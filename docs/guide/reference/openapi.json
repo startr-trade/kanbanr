@@ -98,6 +98,10 @@
             },
             "type": "array"
           },
+          "baseline": {
+            "description": "The engineering-baseline entry this decision records (`B-003`, FTR-033), written when the\nperson accepts the revision that adds it.",
+            "type": "string"
+          },
           "body": {
             "description": "Everything below the front-matter.",
             "type": "string"
@@ -511,6 +515,80 @@
           "at",
           "dirty"
         ],
+        "type": "object"
+      },
+      "BuildConfig": {
+        "additionalProperties": true,
+        "description": "How agents' builds share one machine (FTR-062). Every field is optional and absent by default;\n[`BuildConfig::effective`](crate::buildplan) resolves the values a build uses.",
+        "properties": {
+          "cache_gib": {
+            "description": "The project's compiler cache size in GiB. Absent: 10.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobs_per_slot": {
+            "description": "Jobs each build may use (`CARGO_BUILD_JOBS`, test threads). Absent: 5.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line_check": {
+            "description": "The command the line check runs. Absent: `scripts/test.sh` when present, else\n`cargo test --locked --workspace`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "linker": {
+            "description": "`default` (the toolchain's linker) or `mold`. Absent: default.",
+            "type": "string"
+          },
+          "max_load": {
+            "description": "The 1-minute load above which a build waits (Linux). Absent: vCPUs - reserve.",
+            "format": "double",
+            "type": "number"
+          },
+          "queue_batch": {
+            "description": "Branches checked together by the merge queue's line check. Absent: 4.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reserve_cpus": {
+            "description": "vCPUs kept free for the desktop. Absent: 2.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reserve_mem_gib": {
+            "description": "GiB of available memory a build waits for (Linux). Absent: 6.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sccache": {
+            "description": "`auto` (the project's sccache server when sccache is installed) or `off`. Absent: auto.",
+            "type": "string"
+          },
+          "sccache_port": {
+            "description": "The project's sccache server port. Absent: derived from the main checkout's path.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slots": {
+            "description": "Builds that may run at once on the machine. Absent: `(vCPUs - reserve) / jobs`, at least 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "web_cache": {
+            "description": "Whether the built monitor is cached by its sources' content. Absent: on.",
+            "type": "boolean"
+          }
+        },
         "type": "object"
       },
       "BurndownDay": {
@@ -3900,6 +3978,10 @@
             "description": "How `kanbanr start` names a branch (FEAT-056): `{code}` and `{slug}`. Absent means the\ndefault, and absent stays absent on disk so an existing config is not rewritten.",
             "type": "string"
           },
+          "build": {
+            "$ref": "#/components/schemas/BuildConfig",
+            "description": "How agents' builds share this machine (FTR-062): slots, jobs, caches, the merge queue.\nAbsent: the defaults [`crate::buildplan::Effective`] derives, and absent stays absent on\ndisk. An older kanbanr keeps it through `extra`."
+          },
           "cadence": {
             "$ref": "#/components/schemas/Cadence",
             "description": "Whether this project works in sprints and releases at all (FEAT-121). Off unless switched\non: many projects follow a different workflow, and data nobody asked for is clutter."
@@ -3990,6 +4072,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "tasks": {
+            "$ref": "#/components/schemas/TaskConfig",
+            "description": "How tasks are planned against each other (FTR-060). Absent: `CHANGELOG.md` is the one\nappend-only file, and absent stays absent on disk."
           },
           "terminal_states": {
             "default": [],
@@ -4300,6 +4386,13 @@
             "description": "Earlier stages the release must have been promoted into before it enters this one.",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "gates": {
+            "description": "Gates the project's engineering baseline requires here (FTR-033): each needs a passed\nresult for the release tip before a release enters the stage. Written when the person\naccepts a baseline revision; an older binary keeps the key through `extra` and does not\nenforce it.",
+            "items": {
+              "$ref": "#/components/schemas/StageGate"
             },
             "type": "array"
           },
@@ -5330,6 +5423,23 @@
         ],
         "type": "object"
       },
+      "StageGate": {
+        "additionalProperties": true,
+        "description": "One gate a release stage requires because a baseline entry promised it (FTR-033): `gate` is a\ngate name as `kanbanr gate record` takes it, `from` the entry (`B-007`).",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "gate": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate",
+          "from"
+        ],
+        "type": "object"
+      },
       "Stakeholder": {
         "additionalProperties": true,
         "properties": {
@@ -5444,20 +5554,66 @@
             "description": "When the task's state last changed (RFC3339; FEAT-214): what agent drift is measured from.\nAbsent on tasks no kanbanr since FEAT-214 has changed.",
             "type": "string"
           },
+          "depends_on": {
+            "description": "The tasks this one waits on (FTR-060): `T3` and `TL-002/T3` in this item,\n`CODE/TL-001/T3` in another, `project:CODE/TL-001/T3` in another project.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "estimate_h": {
+            "description": "The estimate in agent-hours (FTR-060), more than 0.",
+            "format": "double",
+            "type": "number"
+          },
           "key": {
             "type": "string"
+          },
+          "reads": {
+            "description": "The files this task only reads (FTR-060), in the same form as `writes`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "state": {
             "$ref": "#/components/schemas/TaskState"
           },
           "text": {
             "type": "string"
+          },
+          "writes": {
+            "description": "The files this task writes (FTR-060): repository-relative, `/`-separated; a folder ends in\n`/`. Empty means the footprint is unknown.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
           "key",
           "text",
           "state"
+        ],
+        "type": "object"
+      },
+      "TaskConfig": {
+        "additionalProperties": true,
+        "description": "How tasks are planned against each other (FTR-060).",
+        "properties": {
+          "append_only": {
+            "default": [
+              "CHANGELOG.md"
+            ],
+            "description": "Files every item appends to: two tasks writing one of them never conflict, the merge\nqueue orders them. Absent: `[\"CHANGELOG.md\"]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "append_only"
         ],
         "type": "object"
       },

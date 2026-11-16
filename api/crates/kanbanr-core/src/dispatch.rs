@@ -265,6 +265,116 @@ pub(crate) fn is_manual_test(
         .unwrap_or(false)
 }
 
+/// A build-settings change (FTR-062) applied to `current`: each key the body names is set, or
+/// cleared by `null` or `""`; an unknown key, a wrong type or a value out of its set is refused and
+/// nothing changes.
+fn apply_build_change(
+    current: crate::config::BuildConfig,
+    body: &Value,
+) -> Result<crate::config::BuildConfig> {
+    let Some(map) = body.as_object() else {
+        return Err(CoreError::Unsupported(
+            "send the build settings as an object, e.g. {\"slots\": 2}".into(),
+        ));
+    };
+    let mut c = current;
+    let bad =
+        |k: &str, want: &str| CoreError::Unsupported(format!("build setting `{k}` takes {want}"));
+    for (k, v) in map {
+        let clear = v.is_null() || v.as_str() == Some("");
+        let count = |want: &str| -> Result<Option<u32>> {
+            if clear {
+                return Ok(None);
+            }
+            v.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| *n >= 1)
+                .map(Some)
+                .ok_or_else(|| bad(k, want))
+        };
+        let choice = |set: &[&str]| -> Result<Option<String>> {
+            if clear {
+                return Ok(None);
+            }
+            v.as_str()
+                .filter(|s| set.contains(s))
+                .map(|s| Some(s.to_string()))
+                .ok_or_else(|| bad(k, &set.join(" or ")))
+        };
+        match k.as_str() {
+            "slots" => c.slots = count("a whole number of at least 1")?,
+            "jobs_per_slot" => c.jobs_per_slot = count("a whole number of at least 1")?,
+            "cache_gib" => c.cache_gib = count("a whole number of at least 1")?,
+            "queue_batch" => c.queue_batch = count("a whole number of at least 1")?,
+            "reserve_cpus" | "reserve_mem_gib" => {
+                let n = if clear {
+                    None
+                } else {
+                    Some(
+                        v.as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .ok_or_else(|| bad(k, "a whole number"))?,
+                    )
+                };
+                if k == "reserve_cpus" {
+                    c.reserve_cpus = n;
+                } else {
+                    c.reserve_mem_gib = n;
+                }
+            }
+            "max_load" => {
+                c.max_load = if clear {
+                    None
+                } else {
+                    Some(
+                        v.as_f64()
+                            .filter(|f| f.is_finite() && *f > 0.0)
+                            .ok_or_else(|| bad(k, "a number above 0"))?,
+                    )
+                }
+            }
+            "sccache_port" => {
+                c.sccache_port = if clear {
+                    None
+                } else {
+                    Some(
+                        v.as_u64()
+                            .and_then(|n| u16::try_from(n).ok())
+                            .filter(|n| *n >= 1)
+                            .ok_or_else(|| bad(k, "a port number"))?,
+                    )
+                }
+            }
+            "sccache" => c.sccache = choice(&["auto", "off"])?,
+            "linker" => c.linker = choice(&["default", "mold"])?,
+            "web_cache" => {
+                c.web_cache = if clear {
+                    None
+                } else {
+                    Some(v.as_bool().ok_or_else(|| bad(k, "true or false"))?)
+                }
+            }
+            "line_check" => {
+                c.line_check = if clear {
+                    None
+                } else {
+                    let argv: Vec<String> = v
+                        .as_array()
+                        .and_then(|a| a.iter().map(|x| x.as_str().map(String::from)).collect())
+                        .ok_or_else(|| bad(k, "a command as a list of words"))?;
+                    if argv.is_empty() { None } else { Some(argv) }
+                }
+            }
+            other => {
+                return Err(CoreError::Unsupported(format!(
+                    "unknown build setting `{other}`"
+                )));
+            }
+        }
+    }
+    Ok(c)
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -633,6 +743,7 @@ fn build_base_config(store: &Store, name: &str, body: &Value) -> Result<ProjectC
                 coverage: Vec::new(),
                 paths: Default::default(),
                 tasks: Default::default(),
+                build: Default::default(),
             }
         }
         None => {
@@ -2206,6 +2317,14 @@ fn dispatch_routes(
                 extra: current.extra,
             };
             ser(&store.set_diagrams(p, diagrams)?.diagrams)
+        }
+        // How agents' builds share the machine (FTR-062): each named key is set, or cleared by
+        // `null` or `""`; keys not named are kept.
+        ("PUT", ["projects", p, "config", "build"]) => {
+            let mut config = store.load_meta(p)?.config;
+            config.build = apply_build_change(config.build, b)?;
+            store.save_config(p, &config)?;
+            ser(&config.build)
         }
         // Which prefix each kind's code gets, and the next code per prefix (FEAT-217).
         ("GET", ["projects", p, "config", "codes"]) => ser(&codes_view(&store.load_meta(p)?)),
