@@ -4467,14 +4467,25 @@ struct NotesSource {
 }
 
 /// The notes templates the board's config has named, newest first: today's, then each earlier one
-/// from the config file's history (DEF-036). Only when a template is configured today.
+/// from the config file's history (DEF-036). Only when a template is configured today. When the
+/// history cannot be read, today's alone, with a note saying why (DEF-080).
 fn notes_templates(store: &Store, id: &str, project: &Project) -> Vec<String> {
     let Some(current) = project.config.cadence.release_prepare.notes.clone() else {
         return Vec::new();
     };
-    let mut out = vec![current];
     let rel = format!("projects/{id}/config.yaml");
-    for text in crate::git::file_versions(store.data_dir(), &rel).unwrap_or_default() {
+    let versions = match crate::git::file_versions(store.data_dir(), &rel) {
+        Ok(v) => v,
+        Err(e) => {
+            crate::git::warn_once(
+                &format!("notes-history:{}", e.repo.display()),
+                &format!("{e}; using today's notes template only"),
+            );
+            return vec![current];
+        }
+    };
+    let mut out = vec![current];
+    for text in versions {
         let past = crate::yaml::from_str::<crate::ProjectConfig>(&text)
             .ok()
             .and_then(|c| c.cadence.release_prepare.notes);
@@ -7000,6 +7011,32 @@ pub(crate) mod tests {
         assert_eq!(moved.at, main[..7]);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-080 R-3: with the board's history unreadable, the notes templates are today's alone.
+    #[test]
+    fn notes_templates_fall_back_to_todays_when_the_history_cannot_be_read() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-def080-notes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", ProjectConfig::default_for("shop"))
+            .unwrap();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        board_history(&dir);
+        set_notes_template(&store, &dir, "docs/book/{version}.md");
+        set_notes_template(&store, &dir, "docs/guide/releases/{version}.md");
+        let project = store.load_meta("shop").unwrap();
+        assert_eq!(
+            super::notes_templates(&store, "shop", &project),
+            ["docs/guide/releases/{version}.md", "docs/book/{version}.md"]
+        );
+        std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        assert_eq!(
+            super::notes_templates(&store, "shop", &project),
+            ["docs/guide/releases/{version}.md"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-036 R-3: a release with no recorded path is found at a path the config named earlier.
