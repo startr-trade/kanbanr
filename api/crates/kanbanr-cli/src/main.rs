@@ -10081,6 +10081,10 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     (false, _) => "off".to_string(),
                     (true, Some(status)) => format!("on: {status} {means}"),
                     (true, None) if name == "links" => format!("on: {means}"),
+                    // Reaches an existing project only by opting in (FTR-006).
+                    (true, None) if name == "system-baseline" => {
+                        "off — not in this workflow: `kanbanr catalog baseline init`".to_string()
+                    }
                     (true, None) => {
                         "on, but not in this workflow — `kanbanr config method --on` adds it"
                             .to_string()

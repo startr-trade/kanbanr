@@ -5,7 +5,11 @@
 //! - at the **build** role: `spec_sections: [Design]` in `requires`, `design-review` in `signoffs`;
 //! - at the **integrate** role: `docs_updated` in `requires` (FEAT-180), `docs-folded` in
 //!   `signoffs`;
-//! - everywhere: doctor's broken-reference scan (FEAT-181), the `links` part.
+//! - everywhere: doctor's broken-reference scan (FEAT-181), the `links` part;
+//! - at the **build** role: `system_baseline_accepted` (FTR-006), the `system-baseline` part —
+//!   the system design is accepted before the first build. It reaches a new project through the
+//!   built-in processes and an existing one only when it opts in (`kanbanr catalog baseline init`
+//!   or `kanbanr config method --on system-baseline`).
 //!
 //! The fragments live in two role-addressed gates, `"@build"` and `"@integrate"`. Those add to a
 //! stage's own gate rather than replacing the built-in rule, so a process that declares nothing
@@ -31,6 +35,8 @@ pub enum Part {
     DocsFolded,
     /// Doctor reports references to things the board does not have.
     Links,
+    /// The project's system baseline is accepted before the first build (FTR-006).
+    SystemBaseline,
 }
 
 /// The sign-off names the method uses.
@@ -39,19 +45,21 @@ pub const DOCS_FOLDED: &str = "docs-folded";
 const DESIGN: &str = "Design";
 
 impl Part {
-    pub const ALL: [Part; 5] = [
+    pub const ALL: [Part; 6] = [
         Part::Design,
         Part::DesignReview,
         Part::Docs,
         Part::DocsFolded,
         Part::Links,
+        Part::SystemBaseline,
     ];
     /// The parts that are gate fragments: all but `links`.
-    pub const GATES: [Part; 4] = [
+    pub const GATES: [Part; 5] = [
         Part::Design,
         Part::DesignReview,
         Part::Docs,
         Part::DocsFolded,
+        Part::SystemBaseline,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -61,10 +69,11 @@ impl Part {
             Part::Docs => "docs",
             Part::DocsFolded => "docs-folded",
             Part::Links => "links",
+            Part::SystemBaseline => "system-baseline",
         }
     }
 
-    /// A part by name, or an error naming the five there are.
+    /// A part by name, or an error naming the ones there are.
     pub fn parse(s: &str) -> crate::Result<Part> {
         let key = s.trim().to_ascii_lowercase();
         Part::ALL
@@ -82,7 +91,7 @@ impl Part {
     /// The stage role whose gate holds this part; `links` is not a gate.
     pub fn role(self) -> Option<Role> {
         match self {
-            Part::Design | Part::DesignReview => Some(Role::Build),
+            Part::Design | Part::DesignReview | Part::SystemBaseline => Some(Role::Build),
             Part::Docs | Part::DocsFolded => Some(Role::Integrate),
             Part::Links => None,
         }
@@ -96,6 +105,7 @@ impl Part {
             Part::Docs => "requires docs_updated",
             Part::DocsFolded => "needs the docs-folded sign-off",
             Part::Links => "doctor reports broken references",
+            Part::SystemBaseline => "requires system_baseline_accepted",
         }
     }
 }
@@ -126,8 +136,9 @@ fn role_gate_key(role: Role) -> String {
     format!("{ROLE_KEY_PREFIX}{}", role.name())
 }
 
-/// Does a requires list ask for the Design section? Plain `spec_sections` means Design.
-fn asks_design(requires: &[Condition]) -> bool {
+/// Does a requires list ask for the Design section? Plain `spec_sections` means Design. Where it
+/// does, the `design_sections` check is judged too (FTR-006).
+pub fn asks_design(requires: &[Condition]) -> bool {
     requires.iter().any(|c| match c {
         Condition::Check(Check::SpecSections) => true,
         Condition::SpecSections { spec_sections } => spec_sections
@@ -162,8 +173,12 @@ pub fn add(wf: &mut WorkflowFile, parts: &[Part]) -> Vec<String> {
                     });
                 }
             }
-            Part::Docs => {
-                let c = Condition::Check(Check::DocsUpdated);
+            Part::Docs | Part::SystemBaseline => {
+                let c = Condition::Check(if part == Part::Docs {
+                    Check::DocsUpdated
+                } else {
+                    Check::SystemBaselineAccepted
+                });
                 if !gate.requires.contains(&c) {
                     gate.requires.push(c);
                 }
@@ -202,6 +217,9 @@ pub fn strip_gate(gate: &mut Gate, parts: &[Part]) {
             Part::Docs => gate
                 .requires
                 .retain(|c| *c != Condition::Check(Check::DocsUpdated)),
+            Part::SystemBaseline => gate
+                .requires
+                .retain(|c| *c != Condition::Check(Check::SystemBaselineAccepted)),
             Part::DesignReview => gate.signoffs.retain(|s| s != DESIGN_REVIEW),
             Part::DocsFolded => gate.signoffs.retain(|s| s != DOCS_FOLDED),
             Part::Links => {}
@@ -240,6 +258,9 @@ pub fn present(wf: &WorkflowFile, p: Part) -> Option<String> {
         Part::Docs => gate
             .requires
             .contains(&Condition::Check(Check::DocsUpdated)),
+        Part::SystemBaseline => gate
+            .requires
+            .contains(&Condition::Check(Check::SystemBaselineAccepted)),
         Part::DesignReview => gate.signoffs.iter().any(|s| s == DESIGN_REVIEW),
         Part::DocsFolded => gate.signoffs.iter().any(|s| s == DOCS_FOLDED),
         Part::Links => false,
@@ -275,7 +296,7 @@ pub fn status(config: &crate::config::ProjectConfig) -> Vec<PartStatus> {
         .collect()
 }
 
-/// The parts named in a request: all five when none are named.
+/// The parts named in a request: all of them when none are named.
 pub fn parse_parts(names: &[String]) -> crate::Result<Vec<Part>> {
     if names.is_empty() {
         return Ok(Part::ALL.to_vec());
@@ -320,6 +341,76 @@ mod tests {
             .into_config("p");
         // Every board is stamped 5 since canonical revisions (FEAT-187); 4 before.
         assert_eq!(default.required_schema_version(), 5);
+    }
+
+    /// FTR-006 R-5: a new project's process carries `system_baseline_accepted` at the build role
+    /// (and nothing written for `design_sections`, which the Design condition implies); a config
+    /// saved before the part reads and saves back byte for byte, without it; turning the part on
+    /// adds it.
+    #[test]
+    fn the_system_baseline_part_lands_on_the_build_role_and_leaves_an_existing_config_alone() {
+        let wanted = Condition::Check(Check::SystemBaselineAccepted);
+        for (name, _) in crate::config::presets() {
+            let wf = crate::config::preset(name).unwrap();
+            let build = wf.gates.get(&role_gate_key(Role::Build)).unwrap();
+            assert!(build.requires.contains(&wanted), "{name}: {build:?}");
+            assert!(present(&wf, Part::SystemBaseline).is_some(), "{name}");
+            assert!(
+                wf.gates.values().all(|g| g
+                    .requires
+                    .iter()
+                    .chain(&g.warns)
+                    .all(|c| *c != Condition::Check(Check::DesignSections))),
+                "{name}: design_sections is never written into a process"
+            );
+        }
+        let togaf = crate::config::preset("togaf").unwrap();
+        assert_eq!(
+            present(&togaf, Part::SystemBaseline).as_deref(),
+            Some("Implementation")
+        );
+
+        // A board from before the part.
+        let dir = std::env::temp_dir().join(format!("kanbanr-method-sb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::Store::new(dir.clone());
+        // L-41: the board is this test's own, under the system temp folder.
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let mut old = togaf.clone();
+        remove(&mut old, &[Part::SystemBaseline]);
+        store.init_project("p", old.into_config("p")).unwrap();
+        let file = store.project_dir("p").join("config.yaml");
+        let before = std::fs::read(&file).unwrap();
+        let config = store.load_meta("p").unwrap().config;
+        store.save_config("p", &config).unwrap();
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "an existing config is untouched"
+        );
+        let wf = WorkflowFile::from_config(&config);
+        assert_eq!(present(&wf, Part::SystemBaseline), None);
+        let shown = status(&config)
+            .into_iter()
+            .find(|s| s.part == Part::SystemBaseline)
+            .unwrap();
+        assert!(shown.on && shown.status.is_none(), "{shown:?}");
+        assert_eq!(shown.means, "requires system_baseline_accepted");
+
+        // `kanbanr config method --on system-baseline`.
+        let parts = parse_parts(&["system-baseline".to_string()]).unwrap();
+        let (config, notes) = store.set_method("p", true, &parts).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            present(&WorkflowFile::from_config(&config), Part::SystemBaseline).as_deref(),
+            Some("Implementation")
+        );
+        // And off again takes out only what it added.
+        let (config, _) = store.set_method("p", false, &parts).unwrap();
+        let wf = WorkflowFile::from_config(&config);
+        assert_eq!(present(&wf, Part::SystemBaseline), None);
+        assert!(present(&wf, Part::Design).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

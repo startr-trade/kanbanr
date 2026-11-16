@@ -1573,9 +1573,10 @@ mod tests {
                 before.iter().any(|g| g.check == Check::SpecSections),
                 "{p}: the full gate asks a chore for the Design section (the DEF-069 warning)"
             );
+            // The Design's subsections (FTR-006) go with the Design section the path leaves out.
             let expected: Vec<_> = before
                 .into_iter()
-                .filter(|g| g.check != Check::SpecSections)
+                .filter(|g| g.check != Check::SpecSections && g.check != Check::DesignSections)
                 .collect();
             assert_eq!(
                 now, expected,

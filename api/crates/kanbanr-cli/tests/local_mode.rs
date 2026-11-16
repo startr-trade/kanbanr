@@ -5578,7 +5578,8 @@ fn method_gates_opt_out() {
     let parts: serde_json::Value =
         serde_json::from_str(&ok(run_in(&base, &work, &["--json", "config", "method"]))).unwrap();
     let parts = parts["parts"].as_array().unwrap();
-    assert_eq!(parts.len(), 5);
+    // Six since the system baseline (FTR-006).
+    assert_eq!(parts.len(), 6);
     assert!(parts.iter().all(|p| p["on"] == false), "{parts:?}");
     let status = ok(run_in(&base, &work, &["process", "status"]));
     assert!(

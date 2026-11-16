@@ -2010,6 +2010,8 @@ impl Store {
         // applies to the item entering it.
         let mut failing =
             crate::readiness::evaluate_entering(feature, known, &gate.requires, ctx, to);
+        // A system baseline changed since it was accepted warns, never blocks (FTR-006).
+        let said = crate::readiness::never_blocks(&mut failing);
         failing.extend(crate::readiness::additions_gap(
             feature,
             &gate.requires,
@@ -2049,8 +2051,14 @@ impl Store {
                 }],
             });
         }
-        let mut warnings =
-            crate::readiness::evaluate_entering(feature, known, &gate.warns, ctx, to);
+        let mut warnings = said;
+        warnings.extend(crate::readiness::evaluate_entering(
+            feature,
+            known,
+            &gate.warns,
+            ctx,
+            to,
+        ));
         if failing.is_empty() {
             return Ok(GateOutcome {
                 warnings,
