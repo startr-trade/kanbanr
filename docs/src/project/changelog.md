@@ -67,6 +67,9 @@ All notable changes to kanbanr are documented here. The format follows
   `walkthrough` is automated evidence a run proves, never a manual check. `kanbanr serve --bind
   127.0.0.1:0` now answers on the port it got and names it. Two runbooks, `walkthroughs/togaf.md`
   and `walkthroughs/agile.md`, ship on the board.
+- doctor no longer warns that a doc folded just before a move has not changed: it re-judges the
+  `docs_updated` gate an item has passed from when the item entered the stage it moved from, as the
+  move did (DEF-074).
 
 ## [0.6.1] - 2026-11-16
 
@@ -192,6 +195,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 - `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
   is no longer warned that it has no Design section (DEF-069).
+- `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
+  is no longer warned that it has no Design section (DEF-069).
+### Fixed
+
+- The `docs_updated` gate also requires the board docs a Design links under Affects docs to have
+  changed (DEF-047). A doc the Design only reads is marked `unchanged` on its line.
 
 ## [0.6.0] - 2026-11-14
 

@@ -1101,6 +1101,24 @@ impl FeatureItem {
             .unwrap_or(self.created_at.as_str())
     }
 
+    /// The stage the item moved from into its current status, and when it entered that stage
+    /// (DEF-074): exactly what [`Self::entered_status_at`] returned at the moment of the move, so
+    /// a gate already passed is re-judged over the window the move used. With no move into the
+    /// current status, the current stage since creation, as `entered_status_at` gives.
+    pub fn entered_previous_status(&self) -> (&str, &str) {
+        let Some(last) = self.history.iter().rposition(|t| t.to == self.status) else {
+            return (self.status.as_str(), self.created_at.as_str());
+        };
+        let from = self.history[last].from.as_str();
+        let at = self.history[..last]
+            .iter()
+            .rev()
+            .find(|t| t.to == from)
+            .map(|t| t.at.as_str())
+            .unwrap_or(self.created_at.as_str());
+        (from, at)
+    }
+
     /// Iterate over every task across all todo-lists.
     pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
         self.todo_lists.iter().flat_map(|l| l.tasks.iter())
@@ -1504,6 +1522,72 @@ mod tests {
     }
 
     type Mutation = Box<dyn Fn(&mut FeatureDefinition)>;
+
+    /// DEF-074 R-1: the stage an item moved from, and when it entered that stage — the window the
+    /// move judged its gate over.
+    #[test]
+    fn entered_previous_status_is_the_entry_into_the_stage_it_left() {
+        let created = "2026-11-16T00:00:00Z";
+        let item = |status: &str, moves: &[(&str, &str, &str)]| -> FeatureItem {
+            let mut f: FeatureItem = serde_json::from_value(serde_json::json!({
+                "code": "FEAT-001", "title": "t", "status": status, "milestone": "MS-001",
+                "created_at": created, "updated_at": created
+            }))
+            .unwrap();
+            f.history = moves
+                .iter()
+                .map(|(from, to, at)| Transition {
+                    at: (*at).into(),
+                    from: (*from).into(),
+                    to: (*to).into(),
+                    ..Default::default()
+                })
+                .collect();
+            f
+        };
+        let (t1, t2, t3) = (
+            "2026-11-16T01:00:00Z",
+            "2026-11-16T02:00:00Z",
+            "2026-11-16T03:00:00Z",
+        );
+        // No history: the current stage, since creation.
+        assert_eq!(
+            item("Planned", &[]).entered_previous_status(),
+            ("Planned", created)
+        );
+        // One move: the stage it left, entered at creation.
+        assert_eq!(
+            item("Scheduled", &[("Planned", "Scheduled", t1)]).entered_previous_status(),
+            ("Planned", created)
+        );
+        // Two moves: the stage it left, entered by the first move.
+        assert_eq!(
+            item(
+                "Completed",
+                &[("Planned", "Scheduled", t1), ("Scheduled", "Completed", t2)]
+            )
+            .entered_previous_status(),
+            ("Scheduled", t1)
+        );
+        // Back and forth: the last entry into the stage it left, before the last move.
+        assert_eq!(
+            item(
+                "Scheduled",
+                &[
+                    ("Planned", "Scheduled", t1),
+                    ("Scheduled", "Planned", t2),
+                    ("Planned", "Scheduled", t3)
+                ]
+            )
+            .entered_previous_status(),
+            ("Planned", t2)
+        );
+        // A status no move led to: the current stage, since creation.
+        assert_eq!(
+            item("Completed", &[("Planned", "Scheduled", t1)]).entered_previous_status(),
+            ("Completed", created)
+        );
+    }
 
     /// FEAT-187 R-3: one definition, written two ways — quotes, flow or block style, key order,
     /// indentation, a test's state — has one revision.
