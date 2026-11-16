@@ -350,6 +350,10 @@ jobs:
       # mark the selected tab with an underline, never an accent fill (FTR-046).
       - name: The UI kit's tabs pick, render and underline correctly
         run: npm run check:ui-tabs
+      # Accordion rows render their body only when open, head it with a real heading holding the
+      # toggle, and keep the open ids in the URL hash (FTR-046).
+      - name: The UI kit's accordion rows open on demand under a heading
+        run: npm run check:ui-accordion
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
