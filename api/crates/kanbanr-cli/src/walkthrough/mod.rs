@@ -119,6 +119,10 @@ pub struct RunArgs {
     /// Do not open a browser: every press and page step is the "no browser" finding.
     #[arg(long)]
     pub no_browser: bool,
+    /// The commit the build under test was made from, when the binary cannot say (a dirty or
+    /// unknown build): every result the run puts on this board names it.
+    #[arg(long)]
+    pub rev: Option<String>,
 }
 
 /// The most answers one step's say gives before it records a finding and goes on.
@@ -1486,6 +1490,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
             errors.len()
         );
     }
+    // The commit every result names: the build's own, else the one `--rev` states. Refused here,
+    // before any remote, session or spend exists (DEF-089).
+    let (rev, rev_from) =
+        evidence_rev(env!("KANBANR_GIT_SHA"), args.rev.as_deref()).map_err(|e| anyhow!(e))?;
     let runs = args.runs.clone().unwrap_or_else(default_runs_dir);
     std::fs::create_dir_all(&runs)?;
     let name = args.name.clone().unwrap_or_else(|| {
@@ -1599,6 +1607,8 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     for n in &setup_notes {
         log.push("note", n.clone());
     }
+    log.push("evidence_rev", rev.clone());
+    log.push("evidence_rev_from", rev_from.to_string());
     log.write(&dirs)?;
     let allowed = guard::allowed_remotes(&dirs);
     // The persona and the session.
@@ -1801,6 +1811,41 @@ pub struct BatchOutcome {
     pub skipped: Vec<String>,
 }
 
+/// The commit a run's results name (DEF-089): `flag` (`--rev`) when given, as 7 to 40 hex digits,
+/// lowercased and never resolved in any repository; else the build's own commit (`build_sha`,
+/// the binary's `KANBANR_GIT_SHA`). A dirty or unknown build without `--rev` is refused. The
+/// second value says where the revision came from: `--rev` or `the build`.
+pub fn evidence_rev(
+    build_sha: &str,
+    flag: Option<&str>,
+) -> std::result::Result<(String, &'static str), String> {
+    let is_hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+    if let Some(f) = flag {
+        let f = f.trim();
+        return if (7..=40).contains(&f.len()) && is_hex(f) {
+            Ok((f.to_ascii_lowercase(), "--rev"))
+        } else {
+            Err(format!(
+                "--rev '{f}' is not a commit: give 7 to 40 hex digits"
+            ))
+        };
+    }
+    if build_sha.len() >= 7 && is_hex(build_sha) {
+        return Ok((build_sha.to_string(), "the build"));
+    }
+    if let Some(h) = build_sha.strip_suffix("-dirty") {
+        return Err(format!(
+            "the binary under test was built from a modified tree at {h}, so no commit holds the \
+             code it would prove: rebuild it from a clean tree, or pass --rev <commit> to name the \
+             commit you vouch for"
+        ));
+    }
+    Err("the binary under test names no commit (it was built without git metadata), so its \
+         results could not say what they proved: rebuild it from a checkout, or pass --rev \
+         <commit>"
+        .to_string())
+}
+
 /// The commit a `kanbanr --version` line names: `kanbanr 0.7.0 (<sha>, built …)`.
 fn version_commit(line: &str) -> Option<String> {
     let inner = line.split_once('(')?.1;
@@ -1933,6 +1978,44 @@ mod tests {
             passed,
             why: why.into(),
             measured: true,
+        }
+    }
+
+    /// DEF-089 R-1, R-2, R-6: a clean build names itself; a dirty or unknown one is refused
+    /// unless `--rev` names a commit, which is taken as given (lowercased, never looked up).
+    #[test]
+    fn the_evidence_rev_is_the_builds_commit_or_the_named_one() {
+        let full = "6a973c690bb2a0909aae0b8e1f5a75e867cec7f1";
+        assert_eq!(
+            evidence_rev(full, None),
+            Ok((full.to_string(), "the build"))
+        );
+        assert_eq!(
+            evidence_rev("6a973c690bb2", None),
+            Ok(("6a973c690bb2".to_string(), "the build"))
+        );
+        let dirty = evidence_rev("abc1234-dirty", None).unwrap_err();
+        assert!(dirty.contains("--rev") && dirty.contains("abc1234"), "{dirty}");
+        assert!(dirty.contains("modified tree"), "{dirty}");
+        let unknown = evidence_rev("unknown", None).unwrap_err();
+        assert!(unknown.contains("--rev"), "{unknown}");
+        assert!(unknown.contains("names no commit"), "{unknown}");
+        assert_eq!(
+            evidence_rev("abc1234-dirty", Some("0123456789abcdef0123456789abcdef01234567")),
+            Ok(("0123456789abcdef0123456789abcdef01234567".to_string(), "--rev"))
+        );
+        assert_eq!(
+            evidence_rev("unknown", Some(" ABCDEF1 ")),
+            Ok(("abcdef1".to_string(), "--rev"))
+        );
+        // A well-formed --rev wins over a clean build too: it is the person's statement.
+        assert_eq!(
+            evidence_rev(full, Some("abcdef1")),
+            Ok(("abcdef1".to_string(), "--rev"))
+        );
+        for bad in ["xyz", "abc12", "g123456", &"a".repeat(41)] {
+            let e = evidence_rev(full, Some(bad)).unwrap_err();
+            assert!(e.contains("is not a commit"), "{bad}: {e}");
         }
     }
 
