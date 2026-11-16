@@ -290,6 +290,115 @@ pub fn task_totals(rows: &[BuildRow], task: &str, since: &str) -> BuildTotals {
         })
 }
 
+// ---------------------------------------------------------------------------------------------
+// The merge queue
+// ---------------------------------------------------------------------------------------------
+
+/// Where a queued branch is in the merge queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueState {
+    /// Waiting for its batch.
+    #[default]
+    Queued,
+    /// Merged onto the target's tip in the queue's worktree, its check running.
+    Checking,
+    /// Integrated: the target moved to a commit that holds it.
+    Merged,
+    /// Not integrated, for `reason`: a conflict or a red check.
+    Refused,
+    /// Taken out of the queue by a person or agent.
+    Removed,
+}
+
+/// One branch waiting to be integrated into `into` (`<git-common-dir>/kanbanr/queue.yaml`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueEntry {
+    /// `MQ-n`.
+    pub id: String,
+    pub branch: String,
+    /// The branch it is integrated into: an item branch, or the line.
+    pub into: String,
+    /// The item the branch builds, `CODE`.
+    #[serde(default)]
+    pub item: String,
+    /// The task, `CODE/TL/T`, for a task branch.
+    #[serde(default)]
+    pub task: Option<String>,
+    /// 0 when the task (or an open task of the item) is on the critical path, else higher.
+    #[serde(default)]
+    pub priority: u8,
+    #[serde(default)]
+    pub added_at: String,
+    #[serde(default)]
+    pub state: QueueState,
+    /// Checked on its own: set when a batch it was in went red.
+    #[serde(default)]
+    pub alone: bool,
+    #[serde(default)]
+    pub reason: String,
+    /// Its last check's log file.
+    #[serde(default)]
+    pub log: String,
+    /// The target's commit after it was integrated.
+    #[serde(default)]
+    pub merged: String,
+}
+
+/// An entry id's number (`MQ-12` → 12), so ids sort as numbers.
+fn id_number(id: &str) -> Option<u64> {
+    id.rsplit('-').next().and_then(|n| n.parse().ok())
+}
+
+/// The order queued entries are taken in: priority, then when they were added, then id.
+fn queue_order(a: &QueueEntry, b: &QueueEntry) -> std::cmp::Ordering {
+    a.priority
+        .cmp(&b.priority)
+        .then_with(|| crate::cmp_instants(&a.added_at, &b.added_at))
+        .then_with(|| match (id_number(&a.id), id_number(&b.id)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            _ => a.id.cmp(&b.id),
+        })
+        .then_with(|| a.id.cmp(&b.id))
+}
+
+/// The next batch to integrate, as indices into `entries`: the queued entries in queue order, the
+/// head's target, and the entries after it with the same target, up to `max` — stopping at the
+/// first with another target or one to be checked alone. A head to be checked alone is a batch of
+/// one. Nothing queued: empty.
+pub fn next_batch(entries: &[QueueEntry], max: usize) -> Vec<usize> {
+    let mut queued: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].state == QueueState::Queued)
+        .collect();
+    queued.sort_by(|&a, &b| queue_order(&entries[a], &entries[b]));
+    let Some(&head) = queued.first() else {
+        return Vec::new();
+    };
+    if entries[head].alone {
+        return vec![head];
+    }
+    queued
+        .iter()
+        .copied()
+        .take_while(|&i| entries[i].into == entries[head].into && !entries[i].alone)
+        .take(max.max(1))
+        .collect()
+}
+
+/// A batch whose check went red: when it held more than one entry, each is marked to be checked
+/// alone and goes back to Queued, in its place, so the queue finds which one is red. A batch of one
+/// is left for the caller to refuse.
+pub fn split_red(entries: &mut [QueueEntry], batch: &[usize]) {
+    if batch.len() < 2 {
+        return;
+    }
+    for &i in batch {
+        if let Some(e) = entries.get_mut(i) {
+            e.alone = true;
+            e.state = QueueState::Queued;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,5 +598,114 @@ mod tests {
         );
         assert!(read_rows(&dir.join("nothing-here")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn entry(id: &str, into: &str, priority: u8, added_at: &str) -> QueueEntry {
+        QueueEntry {
+            id: id.into(),
+            branch: format!("feat/{id}"),
+            into: into.into(),
+            item: "FTR-1".into(),
+            priority,
+            added_at: added_at.into(),
+            ..Default::default()
+        }
+    }
+
+    fn ids(entries: &[QueueEntry], batch: &[usize]) -> Vec<String> {
+        batch.iter().map(|&i| entries[i].id.clone()).collect()
+    }
+
+    #[test]
+    fn the_queue_takes_entries_by_priority_and_batches_one_target() {
+        assert!(next_batch(&[], 4).is_empty());
+
+        let line = "sprint/SP-4";
+        let mut q = vec![
+            entry("MQ-1", line, 1, "2026-11-17T09:00:00Z"),
+            entry("MQ-2", "feat/FTR-9", 1, "2026-11-17T09:01:00Z"),
+            entry("MQ-3", line, 0, "2026-11-17T09:02:00Z"),
+            entry("MQ-4", line, 1, "2026-11-17T09:03:00Z"),
+            entry("MQ-5", line, 1, "2026-11-17T09:04:00Z"),
+            entry("MQ-6", line, 1, "2026-11-17T09:05:00Z"),
+            entry("MQ-7", line, 1, "2026-11-17T09:06:00Z"),
+        ];
+        // Critical path first, then arrival; one target per batch: MQ-2 ends it.
+        assert_eq!(ids(&q, &next_batch(&q, 4)), ["MQ-3", "MQ-1"]);
+
+        // MQ-2 targets an item branch; with it out of the way, the line batch is capped at 4.
+        q[1].state = QueueState::Merged;
+        assert_eq!(
+            ids(&q, &next_batch(&q, 4)),
+            ["MQ-3", "MQ-1", "MQ-4", "MQ-5"]
+        );
+        assert_eq!(ids(&q, &next_batch(&q, 2)), ["MQ-3", "MQ-1"]);
+        assert_eq!(ids(&q, &next_batch(&q, 0)), ["MQ-3"], "at least one");
+
+        // Only queued entries are taken.
+        q[2].state = QueueState::Refused;
+        q[0].state = QueueState::Removed;
+        q[3].state = QueueState::Checking;
+        assert_eq!(ids(&q, &next_batch(&q, 4)), ["MQ-5", "MQ-6", "MQ-7"]);
+
+        // A head to be checked alone goes alone; an alone entry behind the head ends the batch.
+        q[4].alone = true;
+        assert_eq!(ids(&q, &next_batch(&q, 4)), ["MQ-5"]);
+        q[4].alone = false;
+        q[5].alone = true;
+        assert_eq!(ids(&q, &next_batch(&q, 4)), ["MQ-5"]);
+
+        // The same priority and time: ids in number order, MQ-9 before MQ-10.
+        let same = vec![
+            entry("MQ-10", line, 1, "2026-11-17T09:00:00Z"),
+            entry("MQ-9", line, 1, "2026-11-17T09:00:00Z"),
+        ];
+        assert_eq!(ids(&same, &next_batch(&same, 4)), ["MQ-9", "MQ-10"]);
+        // Times compare as instants, not text: .5 s is after .25 s.
+        let times = vec![
+            entry("MQ-1", line, 1, "2026-11-17T09:00:00.5Z"),
+            entry("MQ-2", line, 1, "2026-11-17T09:00:00.25Z"),
+        ];
+        assert_eq!(ids(&times, &next_batch(&times, 4)), ["MQ-2", "MQ-1"]);
+    }
+
+    #[test]
+    fn a_red_batch_is_retried_one_entry_at_a_time() {
+        let line = "main";
+        let mut q = vec![
+            entry("MQ-1", line, 1, "2026-11-17T09:00:00Z"),
+            entry("MQ-2", line, 0, "2026-11-17T09:01:00Z"),
+            entry("MQ-3", line, 1, "2026-11-17T09:02:00Z"),
+            entry("MQ-4", line, 1, "2026-11-17T09:03:00Z"),
+        ];
+        let batch = next_batch(&q, 3);
+        assert_eq!(ids(&q, &batch), ["MQ-2", "MQ-1", "MQ-3"]);
+        for &i in &batch {
+            q[i].state = QueueState::Checking;
+        }
+
+        split_red(&mut q, &batch);
+        for &i in &batch {
+            assert!(q[i].alone, "{} is checked alone", q[i].id);
+            assert_eq!(q[i].state, QueueState::Queued);
+        }
+        assert!(!q[3].alone, "an entry outside the batch is untouched");
+        assert_eq!(
+            q.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+            ["MQ-1", "MQ-2", "MQ-3", "MQ-4"],
+            "order unchanged"
+        );
+
+        // Retried one at a time, in queue order.
+        let one = next_batch(&q, 3);
+        assert_eq!(ids(&q, &one), ["MQ-2"]);
+        q[one[0]].state = QueueState::Merged;
+        let one = next_batch(&q, 3);
+        assert_eq!(ids(&q, &one), ["MQ-1"]);
+
+        // A red batch of one is left as it is, for the caller to refuse.
+        q[one[0]].state = QueueState::Checking;
+        split_red(&mut q, &one);
+        assert_eq!(q[0].state, QueueState::Checking);
     }
 }
