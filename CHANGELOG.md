@@ -37,6 +37,10 @@ All notable changes to kanbanr are documented here. The format follows
 - doctor judges a stage's docs_updated from when the item entered it, so a doc folded just before the move warns afterwards (DEF-074)
 - Agreeing the charter after setup leaves CLAUDE.md modified on main, so Promote to main refuses the dirty checkout (DEF-083)
 - The skill leaves the styling approach undecided, skips the formatter, misreports what is waiting, and names tests capture can't read (DEF-084)
+- The skill asks the styling approach even when the person has already described the look, and
+  records only what they said as theirs. It has build agents run the project's formatter and linter
+  before each commit. It reads the queue and `kanbanr check` before saying what waits, gives page
+  addresses with `/p/<project>/`, and never names a kanbanr command as a test (DEF-084).
 - Claude keeps a test the person named with the kind and name they gave, uses `walkthrough:` tests
   only for what a kanbanr run can see on the board, the monitor or the remote, and settles test
   names in the runner's form before asking for approval, so its own corrections no longer lapse an

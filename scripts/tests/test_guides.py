@@ -169,7 +169,7 @@ class SkillTests(unittest.TestCase):
     def the_skill_designs_a_pipeline_in_the_guides_order(self) -> None:
         text = read(SKILL)
         self.assertTrue("Designing CI or a release workflow" in text)
-        self.assertTrue(PAGE in text)
+        self.assertTrue("Designing CI and the release workflow" in text)
 
     def the_skill_recommends_a_sprint_starting_today(self) -> None:
         """DEF-041 R-3: the sprint's first day is recommended as today, and the guides say so."""

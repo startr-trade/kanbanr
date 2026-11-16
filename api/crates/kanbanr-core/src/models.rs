@@ -1436,7 +1436,7 @@ requirements:
   - kind: functional
     text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
     tests:
-      - name: \"<doc check or doctor rule>\"
+      - name: \"<a doc check in the project's test runner>\"
         kind: manual
         state: planned
 "

@@ -418,7 +418,9 @@ guard refuses the commands if you try. **Never hand the user a kanbanr command t
 way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `adr accept`,
 `test … --manual` or `release promote`. Name the page and the button. If they ask for the terminal
 form, the page names it. Your part is one message saying what is waiting and where:
-`kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
+`kanbanr open --check` gives the addresses. Give each page's address exactly as it prints it,
+`<monitor>/p/<project>/review` or `…/releases`. Never shorten it to `<monitor>/review`, which does
+not open the project's page. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 When the monitor's header warns that the board was last written by a newer kanbanr than it runs
 (FTR-036), restart the monitor from the newer kanbanr before the user takes sign-offs on it.
@@ -569,6 +571,13 @@ The queue offers a sign-off only for the stage the item reaches **next**, and on
 stage's other requirements are met. A sign-off for a later stage, or for work not done yet, is not
 asked for, so don't ask for it either.
 
+**Read before you report what waits.** In the same turn, read `kanbanr review --pending --json`
+and, for each item you will name, `kanbanr check <CODE> --json`. Name a sign-off only when the
+queue offers it now. Say a held one is held and what releases it, for example "docs-folded follows
+once R-5's manual check is Passed", never "you can do both now". Never list as waiting an approval,
+sign-off or manual check already recorded: a manual check is waiting only while its test is not
+green.
+
 **A decision you draft is announced at once:** fill its sections, show it in a few lines, and say
 it waits on the Review page.
 
@@ -707,7 +716,10 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   approach the stack allows (hand-written CSS, a utility-class framework, a component library for
   the UI framework in use, or the project's own design system); and the visual direction (the feel,
   colours or brand, and a site it should resemble). Recommend what fits the charter's constraints,
-  and say why. Record the answer in the item's Design. Never decide the look yourself: "plain" is
+  and say why. Record the answer in the item's Design. If the person has already described the
+  look (a feel, colours, "plain"), still ask the styling approach, and the other way round. Record
+  as the person's decision only what they said. Anything you chose is your recommendation until
+  they agree, and the Design says so. Never decide the look yourself: "plain" is
   an answer the user gives, not a default. (FTR-033 changes this: the answer goes into the
   project's baseline, and later screens read it from there.)
 
@@ -837,6 +849,9 @@ As the coordinator you:
 - have build agents record their own progress, so the board never lags the code; and when you look
   at an agent's branch, bring its item's tasks up to date at once, never waiting for its report.
   `kanbanr scope drift` (and the Stop hook) names an agent branch ahead of its item's tasks;
+- tell each build agent, in its brief, to run the project's formatter and linter (the commands its
+  `make ci`, CI design or README names) before each commit, and to fix what they report on the
+  item's branch. Unformatted code found later costs a follow-up item.
 - take back every question and every piece of work outside the brief: the agent reports it, you
   decide or ask the user, it never decides a design question itself. A refusal an agent reports is
   the same: decide it or ask the user, never widen the scope to get past it;
@@ -1148,7 +1163,12 @@ runner prints and capture reads (the forms above), with the runner and its repor
 the project has not chosen its test runner yet, ask that (one AskUserQuestion, the option capture
 reads recommended first) while you draft the definition, before the approval request, never after
 it. A test named in another form is renamed before you ask: the same rename after approval lapses
-it, on every item that holds such a name.
+it, on every item that holds such a name. A test is something the project's runner runs and
+capture reads, a chore's check included. It is never a kanbanr command (`kanbanr doctor`,
+`kanbanr check`) or a shell line: no runner prints those, so capture records nothing and the name
+has to change later. A chore that adds a changelog is checked by a runner test, such as one
+asserting the file has an Unreleased heading. A check only a person can judge is the item's one
+manual test.
 
 ## Every change points back at the reason for it
 
