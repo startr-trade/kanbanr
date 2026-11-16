@@ -1650,6 +1650,10 @@
             },
             "type": "array"
           },
+          "affects_no_docs": {
+            "description": "Why this item changes no doc, in the person's words (DEF-075), recorded when they confirm\nit does: it silences the 'declares no docs' warning that a `docs_updated` gate gives an item\nnaming none. Like `affects_docs` it is design, outside the agreed content, and declared\nafter it, so an older binary keeps it in `extra` and writes it back in the same place.",
+            "type": "string"
+          },
           "approval": {
             "$ref": "#/components/schemas/Approval",
             "description": "Who agreed to this definition, when, and what exactly they agreed to (FEAT-048)."
@@ -2827,6 +2831,10 @@
               }
             ],
             "description": "The newest kept result for this test, so a failed check shows who failed it."
+          },
+          "opens_at": {
+            "description": "The build stage the check opens at (DEF-076); empty when the check is due.",
+            "type": "string"
           },
           "requirement": {
             "type": "string"
@@ -4978,6 +4986,7 @@
         "type": "object"
       },
       "Sprint": {
+        "additionalProperties": true,
         "properties": {
           "capacity": {
             "description": "What the sprint can take, in the project's estimate unit.",
@@ -4992,6 +5001,10 @@
             "type": "array"
           },
           "closed_at": {
+            "type": "string"
+          },
+          "closed_commit": {
+            "description": "The tip of `sprint/<SP>` when the sprint closed with that branch in the code repository\n(FTR-004); empty otherwise. A position at the sprint never depends on it alone: an older\nbinary that rewrites the file drops it, so the tag and the branch are the fallbacks.",
             "type": "string"
           },
           "code": {
@@ -5043,6 +5056,7 @@
         "type": "object"
       },
       "SprintReport": {
+        "additionalProperties": true,
         "description": "A sprint as a report: its record, what it holds, and how it burned down.",
         "properties": {
           "burndown": {
@@ -5064,6 +5078,10 @@
             "type": "array"
           },
           "closed_at": {
+            "type": "string"
+          },
+          "closed_commit": {
+            "description": "The tip of `sprint/<SP>` when the sprint closed with that branch in the code repository\n(FTR-004); empty otherwise. A position at the sprint never depends on it alone: an older\nbinary that rewrites the file drops it, so the tag and the branch are the fallbacks.",
             "type": "string"
           },
           "code": {
@@ -5171,6 +5189,10 @@
             "type": "string"
           },
           "stage": {
+            "type": "string"
+          },
+          "undoes": {
+            "description": "The stage this change undid (`kanbanr release undo`, DEF-034); empty on every other change.\nAn older binary keeps it in `extra` and reads the change as a move back to `stage`.",
             "type": "string"
           }
         },
@@ -5416,6 +5438,10 @@
             "type": "string"
           },
           "from": {
+            "type": "string"
+          },
+          "merge_commit": {
+            "description": "The merge commit of the move that integrated the item (FTR-004): what a position at the\nitem resolves to once its branch is gone. Empty on every other transition and on every\nmove before this version.",
             "type": "string"
           },
           "origin": {

@@ -12,6 +12,7 @@
 //! directly. This is purely additive and OFF by default: the read-only monitor is unchanged, and
 //! the CLI-writes-directly default is fully preserved.
 
+pub mod background;
 mod embedded;
 pub mod memo;
 mod origin;
@@ -29,7 +30,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kanbanr_core::Store;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
@@ -52,6 +53,9 @@ pub struct AppState {
     pub gens: Arc<memo::Generations>,
     /// The read memo: GET bodies kept per stamp, and the ETags they answer with (DEF-081).
     pub memo: Arc<memo::Memo>,
+    /// The background worker (FTR-045): drift computed after each change, and warm summary reads.
+    /// Set once the state is built, since the worker needs the state.
+    pub background: Arc<OnceLock<Arc<background::Background>>>,
 }
 
 /// Run the view daemon until the process is stopped. `bind` like `127.0.0.1:8080`; `ui_dir` is the
@@ -107,7 +111,16 @@ pub async fn run_with(
         code_repo,
         gens: Arc::new(memo::Generations::default()),
         memo: Arc::new(memo::Memo::new(memo::MEMO_CAP_BYTES)),
+        background: Arc::new(OnceLock::new()),
     };
+    // Drift in the background, for the project whose code repository the daemon was started in
+    // (FTR-045). Without one, nothing runs and the route answers `unavailable`.
+    let repos: Vec<(String, PathBuf)> = state.code_repo.iter().cloned().collect();
+    let _ = state.background.set(background::Background::start(
+        state.clone(),
+        Arc::new(background::CoreRunner),
+        repos,
+    ));
 
     // Watch the data folder and push SSE "changed" events as the CLI edits files.
     let _watcher = watcher::spawn(data_dir.join("projects"), tx.clone())?;
@@ -127,6 +140,7 @@ pub async fn run_with(
         .route("/projects/:project/docs/raw", get(routes::get_doc_raw))
         .route("/projects/:project/activity", get(routes::project_activity))
         .route("/projects/:project/events", get(routes::project_events))
+        .route("/projects/:project/drift/latest", get(routes::drift_latest))
         .route("/events", get(routes::all_events))
         .route("/openapi.json", get(routes::openapi));
 
