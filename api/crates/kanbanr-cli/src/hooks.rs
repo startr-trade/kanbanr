@@ -99,8 +99,23 @@ fn script_of(command: &str) -> PathBuf {
     }
 }
 
+/// Is `command` kanbanr's own `name` script hook? Its script's file name is the script's, and the
+/// folder holding it ends in `kanbanr/hooks`, compared by path components (L-46), so another
+/// tool's command, or a user's own `~/bin/kanbanr-session-start-notes.sh`, never matches
+/// (FTR-059 R-7). A substring match ("contains kanbanr and the name") once matched both.
 fn is_kanbanr_hook(command: &str, name: &str) -> bool {
-    command.contains("kanbanr") && command.contains(name)
+    let script = script_of(command);
+    if script.file_name().and_then(|f| f.to_str()) != Some(script_file(name).as_str()) {
+        return false;
+    }
+    let Some(folder) = script.parent() else {
+        return false;
+    };
+    let mut parts = folder
+        .components()
+        .rev()
+        .filter_map(|c| c.as_os_str().to_str());
+    parts.next() == Some("hooks") && parts.next() == Some("kanbanr")
 }
 
 /// Every registered hook command, per event (`hooks.<event>[].hooks[].command`).
@@ -177,6 +192,43 @@ pub fn missing(settings: &Value) -> Vec<&'static str> {
     // reads like a bug.
     for (event, _, command) in CLI_HOOKS {
         if !commands(settings, event).any(|c| c.trim() == command) && !missing.contains(&event) {
+            missing.push(event);
+        }
+    }
+    missing
+}
+
+/// The events kanbanr registers that none of `files` registers (FTR-059 R-8): a hook counts as
+/// registered when any one file holds it, so the project's `settings.local.json` and the user's
+/// `settings.json` together can carry the set. Each file is read as JSON; one that is missing or
+/// unreadable counts as empty. A registration whose script is gone counts as missing, as in
+/// [`missing`]. In the order [`missing`] reports them, each event once.
+// Called by the hook health check (FTR-059 T5), which lands after this.
+#[allow(dead_code)]
+pub fn missing_across(files: &[PathBuf]) -> Vec<&'static str> {
+    let all: Vec<Value> = files
+        .iter()
+        .map(|f| {
+            std::fs::read_to_string(f)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_else(|| json!({}))
+        })
+        .collect();
+    let mut missing: Vec<&'static str> = Vec::new();
+    for (event, name) in script_hooks() {
+        let held = all
+            .iter()
+            .any(|s| !missing_scripts(s).contains(&(event, name)));
+        if !held && !missing.contains(&event) {
+            missing.push(event);
+        }
+    }
+    for (event, _, command) in CLI_HOOKS {
+        let held = all
+            .iter()
+            .any(|s| commands(s, event).any(|c| c.trim() == command));
+        if !held && !missing.contains(&event) {
             missing.push(event);
         }
     }
@@ -706,6 +758,221 @@ mod tests {
             std::fs::read_to_string(settings_path(&broken)).unwrap(),
             "{ not json"
         );
+    }
+
+    /// FTR-059 R-7: install and uninstall leave every other tool's entry where it was, byte for
+    /// byte: katalogr's SessionStart, a command-rewriting PreToolUse Bash hook, and a user's own
+    /// script whose name holds both "kanbanr" and "session-start" (which the old substring match
+    /// took for kanbanr's and uninstall removed).
+    #[test]
+    fn install_and_uninstall_leave_other_tools_entries_in_place() {
+        let dir = temp_claude_dir(true);
+        let katalogr = json!({"type": "command", "command": "katalogr session-start"});
+        let rtk = json!({"type": "command", "command": "rtk hook claude"});
+        let notes = json!({"type": "command", "command": "~/bin/kanbanr-session-start-notes.sh"});
+        let original = json!({
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [katalogr.clone()]},
+                    {"hooks": [notes.clone()]}
+                ],
+                "PreToolUse": [{"matcher": "Bash", "hooks": [rtk.clone()]}]
+            }
+        });
+        let original_text = serde_json::to_string_pretty(&original).unwrap() + "\n";
+        std::fs::write(settings_path(&dir), &original_text).unwrap();
+        let theirs = |v: &Value| -> Vec<String> {
+            ["SessionStart", "PreToolUse"]
+                .iter()
+                .flat_map(|e| v["hooks"][e].as_array().cloned().unwrap_or_default())
+                .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+                .filter(|h| [&katalogr, &rtk, &notes].contains(&h))
+                .map(|h| h.to_string())
+                .collect()
+        };
+        let read_back = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap()
+        };
+        let before = theirs(&original);
+        assert_eq!(before.len(), 3);
+
+        assert_eq!(install(&dir).unwrap(), Installed::Added(all_events()));
+        let installed = read_back();
+        assert_eq!(theirs(&installed), before, "kept, in order, after install");
+        // Their groups are still the first ones on each event: kanbanr's come after.
+        assert_eq!(installed["hooks"]["SessionStart"][0]["hooks"][0], katalogr);
+        assert_eq!(installed["hooks"]["SessionStart"][1]["hooks"][0], notes);
+        assert_eq!(installed["hooks"]["PreToolUse"][0]["hooks"][0], rtk);
+        // Only kanbanr's own entries came: every added one is kanbanr's.
+        let added: Vec<String> = installed["hooks"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(event, groups)| {
+                groups
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|g| g["hooks"].as_array().unwrap().clone())
+                    .filter_map(|h| h["command"].as_str().map(str::to_string))
+                    .filter(|c| {
+                        ![&katalogr, &rtk, &notes]
+                            .iter()
+                            .any(|o| o["command"] == c.as_str())
+                    })
+                    .map(|c| format!("{event} {c}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(added.len(), script_hooks().len() + CLI_HOOKS.len());
+        for entry in &added {
+            let (event, command) = entry.split_once(' ').unwrap();
+            assert!(
+                script_hooks()
+                    .iter()
+                    .any(|(e, n)| *e == event && is_kanbanr_hook(command, n))
+                    || CLI_HOOKS
+                        .iter()
+                        .any(|(e, _, c)| *e == event && *c == command),
+                "{entry} is kanbanr's own"
+            );
+        }
+
+        assert_eq!(
+            uninstall(&dir).unwrap(),
+            script_hooks().len() + CLI_HOOKS.len(),
+            "only kanbanr's own entries go"
+        );
+        let after = read_back();
+        assert_eq!(theirs(&after), before, "kept, in order, after uninstall");
+        assert_eq!(after, original);
+        assert_eq!(
+            std::fs::read_to_string(settings_path(&dir)).unwrap(),
+            original_text,
+            "the file is byte-equal to what it was"
+        );
+
+        // The matching rule itself: script file and `kanbanr/hooks` folder, by components.
+        assert!(is_kanbanr_hook(
+            &script_command(&scripts_dir(&dir), "session-start"),
+            "session-start"
+        ));
+        assert!(!is_kanbanr_hook(
+            "~/bin/kanbanr-session-start-notes.sh",
+            "session-start"
+        ));
+        assert!(!is_kanbanr_hook(
+            "/opt/kanbanr/session-start.sh",
+            "session-start"
+        ));
+        assert!(!is_kanbanr_hook("katalogr session-start", "session-start"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-059 R-6: the Stop check never loops with another tool's blocking Stop hook. Run as
+    /// Claude Code runs it, in a tracked temp project whose board is stale and whose tree is
+    /// dirty: with `stop_hook_active: true` (a Stop hook, any tool's, already blocked this stop)
+    /// it prints nothing; otherwise it blocks once, and the same session again gets nothing. A stub
+    /// `kanbanr` first on PATH answers nothing, so no real board is read (L-41).
+    #[cfg(unix)]
+    #[test]
+    fn the_stop_check_blocks_once_and_never_after_another_hooks_block() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+        let dir = temp_claude_dir(false);
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@x"])
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_AUTHOR_DATE", "2020-01-01T00:00:00Z")
+                .env("GIT_COMMITTER_DATE", "2020-01-01T00:00:00Z")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        // The board: a git repo whose last commit is years old.
+        let board = dir.join("board");
+        std::fs::create_dir_all(&board).unwrap();
+        git(&board, &["init", "-q"]);
+        std::fs::write(board.join("x.yaml"), "x: 1\n").unwrap();
+        git(&board, &["add", "."]);
+        git(&board, &["commit", "-q", "--no-verify", "-m", "old"]);
+        // The project: tracked, with work the board has not seen.
+        let project = dir.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        git(&project, &["init", "-q"]);
+        std::fs::write(project.join(".kanbanr"), "project = \"stub\"\n").unwrap();
+        std::fs::write(project.join("work.txt"), "unrecorded\n").unwrap();
+        // A stub kanbanr: every call answers nothing and fails.
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("kanbanr");
+        std::fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = dir.join("stop-check.sh");
+        std::fs::write(&script, embedded_script("hooks/stop-check.sh")).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let run = |input: &str| -> String {
+            use std::io::Write;
+            let mut child = Command::new("bash")
+                .arg(&script)
+                .current_dir(&project)
+                .env("PATH", &path)
+                .env("TMPDIR", &dir)
+                .env("KANBANR_DATA_DIR", &board)
+                .env_remove("KANBANR_PROJECT")
+                .env_remove("KANBANR_STOP_WINDOW_MIN")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "the Stop check exits 0: {out:?}");
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+
+        // Another hook already blocked this stop: nothing, before any other rule.
+        assert_eq!(
+            run(r#"{"session_id":"s-ftr059","stop_hook_active":true}"#),
+            ""
+        );
+        // A fresh stop: one block.
+        let first = run(r#"{"session_id":"s-ftr059","stop_hook_active":false}"#);
+        let blocks = first
+            .lines()
+            .filter(|l| l.contains(r#""decision":"block""#));
+        assert_eq!(blocks.count(), 1, "{first}");
+        // The same session, the same reason: nothing more.
+        assert_eq!(
+            run(r#"{"session_id":"s-ftr059","stop_hook_active":false}"#),
+            ""
+        );
+        // And while continuing because of that block: nothing.
+        assert_eq!(
+            run(r#"{"session_id":"s-ftr059","stop_hook_active":true}"#),
+            ""
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The hook script the binary carries, as `skill install` writes it.
