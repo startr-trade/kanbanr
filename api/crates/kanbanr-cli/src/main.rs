@@ -11049,6 +11049,10 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
                 }
                 for g in &gs {
                     println!("  {}", delegation_line(g));
+                    // DEF-080: the board's history cannot be read, so the grant cannot be checked.
+                    if let Some(why) = g["grant_unverifiable"].as_str() {
+                        println!("    can't be checked: {why}");
+                    }
                     for line in permission_hint(v, g["id"].as_str()) {
                         println!("    {line}");
                     }
