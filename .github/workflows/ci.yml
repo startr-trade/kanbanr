@@ -509,7 +509,7 @@ jobs:
       - name: No tracked merge leftovers (*.orig, *.rej)
         run: |
           set -eu
-          python3 -m unittest -q scripts/tests/test_check_tracked_files.py
+          python3 -m unittest discover -s scripts/tests -p 'test_check_tracked_files.py' -v
           sh scripts/check-tracked-files.sh
 
       # The test runner, its config and the JUnit check follow the shared Rust CI practices (MNT-010;
@@ -519,16 +519,16 @@ jobs:
 
       # The guides cover designing a pipeline and describe a product by what a person does (DOC-007).
       - name: The guides cover the pipeline and a product people use
-        run: python3 -m unittest -q scripts/tests/test_guides.py
+        run: python3 -m unittest discover -s scripts/tests -p 'test_guides.py' -v
 
       # The privacy scan lists what a public board would show (MNT-012).
       - name: The privacy scan's own tests pass
-        run: python3 -m unittest -q scripts/tests/test_privacy_scan.py
+        run: python3 -m unittest discover -s scripts/tests -p 'test_privacy_scan.py' -v
 
       # The guide is docs/guide, the system representation docs/system, and the move from the old
       # source folder left no live reference behind (MNT-002).
       - name: The docs layout holds
-        run: python3 -m unittest -v scripts/tests/test_docs_layout.py
+        run: python3 -m unittest discover -s scripts/tests -p 'test_docs_layout.py' -v
 
       # Every check a gate can ask for has its behaviour described in the Working with Claude
       # chapter (FEAT-159): a new check cannot ship with nothing saying what Claude does about it.
@@ -639,7 +639,7 @@ jobs:
       # Builds read only the lockfiles, and a release says what is inside it (MNT-004). The
       # SBOM step runs the release's own script, so a broken one shows here before a tag does.
       - name: The supply-chain check's own tests pass
-        run: python3 -m unittest -q scripts/tests/test_check_supply_chain.py
+        run: python3 -m unittest discover -s scripts/tests -p 'test_check_supply_chain.py' -v
 
       - name: Builds are locked and installs are clean
         run: python3 scripts/check_supply_chain.py

@@ -863,6 +863,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def unittest_by_name(file: str) -> list[str]:
+    """Run one test file so unittest prints each test's line under the bare file name as its module
+    (`test_x (test_ci_local.Class.test_x) ... ok`), the names the board tracks (MNT-007, DEF-068)."""
+    return [sys.executable, "-m", "unittest", "discover", "-s", "scripts/tests", "-p", file, "-v"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parse_args(argv)
     print(f"make ci: a clean copy of the tracked tree at {TREE}", flush=True)
@@ -875,13 +881,13 @@ def main(argv: list[str] | None = None) -> int:
     # A test that reaches the real board writes to someone's data, and its push publishes it.
     # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
     board_before = board_state()
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_ci_local.py"), ROOT)
     say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_check_supply_chain.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_check_supply_chain.py"), ROOT)
     say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_guides.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_guides.py"), ROOT)
     say("make ci: the guides cover the pipeline and a product people use (DOC-007)", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_privacy_scan.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_privacy_scan.py"), ROOT)
     say("make ci: the privacy scan lists what a public board would show (MNT-012)", ok, out)
     fresh_tree()
     lint_workflows()
