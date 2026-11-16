@@ -171,7 +171,7 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
         message,
         setup_pending: setup_pending(root),
         staged: None,
-        block_refresh: false,
+        block_refresh: claude_block_refresh(root, true),
     }
 }
 
@@ -180,6 +180,7 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
 pub fn repo_facts_staged(root: &Path, message: Option<String>) -> crate::scm::RepoFacts {
     crate::scm::RepoFacts {
         staged: staged_paths(root),
+        block_refresh: claude_block_refresh(root, false),
         ..repo_facts(root, message)
     }
 }
@@ -216,6 +217,45 @@ pub fn staged_paths(root: &Path) -> Option<Vec<String>> {
             .map(str::to_string)
             .collect(),
     )
+}
+
+/// Does the repository's CLAUDE.md differ from HEAD's only inside the generated block (DEF-083)?
+/// HEAD's copy is `git cat-file blob HEAD:CLAUDE.md`, or "" when HEAD has none. The candidates are
+/// the index's copy (`:CLAUDE.md`, when it has one) and, with `worktree`, `root/CLAUDE.md` on disk.
+/// True when any candidate satisfies `claude::block_only_change(head, candidate)`. Fails safe:
+/// false with no commits, or when git cannot be asked (ADR-0004).
+pub fn claude_block_refresh(root: &Path, worktree: bool) -> bool {
+    if !has_commits(root) {
+        return false;
+    }
+    // `Some(None)`: absent; `None`: git could not be asked.
+    let blob = |spec: &str| -> Option<Option<String>> {
+        match run(root, &["cat-file", "-e", spec]) {
+            Ok(o) if !o.status.success() => return Some(None),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        let out = run(root, &["cat-file", "blob", spec]).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    };
+    let file = crate::scm::BLOCK_FILE;
+    let Some(head) = blob(&format!("HEAD:{file}")) else {
+        return false;
+    };
+    let head = head.unwrap_or_default();
+    let Some(index) = blob(&format!(":{file}")) else {
+        return false;
+    };
+    let mut candidates: Vec<String> = index.into_iter().collect();
+    if worktree && let Ok(text) = std::fs::read_to_string(root.join(file)) {
+        candidates.push(text);
+    }
+    candidates
+        .iter()
+        .any(|candidate| crate::claude::block_only_change(&head, candidate))
 }
 
 /// The commit a revision names.
@@ -939,6 +979,44 @@ pub(crate) mod tests {
         std::fs::write(fresh.join(".kanbanr"), "data_dir: x\n").unwrap();
         assert!(!setup_pending(&fresh));
         let _ = std::fs::remove_dir_all(&fresh);
+    }
+
+    /// DEF-083 R-1: a refresh of CLAUDE.md's block is read from the working tree for the guard
+    /// and commit-msg, from the index for pre-commit, and closes once committed.
+    #[test]
+    fn a_block_refresh_is_read_from_the_index_and_the_tree() {
+        use crate::claude::{BEGIN, END};
+        let block_a = format!("# p\n\n{BEGIN}\n\nA\n\n{END}\n");
+        let block_b = format!("# p\n\n{BEGIN}\n\nB\n\n{END}\n");
+        let repo = scratch_repo("block-refresh");
+        commit_file(&repo, "CLAUDE.md", &block_a, "claude");
+        assert!(!claude_block_refresh(&repo, true), "nothing changed");
+        std::fs::write(repo.join("CLAUDE.md"), &block_b).unwrap();
+        assert!(claude_block_refresh(&repo, true), "the tree");
+        assert!(!claude_block_refresh(&repo, false), "the index is HEAD's");
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(claude_block_refresh(&repo, true));
+        assert!(claude_block_refresh(&repo, false), "the index");
+        assert!(repo_facts_staged(&repo, None).block_refresh);
+        assert!(repo_facts(&repo, None).block_refresh);
+        // A line outside the markers is the author's: no refresh.
+        std::fs::write(repo.join("CLAUDE.md"), format!("mine\n{block_b}")).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
+        // Committed: the window closes.
+        std::fs::write(repo.join("CLAUDE.md"), &block_b).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "[no-ref] refresh the kanbanr block"]).unwrap();
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // HEAD with no CLAUDE.md reads as empty: a block-only file on disk is a refresh.
+        let bare = scratch_repo("block-refresh-bare");
+        std::fs::write(bare.join("CLAUDE.md"), format!("{BEGIN}\n\nA\n\n{END}\n")).unwrap();
+        assert!(claude_block_refresh(&bare, true));
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
