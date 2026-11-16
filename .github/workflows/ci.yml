@@ -326,6 +326,10 @@ jobs:
       # the slices it names, and loading is never drawn as empty (DEF-081).
       - name: The monitor's data cache shares reads and re-reads only changed slices
         run: npm run check:data-cache
+      # The latest background drift result is labelled with its code revision and age, recomputing
+      # while a newer run goes, and unavailable without a code repository (FTR-045).
+      - name: The monitor labels background drift with its revision and age
+        run: npm run check:drift-age
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

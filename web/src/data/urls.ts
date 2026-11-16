@@ -30,6 +30,9 @@ export const urls = {
   sprint: (p: string, s: string) => apiUrl(`${project(p)}/sprints/${enc(s)}`),
   gitModel: (p: string) => apiUrl(`${project(p)}/git/model`),
   docTree: (p: string) => apiUrl(`${project(p)}/docs`),
+  /** The latest background drift result, with the flags unless `flags` is false (FTR-045). */
+  driftLatest: (p: string, flags = true) =>
+    apiUrl(`${project(p)}/drift/latest${flags ? "" : "?flags=false"}`),
 };
 
 /** The slice tags each read depends on (A1 shared API §2). */
@@ -43,4 +46,6 @@ export const TAGS = {
   charter: ["charter"],
   sprints: ["sprints", "items"],
   docTree: ["docs"],
+  /** Sent only by the daemon's background worker, after a drift run (FTR-045). */
+  driftLatest: ["drift"],
 } as const;
