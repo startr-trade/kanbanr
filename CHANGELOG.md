@@ -15,6 +15,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 - The image's health check names `localhost`, so docker and compose report a serving monitor
   healthy again; it had been refused by the host check since v0.5.0 (DEF-079).
+- An item whose branch is merged into its release still reads its changed docs as built, so
+  docs-folded can be given after the merge (DEF-091).
 
 ## [0.7.0] - 2026-11-16
 
