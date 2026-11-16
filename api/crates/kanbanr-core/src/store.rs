@@ -2199,6 +2199,13 @@ impl Store {
             ctx,
             to,
         ));
+        // Said at the move, never enforced (DEF-075).
+        warnings.extend(crate::readiness::undeclared_docs_warning(
+            &project.id,
+            feature,
+            to,
+            &gate,
+        ));
         if failing.is_empty() {
             return Ok(GateOutcome {
                 warnings,
