@@ -163,6 +163,30 @@ pub fn merge(existing: &str, block: &str) -> String {
     }
 }
 
+/// The author's part of a CLAUDE.md: the text before BEGIN and after END, each trimmed and joined
+/// by one "\n" (an empty part dropped), or the whole text trimmed when there is no BEGIN…END pair
+/// with END after BEGIN. "\r\n" is read as "\n" first. Pure (DEF-083).
+pub fn outside_block(text: &str) -> String {
+    let t = text.replace("\r\n", "\n");
+    let Some(s) = t.find(BEGIN) else {
+        return t.trim().to_string();
+    };
+    let Some(e) = t[s..].find(END).map(|i| s + i) else {
+        return t.trim().to_string();
+    };
+    [t[..s].trim(), t[e + END.len()..].trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `before` and `after` differ, and only inside the generated block:
+/// `before != after && outside_block(before) == outside_block(after)`. Pure (DEF-083).
+pub fn block_only_change(before: &str, after: &str) -> bool {
+    before != after && outside_block(before) == outside_block(after)
+}
+
 /// The board path to suggest for a file the guard refuses, or `None` when the write is not the
 /// guard's business.
 ///
@@ -337,6 +361,34 @@ mod tests {
         );
         assert_eq!(again.matches(BEGIN).count(), 1, "exactly one block");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-083: a refresh of the generated block is told apart from an edit of the author's text.
+    #[test]
+    fn a_block_only_change_leaves_the_authors_text_alone() {
+        let block_a = format!("{BEGIN}\n\nA\n\n{END}\n");
+        let block_b = format!("{BEGIN}\n\nB\n\n{END}\n");
+        let first = merge("# app\n", &block_a);
+        // The block appended to a file that had none.
+        assert!(block_only_change("# app\n", &first), "{first}");
+        // The block replaced.
+        let second = merge(&first, &block_b);
+        assert!(block_only_change(&first, &second), "{second}");
+        // No change is no refresh.
+        assert!(!block_only_change(&first, &first));
+        // The author's text changed too.
+        let edited = merge(&first.replace("# app", "# app2"), &block_b);
+        assert!(!block_only_change(&first, &edited), "{edited}");
+        // CRLF outside the block reads as LF.
+        let crlf = first.replace('\n', "\r\n");
+        assert!(block_only_change(&crlf, &second));
+        // BEGIN with no END after it is no block: any change is outside.
+        let open = format!("# app\n\n{BEGIN}\n\nA\n");
+        assert!(!block_only_change(&open, &open.replace("A\n", "B\n")));
+        let backwards = format!("{END}\n# app\n{BEGIN}\nA\n");
+        assert!(!block_only_change(&backwards, &backwards.replace("A\n", "B\n")));
+        // HEAD with no CLAUDE.md reads as empty: a block-only file is a refresh.
+        assert!(block_only_change("", &block_a));
     }
 
     /// FEAT-136: the board's remote becomes the address a contributor clones; a local path does not.
