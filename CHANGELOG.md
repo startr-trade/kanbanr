@@ -29,6 +29,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- A delegation whose grant cannot be checked, because the board's git history cannot be read (for
+  example a folder owned by another user), now says so and why, instead of reading as not granted
+  through kanbanr (DEF-080).
 - `kanbanr claude permissions` no longer warns that `.claude/settings.local.json` is not ignored
   when a root-anchored or glob `.gitignore` line ignores it: it asks git (DEF-097).
 - The image's health check names `localhost`, so docker and compose report a serving monitor

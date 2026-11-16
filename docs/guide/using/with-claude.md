@@ -163,6 +163,15 @@ design decision (ADR) or the decisions settings themselves, and only the Claude 
 acts under one, never a sub-agent it briefs. Revoke a delegation on the same panel at any time;
 switching back to monitor mode suspends them all.
 
+**"Can't be checked".** kanbanr honours a grant only when its own history shows that kanbanr wrote
+it. When it cannot read the board's git history, it cannot tell, so the delegation is marked
+**can't be checked**, with the reason, on the Review page and in `kanbanr decisions show`, and
+nothing is taken under it until it can be checked: Claude's decision under it is refused, naming
+the reason. Most often the board's folder belongs to another user, and git refuses such a
+repository (its safe.directory rule). Run kanbanr as the folder's owner, or trust the folder with
+`git config --global --add safe.directory <folder>`; the delegation is honoured again with nothing
+to grant anew.
+
 Outside a delegation nothing changes: a verdict run inside a Claude session is refused by kanbanr
 itself, not only by its hook. This keeps Claude to what you delegated through kanbanr's own
 commands and hooks, and makes any departure visible; it is not a security boundary against a

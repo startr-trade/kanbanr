@@ -490,7 +490,10 @@ The top of the Review page says where this project's decisions are taken (FTR-02
   until when: **Grant** grants it exactly as shown (if it changed since the page loaded, the grant
   is refused), **Reject** discards it. A granted one shows its end and **Revoke**, which needs a
   reason. A delegation whose grant kanbanr did not write (the file was edited by hand, or changed
-  outside a commit) is marked "not granted through kanbanr", and nothing is taken under it. In delegated mode a granted one also says
+  outside a commit) is marked "not granted through kanbanr", and nothing is taken under it. One
+  whose grant kanbanr cannot check, because it cannot read the board's git history (most often a
+  folder owned by another user), is marked "can't be checked" with the reason and the fix, and
+  nothing is taken under it until it can be. In delegated mode a granted one also says
   whether the Claude Code allow rule auto mode needs is in place ("auto mode: allowed"), or names
   the missing rule and the command that adds it, `kanbanr claude permissions --write`.
 - **Delegated decisions to review**: what Claude decided under a delegation, on which item, under
