@@ -517,6 +517,80 @@
         ],
         "type": "object"
       },
+      "BuildConfig": {
+        "additionalProperties": true,
+        "description": "How agents' builds share one machine (FTR-062). Every field is optional and absent by default;\n[`BuildConfig::effective`](crate::buildplan) resolves the values a build uses.",
+        "properties": {
+          "cache_gib": {
+            "description": "The project's compiler cache size in GiB. Absent: 10.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobs_per_slot": {
+            "description": "Jobs each build may use (`CARGO_BUILD_JOBS`, test threads). Absent: 5.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "line_check": {
+            "description": "The command the line check runs. Absent: `scripts/test.sh` when present, else\n`cargo test --locked --workspace`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "linker": {
+            "description": "`default` (the toolchain's linker) or `mold`. Absent: default.",
+            "type": "string"
+          },
+          "max_load": {
+            "description": "The 1-minute load above which a build waits (Linux). Absent: vCPUs - reserve.",
+            "format": "double",
+            "type": "number"
+          },
+          "queue_batch": {
+            "description": "Branches checked together by the merge queue's line check. Absent: 4.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reserve_cpus": {
+            "description": "vCPUs kept free for the desktop. Absent: 2.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reserve_mem_gib": {
+            "description": "GiB of available memory a build waits for (Linux). Absent: 6.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sccache": {
+            "description": "`auto` (the project's sccache server when sccache is installed) or `off`. Absent: auto.",
+            "type": "string"
+          },
+          "sccache_port": {
+            "description": "The project's sccache server port. Absent: derived from the main checkout's path.",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slots": {
+            "description": "Builds that may run at once on the machine. Absent: `(vCPUs - reserve) / jobs`, at least 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "web_cache": {
+            "description": "Whether the built monitor is cached by its sources' content. Absent: on.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "BurndownDay": {
         "description": "One day of a burndown: what was still to do at the end of it.",
         "properties": {
@@ -4234,6 +4308,10 @@
           "branch_pattern": {
             "description": "How `kanbanr start` names a branch (FEAT-056): `{code}` and `{slug}`. Absent means the\ndefault, and absent stays absent on disk so an existing config is not rewritten.",
             "type": "string"
+          },
+          "build": {
+            "$ref": "#/components/schemas/BuildConfig",
+            "description": "How agents' builds share this machine (FTR-062): slots, jobs, caches, the merge queue.\nAbsent: the defaults [`crate::buildplan::Effective`] derives, and absent stays absent on\ndisk. An older kanbanr keeps it through `extra`."
           },
           "cadence": {
             "$ref": "#/components/schemas/Cadence",

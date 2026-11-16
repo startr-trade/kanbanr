@@ -139,6 +139,11 @@ pub struct ProjectConfig {
     /// append-only file, and absent stays absent on disk.
     #[serde(default, skip_serializing_if = "TaskConfig::is_default")]
     pub tasks: TaskConfig,
+    /// How agents' builds share this machine (FTR-062): slots, jobs, caches, the merge queue.
+    /// Absent: the defaults [`crate::buildplan::Effective`] derives, and absent stays absent on
+    /// disk. An older kanbanr keeps it through `extra`.
+    #[serde(default, skip_serializing_if = "BuildConfig::is_default")]
+    pub build: BuildConfig,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -307,6 +312,65 @@ impl Default for TaskConfig {
             append_only: TaskConfig::default_append_only(),
             extra: Default::default(),
         }
+    }
+}
+
+/// How agents' builds share one machine (FTR-062). Every field is optional and absent by default;
+/// [`BuildConfig::effective`](crate::buildplan) resolves the values a build uses.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BuildConfig {
+    /// Builds that may run at once on the machine. Absent: `(vCPUs - reserve) / jobs`, at least 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<u32>,
+    /// Jobs each build may use (`CARGO_BUILD_JOBS`, test threads). Absent: 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs_per_slot: Option<u32>,
+    /// vCPUs kept free for the desktop. Absent: 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_cpus: Option<u32>,
+    /// GiB of available memory a build waits for (Linux). Absent: 6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_mem_gib: Option<u32>,
+    /// The 1-minute load above which a build waits (Linux). Absent: vCPUs - reserve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_load: Option<f64>,
+    /// `auto` (the project's sccache server when sccache is installed) or `off`. Absent: auto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sccache: Option<String>,
+    /// The project's sccache server port. Absent: derived from the main checkout's path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sccache_port: Option<u16>,
+    /// The project's compiler cache size in GiB. Absent: 10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_gib: Option<u32>,
+    /// `default` (the toolchain's linker) or `mold`. Absent: default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linker: Option<String>,
+    /// Whether the built monitor is cached by its sources' content. Absent: on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_cache: Option<bool>,
+    /// Branches checked together by the merge queue's line check. Absent: 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_batch: Option<u32>,
+    /// The command the line check runs. Absent: `scripts/test.sh` when present, else
+    /// `cargo test --locked --workspace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_check: Option<Vec<String>>,
+    /// Keys a newer kanbanr wrote here, kept and written back unchanged.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+impl BuildConfig {
+    /// Nothing set: what an absent key means, and why it stays absent.
+    pub fn is_default(&self) -> bool {
+        *self == BuildConfig::default()
     }
 }
 
@@ -1129,6 +1193,7 @@ impl WorkflowFile {
             coverage: Vec::new(),
             paths: path_keys(self.paths),
             tasks: Default::default(),
+            build: Default::default(),
         };
         config.schema_version = config.required_schema_version();
         config

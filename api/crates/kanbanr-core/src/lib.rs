@@ -18,6 +18,7 @@ pub mod atomic;
 pub mod baseline;
 pub mod batch;
 pub mod boardreadme;
+pub mod buildplan;
 pub mod catalog;
 pub mod charter;
 pub mod claude;
