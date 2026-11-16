@@ -1,0 +1,319 @@
+//! `kanbanr recover`: the plan to resume from, sized for a session start (DEF-093).
+//!
+//! Gathers the [`Inputs`] over the backend, from the same routes and printers the 0.7.0
+//! SessionStart script called one by one, and prints what [`recover::render`] makes of them.
+//! Read-only (ADR-0005), and best effort: a section whose source errors is left out, and with no
+//! project to recover the command prints nothing and succeeds, so it never breaks a session
+//! (ADR-0004).
+
+use crate::backend::Backend;
+use crate::{Cli, activity_text, board_text, decisions_summary, get_project, lessons_text};
+use crate::{process_status_text, project_drift, scope_drift_text, scope_list_text};
+use kanbanr_core::recover::{self, Inputs, Line, Section, Waiting};
+use kanbanr_core::{Project, project};
+use serde_json::{Value, json};
+
+/// The environment variable that sets the budget when `--budget` is not given.
+pub const BUDGET_ENV: &str = "KANBANR_SESSION_BUDGET";
+
+const LESSONS_NOTE: &str = "_Before starting an item, check `kanbanr lessons --for <CODE>`. If one of\n\
+these turns out to be wrong, say so: `kanbanr lesson contradict <L-n> --note '…'`._";
+
+const FOOTER: &str = "_kanbanr is the system of record for this project's PLAN (features/tasks/\n\
+specs/decisions/progress). Resume from the board above; record new work in\n\
+kanbanr as you go. Every document (requested or self-initiated) goes in\n\
+kanbanr docs (`kanbanr doc add …`), NOT the working folder — unless the user\n\
+asks for it in the project folder._";
+
+/// The budget in force: the flag, else the environment, else the default; never below the
+/// minimum.
+fn budget(flag: Option<usize>) -> usize {
+    flag.or_else(|| {
+        std::env::var(BUDGET_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+    })
+    .unwrap_or(recover::DEFAULT_BUDGET)
+    .max(recover::MIN_BUDGET)
+}
+
+fn section(title: &str, body: String) -> Section {
+    Section {
+        title: title.to_string(),
+        body,
+    }
+}
+
+/// The first `n` lessons of `lessons_text`: each starts on an unindented line.
+fn first_lessons(text: &str, n: usize) -> String {
+    let mut seen = 0;
+    let mut out = String::new();
+    for line in text.lines() {
+        if !line.starts_with(' ') {
+            seen += 1;
+            if seen > n {
+                break;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn first_lines(text: &str, n: usize) -> String {
+    text.lines().take(n).map(|l| format!("{l}\n")).collect()
+}
+
+/// The ids in a JSON list whose `key` holds a string.
+fn ids(v: &Value, key: &str) -> Vec<String> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|x| x[key].as_str().map(str::to_string))
+        .collect()
+}
+
+fn sprint_line(client: &Backend, p: &str, project: &Project) -> Option<String> {
+    let sprints = kanbanr_core::sprints::load(client.store(), p).ok()?;
+    let s = kanbanr_core::sprints::active(&sprints)?;
+    let items: Vec<_> = project
+        .features
+        .iter()
+        .filter(|f| f.sprint.as_deref() == Some(s.code.as_str()))
+        .collect();
+    let done = items
+        .iter()
+        .filter(|f| project.config.is_terminal(&f.status))
+        .count();
+    Some(format!(
+        "Sprint {} \"{}\", {} to {}: {done}/{} items finished.",
+        s.code,
+        s.goal,
+        s.start,
+        s.end,
+        items.len()
+    ))
+}
+
+fn release_line(client: &Backend, p: &str, project: &Project) -> Option<String> {
+    use kanbanr_core::releases::ReleaseState;
+    let releases = kanbanr_core::releases::load(client.store(), p).ok()?;
+    let stages = project.config.cadence.stages();
+    let lines: Vec<String> = releases
+        .iter()
+        .rev()
+        .filter(|r| r.state == ReleaseState::Planned)
+        .take(2)
+        .map(|r| {
+            if r.waits_on_tag() {
+                return format!(
+                    "Release {}: tagged in {}, waiting for the tag workflow.",
+                    r.version, r.version
+                );
+            }
+            let next = match stages.iter().position(|s| *s == r.stage) {
+                Some(at) => stages.get(at + 1),
+                None if r.stage.is_empty() => stages.first(),
+                None => None,
+            };
+            format!(
+                "Release {}: at {}, next {}.",
+                r.version,
+                if r.stage.is_empty() {
+                    "not started"
+                } else {
+                    &r.stage
+                },
+                next.map_or("cut", String::as_str)
+            )
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// Everything `render` needs, gathered best effort.
+fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
+    let config = &project.config;
+    let mut full = Vec::new();
+
+    let mut board = board_text(project);
+    if let (Some(line), _) = decisions_summary(client, p) {
+        board.push_str(&line);
+        board.push('\n');
+    }
+    full.push(section("Board", board));
+
+    let activity = activity_text(client, p).ok();
+    if let Some(a) = &activity {
+        full.push(section("Recent activity", a.clone()));
+    }
+
+    let lessons = lessons_text(client, p, None, false)
+        .ok()
+        .filter(|l| l.trim() != "(nothing learned here yet)" && !l.trim().is_empty());
+    if let Some(l) = &lessons {
+        full.push(section(
+            "Lessons this project has learned",
+            format!("{}\n{LESSONS_NOTE}", first_lines(l, 10)),
+        ));
+    }
+
+    let items = client
+        .get(&format!("/projects/{p}/review"))
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .map(|v| ids(&v, "code"))
+        .unwrap_or_default();
+    let adrs: Vec<String> = client
+        .get(&format!("/projects/{p}/adrs"))
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .map(|v| {
+            v.as_array()
+                .into_iter()
+                .flatten()
+                .filter(|a| a["status"] == "proposed")
+                .filter_map(|a| a["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let prepared = client
+        .get(&format!("/projects/{p}/prepared?state=open"))
+        .ok()
+        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+        .and_then(|v| v.as_array().map(Vec::len))
+        .unwrap_or(0);
+    if !items.is_empty() || !adrs.is_empty() {
+        full.push(section(
+            "Waiting for the user",
+            format!(
+                "{} item(s) and {} proposed decision(s) need a verdict. Offer to review them here,\n\
+                 one question each — see the skill's \"Waiting decisions\" — rather than sending the user\n\
+                 to the browser.",
+                items.len(),
+                adrs.len()
+            ),
+        ));
+    }
+
+    let scopes = scope_list_text(client, p, false, None)
+        .ok()
+        .filter(|s| s.trim() != "(no agent scopes in force)" && !s.trim().is_empty());
+    let drift = scope_drift_text(client, p, true)
+        .ok()
+        .filter(|d| !d.trim().is_empty());
+    let agents = (scopes.is_some() || drift.is_some()).then(|| {
+        let mut body = scopes.unwrap_or_default();
+        if let Some(d) = drift {
+            body.push_str("Ahead of the board — bring these items' tasks up to date first:\n");
+            body.push_str(&d);
+        }
+        section("Agents at work", body)
+    });
+    if let Some(a) = &agents {
+        full.push(a.clone());
+    }
+
+    let process = project_drift(client, project)
+        .ok()
+        .map(|d| process_status_text(p, d.as_ref(), true))
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| {
+            section(
+                "The project's process",
+                format!(
+                    "{t}Mention it and ask once whether to update; never run `kanbanr process update` unasked."
+                ),
+            )
+        });
+    if let Some(s) = &process {
+        full.push(s.clone());
+    }
+
+    let mut optional = vec![section("Hooks", String::new())];
+    optional.extend(agents);
+    optional.extend(process);
+    if let Some(l) = &lessons {
+        optional.push(section("Lessons", first_lessons(l, 3)));
+    }
+    if let Some(a) = &activity {
+        // The activity lists the newest first: its first lines are the latest.
+        optional.push(section("Recent activity", first_lines(a, 5)));
+    }
+
+    let in_progress = project
+        .features
+        .iter()
+        .filter(|f| {
+            f.status != config.default_state
+                && !config.is_terminal(&f.status)
+                && !config.is_no_op(&f.status)
+                && config.board_states().contains(&f.status)
+        })
+        .map(|f| Line {
+            code: f.code.clone(),
+            status: f.status.clone(),
+            title: f.title.clone(),
+            tasks: (f.done_count(), f.task_count()),
+        })
+        .collect();
+    let counts = config
+        .board_states()
+        .iter()
+        .map(|s| {
+            (
+                s.clone(),
+                project.features.iter().filter(|f| &f.status == s).count(),
+            )
+        })
+        .collect();
+
+    Inputs {
+        project: p.to_string(),
+        full,
+        in_progress,
+        counts,
+        waiting: Waiting {
+            items,
+            adrs,
+            prepared,
+        },
+        sprint: sprint_line(client, p, project),
+        release: release_line(client, p, project),
+        optional,
+        footer: FOOTER.to_string(),
+    }
+}
+
+/// Print the session-start summary within the budget (flag, `KANBANR_SESSION_BUDGET`, default).
+/// With no project to recover, print nothing and succeed: the hook's contract.
+pub fn run_recover(cli: &Cli, client: &Backend, flag: Option<usize>) -> anyhow::Result<()> {
+    let Some(p) = project::resolve_project(cli.project.as_deref()) else {
+        return Ok(());
+    };
+    let Ok(project) = get_project(client, &p) else {
+        return Ok(());
+    };
+    let inputs = gather(client, &p, &project);
+    let budget = budget(flag);
+    let text = recover::render(&inputs, budget);
+    if cli.json {
+        let form = if text == recover::render(&inputs, usize::MAX) {
+            "full"
+        } else {
+            "brief"
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "bytes": text.len(),
+                "form": form,
+                "text": text,
+            }))?
+        );
+    } else {
+        print!("{text}");
+    }
+    Ok(())
+}

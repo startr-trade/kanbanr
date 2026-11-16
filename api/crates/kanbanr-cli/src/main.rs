@@ -6,6 +6,7 @@ mod backend;
 mod editor;
 mod hooks;
 mod mirror;
+mod recover;
 mod scm;
 mod self_update;
 mod skill;
@@ -552,6 +553,13 @@ enum Command {
     },
     /// Print a text kanban board for the project.
     Board,
+    /// The plan to resume from, sized for a session start (DEF-093): work in progress, what waits
+    /// for you, the sprint and release, and where to read more.
+    Recover {
+        /// The most bytes to print (default: $KANBANR_SESSION_BUDGET, else 8000; never below 2000).
+        #[arg(long)]
+        budget: Option<usize>,
+    },
     /// List features that are ready to work (all dependencies terminal). (FEAT-027)
     Ready {
         /// Span every project (portfolio-wide) instead of just the current one.
@@ -2167,6 +2175,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Report { .. }
         | Command::Export { .. }
         | Command::Board
+        | Command::Recover { .. }
         | Command::Ready { .. }
         | Command::Blocked { .. }
         | Command::Graph { .. }
@@ -7909,6 +7918,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             println!("{resp}");
             Ok(())
         }
+        Command::Recover { budget } => recover::run_recover(cli, &client, *budget),
         Command::Board => {
             let p = require_project(cli)?;
             let project = get_project(&client, &p)?;
@@ -8735,7 +8745,11 @@ fn scope_list_text(
     let scopes = scopes_listed(client, p, all, item)?;
     let mut out = String::new();
     if scopes.is_empty() {
-        let _ = writeln!(out, "(no agent scopes{})", if all { "" } else { " in force" });
+        let _ = writeln!(
+            out,
+            "(no agent scopes{})",
+            if all { "" } else { " in force" }
+        );
     }
     for s in &scopes {
         let f = |k: &str| s[k].as_str().unwrap_or_default().to_string();
