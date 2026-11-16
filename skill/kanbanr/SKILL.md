@@ -506,6 +506,8 @@ informed. Never leave them as "for you to decide" after the approval is given.
 When one request spans several stages ("take it to business architecture, then design it"), say at
 the top of the brief which stages it covers.
 
+Before you ask for approval, settle what would otherwise change after it: each test's kind (a
+test the person named keeps theirs) and its name in the runner's form (see Tests are evidence).
 Then write the definition to the board (`kanbanr feature define`), show its brief in a few lines,
 and say it is waiting for their approval on the Review page, with the link. Choices you had to
 make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
@@ -1037,7 +1039,7 @@ project revision it was observed at. So:
   `e2e/basket.spec.ts › kept basket › basket is kept after the browser is closed and reopened`
   (project, location and duration dropped; the titles alone also match). Vitest's default
   reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
-  them records nothing.
+  them records nothing. Settle that form before you ask for approval (below).
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed
@@ -1058,11 +1060,28 @@ said>"` and tell them to confirm it on the Review page. A failed check is record
 user whether to file a defect, and file one only when they say so.
 
 **At most one manual test per item, and only for a person's judgement** (does this read well, is
-this confusing). Anything a run can see — a button offered, a decision taken with nothing typed, a
-question asked or not asked, a board claim, a tag on the remote — is a test of kind `walkthrough`,
-named `walkthrough: <what the run shows>`: automated evidence, proved by
+this confusing). A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
+the board, the monitor or the remote: a button the monitor offers, a decision taken with nothing
+typed, a question Claude asked or did not ask, a board claim, a tag on the remote. Name it
+`walkthrough: <what the run shows>`: automated evidence, proved by
 `kanbanr walkthrough run <runbook doc>`, never asked of the person, and never searched for in the
-repository (FTR-037). `kanbanr check` says so for one not yet green.
+repository (FTR-037). `kanbanr check` says so for one not yet green. **The product's own behaviour
+is never a walkthrough test.** A runbook drives kanbanr, not the project's app, so a page, an API
+or a stored value of the project is proved by a test in the project's own runner (unit,
+integration or end-to-end), or, when only a person can judge it, by the item's one manual test.
+
+**A test the person named keeps its kind and its name.** When the person asks for a test (a
+manual check of the basket page, a test with this wording), record it with the kind and the words
+they gave. If you think another kind fits better, say why in a question before you record it, and
+record what they choose. Never change it afterwards on your own: after approval a change of kind
+or name lapses the approval, so propose it and make it only when the person agrees.
+
+**Settle test names before asking for approval.** Name every test in the form the project's
+runner prints and capture reads (the forms above), with the runner and its reporter chosen. If
+the project has not chosen its test runner yet, ask that (one AskUserQuestion, the option capture
+reads recommended first) while you draft the definition, before the approval request, never after
+it. A test named in another form is renamed before you ask: the same rename after approval lapses
+it, on every item that holds such a name.
 
 ## Every change points back at the reason for it
 
@@ -1475,7 +1494,8 @@ Under a phased process, grow an item's definition stage by stage.
 - **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
   standing, to be reviewed at the next decision (before build) or at once (from build on, when the
   Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
-  to approve again before the move.
+  to approve again before the move. So settle test kinds and runner-form names before the first
+  approval, not after it.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the
