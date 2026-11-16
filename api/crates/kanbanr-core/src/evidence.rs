@@ -12,40 +12,262 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Test name -> passed, parsed from a test runner's output. Handles `cargo test` (`test NAME ...
-/// ok`) and the common `✓ NAME` / `✗ NAME` shape used by JS runners. Unknown formats yield
-/// nothing, which is the right failure: recording a guess would be worse than recording nothing.
+/// Test name -> passed, parsed from a test runner's output. A fixed chain of readers, one per
+/// runner (cargo, then marked lines such as Vitest's); the first reader that owns a line decides
+/// it. Unknown formats yield nothing, which is the right failure: recording a guess would be
+/// worse than recording nothing. A name reported more than once is green only if every line
+/// passed (DEF-061).
 pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
     let mut out = BTreeMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("test ") {
-            // cargo: `test module::name ... ok` / `... FAILED`
-            if let Some((name, verdict)) = rest.rsplit_once(" ... ") {
-                let name = name.trim();
-                match verdict.trim() {
-                    "ok" => {
-                        out.insert(name.to_string(), true);
-                    }
-                    "FAILED" => {
-                        out.insert(name.to_string(), false);
-                    }
-                    _ => {}
-                }
+    for raw in text.lines() {
+        let line = raw.trim();
+        let readings = if let Some(r) = read_cargo(line) {
+            vec![r]
+        } else if let Some(r) = read_pytest(line) {
+            vec![r]
+        } else if let Some(rs) = read_playwright(line) {
+            rs
+        } else if let Some(r) = read_marked(line) {
+            vec![r]
+        } else {
+            continue;
+        };
+        for r in readings {
+            match r.outcome {
+                Outcome::Passed => record(&mut out, r.name, true),
+                Outcome::Failed => record(&mut out, r.name, false),
+                Outcome::Unproven => {}
             }
-        } else if let Some(name) = line
-            .strip_prefix("\u{2713} ")
-            .or_else(|| line.strip_prefix("PASS "))
-        {
-            out.insert(name.trim().to_string(), true);
-        } else if let Some(name) = line
-            .strip_prefix("\u{2717} ")
-            .or_else(|| line.strip_prefix("FAIL "))
-        {
-            out.insert(name.trim().to_string(), false);
         }
     }
     out
+}
+
+/// What one line says, once a reader owns it. `Unproven`: the line is a result that proves
+/// nothing (skipped, todo, ignored); owning it keeps a later reader from misreading it.
+/// (Named `Outcome`, not `Verdict`: a verdict is a person's decision elsewhere in kanbanr.)
+#[derive(Clone, Copy)]
+enum Outcome {
+    Passed,
+    Failed,
+    Unproven,
+}
+
+struct Reading {
+    name: String,
+    outcome: Outcome,
+}
+
+/// One name's result for the run: a name seen more than once is green only if every line passed.
+fn record(out: &mut BTreeMap<String, bool>, name: String, passed: bool) {
+    *out.entry(name).or_insert(true) &= passed;
+}
+
+/// cargo test: `test NAME ... ok|FAILED|ignored`. Boundary: the line starts with `test `; the
+/// name ends at the last ` ... `.
+fn read_cargo(line: &str) -> Option<Reading> {
+    let rest = line.strip_prefix("test ")?;
+    let (name, verdict) = rest.rsplit_once(" ... ")?;
+    let outcome = match verdict.trim() {
+        "ok" => Outcome::Passed,
+        "FAILED" => Outcome::Failed,
+        _ => Outcome::Unproven,
+    };
+    Some(Reading {
+        name: name.trim().to_string(),
+        outcome,
+    })
+}
+
+/// pytest -v: `<node id> PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS …`. Boundary: the first space
+/// followed by one of those words and then the end of the line or a space; the node id is the text
+/// before it, cut at ` <- ` (`-vv`), and must contain `::` and not start with `[` (xdist's
+/// `[gw0] …` puts the word first and is not read). Everything after the word is ignored.
+fn read_pytest(line: &str) -> Option<Reading> {
+    const WORDS: [(&str, Outcome); 6] = [
+        ("PASSED", Outcome::Passed),
+        ("FAILED", Outcome::Failed),
+        ("ERROR", Outcome::Failed),
+        ("SKIPPED", Outcome::Unproven),
+        ("XFAIL", Outcome::Unproven),
+        ("XPASS", Outcome::Unproven),
+    ];
+    for (i, _) in line.match_indices(' ') {
+        let rest = &line[i + 1..];
+        for (word, outcome) in WORDS {
+            let Some(after) = rest.strip_prefix(word) else {
+                continue;
+            };
+            if !(after.is_empty() || after.starts_with(' ')) {
+                continue;
+            }
+            let node = line[..i].trim();
+            let node = node.split_once(" <- ").map_or(node, |(n, _)| n.trim());
+            if !node.contains("::") || node.starts_with('[') {
+                return None;
+            }
+            return Some(Reading {
+                name: node.to_string(),
+                outcome,
+            });
+        }
+    }
+    None
+}
+
+/// Playwright list reporter: `✓|✘|-  <n> [<project>] › <file>:<l>:<c> › <titles> (<duration>)`.
+/// Boundary: a mark, two or more spaces, the digits of the index, one space, then a title of an
+/// optional `[<project>] › `, a location ending `:<digits>:<digits>`, ` › ` and the titles. Two
+/// readings: `<file> › <titles>` and `<titles>`. The `ok`/`x` marks are not read.
+fn read_playwright(line: &str) -> Option<Vec<Reading>> {
+    const SEP: &str = " \u{203a} ";
+    let (mark_len, outcome) = if line.starts_with('\u{2713}') {
+        ('\u{2713}'.len_utf8(), Outcome::Passed)
+    } else if line.starts_with('\u{2718}') {
+        ('\u{2718}'.len_utf8(), Outcome::Failed)
+    } else if line.starts_with('-') {
+        (1, Outcome::Unproven)
+    } else {
+        return None;
+    };
+    let rest = &line[mark_len..];
+    let after_spaces = rest.trim_start_matches(' ');
+    if rest.len() - after_spaces.len() < 2 {
+        return None;
+    }
+    let digits = after_spaces.bytes().take_while(u8::is_ascii_digit).count();
+    let title = after_spaces[digits..]
+        .strip_prefix(' ')
+        .filter(|_| digits > 0)?;
+    // Optional `[<project>] › `.
+    let title = match title.strip_prefix('[') {
+        Some(t) => {
+            let (_project, t) = t.split_once(']')?;
+            t.strip_prefix(SEP)?
+        }
+        None => title,
+    };
+    let (location, titles) = title.split_once(SEP)?;
+    let (file_line, col) = location.rsplit_once(':')?;
+    let (file, row) = file_line.rsplit_once(':')?;
+    if file.is_empty() || !all_digits(row) || !all_digits(col) {
+        return None;
+    }
+    let titles = without_playwright_suffix(titles);
+    if titles.is_empty() {
+        return None;
+    }
+    let mk = |name: String| Reading { name, outcome };
+    Some(vec![
+        mk(format!("{file}{SEP}{titles}")),
+        mk(titles.to_string()),
+    ])
+}
+
+/// Whether `d` is a Playwright duration: `<N>ms`, `<N>.<d>s`, `<N>.<d>m` or `<N>.<d>h`.
+fn is_playwright_duration(d: &str) -> bool {
+    if let Some(n) = d.strip_suffix("ms") {
+        return all_digits(n);
+    }
+    let Some(n) = d
+        .strip_suffix('s')
+        .or_else(|| d.strip_suffix('m'))
+        .or_else(|| d.strip_suffix('h'))
+    else {
+        return false;
+    };
+    n.split_once('.')
+        .is_some_and(|(a, b)| all_digits(a) && b.len() == 1 && all_digits(b))
+}
+
+/// A Playwright title without its trailing ` (<duration>)` and then ` (retry #<N>)`.
+fn without_playwright_suffix(title: &str) -> &str {
+    let mut s = title.trim();
+    if let Some(h) = s.strip_suffix(')')
+        && let Some(i) = h.rfind(" (")
+        && is_playwright_duration(&h[i + 2..])
+        && !h[..i].trim_end().is_empty()
+    {
+        s = h[..i].trim_end();
+    }
+    if let Some(h) = s.strip_suffix(')')
+        && let Some(i) = h.rfind(" (retry #")
+        && all_digits(&h[i + " (retry #".len()..])
+        && !h[..i].trim_end().is_empty()
+    {
+        s = h[..i].trim_end();
+    }
+    s
+}
+
+/// A marked line: `✓|×|✗|↓|□|PASS|FAIL <name>`, Vitest's suffix removed. Boundary: the mark is
+/// followed by exactly one ASCII space and then a non-space (so Playwright's `✓  1 ...` and
+/// nextest's `PASS [` are not this reader's lines).
+fn read_marked(line: &str) -> Option<Reading> {
+    const MARKS: [(&str, Outcome); 7] = [
+        ("\u{2713}", Outcome::Passed),
+        ("\u{d7}", Outcome::Failed),
+        ("\u{2717}", Outcome::Failed),
+        ("\u{2193}", Outcome::Unproven),
+        ("\u{25a1}", Outcome::Unproven),
+        ("PASS", Outcome::Passed),
+        ("FAIL", Outcome::Failed),
+    ];
+    for (mark, outcome) in MARKS {
+        let Some(rest) = line.strip_prefix(mark).and_then(|r| r.strip_prefix(' ')) else {
+            continue;
+        };
+        if rest.is_empty() || rest.starts_with(' ') {
+            return None;
+        }
+        return Some(Reading {
+            name: without_vitest_suffix(rest).to_string(),
+            outcome,
+        });
+    }
+    None
+}
+
+/// `s` without its last space-separated token when `token_ok` accepts it and something remains.
+fn drop_last_token(s: &str, token_ok: impl Fn(&str) -> bool) -> Option<&str> {
+    let (head, tail) = s.rsplit_once(' ')?;
+    let head = head.trim_end();
+    (!head.is_empty() && token_ok(tail)).then_some(head)
+}
+
+fn all_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `name` without Vitest's trailing suffix, from the end and in this order, each at most once and
+/// only while something would remain: a `[note]`, ` <N> MB heap used`, ` (repeat x<N>)`,
+/// ` (retry x<N>)`, then a token `<N>ms`.
+fn without_vitest_suffix(name: &str) -> &str {
+    let mut s = name.trim();
+    // `[note]`: the last token begins with `[` and ends the line with `]`.
+    if s.ends_with(']')
+        && let Some(i) = s.rfind(" [")
+        && !s[..i].trim_end().is_empty()
+    {
+        s = s[..i].trim_end();
+    }
+    if let Some(h) = s.strip_suffix(" MB heap used")
+        && let Some(h) = drop_last_token(h, all_digits)
+    {
+        s = h;
+    }
+    for (open, close) in [(" (repeat x", ')'), (" (retry x", ')')] {
+        if let Some(i) = s.rfind(open) {
+            let tail = &s[i + open.len()..];
+            if tail.strip_suffix(close).is_some_and(all_digits) && !s[..i].trim_end().is_empty() {
+                s = s[..i].trim_end();
+            }
+        }
+    }
+    if let Some(h) = drop_last_token(s, |t| t.strip_suffix("ms").is_some_and(all_digits)) {
+        s = h;
+    }
+    s.trim()
 }
 
 /// The `test.state` operations a run's `results` call for, stamped with the project revision the
@@ -269,6 +491,158 @@ some unrelated line ... ok";
         assert_eq!(results.len(), 6, "{results:?}");
         // Nothing recognizable: the hook stays quiet rather than guessing.
         assert!(parse_results("cargo build finished in 3.2s").is_empty());
+    }
+
+    /// Real lines from the Vitest 5.1.0 verbose run of DOC-001 (14 Nov 2026), leading spaces kept.
+    const VITEST_5_1: &str = "\
+ \u{2713} src/App.test.tsx > title shows the basket item count 41ms
+ \u{2713} src/App.test.tsx > title updates when the basket changes 5ms
+ \u{2713} src/components/BasketView.test.tsx > changes a line's quantity 67ms
+ \u{2713} src/components/BasketView.test.tsx > removes a line 12ms
+ \u{2713} src/components/BasketView.test.tsx > shows the total 9ms
+ \u{2713} src/money.test.ts > formats paise as rupees 2ms
+ \u{2713} src/money.test.ts > rounds half up 1ms
+ \u{2713} src/money.test.ts > formats zero 3ms
+ \u{2713} src/money.test.ts > rejects negatives 4ms
+\u{2713} built in 163ms";
+
+    #[test]
+    fn capture_reads_vitest5_lines_with_durations() {
+        let r = parse_results(VITEST_5_1);
+        assert_eq!(
+            r.get("src/App.test.tsx > title shows the basket item count"),
+            Some(&true)
+        );
+        assert_eq!(
+            r.get("src/money.test.ts > formats paise as rupees"),
+            Some(&true)
+        );
+        assert_eq!(
+            r.len(),
+            10,
+            "nine tests and Vite's harmless `built in`: {r:?}"
+        );
+        assert_eq!(r.get("built in"), Some(&true));
+        let one = |t: &str| parse_results(t);
+        let r = one(" \u{d7} src/App.test.tsx > title updates when the basket changes 5ms");
+        assert_eq!(
+            r.get("src/App.test.tsx > title updates when the basket changes"),
+            Some(&false)
+        );
+        assert!(one(" \u{2193} src/x.test.tsx > later [skipped]").is_empty());
+        assert!(one(" \u{25a1} src/x.test.tsx > todo").is_empty());
+        let r = one(" \u{2713} src/a.test.ts > waits 5s 12ms");
+        assert_eq!(r.get("src/a.test.ts > waits 5s"), Some(&true));
+        let r = one(" \u{2713} src/a.test.ts > flaky 12ms (retry x1)");
+        assert_eq!(r.get("src/a.test.ts > flaky"), Some(&true));
+        let r = one(" \u{2713} src/a.test.ts > big 12ms 34 MB heap used");
+        assert_eq!(r.get("src/a.test.ts > big"), Some(&true));
+        assert_eq!(one("\u{2713} 41ms").get("41ms"), Some(&true));
+        let r = one(" \u{2713} src/App.test.tsx (3 tests) 12ms");
+        assert_eq!(r.get("src/App.test.tsx (3 tests)"), Some(&true));
+        assert_eq!(one("\u{2713} cart retains items for 7 days").len(), 1);
+        assert_eq!(
+            one("PASS src/cart.test.ts").get("src/cart.test.ts"),
+            Some(&true)
+        );
+        // Fail wins for a name seen twice in one run, in either order.
+        let r = one("\u{2713} a > b 1ms\n\u{d7} a > b 2ms");
+        assert_eq!(r.get("a > b"), Some(&false));
+        let r = one("\u{d7} a > b 1ms\n\u{2713} a > b 2ms");
+        assert_eq!(r.get("a > b"), Some(&false));
+        // A long transcript of these lines parses to the same map.
+        let big = format!("{VITEST_5_1}\n").repeat(1200);
+        assert!(big.lines().count() >= 10_000);
+        let t = std::time::Instant::now();
+        let r = parse_results(&big);
+        eprintln!("10k-line parse: {:?}", t.elapsed());
+        assert_eq!(r, parse_results(VITEST_5_1));
+    }
+
+    /// Real lines from the pytest 9.2.0 `-v` run of DOC-001 (14 Nov 2026), fill spaces kept.
+    const PYTEST_9_2: &str = "\
+tests/test_basket_api.py::test_only_the_basket_cookie_is_set PASSED      [ 25%]
+tests/test_ci_workflow.py::test_publishes_nothing FAILED                 [ 42%]
+tests/test_repository.py::test_changelog_exists_with_unreleased_section PASSED [100%]";
+
+    #[test]
+    fn pytest_verbose_lines_are_read_as_node_ids() {
+        let r = parse_results(PYTEST_9_2);
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(
+            r.get("tests/test_basket_api.py::test_only_the_basket_cookie_is_set"),
+            Some(&true)
+        );
+        assert_eq!(
+            r.get("tests/test_ci_workflow.py::test_publishes_nothing"),
+            Some(&false)
+        );
+        assert_eq!(
+            r.get("tests/test_repository.py::test_changelog_exists_with_unreleased_section"),
+            Some(&true)
+        );
+        let one = |t: &str| parse_results(t);
+        assert_eq!(
+            one("tests/x.py::test_e ERROR [ 50%]").get("tests/x.py::test_e"),
+            Some(&false)
+        );
+        assert!(one("tests/x.py::test_s SKIPPED (no db) [ 50%]").is_empty());
+        assert!(one("tests/x.py::test_xf XFAIL").is_empty());
+        assert!(one("tests/x.py::test_xp XPASS").is_empty());
+        let r = one("tests/x.py::test_p[a b] PASSED [ 3/12]");
+        assert_eq!(r.get("tests/x.py::test_p[a b]"), Some(&true));
+        let r = one("tests/x.py::test_v <- src/x.py PASSED");
+        assert_eq!(r.get("tests/x.py::test_v"), Some(&true));
+        assert!(one("[gw0] [ 25%] PASSED tests/x.py::test_d").is_empty());
+        assert!(one("PASSED tests/x.py::test_r").is_empty());
+        assert!(one("FAILED tests/x.py::test_r - assert 1 == 2").is_empty());
+        assert!(one("the tests PASSED quickly").is_empty());
+    }
+
+    /// A real line from the Playwright 1.65.1 list-reporter run of DOC-001 (14 Nov 2026).
+    const PLAYWRIGHT_1_65: &str = "  \u{2713}  1 [chromium] \u{203a} e2e/kept-basket.spec.ts:4:3 \u{203a} kept basket \u{203a} basket is kept after the browser is closed and reopened (701ms)";
+
+    #[test]
+    fn playwright_list_lines_are_read_as_file_and_titles() {
+        let full = "e2e/kept-basket.spec.ts \u{203a} kept basket \u{203a} basket is kept after the browser is closed and reopened";
+        let titles = "kept basket \u{203a} basket is kept after the browser is closed and reopened";
+        let r = parse_results(PLAYWRIGHT_1_65);
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!(r.get(full), Some(&true));
+        assert_eq!(r.get(titles), Some(&true));
+        let one = |t: &str| parse_results(t);
+        let r = one(
+            "  \u{2718}  2 [chromium] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (800ms)",
+        );
+        assert_eq!(
+            r.get("e2e/basket.spec.ts \u{203a} removes a line"),
+            Some(&false)
+        );
+        assert_eq!(r.get("removes a line"), Some(&false));
+        assert!(
+            one("  -  3 [chromium] \u{203a} e2e/basket.spec.ts:20:1 \u{203a} later").is_empty()
+        );
+        // The same test failing in one project and passing in another stays red, in either order.
+        let a = "  \u{2718}  2 [chromium] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (800ms)";
+        let b = "  \u{2713}  4 [firefox] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (retry #1) (1.0s)";
+        assert_eq!(
+            one(&format!("{a}\n{b}")).get("removes a line"),
+            Some(&false)
+        );
+        assert_eq!(
+            one(&format!("{b}\n{a}")).get("removes a line"),
+            Some(&false)
+        );
+        let r = one("  \u{2713}  5 e2e/basket.spec.ts:30:1 \u{203a} no project (1.2m)");
+        assert_eq!(r.get("e2e/basket.spec.ts \u{203a} no project"), Some(&true));
+        let r = one(
+            "  \u{2713}  6 [chromium] \u{203a} e2e/basket.spec.ts:40:1 \u{203a} tagged @smoke (3ms)",
+        );
+        assert_eq!(
+            r.get("e2e/basket.spec.ts \u{203a} tagged @smoke"),
+            Some(&true)
+        );
+        assert!(one("\u{2713}  7 something else").is_empty());
     }
 
     fn project_with_tests(tests: &str) -> Project {

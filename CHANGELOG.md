@@ -83,6 +83,11 @@ All notable changes to kanbanr are documented here. The format follows
   HEAD, the refs and `packed-refs` live (`git rev-parse --git-path`), so a checkout, a commit or a
   fast-forward in a worktree reruns it. A test checks the crate twice in a scratch worktree; the
   release gate runs it.
+### Fixed
+
+- `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
+  Playwright list-reporter lines (project, location and duration dropped); a name reported more
+  than once in a run is green only if every line passed (DEF-061).
 
 ## [0.6.0] - 2026-11-14
 
