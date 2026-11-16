@@ -4051,9 +4051,14 @@ requirements:
                 .unwrap()
                 .contains("future: kept")
         );
-        // The release report carries the stage to the monitor.
+        // The release report carries the stage to the monitor. The report is newest first
+        // (DEF-034), so the release under test is picked by its version.
         let report = crate::releases::report_all(&store, "demo").unwrap();
-        let shown = serde_json::to_value(&report[0]).unwrap();
+        let v010 = report
+            .iter()
+            .find(|r| r.release.version == "v0.1.0")
+            .unwrap();
+        let shown = serde_json::to_value(v010).unwrap();
         assert_eq!(shown["stage"], "uat");
         assert_eq!(shown["stages"].as_array().unwrap().len(), 2);
     }
