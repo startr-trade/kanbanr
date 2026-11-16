@@ -231,7 +231,7 @@ pub async fn all_events(
 use axum::http::Method as HttpMethod;
 
 /// The project id from a dispatch path `/projects/<id>/...` (for SSE notification).
-fn project_id(path: &str) -> Option<String> {
+pub(crate) fn project_id(path: &str) -> Option<String> {
     let mut segs = path.split('/').filter(|s| !s.is_empty());
     if segs.next()? != "projects" {
         return None;
@@ -242,7 +242,7 @@ fn project_id(path: &str) -> Option<String> {
 /// The code repository the daemon was started in, for its own project only (FEAT-183): any
 /// other project's requests that need one answer as they do without one, never against the wrong
 /// code.
-fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::Path> {
+pub(crate) fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::Path> {
     st.code_repo
         .as_ref()
         .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
@@ -253,7 +253,7 @@ fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::
 /// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), and the readiness and review reads that judge the repository
 /// docs of an item (DEF-033), and the drift reads (FTR-013), query
 /// string aside.
-fn reads_code_repo(dispatch_path: &str) -> bool {
+pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     matches!(

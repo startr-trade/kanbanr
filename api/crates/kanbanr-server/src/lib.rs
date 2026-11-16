@@ -13,6 +13,7 @@
 //! the CLI-writes-directly default is fully preserved.
 
 mod embedded;
+pub mod memo;
 mod origin;
 mod routes;
 mod watcher;
@@ -47,6 +48,10 @@ pub struct AppState {
     /// The code repository the daemon was started in, and the project its marker names
     /// (FEAT-183). Release promotion acts on it for that project only.
     pub code_repo: Option<(String, PathBuf)>,
+    /// Board generations, bumped on every change, that stamp the memo's entries (DEF-081).
+    pub gens: Arc<memo::Generations>,
+    /// The read memo: GET bodies kept per stamp, and the ETags they answer with (DEF-081).
+    pub memo: Arc<memo::Memo>,
 }
 
 /// Run the view daemon until the process is stopped. `bind` like `127.0.0.1:8080`; `ui_dir` is the
@@ -100,6 +105,8 @@ pub async fn run_with(
         allow_writes,
         push: PushPolicy::for_board(&data_dir).0,
         code_repo,
+        gens: Arc::new(memo::Generations::default()),
+        memo: Arc::new(memo::Memo::new(memo::MEMO_CAP_BYTES)),
     };
 
     // Watch the data folder and push SSE "changed" events as the CLI edits files.
@@ -146,7 +153,14 @@ pub async fn run_with(
     // gantt, ready/blocked/graph/impact, critical-path, query, doctor, …) is served by this
     // fallback, keeping the daemon's read surface in lockstep with the CLI. (Without it such paths
     // fell through to the SPA index.html — which broke the web Gantt page.)
-    let api = api.fallback(routes::read_passthrough).with_state(state);
+    // The read memo wraps every GET route, the fallback included, so it goes on after it (DEF-081).
+    let api = api
+        .fallback(routes::read_passthrough)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            memo::layer,
+        ))
+        .with_state(state);
 
     // Bound before the guard is built and the start line printed, so `--bind 127.0.0.1:0` (an
     // ephemeral port, as a walkthrough's scratch monitor asks for; FTR-037) answers for the port it
