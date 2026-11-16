@@ -191,7 +191,11 @@ mod tests {
     fn iso_tags_are_stored_in_their_canonical_spelling() {
         let mut d = def(vec![nfr(
             "R-1",
-            &["performance-efficiency", "  SECURITY ", "Performance Efficiency"],
+            &[
+                "performance-efficiency",
+                "  SECURITY ",
+                "Performance Efficiency",
+            ],
         )]);
         canonicalise_iso(None, &mut d).unwrap();
         assert_eq!(
@@ -202,7 +206,10 @@ mod tests {
 
     #[test]
     fn a_tag_carried_unchanged_is_kept_as_stored() {
-        let previous = def(vec![nfr("R-1", &["Performance efficiency"]), nfr("R-2", &[])]);
+        let previous = def(vec![
+            nfr("R-1", &["Performance efficiency"]),
+            nfr("R-2", &[]),
+        ]);
         let mut d = def(vec![
             nfr("R-1", &["Performance efficiency", "reliability"]),
             // Another requirement's stored spelling is not this one's.

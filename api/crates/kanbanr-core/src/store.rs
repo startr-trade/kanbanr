@@ -1092,26 +1092,33 @@ impl Store {
                 *doc = crate::refs::doc_key(doc);
             }
         }
-        let definition = definition.map(|mut def| {
-            assign_requirement_ids(&mut def);
-            // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
-            // it. Erasing would lose who agreed to what, and would report "never approved" for an
-            // item whose scope simply changed after a yes — the exact distinction that matters.
-            if let Some(prev) = previous.as_ref() {
-                if def.approval.is_none() {
-                    def.approval = prev.approval.clone();
+        let definition = match definition {
+            None => None,
+            Some(mut def) => {
+                assign_requirement_ids(&mut def);
+                // One spelling per tag (MNT-009): a tag added or changed is stored canonical, one
+                // carried unchanged is kept, so a change of case never lapses an approval.
+                crate::vocab::canonicalise_iso(previous.as_ref(), &mut def)?;
+                // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
+                // it. Erasing would lose who agreed to what, and would report "never approved" for an
+                // item whose scope simply changed after a yes — the exact distinction that matters.
+                if let Some(prev) = previous.as_ref() {
+                    if def.approval.is_none() {
+                        def.approval = prev.approval.clone();
+                    }
+                    if def.started_unapproved.trim().is_empty() {
+                        def.started_unapproved = prev.started_unapproved.clone();
+                    }
+                    // The history and the sign-offs are append-only logs, so they too are carried:
+                    // each entry keeps its `rev`, which is what reads it as lapsed once the content
+                    // changed.
+                    def.approvals =
+                        merge_history(&prev.approvals, std::mem::take(&mut def.approvals));
+                    def.signoffs = merge_history(&prev.signoffs, std::mem::take(&mut def.signoffs));
                 }
-                if def.started_unapproved.trim().is_empty() {
-                    def.started_unapproved = prev.started_unapproved.clone();
-                }
-                // The history and the sign-offs are append-only logs, so they too are carried:
-                // each entry keeps its `rev`, which is what reads it as lapsed once the content
-                // changed.
-                def.approvals = merge_history(&prev.approvals, std::mem::take(&mut def.approvals));
-                def.signoffs = merge_history(&prev.signoffs, std::mem::take(&mut def.signoffs));
+                Some(def)
             }
-            def
-        });
+        };
         if let Some(def) = definition.as_ref() {
             check_test_stages(&project.config.cadence, code, def)?;
         }
