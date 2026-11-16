@@ -152,7 +152,7 @@ cargo run -p kanbanr-core --features schema --example openapi          # write i
 cargo run -p kanbanr-core --features schema --example openapi -- --check  # CI: fail if stale
 ```
 
-It is committed as `docs/src/reference/openapi.json`, and the daemon serves those same bytes. A
+It is committed as `docs/guide/reference/openapi.json`, and the daemon serves those same bytes. A
 contract test starts a daemon on a fixture board and checks every public route against it: the
 status, the media type, and that each JSON body validates against its schema.
 

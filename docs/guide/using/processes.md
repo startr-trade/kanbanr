@@ -634,9 +634,9 @@ kanbanr config release-prepare --version-file api/Cargo.toml \
   --version-file 'api/Cargo.lock=name = "kanbanr-core"\nversion = "{version}"' \
   --version-file 'api/Cargo.lock=name = "kanbanr-cli"\nversion = "{version}"' \
   --version-file 'api/Cargo.lock=name = "kanbanr-server"\nversion = "{version}"' \
-  --changelog CHANGELOG.md --changelog-copy docs/src/project/changelog.md \
-  --notes 'docs/src/releases/{version}.md' \
-  --notes-listing 'docs/src/SUMMARY.md::- [Release notes](releases/index.md)::  - [{number}](releases/{version}.md)'
+  --changelog CHANGELOG.md --changelog-copy docs/guide/project/changelog.md \
+  --notes 'docs/guide/releases/{version}.md' \
+  --notes-listing 'docs/guide/SUMMARY.md::- [Release notes](releases/index.md)::  - [{number}](releases/{version}.md)'
 kanbanr config release-prepare                     # shows it
 ```
 
@@ -670,7 +670,7 @@ The drafted notes are on `release/<V>`, not in your checkout, so read and change
 release itself — no branch switch, no separate item:
 
 ```bash
-kanbanr release notes v0.3.0                 # release/v0.3.0 @ 8f995e1: docs/src/releases/v0.3.0.md, then the text
+kanbanr release notes v0.3.0                 # release/v0.3.0 @ 8f995e1: docs/guide/releases/v0.3.0.md, then the text
 kanbanr release notes v0.3.0 --edit          # $VISUAL / $EDITOR on a copy; committed if it changed
 kanbanr release notes v0.3.0 --file notes.md # or `-` for stdin
 kanbanr release notes v0.3.0 --file notes.md --changelog section.md  # the notes and the changelog section, one commit

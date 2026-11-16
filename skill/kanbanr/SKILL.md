@@ -266,7 +266,7 @@ known:
   recommended first: the manifest for `--version-file` (`Cargo.toml`, `package.json`,
   `pyproject.toml`, or the file the person names), `CHANGELOG.md` for `--changelog` when it
   exists, and the notes path (the doc site's releases folder if there is one,
-  `docs/src/releases/{version}.md` for an mdBook, else `RELEASES/{version}.md`). Run the command
+  `docs/guide/releases/{version}.md` for an mdBook, else `RELEASES/{version}.md`). Run the command
   the answer gives.
   (b) When there is no `CHANGELOG.md`, offer a chore in the same message ("a CHANGELOG.md in Keep a
   Changelog form, with an `## [Unreleased]` heading", planned into the release) and file it on yes,
@@ -695,6 +695,9 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   heading, write each repository doc the change touches (guides, reference pages, `SECURITY.md`,
   `CHANGELOG.md`) as a path in backticks, one per bullet, and add a task for each document to
   build, naming its path. `docs-folded` is offered to the user only once those are built.
+- **Two docs folders in the repository**: the product guide, which the published book is built
+  from, is `docs/guide`; the system representation (component docs as built, views) is
+  `docs/system`, which branches with the code and is not a chapter of the book.
 - **Every reference is a live link**: items, requirements, milestones, goals, ADRs and docs, in the
   forms under "Every change points back at the reason for it". `kanbanr doctor` reports a link that
   points at nothing.
@@ -1211,7 +1214,7 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and
   `/p/<project>/docs/file/<path>` for an ADR or a doc. A code in prose is linked too, but a link
   says you mean it. A file in the code repository is not a board doc: name it as a code path
-  (`docs/src/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
+  (`docs/guide/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
   is made of these links. `kanbanr doctor` reports any that point at nothing — fix them before
   calling the item done. `kanbanr trace <doc.md>` shows what a doc names and what links to it.
 
@@ -1564,7 +1567,7 @@ kanbanr release redate v0.1.0                     # date the notes and changelog
 kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
-kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
+kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/guide/releases/{version}.md'
 kanbanr config release-prepare --version-file 'api/Cargo.lock=name = "a"\nversion = "{version}"' --version-file 'api/Cargo.lock=name = "b"\nversion = "{version}"'   # one file, several entries, each applied
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
 kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main] [--has-ci on]

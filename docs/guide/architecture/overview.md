@@ -83,7 +83,7 @@ The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). The
 live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the
 shipped binary does not enable; `kanbanr_core::openapi` lists the public routes and builds an
 OpenAPI 3.1 document from those schemas. The document is generated into
-`docs/src/reference/openapi.json`, committed, and served as those bytes at `/api/openapi.json`. A
+`docs/guide/reference/openapi.json`, committed, and served as those bytes at `/api/openapi.json`. A
 contract test runs a daemon on a fixture board and validates every public route against it, and
 fails when the committed document and the code disagree; the monitor's TypeScript types are
 checked against the same document. Every other read route is internal. See
