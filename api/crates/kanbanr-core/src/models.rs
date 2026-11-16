@@ -971,6 +971,11 @@ pub struct Transition {
     /// before this version.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The merge commit of the move that integrated the item (FTR-004): what a position at the
+    /// item resolves to once its branch is gone. Empty on every other transition and on every
+    /// move before this version.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub merge_commit: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1079,6 +1084,16 @@ pub struct IssueLink {
 }
 
 impl FeatureItem {
+    /// The merge commit recorded when the item was integrated (FTR-004): the newest transition
+    /// that carries one. None on an item never integrated, or integrated before this version.
+    pub fn merge_commit(&self) -> Option<&str> {
+        self.history
+            .iter()
+            .rev()
+            .find(|t| !t.merge_commit.is_empty())
+            .map(|t| t.merge_commit.as_str())
+    }
+
     /// Is sign-off `id` current: recorded against the definition as it stands and, when it pinned
     /// the spec, against the spec as it stands (FTR-023)?
     pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
