@@ -419,7 +419,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; plan it into the running sprint, or start its sprint today; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
-| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the definition, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and each board doc the Design links under `Affects docs`, as built (a doc the Design only reads is marked `unchanged` on its line and needs no change), and draft that fold-in into the definition, saying which docs change; if the item names none and links none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
@@ -789,7 +789,9 @@ the user, by the agent for its item (`Agent-Scope:` on the commit).
 ### At the integrate role
 
 Before the move:
-- fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
+- fold the Design into each doc in `affects_docs` and each board doc linked under `Affects docs`,
+  describing it as built (`docs_updated` reads both); mark a linked doc the Design only reads
+  `unchanged` on its list line, and it needs no change;
 - build every document the item names and finish every task: the board docs in `affects_docs` or
   linked under `Affects docs`, and the repository docs its Design lists there. **docs-folded** is
   offered only once every task is complete and every doc linked under `Affects docs` (board or
