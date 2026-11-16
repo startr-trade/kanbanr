@@ -2890,10 +2890,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "its next stage".into())
         ),
-        ["projects", _p, "releases", v, "undo"] => format!(
-            "undo the newest stage of release {}",
-            percent_decode(v)
-        ),
+        ["projects", _p, "releases", v, "undo"] => {
+            format!("undo the newest stage of release {}", percent_decode(v))
+        }
         ["projects", _p, "releases", v] if del => format!("remove release {}", percent_decode(v)),
         ["projects", _p, "sprints", c] if del => format!("remove sprint {c}"),
         ["projects", _p, "sprints", c] => format!("edit sprint {c}"),
