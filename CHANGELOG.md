@@ -6,23 +6,19 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.6.1] - 2026-11-16
-
 ### Fixed
 
-- Setup can commit its `.kanbanr` marker, `CLAUDE.md` and `.gitignore` on the default branch of a
-  repository that already has commits: the guard and the git hooks take that one `[no-ref]`
-  commit, with the git model on or off, until the marker is committed (DEF-067).
-### Fixed
-
+- Claude keeps a test the person named with the kind and name they gave, uses `walkthrough:` tests
+  only for what a kanbanr run can see on the board, the monitor or the remote, and settles test
+  names in the runner's form before asking for approval, so its own corrections no longer lapse an
+  approval (DEF-073).
 - Claude proposes the release files, a CHANGELOG chore and the pipeline item when the first release
   is planned, before it names Promote to candidate; `release add` says what the first release still
   needs; an override a gate did not need is no longer recorded (DEF-056).
-### Fixed
-
 - `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
   Playwright list-reporter lines (project, location and duration dropped); a name reported more
   than once in a run is green only if every line passed (DEF-061).
+
 ### Added
 
 - **Walkthroughs run themselves (FTR-037).** `kanbanr walkthrough run <runbook>` follows a guide's
@@ -42,6 +38,14 @@ All notable changes to kanbanr are documented here. The format follows
   `walkthrough` is automated evidence a run proves, never a manual check. `kanbanr serve --bind
   127.0.0.1:0` now answers on the port it got and names it. Two runbooks, `walkthroughs/togaf.md`
   and `walkthroughs/agile.md`, ship on the board.
+
+## [0.6.1] - 2026-11-16
+
+### Fixed
+
+- Setup can commit its `.kanbanr` marker, `CLAUDE.md` and `.gitignore` on the default branch of a
+  repository that already has commits: the guard and the git hooks take that one `[no-ref]`
+  commit, with the git model on or off, until the marker is committed (DEF-067).
 
 ## [0.6.0] - 2026-11-14
 
