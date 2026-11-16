@@ -914,6 +914,7 @@ mod tests {
             release: String::new(),
             sprint: String::new(),
             changed_at: String::new(),
+            tests_only: false,
         }
     }
 
