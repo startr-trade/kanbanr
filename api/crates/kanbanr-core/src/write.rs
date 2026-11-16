@@ -1223,6 +1223,7 @@ mod tests {
             expires_at: "2999-01-01T00:00:00Z".into(),
             note: String::new(),
             worktree: None,
+            agent_branch: None,
             claimed_at: None,
             revoked_at: None,
             revoked_by: None,
