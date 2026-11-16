@@ -33,7 +33,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tokio::sync::broadcast;
+use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+/// Hashed asset files never change under one name, so a browser keeps them for a year (DEF-081).
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// `Cache-Control` for a served asset: only a success is kept, so a file asked for mid-rebuild
+/// (a 404) is asked for again rather than remembered as missing for a year.
+fn immutable_on_success(res: &Response) -> Option<axum::http::HeaderValue> {
+    res.status()
+        .is_success()
+        .then(|| axum::http::HeaderValue::from_static(IMMUTABLE))
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -249,7 +262,14 @@ pub async fn run_with(
             std::fs::read_to_string(&index_path).unwrap_or_default(),
         ));
         app = app
-            .nest_service("/assets", ServeDir::new(base.join("assets")))
+            .merge(
+                Router::new()
+                    .nest_service("/assets", ServeDir::new(base.join("assets")))
+                    .layer(SetResponseHeaderLayer::overriding(
+                        axum::http::header::CACHE_CONTROL,
+                        immutable_on_success,
+                    )),
+            )
             .fallback(move |uri: axum::http::Uri| {
                 let path = index_path.clone();
                 let last_good = Arc::clone(&last_good);
@@ -299,10 +319,21 @@ pub async fn run_with(
                     // A hashed asset, the favicon or config.json: served as itself. The index is
                     // always the copy carrying its base, however it is asked for.
                     Some(body) if path != "index.html" => {
-                        ([(CONTENT_TYPE, embedded::content_type(path))], body.clone())
+                        let mut res =
+                            ([(CONTENT_TYPE, embedded::content_type(path))], body.clone())
+                                .into_response();
+                        // Hashed names under assets/ are immutable (DEF-081); the favicon and
+                        // config.json keep the default, since their names do not change.
+                        if path.starts_with("assets/") {
+                            res.headers_mut().insert(
+                                axum::http::header::CACHE_CONTROL,
+                                axum::http::HeaderValue::from_static(IMMUTABLE),
+                            );
+                        }
+                        res
                     }
                     // Anything else is a client-side route, so the app decides what it means.
-                    _ => ([(CONTENT_TYPE, "text/html; charset=utf-8")], index),
+                    _ => ([(CONTENT_TYPE, "text/html; charset=utf-8")], index).into_response(),
                 }
             }
         });
@@ -318,6 +349,10 @@ pub async fn run_with(
         );
     }
 
+    // Gzip sits just inside the guard, so it covers the API and the monitor's files alike; its
+    // default predicate already skips `text/event-stream`, images and bodies under 32 bytes
+    // (DEF-081: the whole-board read is 4 MB raw and about 0.6 MB gzipped).
+    let app = app.layer(CompressionLayer::new().gzip(true));
     // The guard goes on last, so it covers the page and its files as well as the API: a layer only
     // wraps the routes that exist when it is added (DEF-024).
     let app = app.layer(axum::middleware::from_fn_with_state(
