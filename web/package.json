@@ -25,6 +25,7 @@
     "check:texts-to-check": "node scripts/check-texts-to-check.mjs",
     "check:manual-tests": "node scripts/check-manual-tests.mjs",
     "check:review-batch": "node scripts/check-review-batch.mjs",
+    "check:review-outcome": "node scripts/check-review-outcome.mjs",
     "check:workflow": "node scripts/check-workflow-sections.mjs",
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",
