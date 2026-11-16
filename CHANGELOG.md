@@ -158,6 +158,10 @@ All notable changes to kanbanr are documented here. The format follows
 - `kanbanr capture` reads `python -m unittest -v` results as `module.Class.test` (Python 3.10's
   form and a docstring's two-line form too; a failed subtest turns its test red), and tells Claude
   when a test run printed nothing it can read, naming the forms it reads (DEF-068).
+### Fixed
+
+- `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
+  is no longer warned that it has no Design section (DEF-069).
 
 ## [0.6.0] - 2026-11-14
 
