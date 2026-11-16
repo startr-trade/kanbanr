@@ -1654,6 +1654,13 @@
             "description": "Why this item changes no doc, in the person's words (DEF-075), recorded when they confirm\nit does: it silences the 'declares no docs' warning that a `docs_updated` gate gives an item\nnaming none. Like `affects_docs` it is design, outside the agreed content, and declared\nafter it, so an older binary keeps it in `extra` and writes it back in the same place.",
             "type": "string"
           },
+          "affects_views": {
+            "description": "Catalog rows this item's design changes (FTR-006), by id (`kanbanr catalog` lists them):\nthe generated rows the change affects, beside those its Affects docs already name. Design,\nlike `affects_docs`, so outside the agreed content; declared after it, so an older binary\nkeeps it in `extra` and writes it back in the same place.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "approval": {
             "$ref": "#/components/schemas/Approval",
             "description": "Who agreed to this definition, when, and what exactly they agreed to (FEAT-048)."

@@ -988,6 +988,83 @@ pub fn views_changed(catalog: &Catalog, docs: &[String], named: &[String]) -> Ve
     out.into_iter().collect()
 }
 
+/// What a `kanbanr:` generator derives for `project`, as JSON: the value the system baseline
+/// (FTR-006) hashes through [`crate::hash::canonical_json`] to pin a generated row. Each is the
+/// read the view already serves: the charter, the Zachman matrix, the ADR index, the trace of
+/// each charter goal, every item's requirements, the release reports, the Gantt chart's text,
+/// every item's tracked tests, and the component docs under `architecture/components/`. A
+/// `katalogr:` source or a name kanbanr does not derive is refused: it cannot be pinned here.
+pub fn generate(
+    store: &Store,
+    project: &crate::store::Project,
+    generator: &str,
+) -> Result<serde_json::Value> {
+    use serde_json::{Value, json};
+    fn ser<T: Serialize>(v: &T) -> Result<Value> {
+        serde_json::to_value(v).map_err(|e| CoreError::Unsupported(e.to_string()))
+    }
+    let id = project.id.as_str();
+    let mut features: Vec<&crate::FeatureItem> = project.features.iter().collect();
+    features.sort_by(|a, b| a.code.cmp(&b.code));
+    match generator.trim() {
+        "kanbanr:charter" => ser(&crate::charter::load(store, id)?),
+        // A project with no items has no matrix: the matrix refuses an empty scope.
+        "kanbanr:zachman" if project.features.is_empty() => Ok(Value::Null),
+        "kanbanr:zachman" => ser(&crate::trace::zachman(store, id, None)?),
+        "kanbanr:adr-index" => ser(&crate::adr::list(store, id)?),
+        "kanbanr:trace" => {
+            let charter = crate::charter::load(store, id)?;
+            let mut out = Vec::new();
+            for goal in &charter.goals {
+                let subject = crate::trace::Subject::Goal {
+                    id: goal.id.clone(),
+                };
+                out.push(json!({"goal": goal.id, "trace": ser(&crate::trace::run(store, id, &subject)?)?}));
+            }
+            Ok(Value::Array(out))
+        }
+        "kanbanr:requirements" => Ok(Value::Array(
+            features
+                .iter()
+                .filter_map(|f| {
+                    let d = f.definition.as_ref()?;
+                    Some(json!({"code": f.code, "requirements": d.requirements}))
+                })
+                .collect(),
+        )),
+        "kanbanr:releases" => ser(&crate::releases::report_all(store, id)?),
+        "kanbanr:gantt" => Ok(Value::String(crate::gantt::project_gantt(store, id)?)),
+        "kanbanr:evidence" => Ok(Value::Array(
+            features
+                .iter()
+                .filter_map(|f| {
+                    let d = f.definition.as_ref()?;
+                    let tests: Vec<Value> = d
+                        .requirements
+                        .iter()
+                        .filter(|r| !r.tests.is_empty())
+                        .map(|r| json!({"requirement": r.id, "tests": r.tests}))
+                        .collect();
+                    (!tests.is_empty()).then(|| json!({"code": f.code, "tests": tests}))
+                })
+                .collect(),
+        )),
+        "kanbanr:component-list" => {
+            let prefix = "architecture/components/";
+            let docs: Vec<String> = store
+                .list_docs(id)?
+                .into_iter()
+                .filter(|d| d.starts_with(prefix))
+                .collect();
+            ser(&docs)
+        }
+        other => Err(CoreError::Unsupported(format!(
+            "\"{other}\" is not a view kanbanr derives (use {})",
+            GENERATORS.join(", ")
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,6 +1112,22 @@ mod tests {
 
     fn strings(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// FTR-006: every view kanbanr derives has a value to pin, the same twice; a katalogr view
+    /// and an unknown name are refused.
+    #[test]
+    fn generate_derives_every_kanbanr_view() {
+        let (store, dir) = temp_store();
+        let project = store.load_meta("demo").unwrap();
+        for g in GENERATORS {
+            let once = generate(&store, &project, g).unwrap_or_else(|e| panic!("{g}: {e}"));
+            let twice = generate(&store, &project, g).unwrap();
+            assert_eq!(once, twice, "{g}");
+        }
+        assert!(generate(&store, &project, "katalogr:structure").is_err());
+        assert!(generate(&store, &project, "kanbanr:nothing").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// R-4: both YAML forms parse; each `problems` rule fires with its row named.
