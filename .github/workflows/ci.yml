@@ -326,6 +326,10 @@ jobs:
       # the slices it names, and loading is never drawn as empty (DEF-081).
       - name: The monitor's data cache shares reads and re-reads only changed slices
         run: npm run check:data-cache
+      # The UI kit uses tokens only, on the type scale and severity palette the person chose
+      # (FTR-046).
+      - name: The UI kit is built on the chosen design tokens
+        run: npm run check:ui-tokens
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
