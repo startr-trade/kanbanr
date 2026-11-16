@@ -537,6 +537,51 @@ pub fn evaluate_conditions(
     evaluate_entering(feature, goal_ids, conditions, ctx, &feature.status)
 }
 
+/// The window `docs_updated` measures a doc's change in (DEF-074): from `since`, when the item
+/// entered `stage`, which the warning names.
+#[derive(Debug, Clone, Copy)]
+pub struct DocsWindow<'a> {
+    pub since: &'a str,
+    pub stage: &'a str,
+}
+
+impl<'a> DocsWindow<'a> {
+    /// From when the item entered its current stage: the window of a move, a check of the next
+    /// gate and the docs-folded offer.
+    pub fn current(feature: &'a FeatureItem) -> Self {
+        DocsWindow {
+            since: feature.entered_status_at(),
+            stage: &feature.status,
+        }
+    }
+
+    /// From when the item entered the stage it moved from: the window the move into its current
+    /// stage used, for re-judging the gate it passed.
+    pub fn passed(feature: &'a FeatureItem) -> Self {
+        let (stage, since) = feature.entered_previous_status();
+        DocsWindow { since, stage }
+    }
+}
+
+/// The gaps of the gate the item passed to reach its current stage, judged as the move judged
+/// them (DEF-074): `docs_updated` measures from when the item entered the stage it moved from.
+/// Every other check is judged as [`evaluate_entering`] at the current stage judges it.
+pub fn evaluate_passed(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    conditions: &[Condition],
+    ctx: &Context,
+) -> Vec<Gap> {
+    evaluate_entering_window(
+        feature,
+        goal_ids,
+        conditions,
+        ctx,
+        &feature.status,
+        DocsWindow::passed(feature),
+    )
+}
+
 /// The gaps of an item against a gate's conditions, as if it were already in `entering` — the
 /// stage whose gate is being judged (FEAT-197). Only `docs_cover` depends on where the item is.
 pub fn evaluate_entering(
@@ -545,6 +590,24 @@ pub fn evaluate_entering(
     conditions: &[Condition],
     ctx: &Context,
     entering: &str,
+) -> Vec<Gap> {
+    evaluate_entering_window(
+        feature,
+        goal_ids,
+        conditions,
+        ctx,
+        entering,
+        DocsWindow::current(feature),
+    )
+}
+
+fn evaluate_entering_window(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    conditions: &[Condition],
+    ctx: &Context,
+    entering: &str,
+    window: DocsWindow<'_>,
 ) -> Vec<Gap> {
     let checks: Vec<Check> = conditions
         .iter()
@@ -555,7 +618,7 @@ pub fn evaluate_entering(
             | Condition::DocsCover { .. } => None,
         })
         .collect();
-    let mut gaps = evaluate_in(feature, goal_ids, &checks, ctx);
+    let mut gaps = evaluate_in_window(feature, goal_ids, &checks, ctx, window);
     let sections: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
@@ -1176,6 +1239,16 @@ pub fn evaluate_in(
     checks: &[Check],
     ctx: &Context,
 ) -> Vec<Gap> {
+    evaluate_in_window(feature, goal_ids, checks, ctx, DocsWindow::current(feature))
+}
+
+fn evaluate_in_window(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    checks: &[Check],
+    ctx: &Context,
+    window: DocsWindow<'_>,
+) -> Vec<Gap> {
     let mut gaps = evaluate_definition(
         feature.definition.as_ref(),
         feature.estimate_days,
@@ -1210,8 +1283,8 @@ pub fn evaluate_in(
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
-        gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
-        gaps.extend(linked_docs_gaps(feature, docs, ctx));
+        gaps.extend(docs_updated_gaps(feature, docs, &ctx.history, window));
+        gaps.extend(linked_docs_gaps(feature, docs, ctx, window));
     }
     // An override Claude made waits for the person to ratify it, even on an agreed item
     // (DEF-043). Unagreed, the "started without approval" gap already asks.
@@ -1524,6 +1597,7 @@ pub(crate) fn docs_updated_gaps(
     feature: &FeatureItem,
     docs: &std::path::Path,
     history: &crate::git::DocHistory,
+    window: DocsWindow<'_>,
 ) -> Vec<Gap> {
     let keys: Vec<String> = feature
         .definition
@@ -1535,7 +1609,14 @@ pub(crate) fn docs_updated_gaps(
                 .collect()
         })
         .unwrap_or_default();
-    docs_unchanged_gaps(feature, &keys, docs, history, "declared in affects_docs")
+    docs_unchanged_gaps(
+        feature,
+        &keys,
+        docs,
+        history,
+        "declared in affects_docs",
+        window,
+    )
 }
 
 /// The board docs the Design links under `Affects docs` that the item must change and does not
@@ -1545,6 +1626,7 @@ pub(crate) fn linked_docs_gaps(
     feature: &FeatureItem,
     docs: &std::path::Path,
     ctx: &Context,
+    window: DocsWindow<'_>,
 ) -> Vec<Gap> {
     if ctx.project.is_empty() {
         return Vec::new();
@@ -1565,10 +1647,11 @@ pub(crate) fn linked_docs_gaps(
         docs,
         &ctx.history,
         "linked under Affects docs",
+        window,
     )
 }
 
-/// One gap per board doc among `keys` that has not changed since `feature` entered its stage, or
+/// One gap per board doc among `keys` that has not changed in `window` (DEF-074), or
 /// that is not on the board (DEF-046). `unknown` says where a missing doc was named, as the tail
 /// of "{key} is {unknown} but is not on the board".
 pub(crate) fn docs_unchanged_gaps(
@@ -1577,8 +1660,9 @@ pub(crate) fn docs_unchanged_gaps(
     docs: &std::path::Path,
     history: &crate::git::DocHistory,
     unknown: &str,
+    window: DocsWindow<'_>,
 ) -> Vec<Gap> {
-    let since = feature.entered_status_at();
+    let since = window.since;
     let mut gaps = Vec::new();
     for key in keys {
         let path = docs.join(key);
@@ -1600,7 +1684,7 @@ pub(crate) fn docs_unchanged_gaps(
                 &format!("{key} not updated"),
                 format!(
                     "{key} has not changed since {} entered {} — fold the design into it",
-                    feature.code, feature.status
+                    feature.code, window.stage
                 ),
             ));
         }
@@ -2814,6 +2898,43 @@ mod tests {
         store.move_feature("demo", &code, "Planned").unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
         assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-074 R-1, R-2: the gate an item passed is re-judged from when it entered the stage it
+    /// moved from, as the move judged it; the next gate still measures from the current stage.
+    #[test]
+    fn the_passed_gate_measures_docs_from_the_stage_the_item_left() {
+        let (store, dir, code) = docs_board("passed074");
+        next_second();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+        next_second();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "fold"));
+        next_second();
+        store.move_feature("demo", &code, "Planned").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let passed = evaluate_passed(
+            project.feature(&code).unwrap(),
+            None,
+            &[Condition::Check(Check::DocsUpdated)],
+            &ctx,
+        );
+        assert!(passed.is_empty(), "{passed:?}");
+        // The next gate keeps the entry into the current stage (R-2).
+        let next = docs_gaps(&store, &code);
+        assert_eq!(next.len(), 1, "{next:?}");
+        assert!(
+            next[0].message.contains(&format!("since {code} entered Planned")),
+            "{}",
+            next[0].message
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

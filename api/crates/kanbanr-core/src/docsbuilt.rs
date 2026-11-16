@@ -287,7 +287,8 @@ pub fn evaluate(
     built.listed.extend(board_keys.iter().cloned());
     built.listed.extend(linked.iter().cloned());
     if let Some(docs) = ctx.docs_dir.as_deref() {
-        let gaps = crate::readiness::docs_updated_gaps(feature, docs, &ctx.history)
+        let window = crate::readiness::DocsWindow::current(feature);
+        let gaps = crate::readiness::docs_updated_gaps(feature, docs, &ctx.history, window)
             .into_iter()
             .chain(crate::readiness::docs_unchanged_gaps(
                 feature,
@@ -295,6 +296,7 @@ pub fn evaluate(
                 docs,
                 &ctx.history,
                 "linked under Affects docs",
+                window,
             ));
         for gap in gaps {
             built.unbuilt.push(Unbuilt {
