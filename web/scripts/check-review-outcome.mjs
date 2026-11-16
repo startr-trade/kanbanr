@@ -6,7 +6,10 @@
 // call is in flight is dropped, never queued, so a second click sends no second request.
 //
 // Usage: npm run check:review-outcome
+import { readFileSync } from "node:fs";
 import { guardInFlight } from "../src/inFlight.ts";
+
+const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
 const R2 = "web::check_prepared_panel_sends_one_request_per_click_until_it_returns";
 
@@ -59,6 +62,24 @@ async function checkInFlight() {
   expect(problems, "a synchronous handler is never left busy", sync.busy(), false);
   sync.run();
   expect(problems, "a synchronous handler runs on every press", syncCalls, 2);
+
+  // PreparedPanel: one guard per panel; the primary button and the second Reject go through it
+  // and are disabled while its call is in flight.
+  const panel = read("../src/components/PreparedPanel.tsx");
+  const has = (name, re) => {
+    if (!re.test(panel)) problems.push(`PreparedPanel.tsx: ${name}`);
+  };
+  has("does not import guardInFlight", /import \{ guardInFlight \} from "\.\.\/inFlight"/);
+  has("keeps no guard per panel in a ref", /useRef<[\s\S]*?\(null\)[\s\S]*guard\.current = guardInFlight\(/);
+  has("onConfirm is still typed to return void, so its promise is not awaited", /onConfirm: \(edits: Record<string, unknown>\) => unknown;/);
+  has("onReject is still typed to return void, so its promise is not awaited", /onReject: \(reason: string\) => unknown;/);
+  has("the primary button does not go through the guard", /onClick=\{\(\) => once\(\(\) => onConfirm\(/);
+  has("the second Reject does not go through the guard", /onClick=\{\(\) => once\(\(\) => onReject\(/);
+  has("the primary button is not disabled while in flight", /disabled=\{busy \|\| inFlight \|\| mode === "reject"\}\s*onClick=\{\(\) => once\(\(\) => onConfirm\(/);
+  has("the second Reject is not disabled while in flight", /disabled=\{busy \|\| inFlight\} onClick=\{\(\) => once\(\(\) => onReject\(/);
+  if (/onClick=\{\(\) => on(Confirm|Reject)\(/.test(panel)) {
+    problems.push("PreparedPanel.tsx: a button calls onConfirm or onReject without the guard");
+  }
   return problems;
 }
 
