@@ -59,6 +59,7 @@ pub fn tags_for(rel: &str) -> Vec<String> {
         ["lessons.yaml"] => one("lessons"),
         ["decisions.yaml"] => one("decisions"),
         ["scopes.yaml"] => one("scopes"),
+        ["system-baseline.yaml"] => one("catalog"),
         ["milestones", _, ..] => one("milestones"),
         [
             folder @ ("prepared" | "manual" | "gates" | "pins" | "activity" | "events"),
@@ -293,6 +294,7 @@ mod tests {
             ("lessons.yaml", &["lessons"]),
             ("decisions.yaml", &["decisions"]),
             ("scopes.yaml", &["scopes"]),
+            ("system-baseline.yaml", &["catalog"]),
             ("prepared/FTR-1.yaml", &["prepared"]),
             ("manual/FTR-1.yaml", &["manual"]),
             ("gates/v1.yaml", &["gates"]),
