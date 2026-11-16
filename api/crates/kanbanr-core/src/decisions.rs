@@ -1165,6 +1165,17 @@ pub struct DelegationView {
     /// Claude's verdicts under it are refused.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub not_granted_through_kanbanr: bool,
+    /// The Claude Code allow rules this delegation's verdicts need to run in auto mode (DEF-060),
+    /// whatever its state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_rules: Vec<String>,
+    /// The mode is delegated, the delegation is granted and the code repository is known, so
+    /// `permission_rules_missing` says something.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permission_rules_checked: bool,
+    /// The rules none of the project's or the user's Claude settings allows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_rules_missing: Vec<String>,
 }
 
 /// `GET /projects/{p}/decisions`: the mode and its history, every delegation, the delegated
@@ -1197,6 +1208,23 @@ pub fn view(
             .iter()
             .map(|g| {
                 let state = g.state(now);
+                let mut rules_of_verdicts: Vec<String> = g
+                    .verdicts
+                    .iter()
+                    .filter_map(|v| crate::claude::permission_rule(v))
+                    .collect();
+                rules_of_verdicts.sort();
+                rules_of_verdicts.dedup();
+                let checked = d.mode() == Mode::Delegated
+                    && state == DelegationState::Granted
+                    && repo.is_some();
+                let missing = match repo {
+                    Some(repo) if checked => crate::claude::rules_missing(
+                        &crate::claude::settings_files(repo),
+                        &rules_of_verdicts,
+                    ),
+                    _ => Vec::new(),
+                };
                 DelegationView {
                     delegation: g.clone(),
                     state,
@@ -1204,6 +1232,9 @@ pub fn view(
                     rev: g.rev(),
                     not_granted_through_kanbanr: g.granted.is_some()
                         && !granted_through_kanbanr(store, p, &g.id),
+                    permission_rules: rules_of_verdicts,
+                    permission_rules_checked: checked,
+                    permission_rules_missing: missing,
                 }
             })
             .collect(),
@@ -1459,6 +1490,48 @@ mod tests {
             .unwrap()
             .rev();
         grant(store, "demo", id, &rev, who("monitor")).unwrap()
+    }
+
+    /// DEF-060 R-1: the view names each granted delegation's allow rules and whether Claude Code's
+    /// settings allow them.
+    #[test]
+    fn the_view_names_each_granted_delegations_permission_rules_and_whether_they_are_allowed() {
+        let (store, dir, _, _) = board();
+        let rule = "Bash(kanbanr signoff:*)".to_string();
+        let repo = dir.join("work");
+        std::fs::create_dir_all(&repo).unwrap();
+        propose(&store, "demo", defects(), who("conversation")).unwrap();
+        grant_it(&store, "DLG-001");
+        let one = |repo: Option<&std::path::Path>| {
+            view(&store, "demo", repo, None, NOW)
+                .unwrap()
+                .delegations
+                .remove(0)
+        };
+
+        // Monitor mode: the rules are named, nothing is checked.
+        let g = one(Some(&repo));
+        assert_eq!(g.permission_rules, vec![rule.clone()]);
+        assert!(!g.permission_rules_checked && g.permission_rules_missing.is_empty());
+
+        set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), None).unwrap();
+        let g = one(Some(&repo));
+        assert!(g.permission_rules_checked);
+        assert_eq!(g.permission_rules_missing, vec![rule.clone()]);
+
+        crate::claude::add_permission_rules(
+            &repo.join(".claude").join("settings.local.json"),
+            std::slice::from_ref(&rule),
+        )
+        .unwrap();
+        let g = one(Some(&repo));
+        assert!(g.permission_rules_checked && g.permission_rules_missing.is_empty());
+
+        // No repository: the rules are named and nothing is claimed.
+        let g = one(None);
+        assert_eq!(g.permission_rules, vec![rule]);
+        assert!(!g.permission_rules_checked && g.permission_rules_missing.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// R-1: the table against the project's mode.

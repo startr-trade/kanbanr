@@ -1152,6 +1152,12 @@ export interface DelegationView extends Delegation {
   rev: string;
   /** Granted, but not through kanbanr: Claude's verdicts under it are refused. */
   not_granted_through_kanbanr?: boolean;
+  /** The Claude Code allow rules the delegation's verdicts need to run in auto mode (DEF-060). */
+  permission_rules?: string[];
+  /** The monitor knows the repository and the mode is delegated: the next field is meaningful. */
+  permission_rules_checked?: boolean;
+  /** The rules none of the project's or the user's Claude settings allows. */
+  permission_rules_missing?: string[];
 }
 
 /** A decision Claude took under a delegation, waiting for the person to keep or undo it. */

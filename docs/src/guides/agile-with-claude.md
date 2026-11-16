@@ -13,6 +13,9 @@ releases. You don't need to learn any commands:
 - **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
   review of small defects, and until when. It proposes a delegation; you grant it on the
   **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
+  If Claude Code runs in auto mode, its safety check may stop a delegated command. When you grant a
+  delegation, kanbanr offers the one allow rule that lets it through; say yes to Claude, or run the
+  command it names.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Agile from the command line](agile-cli.md). For the other

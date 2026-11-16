@@ -11739,6 +11739,102 @@ fn in_session(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> 
         .expect("run kanbanr CLI")
 }
 
+/// DEF-060 R-1: granting a delegation in delegated mode names the Claude Code allow rule auto mode
+/// needs, `kanbanr claude permissions` lists it, `--write` adds it to the project's
+/// `settings.local.json` and nothing else, and the view then says it is allowed.
+#[test]
+fn granted_delegation_offers_its_permission_rule() {
+    let (base, work) = delegation_board("def060-rule");
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let rule = "Bash(kanbanr signoff:*)";
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let text = |o: &Output| String::from_utf8_lossy(&o.stdout).to_string();
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    let granted = ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    assert!(
+        !text(&granted).contains(rule),
+        "monitor mode needs no rule: {}",
+        text(&granted)
+    );
+    let mode = ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let said = text(&mode);
+    assert!(
+        said.contains(rule) && said.contains("kanbanr claude permissions --write"),
+        "{said}"
+    );
+
+    let listed = ok(run_in(&base, &work, &["claude", "permissions"]));
+    assert!(
+        text(&listed).contains(&format!("{rule}: missing")),
+        "{}",
+        text(&listed)
+    );
+    let settings = work.join(".claude").join("settings.local.json");
+    assert!(!settings.exists());
+
+    // A file with other content keeps it.
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"theme": "dark", "permissions": {"allow": ["Bash(ls:*)"]}}"#,
+    )
+    .unwrap();
+    let wrote = ok(run_in(&base, &work, &["claude", "permissions", "--write"]));
+    assert!(
+        text(&wrote).contains(&format!("added {rule}")),
+        "{}",
+        text(&wrote)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(v["theme"], "dark");
+    assert_eq!(
+        v["permissions"]["allow"],
+        serde_json::json!(["Bash(ls:*)", rule])
+    );
+
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["delegations"][0]["permission_rules_checked"], true, "{v}");
+    assert!(
+        v["delegations"][0]
+            .get("permission_rules_missing")
+            .is_none(),
+        "{v}"
+    );
+
+    let again = ok(run_in(&base, &work, &["claude", "permissions", "--write"]));
+    assert!(text(&again).contains("allowed already"), "{}", text(&again));
+
+    // Back in monitor mode no rule is needed; the one left behind is listed as not needed.
+    ok(run_in(&base, &work, &["decisions", "mode", "monitor"]));
+    let idle = ok(run_in(&base, &work, &["claude", "permissions"]));
+    let said = text(&idle);
+    assert!(
+        said.contains("no permission rule is needed") && said.contains("not needed now"),
+        "{said}"
+    );
+}
+
 /// FTR-028 R-2: inside a Claude session a delegation can be proposed but not granted, and the mode
 /// cannot be changed; from the person's terminal both are recorded.
 #[test]
