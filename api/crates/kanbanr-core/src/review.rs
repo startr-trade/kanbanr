@@ -226,6 +226,10 @@ pub struct ReviewEntry {
     /// When the item last changed: its `updated_at` (FTR-038).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub changed_at: String,
+    /// The change since the last decision touched only tests (FTR-039): set on `lapsed` and
+    /// `added` entries, so a grouped approval of tests-only edits can be told apart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tests_only: bool,
 }
 
 /// One override Claude made, as the Review page shows it (DEF-043).
@@ -594,6 +598,8 @@ impl Inputs {
                 release: f.release.clone().unwrap_or_default(),
                 sprint: f.sprint.clone().unwrap_or_default(),
                 changed_at: f.updated_at.clone(),
+                tests_only: matches!(approval, ApprovalKind::Lapsed | ApprovalKind::Added)
+                    && definition.tests_only_change(),
             })
         }
     }
@@ -635,6 +641,86 @@ mod tests {
         assert_eq!(d.len(), 3000);
         assert!(d[..1500].iter().all(|l| l.op == DiffOp::Removed));
         assert!(d[1500..].iter().all(|l| l.op == DiffOp::Added));
+    }
+
+    /// FTR-039 R-5: a finished item edited in its tests only is listed Lapsed (a test renamed) or
+    /// Added (a test added) with `tests_only: true`; an edit beyond its tests is listed without it.
+    #[test]
+    fn a_tests_only_change_is_marked_on_its_review_entry() {
+        use crate::models::{FeatureDefinition, Requirement, TestRef, TestState};
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-review-tests-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::config::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let def = |test: &str, text: &str| FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![Requirement {
+                id: "R-1".into(),
+                text: text.into(),
+                tests: vec![TestRef {
+                    name: test.into(),
+                    kind: "unit".into(),
+                    state: TestState::Green,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let item = |title: &str, edit: FeatureDefinition| {
+            let code = store
+                .add_feature("demo", title, "spec", "M", None)
+                .unwrap()
+                .code;
+            store
+                .set_feature_definition("demo", &code, Some(def("a::t", "THE SYSTEM SHALL x")))
+                .unwrap();
+            store.approve_feature("demo", &code, "Ada").unwrap();
+            store
+                .set_feature_definition("demo", &code, Some(edit))
+                .unwrap();
+            store.move_feature("demo", &code, "Scheduled").unwrap();
+            store.move_feature("demo", &code, "Completed").unwrap();
+            code
+        };
+        let renamed = item("Renamed", def("a::t_renamed", "THE SYSTEM SHALL x"));
+        let mut grown = def("a::t", "THE SYSTEM SHALL x");
+        grown.requirements[0].tests.push(TestRef {
+            name: "a::u".into(),
+            kind: "unit".into(),
+            state: TestState::Green,
+            ..Default::default()
+        });
+        let added = item("Added", grown);
+        let reworded = item("Reworded", def("a::t_renamed", "THE SYSTEM SHALL y"));
+
+        let queue = pending(&store, "demo", None).unwrap();
+        let entry = |code: &str| {
+            queue
+                .iter()
+                .find(|e| e.code == code)
+                .unwrap_or_else(|| panic!("{code} not in the queue"))
+        };
+        assert_eq!(entry(&renamed).approval, ApprovalKind::Lapsed);
+        assert!(entry(&renamed).tests_only);
+        assert_eq!(entry(&added).approval, ApprovalKind::Added);
+        assert!(entry(&added).tests_only);
+        assert_eq!(entry(&reworded).approval, ApprovalKind::Lapsed);
+        assert!(!entry(&reworded).tests_only);
+        // On the wire: present when true, absent when false.
+        let wire = serde_json::to_value(entry(&renamed)).unwrap();
+        assert_eq!(wire["tests_only"], true);
+        let wire = serde_json::to_value(entry(&reworded)).unwrap();
+        assert!(wire.get("tests_only").is_none(), "{wire}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-039 R-1: the Review entry lists only the texts still left, and shows what Claude

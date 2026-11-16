@@ -167,6 +167,8 @@ export interface ApprovalEvent {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** `tests` when the approval agreed to a change to tests only (FTR-039); absent otherwise. */
+  scope?: string;
 }
 
 export interface FeatureDefinition {
@@ -320,6 +322,8 @@ export interface PendingReview {
   spec?: SpecBrief;
   /** Claude's overrides on the item that wait for the person to ratify, oldest first (DEF-043). */
   overrides?: OverrideView[];
+  /** The change since the last decision touched only tests (FTR-039); absent when false. */
+  tests_only?: boolean;
 }
 
 /** One override Claude made past a gate, as the Review page shows it (DEF-043). */

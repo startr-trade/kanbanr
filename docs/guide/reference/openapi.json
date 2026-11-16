@@ -305,6 +305,10 @@
             "description": "The definition content this verdict was about.",
             "type": "string"
           },
+          "scope": {
+            "description": "What an `approved` verdict agreed to, when it was less than the whole definition\n(FTR-039): `tests` when the change since the last decision touched only tests, else empty.\nDeclared last, so an older kanbanr keeps it in `extra`; approvals are outside\n`content_rev`, so recording it lapses nothing.",
+            "type": "string"
+          },
           "status": {
             "description": "The status the item was in when the verdict was given (FEAT-114), so a definition that grows\nstage by stage leaves a readable trail: approved at Vision, again at System Design.",
             "type": "string"
@@ -4846,6 +4850,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "tests_only": {
+            "description": "The change since the last decision touched only tests (FTR-039): set on `lapsed` and\n`added` entries, so a grouped approval of tests-only edits can be told apart.",
+            "type": "boolean"
           },
           "title": {
             "type": "string"

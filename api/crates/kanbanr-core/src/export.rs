@@ -4,6 +4,15 @@ use crate::models::{FeatureItem, Milestone, TaskState};
 use crate::store::Project;
 use serde::Serialize;
 
+/// " (tests only)" when the standing approval's latest event agreed to a change to tests only
+/// (FTR-039), else nothing.
+fn tests_only(def: &crate::models::FeatureDefinition) -> &'static str {
+    match def.approvals.last() {
+        Some(e) if e.verdict == "approved" && e.scope == "tests" => " (tests only)",
+        _ => "",
+    }
+}
+
 /// "N part(s) added since: keys" for an approval that has only grown (FTR-018).
 fn added_since(def: &crate::models::FeatureDefinition) -> String {
     let added = def.part_changes().map(|c| c.added).unwrap_or_default();
@@ -307,20 +316,22 @@ pub(crate) fn definition_sections(
         crate::models::ApprovalState::Current => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
-                    "- **Approved** by {} on {}{}\n",
+                    "- **Approved** by {} on {}{}{}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
-                    crate::origin::via(&a.origin)
+                    crate::origin::via(&a.origin),
+                    tests_only(def)
                 ));
             }
         }
         crate::models::ApprovalState::Extended => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
-                    "- **Approved** by {} on {}{}, with {}\n",
+                    "- **Approved** by {} on {}{}{}, with {}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
                     crate::origin::via(&a.origin),
+                    tests_only(def),
                     added_since(def)
                 ));
             }
