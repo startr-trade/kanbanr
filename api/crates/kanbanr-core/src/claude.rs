@@ -541,17 +541,22 @@ pub fn add_permission_rules(path: &Path, rules: &[String]) -> Result<Vec<String>
     Ok(added)
 }
 
-/// Does the repository's `.gitignore` have a line equal to `relative` or `**/<file name>`?
-/// Read-only; false when unreadable.
+/// Is `relative` ignored in the repository? Asks git (`git check-ignore`), so a root-anchored
+/// line, a glob, a parent directory, `info/exclude` and a nested `.gitignore` all count, and a
+/// tracked file does not (DEF-097). Outside a git repository, or without git, it falls back to
+/// reading the root `.gitignore` for a line equal to `relative` or `**/<file name>`. Read-only;
+/// false when unreadable.
 pub fn gitignore_covers(repo: &Path, relative: &str) -> bool {
-    let Ok(text) = std::fs::read_to_string(repo.join(".gitignore")) else {
-        return false;
-    };
-    let name = relative.rsplit('/').next().unwrap_or(relative);
-    let wide = format!("**/{name}");
-    text.lines()
-        .map(str::trim)
-        .any(|l| l == relative || l == wide)
+    crate::coderepo::check_ignored(repo, relative).unwrap_or_else(|| {
+        let Ok(text) = std::fs::read_to_string(repo.join(".gitignore")) else {
+            return false;
+        };
+        let name = relative.rsplit('/').next().unwrap_or(relative);
+        let wide = format!("**/{name}");
+        text.lines()
+            .map(str::trim)
+            .any(|l| l == relative || l == wide)
+    })
 }
 
 #[cfg(test)]
@@ -1049,6 +1054,44 @@ mod tests {
         assert_eq!(files[0], dir.join(".claude").join("settings.local.json"));
         assert_eq!(files[1], dir.join(".claude").join("settings.json"));
         assert!(files.len() >= 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-097 R-1, R-3: git decides, for every pattern form; a tracked file keeps the warning.
+    #[test]
+    fn gitignore_covers_asks_git_for_every_pattern_form() {
+        let dir = scratch("gitignore");
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        let rel = ".claude/settings.local.json";
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        std::fs::write(dir.join(rel), "{}").unwrap();
+        assert!(!gitignore_covers(&dir, rel), "no .gitignore");
+        for line in [
+            "/.claude/settings.local.json",
+            ".claude/*.local.json",
+            ".claude/",
+        ] {
+            std::fs::write(dir.join(".gitignore"), format!("{line}\n")).unwrap();
+            assert!(gitignore_covers(&dir, rel), "{line}");
+        }
+        std::fs::remove_file(dir.join(".gitignore")).unwrap();
+        assert!(!gitignore_covers(&dir, rel));
+        std::fs::write(dir.join(".git/info/exclude"), "settings.local.json\n").unwrap();
+        assert!(gitignore_covers(&dir, rel), "info/exclude");
+        std::fs::write(dir.join(".git/info/exclude"), "").unwrap();
+        std::fs::write(dir.join(".claude/.gitignore"), "settings.local.json\n").unwrap();
+        assert!(gitignore_covers(&dir, rel), "nested .gitignore");
+        git(&["add", "-f", rel]);
+        assert!(!gitignore_covers(&dir, rel), "tracked keeps the warning");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
