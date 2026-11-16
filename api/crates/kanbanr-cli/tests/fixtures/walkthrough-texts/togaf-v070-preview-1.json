@@ -1,0 +1,38 @@
+[
+  {
+    "turn": 1,
+    "rule": "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir",
+    "recommended": true,
+    "text": "I've checked the project. kanbanr 0.6.0 is installed and this folder isn't tracked yet. You've already picked TOGAF with sprints and releases, so I only need a few more answers, one at a time.\n\n**Where should the board live?** It's its own git repo and should sit outside the project folder.\n\n1. `<run>/project.kanbanr`, a new folder beside the repo (recommended)\n2. A different path you give me"
+  },
+  {
+    "turn": 2,
+    "rule": "\\bpurpose\\b|^(question \\d+: )?what is (this|the) (project|shop) for|\\bproject.s goals?\\b",
+    "recommended": false,
+    "text": "The repository gives me very little to draft from. The README is a single line, there's no manifest, and there are no docs. So most of this charter has to come from you. Here is what I can fill in, with everything else left blank:\n\n**Charter (draft)**\n\n- **Purpose:** A scratch project used to walk through the TOGAF process with kanbanr. *(from the README; correct me if the real purpose differs)*\n- **Vision:** *(blank)*\n- **Goals:**\n  - G-0: The system stays operable and maintainable. Measure: *(blank)*. This is a standing goal so chores link to something honest.\n  - *(no others yet)*\n- **Non-goals:** *(blank)*\n- **Stakeholders:** *(blank)*\n- **Constraints:**\n  - Work follows the TOGAF process, in sprints and releases.\n  - Nothing is pushed except by you.\n  - Main must be pushed before anything is tagged. *(from your request)*\n\n**Question 1: what is this project for?** Your answer settles the purpose, and the goals, non-goals and stakeholders follow from it.\n\n1. Keep the draft purpose as it stands: a scratch project for exercising the TOGAF process (recommended if that's really all it is)\n2. Tell me the real purpose, plus any goals and non-goals you have in mind\n\nTwo things are still open and I'll ask each in turn:\n- **The board location.** My earlier question is unanswered. The recommended option is `<run>/project.kanbanr`.\n- **Whether the project has CI.**\n\nI'll set up the release stages after the board exists. Making main be pushed before the tag is a `kanbanr config release-stage` setting, so I need the board first."
+  },
+  {
+    "turn": 3,
+    "rule": "\\bpurpose\\b|^(question \\d+: )?what is (this|the) (project|shop) for|\\bproject.s goals?\\b",
+    "recommended": false,
+    "text": "Thanks. From this folder my check doesn't find that monitor. It looks at localhost:8080, and nothing answers there. That's expected, because no board exists yet for the monitor to read. I'll use your address, <monitor_url>, for every decision once the board is set up.\n\nI still need two answers before I can create anything. I'll ask the charter question first.\n\n**What is this project for?**\n\n1. Keep the draft purpose: a scratch project for exercising the TOGAF process with kanbanr (recommended if that's all it is)\n2. Tell me the real purpose, plus any goals and non-goals you have in mind\n\nAfter that I'll ask where the board lives. My recommendation is `<run>/project.kanbanr`."
+  },
+  {
+    "turn": 4,
+    "rule": "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir",
+    "recommended": true,
+    "text": "I can't start a sprint yet, because there's no board. Setup comes first, and it needs your answers on the board's location, the charter and CI. What you just described does change the charter draft. The project is a shop's web page where a shopper's basket is kept between visits.\n\n**Where should the board live?**\n\n1. `<run>/project.kanbanr`, a new folder beside the repo and outside it (recommended)\n2. A different path you give me\n\nOnce you answer, I'll ask about CI, then show the charter draft rewritten around the shop. After the setup I'll plan the first sprint and the basket item for the first release. For the sprint I'll ask its goal and capacity, and I'll recommend starting it today. For the release I'll ask its version and target date."
+  },
+  {
+    "turn": 5,
+    "rule": "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir",
+    "recommended": true,
+    "text": "I've noted the test, but I can't add it yet. There's still no board, so there's no basket item to attach it to. I've asked for the board location twice now, and nothing else can be created until you answer it.\n\nYour test is open the basket page, add an item, close the browser, reopen the page, and the item is still there. When I define the item, I'll put it under the requirement that the basket is kept between visits. One thing I'll raise then: kanbanr reserves manual tests for a person's judgement, such as whether something reads well. A browser close-and-reopen check is something an automated run can see. I'll propose it as an automated walkthrough test, and you can still ask for it to be manual.\n\n**Where should the board live?**\n\n1. `<run>/project.kanbanr`, beside the repo and outside it (recommended)\n2. A different path you give me"
+  },
+  {
+    "turn": 6,
+    "rule": "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir",
+    "recommended": false,
+    "text": "I can't do that yet. There's no board, and so no saved-basket item to move. This is the fourth time I've asked for the board location, and the setup is blocked on that one answer.\n\nA reply of just \"1\" is enough. It puts the board at `<run>/project.kanbanr`, beside the repo and outside it.\n\nAfter that I'll ask the remaining questions one at a time: CI, then the charter, with the draft rewritten around the shop. When setup is done, I'll create the sprint and the saved-basket item. Moving it to Business Architecture will wait for your approval of its definition on the Review page at <monitor_url>."
+  }
+]

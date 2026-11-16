@@ -1,0 +1,8 @@
+code: FEAT-001
+requirement: R-1
+test: "manual: open the basket page, add an item, reopen it and the item is still there"
+state: green
+by: Tester
+at: 2026-11-15T10:05:00Z
+origin: monitor
+prepared: 20261115T100400Z-manual-test

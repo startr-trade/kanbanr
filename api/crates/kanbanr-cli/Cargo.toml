@@ -42,6 +42,18 @@ flate2 = "1"
 # Cross-process advisory file lock so two concurrent writers can't interleave a mutate→commit
 # sequence on the same data dir (FEAT-029).
 fs2 = "0.4"
+# A walkthrough runbook's answer rules match Claude's questions by pattern (FTR-037). Already in
+# the dependency tree through other crates, so no new crate.
+regex = "1"
+# A walkthrough's metrics read RFC 3339 times from its captures (FTR-037); the workspace's crate.
+time.workspace = true
+# A walkthrough's scripted person reads the monitor's rendered pages and presses their buttons over
+# the DevTools protocol (FTR-037 W4b): pure Rust on tokio, drives a browser already on the machine,
+# never needed for a run to complete. MIT OR Apache-2.0 throughout (the person's choice, 15 Nov 2026,
+# over headless_chrome, whose code generator is GPL). The handler stream is driven with `futures`,
+# already in the tree.
+chromiumoxide = "0.9.1"
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # FEAT-034 unit tests inspect the data repo's commit log directly (vendored, matches kanbanr-core).

@@ -308,6 +308,25 @@ export const api = {
       "kanbanr prepare list",
     ) as Promise<Resolution>,
   /**
+   * Confirm every open record of a batch with one click (FTR-037): a walkthrough run's checks. The
+   * server makes each record's verdict as `by`, in one commit, and says which went through.
+   */
+  confirmPreparedBatch: (id: string, batch: string, by: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/prepared/batch/${encodeURIComponent(batch)}/confirm`,
+      { by },
+      "confirm the batch Claude prepared",
+      "kanbanr prepare list",
+    ) as Promise<BatchAnswer>,
+  /** Turn a whole batch down at once (FTR-037); the reason is optional. */
+  rejectPreparedBatch: (id: string, batch: string, by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/prepared/batch/${encodeURIComponent(batch)}/reject`,
+      { by, ...(reason ? { reason } : {}) },
+      "reject the batch Claude prepared",
+      "kanbanr prepare list",
+    ) as Promise<BatchAnswer>,
+  /**
    * Where this project's decisions are taken (FTR-028): the mode, the delegations, the decisions
    * Claude took under one for the person to keep or undo, and what waits where.
    */
@@ -397,6 +416,12 @@ export const api = {
     apiUrl(`/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/export?format=${format}`),
   projectEvents: (id: string) => apiUrl(`/projects/${encodeURIComponent(id)}/events`),
   allEvents: () => apiUrl("/events"),
+};
+
+/** The answer to a batch confirmation or rejection (FTR-037): each record and whether it went through. */
+export type BatchAnswer = {
+  batch: string;
+  results: { id: string; kind: string; verdict: "confirmed" | "rejected"; made?: string; error?: string }[];
 };
 
 /** What the daemon's `meta` route answers: this daemon's capabilities and the identity it would record. */

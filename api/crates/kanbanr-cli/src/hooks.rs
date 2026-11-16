@@ -293,6 +293,35 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
     Ok(added)
 }
 
+/// The settings a walkthrough run gives its scratch project (FTR-037 W5): the run-only
+/// `AskUserQuestion` hook that answers every question from the runbook, the guards and the capture
+/// hook the project would have anyway (`kanbanr git guard` reads the run's allowed remotes), and
+/// `Bash(kanbanr:*)` allowed. Written to the run project's `.claude/settings.local.json`; never
+/// into the person's own settings.
+pub fn walkthrough_project_settings() -> Value {
+    json!({
+        "permissions": {"allow": ["Bash(kanbanr:*)"]},
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "kanbanr walkthrough answer"}]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "kanbanr git guard"}]},
+                {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "kanbanr claude guard"}]}
+            ],
+            "PostToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "kanbanr capture"}]}
+            ]
+        }
+    })
+}
+
+/// Write the walkthrough settings into `project_root/.claude/settings.local.json` (replacing a
+/// file an earlier run left: the scratch project is the run's own).
+pub fn write_walkthrough_settings(project_root: &Path) -> anyhow::Result<PathBuf> {
+    let path = project_config_dir(project_root).join("settings.local.json");
+    write(&path, &walkthrough_project_settings())?;
+    Ok(path)
+}
+
 fn read(path: &Path) -> anyhow::Result<Value> {
     match std::fs::read_to_string(path) {
         Ok(s) if s.trim().is_empty() => Ok(json!({})),

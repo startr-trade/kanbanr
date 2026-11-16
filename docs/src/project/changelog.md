@@ -23,6 +23,25 @@ All notable changes to kanbanr are documented here. The format follows
 - `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
   Playwright list-reporter lines (project, location and duration dropped); a name reported more
   than once in a run is green only if every line passed (DEF-061).
+### Added
+
+- **Walkthroughs run themselves (FTR-037).** `kanbanr walkthrough run <runbook>` follows a guide's
+  runbook (a board doc under `walkthroughs/`) from an empty folder to a cut release with no person
+  present: it drives a Claude Code session headlessly on a scratch project inside a fence, answers
+  every question Claude asks from the runbook's rules (else the recommended option, else the first)
+  and logs each in `questions.tsv`, takes each step's decision on the scratch board through the
+  monitor's own write routes as the scripted person after checking the button the guide names is
+  offered (or presses it on the rendered page, with a browser), pushes only to its own remotes,
+  keeps every capture under `MANIFEST.sha256`, derives `decisions.tsv` and `metrics.md` from the
+  captures alone, and prepares the run's checks on your board as one batch. The Review page offers
+  **Confirm all N** and **Reject all N** for a batch beside the single buttons
+  (`POST /projects/{p}/prepared/batch/{batch}/confirm|reject`; `kanbanr prepare test --batch`).
+  A missing offer, a failed board claim or a mismatch with the remote is a finding, never a stop;
+  `--pause-at-decisions` leaves each click to you. `kanbanr walkthrough lint|verify|derive|remotes`
+  check a runbook, a run's manifest, its tables and the repositories runs created. A test of kind
+  `walkthrough` is automated evidence a run proves, never a manual check. `kanbanr serve --bind
+  127.0.0.1:0` now answers on the port it got and names it. Two runbooks, `walkthroughs/togaf.md`
+  and `walkthroughs/agile.md`, ship on the board.
 
 ## [0.6.0] - 2026-11-14
 

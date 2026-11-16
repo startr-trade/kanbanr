@@ -1,0 +1,23 @@
+- version: v0.1.0
+  target: 2026-12-01
+  state: shipped
+  shipped_at: 2026-11-15T10:20:00Z
+  shipped:
+  - FEAT-001
+  stage: tag
+  stages:
+  - stage: candidate
+    by: Tester
+    at: 2026-11-15T10:10:00Z
+    origin: monitor
+  - stage: main
+    by: Tester
+    at: 2026-11-15T10:15:00Z
+    origin: monitor
+  - stage: tag
+    by: Tester
+    at: 2026-11-15T10:20:00Z
+    origin: monitor
+  branch: release/v0.1.0
+  tagged_at: 2026-11-15T10:20:00Z
+  tag_commit: 9f078bd0c1e2aaaaaaaaaaaaaaaaaaaaaaaaaaaa

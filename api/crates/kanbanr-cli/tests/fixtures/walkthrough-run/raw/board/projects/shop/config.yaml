@@ -1,0 +1,111 @@
+schema_version: 5
+name: shop
+description: ""
+statuses:
+- Deferred
+- Planned
+- In Progress
+- Completed
+- Ongoing
+- No Action
+- Not Applicable
+- Out-of-Scope
+default_state: Planned
+transitions:
+  Completed:
+  - In Progress
+  Deferred:
+  - Planned
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+  In Progress:
+  - Completed
+  - Planned
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+  No Action:
+  - Planned
+  Not Applicable:
+  - Planned
+  Ongoing:
+  - In Progress
+  - Planned
+  Out-of-Scope:
+  - Planned
+  Planned:
+  - In Progress
+  - Deferred
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+displayed_states:
+- Planned
+- In Progress
+- Completed
+no_op_states:
+- No Action
+- Not Applicable
+- Out-of-Scope
+terminal_states:
+- Completed
+gates:
+  "@build":
+    requires:
+    - spec_sections:
+      - Design
+    signoffs:
+    - design-review
+  "@integrate":
+    requires:
+    - docs_updated
+    signoffs:
+    - docs-folded
+  Completed:
+    roles:
+    - integrate
+    - release
+  In Progress:
+    roles:
+    - build
+  Planned:
+    roles:
+    - design
+cadence:
+  sprints: false
+  releases: true
+  release_stages:
+  - candidate
+  - main
+  - tag
+  git_model: true
+  release_gates:
+    candidate:
+      purpose: Make the release branch and prepare it once its items are merged
+      requires:
+      - items_merged
+      on_enter:
+      - branch
+      - prepare
+    main:
+      purpose: Move main to the release once its items are finished
+      requires:
+      - items_finished
+      on_enter:
+      - move_main
+    tag:
+      purpose: "Cut the release: tag it once main is at the release and pushed"
+      requires:
+      - main_at_release
+      - pushed
+      on_enter:
+      - tag
+process:
+  name: default
+  library: builtin
+  version: 0
+  rev: e6b7d95724cb14eb

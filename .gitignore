@@ -11,6 +11,8 @@
 /editor/vscode/*.vsix
 # Logs / OS
 *.log
+# A walkthrough fixture run's raw logs are test data, not build output (FTR-037).
+!api/crates/kanbanr-cli/tests/fixtures/walkthrough*/**/*.log
 .DS_Store
 # Local Claude Code tooling state (agent worktrees, etc.) — never part of the source repo.
 # Claude Code: only the machine-local parts. settings.json is generated per machine by
