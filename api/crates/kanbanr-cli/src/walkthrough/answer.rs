@@ -1,7 +1,8 @@
 //! Every question Claude asks during a run is answered, never waited on (FTR-037 W5, R-2): from
-//! the runbook's rules (the current step's first, then the shared table, then the other steps' in
-//! order), else the recommended option, else the first option; a free-text question with no rule
-//! gets "Your call; keep it simple". Each answer is logged to `raw/questions.tsv` with the policy
+//! the runbook's rules (the current step's first, then the shared table; never another step's),
+//! else the recommended option, else a rule matching the whole message (only for a question with
+//! no options), else the first option; a free-text question with no rule gets "Your call; keep it
+//! simple". Each answer is logged to `raw/questions.tsv` with the policy
 //! that chose it.
 //!
 //! Two paths bring a question here. The live one under `-p` (the spike of 15 Nov 2026) is text: the
@@ -153,8 +154,9 @@ impl<'a> Policy<'a> {
         out
     }
 
-    /// The rules in the order they are tried: the current step's, the shared table, every other
-    /// step's in step order.
+    /// The rules in the order they are tried: the current step's, then the shared table. Another
+    /// step's rules never answer (preview-7 RC2: step 6.8's "file it as a defect" answered a
+    /// question at 2.3 and made a defect nobody asked for).
     fn rules(&self) -> Vec<&'a AnswerRule> {
         let mut out: Vec<&AnswerRule> = Vec::new();
         if let Some(step) = &self.current_step
@@ -163,11 +165,6 @@ impl<'a> Policy<'a> {
             out.extend(s.answers.iter());
         }
         out.extend(self.runbook.answers.iter());
-        for s in &self.runbook.steps {
-            if self.current_step.as_deref() != Some(s.id.as_str()) {
-                out.extend(s.answers.iter());
-            }
-        }
         out
     }
 
@@ -386,8 +383,8 @@ mod tests {
         }
     }
 
-    /// FTR-037 R-2: the runbook's rule answers first (the current step's before the shared table
-    /// and the other steps'), then the option marked recommended, then the first option; a free-text
+    /// FTR-037 R-2: the runbook's rule answers first (the current step's before the shared table;
+    /// another step's never), then the option marked recommended, then the first option; a free-text
     /// question with no rule gets the literal pick; every answer names its policy.
     #[test]
     fn runbook_then_recommended_then_first() {
@@ -418,16 +415,13 @@ mod tests {
             (p.policy, p.pick.as_str()),
             ("runbook", "Its remote is /tmp/x/board.git.")
         );
-        // Another step's rule answers too, when the current step has none.
+        // Another step's rule never answers: at 5.8 the question falls through to the first option.
         let p = Policy::new(&rb, Some("5.8")).answer(&question(
             "What is the project for?",
             &["A shop", "A blog"],
             Source::Dialog,
         ));
-        assert_eq!(
-            (p.policy, p.pick.as_str()),
-            ("runbook", "A small web shop.")
-        );
+        assert_eq!((p.policy, p.pick.as_str()), ("first", "A shop"));
         // No rule: the recommended option, wherever it stands.
         let p = policy.answer(&question(
             "Which colour should the basket page use?",
@@ -542,6 +536,46 @@ mod tests {
                 assert_eq!(build.pick, build_say, "{file} 2.1: {:?}", q.text);
             }
         }
+    }
+
+    /// Preview-7 triage RC2: at agile 2.3 Claude asked "how should I record it?" about the
+    /// manual test, and step 6.8's own rule ("File it as a defect…") answered it, making a defect
+    /// nobody asked for. Now another step's rule never answers: at 2.3 the recommended option
+    /// wins, and at 6.8 its rule still does.
+    #[test]
+    fn another_steps_rule_never_answers_a_question() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/agile-v070-preview-4.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let text = texts[0]["text"].as_str().unwrap();
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/agile.md")).unwrap())
+                .unwrap();
+        let q = crate::walkthrough::driver::parse_text_question(text).unwrap();
+        assert_eq!(q.text, "Question: how should I record it?");
+        let q = Question::from_text(&q);
+        let at_2_3 = Policy::new(&rb, Some("2.3")).answer(&q);
+        assert_eq!(at_2_3.policy, "recommended", "{at_2_3:?}");
+        assert!(
+            at_2_3
+                .pick
+                .starts_with("Your check becomes the item's one manual test"),
+            "{at_2_3:?}"
+        );
+        assert!(!at_2_3.pick.contains("defect"));
+        let defect_step = rb
+            .steps
+            .iter()
+            .find(|s| s.names.contains_key("defect"))
+            .unwrap();
+        let at_defect = Policy::new(&rb, Some(&defect_step.id)).answer(&q);
+        assert!(
+            at_defect.pick.starts_with("File it as a defect"),
+            "{at_defect:?}"
+        );
     }
 
     /// Preview-6 triage: the TOGAF run stopped at setup after 4 turns. Its last message, the

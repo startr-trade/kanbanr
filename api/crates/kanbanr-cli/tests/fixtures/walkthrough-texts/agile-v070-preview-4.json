@@ -1,0 +1,8 @@
+[
+  {
+    "from": "agile-v070-preview-4",
+    "line": 283,
+    "step": "2.3",
+    "text": "An item should carry at most one manual test, and FEAT-002 already has one. R-5 holds \"manual: the basket page is one column, in system fonts, with no images\". So I'm asking before I record yours.\n\nYour check is the same behaviour as R-1, which Playwright already proves by closing and reopening the browser. FEAT-002 isn't approved yet, so any change here costs nothing.\n\n**Question: how should I record it?**\n\n1. **Your check becomes the item's one manual test, on R-1 (recommended).** It keeps your wording: \"open the basket page, add an item, close the browser, reopen the page, and the item is still there\". R-5 then gets an automated Playwright test, `e2e/basket.spec.ts › plain page › basket page is one column, in system fonts, with no images`, which checks the page's styles and finds no images.\n2. **Keep both manual tests**, yours on R-1 and the look check on R-5. This goes against the one-manual-test guidance.\n3. **Replace R-1's Playwright test with yours.** R-1 would then rest on a person's check alone."
+  }
+]
