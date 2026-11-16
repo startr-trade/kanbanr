@@ -727,6 +727,8 @@ export interface ManualWaiting {
   state: string;
   checked_rev: string;
   last: ManualResult | null;
+  /** The build stage the check opens at (DEF-076); absent or empty when the check is due. */
+  opens_at?: string;
 }
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */

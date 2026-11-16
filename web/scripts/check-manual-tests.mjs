@@ -5,9 +5,13 @@
 // person. The pure functions the page uses are checked case by case; the page is read for where it
 // renders the section, what it shows, and that nothing has to be typed.
 //
+// web::check_manual_check_offers_no_result_before_its_item_is_built (DEF-076 R-3): a check whose
+// item has not reached its build stage says why, offers no Passed, Failed or prepared record, and
+// is listed apart under "Not due yet".
+//
 // Usage: npm run check:manual-tests
 import { readFileSync } from "node:fs";
-import { lastResultLine, manualCommand, manualRows } from "../src/manualTests.ts";
+import { lastResultLine, manualCommand, manualRows, notDueLine } from "../src/manualTests.ts";
 
 const problems = [];
 const expect = (name, got, want) => {
@@ -91,8 +95,57 @@ const inputs = manualPart.split("<input").length - 1;
 const gated = /\{noting \? \(\s*<p className="small">\s*<label>[\s\S]*?<input/.test(manualPart);
 if (inputs !== 1 || !gated) problems.push("ReviewPage.tsx: the manual check renders an input before Add a note is chosen");
 
-if (problems.length) {
-  for (const p of problems) console.error(`web::manual_tests — ${p}`);
-  process.exit(1);
+// DEF-076 R-3: no result is offered before the item's build stage.
+const notDue = [];
+const expectNotDue = (name, got, want) => {
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    notDue.push(`${name}: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+  }
+};
+const early = waiting("FEAT-003", "R-1", "manual: it prints", { status: "System Design", opens_at: "Build" });
+expectNotDue(
+  "a check before its build stage says why",
+  notDueLine(early),
+  "Not yet: FEAT-003 is at System Design. Its check opens at Build, once the code it checks exists.",
+);
+expectNotDue("a due check has no line", notDueLine(a), "");
+expectNotDue("an empty opens_at is due", notDueLine({ ...a, opens_at: "" }), "");
+// ManualCheck: the not-due branch comes before every way to record a result, so none renders.
+const branch = manualPart.indexOf(") : notDue ? (");
+const firstAfter = (re) => {
+  const m = manualPart.slice(Math.max(branch, 0)).search(re);
+  return m < 0 ? -1 : m + branch;
+};
+if (!/const notDue = notDueLine\(row\);/.test(manualPart)) notDue.push("ManualCheck does not read notDueLine(row)");
+if (branch < 0) notDue.push("ManualCheck has no branch for a check that is not due");
+else {
+  const before = manualPart.slice(0, branch);
+  for (const [name, re] of [
+    ["PreparedPanel", /<PreparedPanel/],
+    ["Passed", />\s*Passed\s*</],
+    ["Failed", />\s*Failed\s*</],
+    ["the terminal command", /manualCommand\(/],
+  ]) {
+    if (re.test(before)) notDue.push(`ManualCheck renders ${name} before the not-due branch`);
+    if (firstAfter(re) < 0) notDue.push(`ManualCheck: ${name} is not behind the not-due branch`);
+  }
+  if (!/^\) : notDue \? \(\s*<p className="small muted">\{notDue\}<\/p>\s*\) :/.test(manualPart.slice(branch))) {
+    notDue.push("ManualCheck's not-due branch renders more than its sentence");
+  }
 }
-console.log("web::manual_tests — manual checks are paired with open records, listed with their requirement and check, and need nothing typed.");
+const listPart = page.slice(page.indexOf("function ManualChecks("), page.indexOf("function ManualCheck("));
+if (!/<summary>Not due yet \(\{notDue\.length\}\)<\/summary>/.test(listPart)) notDue.push("ManualChecks has no collapsed Not due yet section");
+if (!/<details/.test(listPart)) notDue.push("the Not due yet section is not collapsed");
+if (!/\{due\.length\} manual check\{due\.length === 1/.test(listPart)) notDue.push("the count sentence does not count due checks only");
+
+for (const p of problems) console.error(`web::manual_tests — ${p}`);
+for (const p of notDue) console.error(`web::check_manual_check_offers_no_result_before_its_item_is_built — ${p}`);
+if (problems.length === 0) {
+  console.log("web::manual_tests — manual checks are paired with open records, listed with their requirement and check, and need nothing typed.");
+}
+if (notDue.length === 0) {
+  console.log(
+    "web::check_manual_check_offers_no_result_before_its_item_is_built — a check before its item's build stage says why, offers no result, and is listed under Not due yet.",
+  );
+}
+if (problems.length || notDue.length) process.exit(1);

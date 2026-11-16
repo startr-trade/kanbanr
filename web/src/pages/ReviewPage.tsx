@@ -12,7 +12,7 @@ import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, blockedSentence, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { type Batch, batches, editedWhileFlagged, openFor } from "../prepared";
-import { lastResultLine, manualCommand, manualRows, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
+import { lastResultLine, manualCommand, manualRows, notDueLine, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
 import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
 
 /**
@@ -755,6 +755,8 @@ function BatchBar({
  * The manual tests waiting for a person (DEF-040): each with its requirement and the check to make,
  * and Passed / Failed for the person who did it. Nothing has to be typed; a note is behind a link.
  * Where the monitor cannot write, the command for the person's own terminal is shown instead.
+ * A check whose item has not reached its build stage is not due (DEF-076): it is listed apart,
+ * collapsed under "Not due yet", and offers no result.
  */
 function ManualChecks({
   project,
@@ -777,27 +779,36 @@ function ManualChecks({
   onConfirm: (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => Promise<void>;
   onReject: (m: ManualRow, view: PreparedView, reason: string) => Promise<void>;
 }) {
+  const due = rows.filter((m) => notDueLine(m.row) === "");
+  const notDue = rows.filter((m) => notDueLine(m.row) !== "");
+  const check = (m: ManualRow) => (
+    <ManualCheck
+      key={manualKey(m)}
+      project={project}
+      m={m}
+      writable={writable}
+      busy={busy === manualKey(m)}
+      outcome={done[manualKey(m)]}
+      onRetry={() => onRetry(manualKey(m))}
+      onRecord={(passed, note) => onRecord(m, passed, note)}
+      onConfirm={(view, edits) => onConfirm(m, view, edits)}
+      onReject={(view, reason) => onReject(m, view, reason)}
+    />
+  );
   return (
     <>
       <h2>Manual checks</h2>
       <p className="muted">
-        {rows.length} manual check{rows.length === 1 ? "" : "s"} waiting for someone to do them. Do the
+        {due.length} manual check{due.length === 1 ? "" : "s"} waiting for someone to do them. Do the
         check, then record whether it passed.
       </p>
-      {rows.map((m) => (
-        <ManualCheck
-          key={manualKey(m)}
-          project={project}
-          m={m}
-          writable={writable}
-          busy={busy === manualKey(m)}
-          outcome={done[manualKey(m)]}
-          onRetry={() => onRetry(manualKey(m))}
-          onRecord={(passed, note) => onRecord(m, passed, note)}
-          onConfirm={(view, edits) => onConfirm(m, view, edits)}
-          onReject={(view, reason) => onReject(m, view, reason)}
-        />
-      ))}
+      {due.map(check)}
+      {notDue.length > 0 ? (
+        <details className="manual-not-due">
+          <summary>Not due yet ({notDue.length})</summary>
+          {notDue.map(check)}
+        </details>
+      ) : null}
     </>
   );
 }
@@ -827,6 +838,8 @@ function ManualCheck({
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
   const last = lastResultLine(row.last);
+  // Before its item reaches its build stage a check offers no result (DEF-076).
+  const notDue = notDueLine(row);
   // Any outcome, a rejection or an error included, replaces the form (DEF-090).
   const finished = outcome != null;
   const failed = row.state === "red";
@@ -849,6 +862,8 @@ function ManualCheck({
       ) : null}
       {finished ? (
         <OutcomeChip outcome={outcome} onRetry={onRetry} />
+      ) : notDue ? (
+        <p className="small muted">{notDue}</p>
       ) : prepared && writable ? (
         <PreparedPanel
           project={project}

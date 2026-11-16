@@ -20,6 +20,16 @@ export function manualRows(waiting: ManualWaiting[] | null | undefined, prepared
   }));
 }
 
+/**
+ * Why a check is not due yet (DEF-076): "Not yet: FEAT-003 is at System Design. Its check opens at
+ * Build, once the code it checks exists.", or "" when it is due. Before its item reaches the build
+ * stage nothing exists to check, so the page offers no result and kanbanr refuses one.
+ */
+export function notDueLine(row: ManualWaiting): string {
+  if (!row.opens_at) return "";
+  return `Not yet: ${row.code} is at ${row.status}. Its check opens at ${row.opens_at}, once the code it checks exists.`;
+}
+
 /** The `kanbanr test` command for the person's own terminal, where the monitor cannot write. */
 export function manualCommand(row: ManualWaiting, passed: boolean): string {
   const quote = (s: string) => (/^[A-Za-z0-9._/:@=+,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
