@@ -12,6 +12,7 @@
 //! directly. This is purely additive and OFF by default: the read-only monitor is unchanged, and
 //! the CLI-writes-directly default is fully preserved.
 
+pub mod background;
 mod embedded;
 pub mod memo;
 mod origin;
