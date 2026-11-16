@@ -691,6 +691,32 @@ pub fn list_remotes(dir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `git@github.com:o/r.git` and `https://github.com/o/r.git` both become `https://github.com/o/r`;
+/// a local path or an unfamiliar scheme is no address a reader can open.
+pub fn web_url(remote: &str) -> Option<String> {
+    let trimmed = remote.trim().trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    if let Some(rest) = trimmed.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!("https://{host}/{path}"));
+    }
+    if let Some(rest) = trimmed.strip_prefix("ssh://git@") {
+        return Some(format!("https://{rest}"));
+    }
+    trimmed.starts_with("https://").then(|| trimmed.to_string())
+}
+
+/// The URL of the remote named `origin`, else the first remote, else `None`.
+pub fn remote_url(dir: &Path) -> Option<String> {
+    let remotes = list_remotes(dir);
+    remotes
+        .iter()
+        .find(|(n, _)| n == "origin")
+        .or_else(|| remotes.first())
+        .map(|(_, u)| u.clone())
+        .filter(|u| !u.is_empty())
+}
+
 /// Add a remote. Returns the git error text on failure.
 pub fn add_remote(dir: &Path, name: &str, url: &str) -> Result<(), String> {
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
@@ -1015,6 +1041,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// DEF-053 (and FEAT-136): a remote becomes the address a reader opens; a local path does not.
+    #[test]
+    fn a_remote_maps_to_its_web_address() {
+        assert_eq!(
+            web_url("git@git.example.invalid:o/r.git").as_deref(),
+            Some("https://git.example.invalid/o/r")
+        );
+        assert_eq!(
+            web_url("ssh://git@git.example.invalid/o/r.git").as_deref(),
+            Some("https://git.example.invalid/o/r")
+        );
+        assert_eq!(
+            web_url("https://git.example.invalid/o/r.git/").as_deref(),
+            Some("https://git.example.invalid/o/r")
+        );
+        assert_eq!(web_url("/srv/boards/shop.git"), None);
+
+        let dir = temp("remoteurl");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        assert_eq!(remote_url(&dir), None);
+        add_remote(&dir, "other", "https://example.invalid/a/other.git").unwrap();
+        add_remote(&dir, "origin", "https://example.invalid/a/main.git").unwrap();
+        assert_eq!(
+            remote_url(&dir).as_deref(),
+            Some("https://example.invalid/a/main.git")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// FEAT-180: a doc is judged against the board as it stood when the item entered its stage.

@@ -25,22 +25,7 @@ fn board_url(store: &Store) -> Option<String> {
     let (_, url) = crate::git::list_remotes(store.data_dir())
         .into_iter()
         .next()?;
-    web_url(&url)
-}
-
-/// `git@github.com:o/r.git` and `https://github.com/o/r.git` both become `https://github.com/o/r`;
-/// a local path or an unfamiliar scheme is no address a reader can open.
-fn web_url(remote: &str) -> Option<String> {
-    let trimmed = remote.trim().trim_end_matches('/');
-    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    if let Some(rest) = trimmed.strip_prefix("git@") {
-        let (host, path) = rest.split_once(':')?;
-        return Some(format!("https://{host}/{path}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix("ssh://git@") {
-        return Some(format!("https://{rest}"));
-    }
-    trimmed.starts_with("https://").then(|| trimmed.to_string())
+    crate::git::web_url(&url)
 }
 
 /// Render the block for a project. `None` when there is nothing worth saying — a project with no
@@ -343,14 +328,14 @@ mod tests {
     #[test]
     fn the_block_names_where_the_board_is_published() {
         assert_eq!(
-            web_url("git@github.com:startr-trade/kanbanr-board.git").as_deref(),
+            crate::git::web_url("git@github.com:startr-trade/kanbanr-board.git").as_deref(),
             Some("https://github.com/startr-trade/kanbanr-board")
         );
         assert_eq!(
-            web_url("https://github.com/startr-trade/kanbanr-board.git").as_deref(),
+            crate::git::web_url("https://github.com/startr-trade/kanbanr-board.git").as_deref(),
             Some("https://github.com/startr-trade/kanbanr-board")
         );
-        assert_eq!(web_url("/srv/boards/shop.git"), None);
+        assert_eq!(crate::git::web_url("/srv/boards/shop.git"), None);
 
         let (store, dir) = fixture();
         crate::charter::save(

@@ -57,7 +57,8 @@ the interview.
 ### Where the board lives
 
 The board is its own git repo, so it belongs **next to** your project, not inside it. It starts
-with a `README.md` that says what it is and how to see it: install kanbanr, clone the board, run
+with a `README.md` that names the project it tracks and links its code repository, then says how
+to see it: install kanbanr, clone the board, run
 `kanbanr serve --data-dir <the clone>` and open http://127.0.0.1:8080. kanbanr keeps the generated
 part current as projects come and go; anything you write outside it is yours. A board made before
 this has none: `kanbanr readme` writes it, and `kanbanr doctor` reminds you until then. A board

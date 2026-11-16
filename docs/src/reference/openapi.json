@@ -770,6 +770,24 @@
         ],
         "type": "object"
       },
+      "CodeRepository": {
+        "additionalProperties": true,
+        "description": "The code repository a project tracks (DEF-053): named and linked from the board README.",
+        "properties": {
+          "private": {
+            "description": "The person said the repository is private: the README names it and never links it.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "The git remote URL as recorded: `git@host:o/r.git`, `https://host/o/r.git`, or a path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "CodesConfig": {
         "additionalProperties": true,
         "description": "Which prefix an item's code gets from its kind (FEAT-217). Absent: every item is `FEAT-`, as\nbefore, and absent stays absent on disk. Kinds sharing a prefix share its counter.",
@@ -3467,6 +3485,10 @@
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
             "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
+          },
+          "repository": {
+            "$ref": "#/components/schemas/CodeRepository",
+            "description": "The code repository this project tracks (DEF-053). Absent unless recorded, and absent\nstays absent on disk."
           },
           "schema_version": {
             "default": 0,

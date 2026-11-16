@@ -65,6 +65,10 @@ project"** (or anything equivalent):
    - *Project name and one-line description*: not asked. Use `suggested_name` (the folder's) and
      `suggested_description` (the README's first line, or a manifest's `description`); ask only
      when the description is null or the README is empty.
+   - *Code repository*: read `suggested_repository` from `kanbanr where --json`. When it is not
+     null, ask once whether the board README may link it (recommended when the repository is
+     public), name it without a link (private), or leave it out. A public board never links a
+     private repository.
 
    **b. Identity, once.** One question for the board and the repository both: name and email,
    defaulted from `git config`, else the board's author. It is asked when git has none here;
@@ -173,7 +177,7 @@ project"** (or anything equivalent):
    the method's gates are on (`kanbanr config method --off` turns them off later):
 
    ```bash
-   kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
+   kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>" [--repository <url>] [--repository-private on]
    kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
