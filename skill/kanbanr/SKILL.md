@@ -1127,8 +1127,9 @@ project revision it was observed at. So:
   reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
   them records nothing. Settle that form before you ask for approval (below).
 - At Design, check each tracked test name against the runner the project uses and one of these
-  forms. A runner outside them (go test, Jest, Maven, nextest until MNT-007) records nothing. Say
-  so in the Design and ask before choosing it. When the hook says it read no test result from a
+  forms. A runner outside them (go test, Jest, Maven) records nothing; cargo nextest's lines are
+  read from kanbanr 0.8.0 (FTR-058), under the names cargo test prints. Say so in the Design and
+  ask before choosing it. When the hook says it read no test result from a
   run, rerun in a form it reads; never set the test by hand.
 - `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`); until
   the installed kanbanr reads nextest's lines (FTR-058, v0.8.0), run

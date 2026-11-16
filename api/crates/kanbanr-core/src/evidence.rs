@@ -810,6 +810,250 @@ pub fn plan_sources(project: &Project, exists: &dyn Fn(&str) -> bool, now: &str)
     out
 }
 
+/// The largest JUnit report [`parse_junit`] reads.
+pub const JUNIT_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Test name -> result and duration, read from a cargo-nextest JUnit report (FTR-058 R-7). A
+/// reader bounded to nextest's form, not a general XML parser: it reads every `<testsuite>` and,
+/// inside it, every `<testcase name classname time>`. A testcase is red when a `<failure` or
+/// `<error` child opens before its `</testcase>`, left out when a `<skipped` child is there, and
+/// green otherwise; `ms` is `time` × 1000, rounded. Comments, CDATA and processing instructions
+/// are stepped over. Only the five predefined entities and character references are decoded; a
+/// report holding `<!DOCTYPE` or `<!ENTITY` is refused, so nothing is ever expanded (R-12).
+pub fn parse_junit(xml: &str) -> Result<BTreeMap<String, Timed>, String> {
+    if xml.len() > JUNIT_MAX_BYTES {
+        return Err(format!(
+            "a JUnit report over {} MiB is not read",
+            JUNIT_MAX_BYTES / (1024 * 1024)
+        ));
+    }
+    let upper = xml.to_ascii_uppercase();
+    if upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY") {
+        return Err("a JUnit report with a DOCTYPE or entity declaration is not read".into());
+    }
+    struct Case {
+        name: String,
+        ms: Option<u64>,
+        failed: bool,
+        skipped: bool,
+    }
+    fn finish(out: &mut BTreeMap<String, Timed>, case: Case) {
+        let outcome = if case.failed {
+            Outcome::Failed
+        } else if case.skipped {
+            Outcome::Unproven
+        } else {
+            Outcome::Passed
+        };
+        record_outcome(
+            out,
+            Reading {
+                name: case.name,
+                outcome,
+                ms: case.ms,
+            },
+        );
+    }
+    let mut out = BTreeMap::new();
+    let mut suite: Option<String> = None;
+    let mut case: Option<Case> = None;
+    let mut rest = xml;
+    while let Some(open) = rest.find('<') {
+        rest = &rest[open..];
+        // Markup whose content is never read.
+        let skip = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
+            .into_iter()
+            .find(|(start, _)| rest.starts_with(start));
+        if let Some((start, end)) = skip {
+            let close = rest[start.len()..]
+                .find(end)
+                .ok_or_else(|| format!("the JUnit report ends inside a '{start}'"))?;
+            rest = &rest[start.len() + close + end.len()..];
+            continue;
+        }
+        let (tag, after) = junit_tag(rest)?;
+        rest = after;
+        match (tag.closing, tag.name) {
+            (false, "testsuite") if !tag.empty => suite = tag.attr("name")?,
+            (true, "testsuite") => suite = None,
+            (false, "testcase") => {
+                if let Some(c) = case.take() {
+                    return Err(format!("testcase '{}' is not closed", c.name));
+                }
+                let name = tag
+                    .attr("name")?
+                    .ok_or("a testcase has no name attribute")?;
+                let class = match tag.attr("classname")? {
+                    Some(c) => c,
+                    None => suite.clone().unwrap_or_default(),
+                };
+                let ms = match tag.attr("time")? {
+                    Some(t) => Some(junit_ms(&t).ok_or_else(|| {
+                        format!("testcase '{name}' has time=\"{t}\", which is not a duration")
+                    })?),
+                    None => None,
+                };
+                let c = Case {
+                    name: board_name(&class, &name),
+                    ms,
+                    failed: false,
+                    skipped: false,
+                };
+                if tag.empty {
+                    finish(&mut out, c);
+                } else {
+                    case = Some(c);
+                }
+            }
+            (true, "testcase") => {
+                let c = case.take().ok_or("a </testcase> closes no testcase")?;
+                finish(&mut out, c);
+            }
+            (false, "failure" | "error") => {
+                if let Some(c) = case.as_mut() {
+                    c.failed = true;
+                }
+            }
+            (false, "skipped") => {
+                if let Some(c) = case.as_mut() {
+                    c.skipped = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(c) = case {
+        return Err(format!("testcase '{}' is not closed", c.name));
+    }
+    Ok(out)
+}
+
+/// One tag of a JUnit report: its name, whether it closes (`</x>`) or is empty (`<x/>`), and its
+/// raw attribute text.
+struct JunitTag<'a> {
+    name: &'a str,
+    closing: bool,
+    empty: bool,
+    attrs: &'a str,
+}
+
+impl JunitTag<'_> {
+    /// The decoded value of attribute `key`, if the tag has it.
+    fn attr(&self, key: &str) -> Result<Option<String>, String> {
+        let mut s = self.attrs;
+        loop {
+            s = s.trim_start();
+            if s.is_empty() {
+                return Ok(None);
+            }
+            let eq = s
+                .find('=')
+                .ok_or_else(|| format!("an attribute of <{}> has no value", self.name))?;
+            let k = s[..eq].trim();
+            let v = s[eq + 1..].trim_start();
+            let quote = v
+                .chars()
+                .next()
+                .filter(|c| *c == '"' || *c == '\'')
+                .ok_or_else(|| format!("attribute '{k}' of <{}> is not quoted", self.name))?;
+            let end = v[1..]
+                .find(quote)
+                .ok_or_else(|| format!("attribute '{k}' of <{}> is not closed", self.name))?;
+            if k == key {
+                return junit_decode(&v[1..1 + end]).map(Some);
+            }
+            s = &v[1 + end + 1..];
+        }
+    }
+}
+
+/// Read the tag `text` starts with (at its `<`), returning it and the text after its `>`. A `>`
+/// inside a quoted attribute value does not end the tag.
+fn junit_tag(text: &str) -> Result<(JunitTag<'_>, &str), String> {
+    let mut quote: Option<char> = None;
+    let mut end = None;
+    for (i, c) in text.char_indices().skip(1) {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => {
+                end = Some(i);
+                break;
+            }
+            (None, '<') => return Err("the JUnit report has a '<' inside a tag".into()),
+            _ => {}
+        }
+    }
+    let end = end.ok_or("the JUnit report ends inside a tag")?;
+    let mut inner = &text[1..end];
+    let closing = inner.starts_with('/');
+    if closing {
+        inner = &inner[1..];
+    }
+    let empty = inner.ends_with('/');
+    if empty {
+        inner = &inner[..inner.len() - 1];
+    }
+    let split = inner
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(inner.len());
+    let tag = JunitTag {
+        name: &inner[..split],
+        closing,
+        empty,
+        attrs: &inner[split..],
+    };
+    Ok((tag, &text[end + 1..]))
+}
+
+/// An attribute value with `&amp; &lt; &gt; &quot; &apos;` and `&#N;`/`&#xH;` decoded. Any other
+/// entity is refused: no entity is ever looked up or expanded.
+fn junit_decode(raw: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let semi = rest[amp..]
+            .find(';')
+            .filter(|n| *n <= 12)
+            .ok_or_else(|| format!("'{raw}' has an '&' that starts no entity"))?;
+        let entity = &rest[amp + 1..amp + semi];
+        let c = match entity {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "quot" => '"',
+            "apos" => '\'',
+            _ => {
+                let code = if let Some(hex) = entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                {
+                    u32::from_str_radix(hex, 16).ok()
+                } else if let Some(dec) = entity.strip_prefix('#') {
+                    dec.parse().ok()
+                } else {
+                    None
+                };
+                code.and_then(char::from_u32).ok_or_else(|| {
+                    format!("'&{entity};' is not an entity a JUnit report is read with")
+                })?
+            }
+        };
+        out.push(c);
+        rest = &rest[amp + semi + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// A JUnit `time` in seconds as whole milliseconds, rounded.
+fn junit_ms(time: &str) -> Option<u64> {
+    let secs: f64 = time.trim().parse().ok()?;
+    (secs.is_finite() && secs >= 0.0).then(|| (secs * 1000.0).round() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1487,5 +1731,107 @@ test_add (tests.test_basket.BasketTests.test_add) ... ok";
         assert!(plan.batch().is_some());
         assert_eq!(source_file(&source("TODO.md:14", None)), "TODO.md");
         assert_eq!(source_file(&source("a:b.md", None)), "a:b.md");
+    }
+
+    /// cargo-nextest 0.9.151's JUnit report for the probe crate (16 Nov 2026): two suites, a
+    /// failure whose message holds `&apos;`, captured output, and an empty testcase.
+    const NEXTEST_JUNIT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="4" failures="1" errors="0" uuid="5b0b6a8e-1f63-4f4e-9d0e-7f1c1c7f9a10" timestamp="2026-11-16T17:20:31.123+00:00" time="1.012">
+    <testsuite name="nxprobe" tests="3" disabled="0" errors="0" failures="1">
+        <testcase name="tests::fails" classname="nxprobe" timestamp="2026-11-16T17:20:31.125+00:00" time="0.004">
+            <failure message="thread &apos;tests::fails&apos; panicked at src/lib.rs:9:9" type="test failure with exit code 101">thread &apos;tests::fails&apos; panicked at src/lib.rs:9:9:
+assertion `left == right` failed</failure>
+            <system-out>
+running 1 test
+test tests::fails ... FAILED
+</system-out>
+            <system-err><![CDATA[<testcase name="not_a_test" classname="nxprobe"/> & stray text]]></system-err>
+        </testcase>
+        <testcase name="tests::passes" classname="nxprobe" timestamp="2026-11-16T17:20:31.125+00:00" time="0.002">
+        </testcase>
+        <!-- a comment holding <testcase name="nor_this"/> -->
+        <testcase name="tests::slowish" classname="nxprobe" timestamp="2026-11-16T17:20:31.126+00:00" time="1.204"/>
+    </testsuite>
+    <testsuite name="nxprobe::cli_flow" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="integration_ok" classname="nxprobe::cli_flow" timestamp="2026-11-16T17:20:31.127+00:00" time="0.006">
+        </testcase>
+    </testsuite>
+</testsuites>
+"#;
+
+    /// FTR-058 R-7: a nextest JUnit report gives the board's names, each test's result and its
+    /// duration; a skipped test is left out and an errored one is red.
+    #[test]
+    fn a_nextest_junit_report_is_read_with_names_results_and_durations() {
+        let r = parse_junit(NEXTEST_JUNIT).unwrap();
+        let t = |passed, ms| Timed {
+            passed,
+            ms: Some(ms),
+        };
+        assert_eq!(r.get("tests::fails"), Some(&t(false, 4)));
+        assert_eq!(r.get("tests::passes"), Some(&t(true, 2)));
+        assert_eq!(r.get("tests::slowish"), Some(&t(true, 1204)));
+        // An integration binary's id names its file, as `board_name` says.
+        assert_eq!(r.get("cli_flow::integration_ok"), Some(&t(true, 6)));
+        // Nothing inside CDATA or a comment is read as a testcase.
+        assert_eq!(r.len(), 4, "{r:?}");
+
+        let skipped = r#"<testsuites><testsuite name="kanbanr-core">
+<testcase name="evidence::tests::a &amp; b" classname="kanbanr-core" time="0.010"><skipped/></testcase>
+<testcase name="evidence::tests::errs" classname="kanbanr-core" time="0.5"><error message="&lt;crash&gt;"/></testcase>
+<testcase name="evidence::tests::untimed" classname="kanbanr-core"/>
+<testcase name='local&#95;mode&#x3a;&#x3A;quoted' classname='kanbanr-cli::bin/kanbanr' time='0.0004'></testcase>
+</testsuite></testsuites>"#;
+        let r = parse_junit(skipped).unwrap();
+        assert_eq!(r.get("evidence::tests::a & b"), None);
+        assert_eq!(r.get("evidence::tests::errs"), Some(&t(false, 500)));
+        assert_eq!(
+            r.get("evidence::tests::untimed"),
+            Some(&Timed {
+                passed: true,
+                ms: None
+            })
+        );
+        // A binary's id (`…::bin/…`) leaves the name as printed.
+        assert_eq!(r.get("local_mode::quoted"), Some(&t(true, 0)));
+        assert_eq!(r.len(), 3, "{r:?}");
+
+        // A report that is not one is an error, never a guess.
+        assert!(parse_junit("<testsuites><testsuite name=\"x\"><testcase name=\"a\"").is_err());
+        assert!(parse_junit("<testcase name=\"a\" time=\"soon\"/>").is_err());
+        assert!(parse_junit("<testcase name=\"a&bogus;\"/>").is_err());
+        assert!(parse_junit("<testsuite name=\"x\"><testcase name=\"a\"></testsuite>").is_err());
+        assert!(parse_junit("").unwrap().is_empty());
+    }
+
+    /// FTR-058 R-12: a report with a DOCTYPE or an entity declaration is refused, nothing is
+    /// expanded, an oversized one is refused, and no XML crate is in the lockfile.
+    #[test]
+    fn a_junit_report_with_a_doctype_or_entity_is_refused() {
+        let want = "a JUnit report with a DOCTYPE or entity declaration is not read";
+        let doctype = "<!DOCTYPE testsuites>\n<testsuites><testsuite name=\"x\">\
+                       <testcase name=\"a\" classname=\"x\" time=\"0.1\"/></testsuite></testsuites>";
+        assert_eq!(parse_junit(doctype), Err(want.to_string()));
+        let entity = "<?xml version=\"1.0\"?>\n<testsuites>\n\
+                      <!ENTITY x SYSTEM \"file:///etc/passwd\">\n\
+                      <testsuite name=\"x\"><testcase name=\"&x;\" classname=\"x\" time=\"0.1\"/>\
+                      </testsuite></testsuites>";
+        assert_eq!(parse_junit(entity), Err(want.to_string()));
+        assert!(parse_junit("<!doctype x>").is_err());
+
+        let big = " ".repeat(JUNIT_MAX_BYTES + 1);
+        assert!(parse_junit(&big).unwrap_err().contains("64 MiB"));
+
+        let lock = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"),
+        )
+        .unwrap();
+        let xml: Vec<&str> = lock
+            .lines()
+            .filter_map(|l| l.strip_prefix("name = \""))
+            .filter_map(|n| n.strip_suffix('"'))
+            .filter(|n| n.contains("xml"))
+            .collect();
+        assert!(xml.is_empty(), "the lockfile holds XML crates: {xml:?}");
     }
 }
