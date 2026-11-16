@@ -400,6 +400,8 @@ mod tests {
                 }),
             )
             .unwrap();
+        // A manual check opens at the build stage, Scheduled here (DEF-076).
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
         store
             .set_test_state(
                 "demo",

@@ -167,6 +167,14 @@ fn manual_board(s: &Scratch, name: &str) -> std::path::PathBuf {
             }),
         )
         .unwrap();
+    // A manual check opens at the build stage (DEF-076).
+    let build = store
+        .load_meta("demo")
+        .unwrap()
+        .config
+        .role_status(kanbanr_core::config::Role::Build)
+        .unwrap();
+    store.move_feature("demo", &f.code, &build).unwrap();
     data
 }
 

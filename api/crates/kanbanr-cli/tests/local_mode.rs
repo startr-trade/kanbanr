@@ -13594,3 +13594,111 @@ fn capture_reads_unittest_and_says_when_a_run_reads_nothing() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-076 R-2: a manual result for an item before its build stage is refused with the sentence,
+/// from `kanbanr test` and from a batch's `test.state` op; nothing is kept under `manual/` and the
+/// test stays planned. At the build stage the same result is recorded.
+#[test]
+fn a_manual_result_for_an_item_before_its_build_stage_is_refused() {
+    let base = std::env::temp_dir().join(format!("kanbanr-def076-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let work = base.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    // The board is the test's own, under the temp folder (L-41).
+    assert!(
+        work.canonicalize()
+            .unwrap()
+            .starts_with(std::env::temp_dir().canonicalize().unwrap())
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: 'manual: the cart keeps its items'\n        kind: manual\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let sentence = "FEAT-001 is at Planned: its manual check opens at In Progress, once the code \
+                    it checks exists. Record it then.";
+    let test = "manual: the cart keeps its items";
+    let refused = run_in(&base, &work, &["test", "FEAT-001", "R-1", test, "green"]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains(sentence), "{err}");
+    // A batch's test.state op is refused the same way.
+    let bundle = base.join("bundle.json");
+    std::fs::write(
+        &bundle,
+        format!(
+            r#"{{"operations":[{{"op":"test.state","feature":"FEAT-001","requirement":"R-1","test":"{test}","state":"green"}}]}}"#
+        ),
+    )
+    .unwrap();
+    let refused = run_in(&base, &work, &["batch", "--file", bundle.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains(sentence), "{err}");
+    // Nothing kept, and the test is still planned.
+    fn manual_dirs(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n == "manual") {
+                    found.push(p.clone());
+                }
+                manual_dirs(&p, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    manual_dirs(&base, &mut found);
+    for d in &found {
+        assert_eq!(std::fs::read_dir(d).unwrap().count(), 0, "{d:?}");
+    }
+    let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v[0]["open_manual"][0], format!("R-1: {test}"));
+    // Setting it back to planned is never refused.
+    ok(run_in(
+        &base,
+        &work,
+        &["test", "FEAT-001", "R-1", test, "planned"],
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -1239,6 +1239,15 @@ fn dispatch_routes(
             // A manual result says a person checked something: keep who, when and from where
             // beside the test's state (DEF-040). The kept result goes first, so a failed write
             // leaves the state alone; if the state then fails, the kept result is taken back.
+            // Before the item's build stage nothing exists to check (DEF-076): refused before
+            // anything is kept.
+            crate::manual::refuse_before_build(
+                &store.load_meta(p)?,
+                code,
+                requirement,
+                test,
+                state,
+            )?;
             let kept = if matches!(state, TestState::Green | TestState::Red)
                 && is_manual_test(store, p, code, requirement, test)
             {

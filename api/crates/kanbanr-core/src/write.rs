@@ -1138,6 +1138,14 @@ mod tests {
                 }),
             )
             .unwrap();
+        // A manual check opens at the build stage (DEF-076).
+        let build = store
+            .load_meta("demo")
+            .unwrap()
+            .config
+            .role_status(crate::config::Role::Build)
+            .unwrap();
+        store.move_feature("demo", "FEAT-001", &build).unwrap();
         let route = "/projects/demo/features/FEAT-001/tests/R-1/";
         let manual = format!("{route}manual%3A%20looks%20right");
         for o in [Origin::Conversation, Origin::Delegated] {
