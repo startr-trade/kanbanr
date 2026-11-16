@@ -127,9 +127,20 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "::notice::releasing $tag (version $version)"
 
+  # ---- 0b. The dependency tier, before anything is built (MNT-007) ----
+  #
+  # deps.yml's proofs run on dependency changes and nightly; a release reruns them on the tagged
+  # commit, so an advisory published since the last nightly stops the release, not a user. A job
+  # that calls a reusable workflow cannot set timeout-minutes; deps.yml's own jobs carry theirs.
+  deps:
+    needs: tag
+    permissions:
+      contents: read
+    uses: ./.github/workflows/deps.yml
+
   # ---- 1. Cross-platform CLI binaries ----------------------------------------
   binaries:
-    needs: tag
+    needs: [tag, deps]
     name: binary (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -282,7 +293,7 @@ jobs:
   # install it with `code --install-extension`; Open VSX gets the same file, further down.
   vscode:
     name: VS Code extension
-    needs: tag
+    needs: [tag, deps]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -313,7 +324,7 @@ jobs:
   # config.json at a daemon's read API and serves the folder; no kanbanr needed to view a board.
   monitor:
     name: monitor bundle
-    needs: tag
+    needs: [tag, deps]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -558,7 +569,7 @@ jobs:
   # ---- 2. Docker image to GHCR ----------------------------------------------
   image:
     name: docker image (GHCR)
-    needs: tag
+    needs: [tag, deps]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -654,7 +665,7 @@ jobs:
   # ---- 3. Publish the standalone library to crates.io (optional) ------------
   crates:
     name: publish the standalone libraries to crates.io
-    needs: tag
+    needs: [tag, deps]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Only runs once the repo variable PUBLISH_CRATES is `true`; it then needs the

@@ -366,16 +366,6 @@ jobs:
       # shellcheck catches the class of bug that has cost installers real debugging: a helper
       # whose `[ -n "$x" ] && printf …` returns 1 when the value is empty, aborting the caller
       # under `set -e` while `|| true` hides it.
-      # The binary must be able to make an HTTPS request (FEAT-088/R-6). `ureq` was declared with
-      # default-features = false and no tls feature, leaving it with no backend at all — every
-      # https:// call failed, and nothing noticed because no test used one.
-      - name: The CLI links a TLS backend
-        working-directory: api
-        run: |
-          set -eu
-          cargo tree --locked -p kanbanr-cli -e normal -i rustls \
-            || { echo "::error::kanbanr-cli has no TLS backend — self-update and https webhooks cannot work" >&2; exit 1; }
-
       # Installing and checking are separate steps so `make ci` can run the check exactly as
       # written here, with the shellcheck already on the machine (FEAT-131).
       - name: Install shellcheck
@@ -604,45 +594,3 @@ jobs:
 
       - name: actionlint
         run: docker run --rm -v "$PWD:/repo" -w /repo --entrypoint sh rhysd/actionlint:1.7.12 -c "actionlint -no-color .github/workflows/*.yml"
-
-  # Supply chain (FEAT-130): licences, sources, and known vulnerabilities in what kanbanr ships.
-  # These FAIL the run. The monitor's build tools are not shipped, so npm audits production
-  # dependencies only.
-  supply-chain:
-    name: supply chain
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          toolchain: "1.98.1"
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-deny,cargo-audit,cargo-cyclonedx@0.5.10
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 22
-
-      - name: cargo deny (licences, bans, sources, advisories)
-        working-directory: api
-        run: cargo deny check
-
-      - name: cargo audit (RustSec advisories, yanked crates)
-        working-directory: api
-        run: cargo audit
-
-      - name: npm audit (the monitor's production dependencies)
-        working-directory: web
-        run: npm audit --omit=dev
-
-      # Builds read only the lockfiles, and a release says what is inside it (MNT-004). The
-      # SBOM step runs the release's own script, so a broken one shows here before a tag does.
-      - name: The supply-chain check's own tests pass
-        run: python3 -m unittest discover -s scripts/tests -p 'test_check_supply_chain.py' -v
-
-      - name: Builds are locked and installs are clean
-        run: python3 scripts/check_supply_chain.py
-
-      - name: The SBOMs build and are valid CycloneDX
-        run: scripts/make-sbom.sh ci "$RUNNER_TEMP/sbom"

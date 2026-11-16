@@ -1,0 +1,155 @@
+name: Dependencies
+
+# The dependency tier (MNT-007): the proofs only a dependency or toolchain change can affect —
+# licences, sources and advisories, the locked-build and clean-install check, the SBOMs, the TLS
+# backend, and the build on the declared rust-version. They run when a lock, manifest or toolchain
+# file changes, nightly (an advisory is published against an unchanged lock), on demand, and from
+# release.yml before anything is built. Every other push runs ci.yml without them.
+on:
+  push:
+    branches: [main]
+    # The same list as pull_request's (test_pipeline_practices.Tiers holds both).
+    paths:
+      - api/Cargo.lock
+      - "**/Cargo.toml"
+      - rust-toolchain.toml
+      - "api/.cargo/**"
+      - api/deny.toml
+      - web/package.json
+      - web/package-lock.json
+      - editor/vscode/package.json
+      - editor/vscode/package-lock.json
+      - scripts/check_supply_chain.py
+      - scripts/make-sbom.sh
+      - .github/workflows/deps.yml
+  pull_request:
+    paths:
+      - api/Cargo.lock
+      - "**/Cargo.toml"
+      - rust-toolchain.toml
+      - "api/.cargo/**"
+      - api/deny.toml
+      - web/package.json
+      - web/package-lock.json
+      - editor/vscode/package.json
+      - editor/vscode/package-lock.json
+      - scripts/check_supply_chain.py
+      - scripts/make-sbom.sh
+      - .github/workflows/deps.yml
+  schedule:
+    # Nightly, off the hour (UTC).
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+# A newer run for the same pull request makes the older one pointless; a nightly, a push to main
+# or a release's call always finishes.
+concurrency:
+  group: deps-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# The CI build environment (MNT-007): no incremental files and no debug info in what is compiled.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  # Supply chain (FEAT-130): licences, sources, and known vulnerabilities in what kanbanr ships.
+  # These FAIL the run. The monitor's build tools are not shipped, so npm audits production
+  # dependencies only.
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.98.1"
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny,cargo-audit,cargo-cyclonedx@0.5.10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: cargo deny (licences, bans, sources, advisories)
+        working-directory: api
+        run: cargo deny check
+
+      - name: cargo audit (RustSec advisories, yanked crates)
+        working-directory: api
+        run: cargo audit
+
+      - name: npm audit (the monitor's production dependencies)
+        working-directory: web
+        run: npm audit --omit=dev
+
+      # Builds read only the lockfiles, and a release says what is inside it (MNT-004). The
+      # SBOM step runs the release's own script, so a broken one shows here before a tag does.
+      - name: The supply-chain check's own tests pass
+        run: python3 -m unittest discover -s scripts/tests -p 'test_check_supply_chain.py' -v
+
+      - name: Builds are locked and installs are clean
+        run: python3 scripts/check_supply_chain.py
+
+      - name: The SBOMs build and are valid CycloneDX
+        run: scripts/make-sbom.sh ci "$RUNNER_TEMP/sbom"
+
+  # The binary must be able to make an HTTPS request (FEAT-088/R-6). `ureq` was declared with
+  # default-features = false and no tls feature, leaving it with no backend at all — every
+  # https:// call failed, and nothing noticed because no test used one. Only a dependency change
+  # can take the backend away, so the check lives in this tier.
+  tls-backend:
+    name: TLS backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: The CLI links a TLS backend
+        working-directory: api
+        run: |
+          set -eu
+          cargo tree --locked -p kanbanr-cli -e normal -i rustls \
+            || { echo "::error::kanbanr-cli has no TLS backend — self-update and https webhooks cannot work" >&2; exit 1; }
+
+  # The workspace builds on the rust-version it declares (api/Cargo.toml), which nothing else
+  # verifies: every other job builds on rust-toolchain.toml's channel.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # rust-toolchain.toml at the root overrides `rustup default`, which is all the toolchain
+      # action sets; this makes cargo use the declared rust-version.
+      RUSTUP_TOOLCHAIN: "1.89"
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          # api/Cargo.toml's rust-version (test_pipeline_practices.Toolchain).
+          toolchain: "1.89"
+
+      - name: Cache cargo registry / build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "api"
+          shared-key: msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The vendored libgit2 and OpenSSL compile from source.
+      - name: Install build deps (Linux)
+        run: sudo apt-get update && sudo apt-get install -y cmake make perl gcc
+
+      - name: The workspace builds on its declared rust-version
+        run: cargo check --locked --workspace --all-targets
