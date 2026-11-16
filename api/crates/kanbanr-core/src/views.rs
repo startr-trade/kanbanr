@@ -17,7 +17,7 @@ use std::path::Path;
 pub const VIEW_SCHEMA: u32 = 1;
 
 /// The facts part F of a kanbanr view ID (CD-3): SHA-256 hex of `<board commit>\0<facts revision>`.
-/// The facts revision is "" until FTR-005's facts record exists.
+/// The facts revision is "" while the project has no facts record (FTR-005).
 pub fn facts_version(board_commit: &str, facts_rev: &str) -> String {
     let mut h = Sha256::new();
     h.update(board_commit.as_bytes());
@@ -27,13 +27,17 @@ pub fn facts_version(board_commit: &str, facts_rev: &str) -> String {
 }
 
 /// The facts part for a project: the board's HEAD commit (or "none") and the project's facts
-/// revision, through [`facts_version`]. FTR-005's facts record does not exist in this build, so the
-/// revision is "" (the Design's rule while the record is absent); when it lands, `facts_rev` reads
-/// `Facts::content_rev()` here and nothing else changes.
-pub fn project_facts(store: &crate::Store, _project: &str) -> String {
+/// revision, through [`facts_version`]. The revision is the facts record's
+/// [`Facts::content_rev`](crate::facts::Facts::content_rev) (FTR-005), or "" while the project has
+/// no facts record (or one that cannot be read).
+pub fn project_facts(store: &crate::Store, project: &str) -> String {
     let board = crate::git::head_commit(store.data_dir());
-    let facts_rev = "";
-    facts_version(board.as_deref().unwrap_or("none"), facts_rev)
+    let facts_rev = crate::facts::load(store, project)
+        .ok()
+        .flatten()
+        .map(|f| f.content_rev())
+        .unwrap_or_default();
+    facts_version(board.as_deref().unwrap_or("none"), &facts_rev)
 }
 
 /// The one text for a repository answered from an imported snapshot with no checkout here
@@ -798,6 +802,20 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = crate::Store::new(dir.canonicalize().unwrap());
         assert_eq!(super::project_facts(&store, "p"), facts_version("none", ""));
+        // A saved facts record changes F; the same answers in another order do not (FTR-005 R-2).
+        std::fs::create_dir_all(store.project_dir("p")).unwrap();
+        let answers = |languages: &[&str]| crate::facts::Facts {
+            languages: languages.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let saved = crate::facts::save(&store, "p", &answers(&["rust", "go"])).unwrap();
+        let with_facts = super::project_facts(&store, "p");
+        assert_ne!(with_facts, facts_version("none", ""));
+        assert_eq!(with_facts, facts_version("none", &saved.content_rev()));
+        crate::facts::save(&store, "p", &answers(&["Go", "rust"])).unwrap();
+        assert_eq!(super::project_facts(&store, "p"), with_facts);
+        crate::facts::save(&store, "p", &answers(&["rust"])).unwrap();
+        assert_ne!(super::project_facts(&store, "p"), with_facts);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
