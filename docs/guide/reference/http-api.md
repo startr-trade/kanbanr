@@ -30,6 +30,10 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/openapi.json` | — | JSON `object` | This description of the public read API |
 | `GET /api/projects` | — | JSON `ProjectSummary[]` | The projects on the board |
 | `GET /api/projects/{project}` | — | JSON `Project` | A project: its configuration, milestones and items |
+| `GET /api/projects/{project}/index` | — | JSON `CompactIndex` | The project's compact index |
+| `GET /api/projects/{project}/config` | — | JSON `ProjectConfig` | The project's configuration |
+| `GET /api/projects/{project}/features/{code}` | — | JSON `FeatureItem` | One item, with its specification |
+| `GET /api/projects/{project}/features` | `status` (optional), `milestone` (optional) | JSON `FeatureItem[]` | Items, without specifications |
 | `GET /api/projects/{project}/charter` | — | JSON `Charter` | The project's charter: purpose, goals, scope and constraints |
 | `GET /api/projects/{project}/readiness` | — | JSON `ProjectReadiness` | What each live item is missing, and its next stages, keyed by code |
 | `GET /api/projects/{project}/features/{code}/readiness` | — | JSON `ReadinessView` | What one item is missing, and what its next stages ask |

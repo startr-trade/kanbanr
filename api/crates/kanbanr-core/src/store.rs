@@ -460,6 +460,45 @@ impl Store {
         Err(CoreError::FeatureNotFound(code.to_string()))
     }
 
+    /// One item with its spec, reading only its own two files (DEF-081): the status comes from
+    /// the `index.yaml` cache, falling back to looking for the item's file in each status folder
+    /// when the index is absent or stale. Nothing is written, not even a missing index (ADR-0005).
+    /// FeatureNotFound when absent.
+    pub fn load_feature(&self, id: &str, code: &str) -> Result<FeatureItem> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let not_found = || CoreError::FeatureNotFound(code.to_string());
+        let plain = !code.is_empty()
+            && !code.contains(['/', '\\'])
+            && Path::new(code)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !plain {
+            return Err(not_found());
+        }
+        let config = self.read_config(id)?;
+        let indexed = Self::read_yaml::<Vec<IndexEntry>>(&self.index_path(id))
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|r| r.code == code))
+            .map(|r| r.status)
+            .filter(|s| config.statuses.contains(s));
+        for status in indexed.iter().chain(config.statuses.iter()) {
+            let path = self.feature_path(id, status, code);
+            if !path.is_file() {
+                continue;
+            }
+            let meta: crate::models::FeatureMeta = Self::read_yaml(&path)?;
+            if meta.code != code {
+                continue;
+            }
+            let spec =
+                std::fs::read_to_string(self.spec_path(id, status, code)).unwrap_or_default();
+            return Ok(FeatureItem::from_meta(meta, spec));
+        }
+        Err(not_found())
+    }
+
     // ---- per-project index cache (FEAT-033) ----------------------------------------------
     //
     // `<project>/index.yaml` is a compact, spec-free list of `IndexEntry` rows — one per feature.

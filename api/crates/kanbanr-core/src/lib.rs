@@ -60,6 +60,7 @@ pub mod method;
 pub mod migrate;
 pub mod mirror;
 pub mod models;
+pub mod monitorindex;
 #[cfg(feature = "schema")]
 pub mod openapi;
 pub mod origin;

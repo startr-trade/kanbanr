@@ -975,6 +975,71 @@
         ],
         "type": "object"
       },
+      "CompactIndex": {
+        "description": "`GET /projects/{p}/index`.",
+        "properties": {
+          "adrs": {
+            "items": {
+              "$ref": "#/components/schemas/IndexAdr"
+            },
+            "type": "array"
+          },
+          "config": {
+            "$ref": "#/components/schemas/IndexConfig"
+          },
+          "docs": {
+            "description": "Every doc path under the project's docs, forward-slashed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goals": {
+            "description": "The charter's goals.",
+            "items": {
+              "$ref": "#/components/schemas/IndexGoal"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "Every item, in the order the board reads them.",
+            "items": {
+              "$ref": "#/components/schemas/IndexItem"
+            },
+            "type": "array"
+          },
+          "milestones": {
+            "items": {
+              "$ref": "#/components/schemas/IndexMilestone"
+            },
+            "type": "array"
+          },
+          "project": {
+            "type": "string"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/IndexRelease"
+            },
+            "type": "array"
+          },
+          "sprints": {
+            "items": {
+              "$ref": "#/components/schemas/IndexSprint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "config",
+          "items",
+          "milestones",
+          "docs",
+          "goals"
+        ],
+        "type": "object"
+      },
       "Condition": {
         "anyOf": [
           {
@@ -2432,6 +2497,272 @@
         "required": [
           "name",
           "email"
+        ],
+        "type": "object"
+      },
+      "IndexAdr": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "path"
+        ],
+        "type": "object"
+      },
+      "IndexCadence": {
+        "description": "Which planning the project uses.",
+        "properties": {
+          "git_model": {
+            "type": "boolean"
+          },
+          "releases": {
+            "type": "boolean"
+          },
+          "sprints": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sprints",
+          "releases",
+          "git_model"
+        ],
+        "type": "object"
+      },
+      "IndexConfig": {
+        "description": "The part of the configuration the shell, links and cards read.",
+        "properties": {
+          "cadence": {
+            "$ref": "#/components/schemas/IndexCadence"
+          },
+          "codes": {
+            "$ref": "#/components/schemas/CodesConfig"
+          },
+          "description": {
+            "type": "string"
+          },
+          "displayed_states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "no_op_states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "statuses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "terminal_states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "cadence",
+          "codes"
+        ],
+        "type": "object"
+      },
+      "IndexGoal": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "description": "The goal's statement.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "IndexItem": {
+        "description": "One item as a card.",
+        "properties": {
+          "assignee": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "done": {
+            "description": "Tasks completed, across all its todo-lists.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "goals": {
+            "description": "The charter goals its definition serves.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "requirements": {
+            "description": "Its requirements' ids.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sprint": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "total": {
+            "description": "Tasks in all its todo-lists.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "milestone",
+          "done",
+          "total",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "IndexMilestone": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ],
+        "type": "object"
+      },
+      "IndexRelease": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReleaseState"
+          },
+          "target": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "state"
+        ],
+        "type": "object"
+      },
+      "IndexSprint": {
+        "description": "A sprint, with its state as of today.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SprintState"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "start",
+          "end",
+          "state"
         ],
         "type": "object"
       },
@@ -6150,6 +6481,47 @@
         "summary": "The project's charter: purpose, goals, scope and constraints"
       }
     },
+    "/api/projects/{project}/config": {
+      "get": {
+        "operationId": "getProjectsConfig",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectConfig"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's configuration"
+      }
+    },
     "/api/projects/{project}/decisions": {
       "get": {
         "operationId": "getProjectsDecisions",
@@ -6422,6 +6794,118 @@
           }
         },
         "summary": "Server-sent events: `changed` whenever this project changes"
+      }
+    },
+    "/api/projects/{project}/features": {
+      "get": {
+        "operationId": "getProjectsFeatures",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the items in this status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the items in this milestone.",
+            "in": "query",
+            "name": "milestone",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeatureItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Items, without specifications"
+      }
+    },
+    "/api/projects/{project}/features/{code}": {
+      "get": {
+        "operationId": "getProjectsFeaturesOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The item's code, such as FEAT-001.",
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureItem"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One item, with its specification"
       }
     },
     "/api/projects/{project}/features/{code}/diagrams": {
@@ -6737,6 +7221,47 @@
           }
         },
         "summary": "The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included"
+      }
+    },
+    "/api/projects/{project}/index": {
+      "get": {
+        "operationId": "getProjectsIndex",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactIndex"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's compact index"
       }
     },
     "/api/projects/{project}/items": {

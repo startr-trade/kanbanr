@@ -333,6 +333,12 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(base.clone());
             out.push(base.replace("FEAT-001", "FEAT-002"));
         }
+        // The monitor's item slice, whole and by each filter (DEF-081).
+        "/api/projects/{project}/features" => {
+            out.push(base.clone());
+            out.push(format!("{base}?status=Planned"));
+            out.push(format!("{base}?milestone=M1&status=In%20Progress"));
+        }
         _ => out.push(base),
     }
     out
