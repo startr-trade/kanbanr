@@ -142,6 +142,7 @@ pub fn run(store: &Store) -> Result<Report> {
         }
         scan_declared_docs(project, &charter, &ctx, &mut report);
         scan_coverage(store, project, &mut report);
+        scan_catalog(store, project, &mut report);
         scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
         scan_repository(store, project, &mut report);
@@ -183,6 +184,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     }
     scan_declared_docs(&project, &charter, &ctx, &mut report);
     scan_coverage(store, &project, &mut report);
+    scan_catalog(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_codes(&project, &mut report);
@@ -914,6 +916,55 @@ fn scan_coverage(store: &Store, project: &Project, report: &mut Report) {
                 first.join(", ")
             ),
         );
+    }
+}
+
+/// The project's facts and content catalog (FTR-005): one hint when the project has no facts
+/// record, an error per problem of an invalid catalog (naming the row), and a warning per applying
+/// row whose source is missing. Nothing else without a catalog.
+fn scan_catalog(store: &Store, project: &Project, report: &mut Report) {
+    let mut issue = |severity: Severity, message: String| {
+        report.issues.push(Issue {
+            severity,
+            project: project.id.clone(),
+            code: None,
+            message,
+        });
+    };
+    match crate::facts::load(store, &project.id) {
+        Ok(Some(_)) => {}
+        Ok(None) => issue(
+            Severity::Warning,
+            "no project facts — `kanbanr facts set …`".to_string(),
+        ),
+        Err(e) => issue(
+            Severity::Error,
+            format!("{} cannot be read: {e}", crate::facts::FACTS_FILE),
+        ),
+    }
+    let Ok(status) = crate::catalog::status(store, project, None) else {
+        return;
+    };
+    for p in &status.problems {
+        // The facts file's own problem is reported above.
+        if !p.starts_with(crate::facts::FACTS_FILE) {
+            issue(Severity::Error, format!("catalog: {p}"));
+        }
+    }
+    for row in &status.rows {
+        let missing = matches!(
+            row.state,
+            crate::catalog::SourceState::Missing | crate::catalog::SourceState::Folder { docs: 0 }
+        );
+        if row.applies.applies && missing {
+            issue(
+                Severity::Warning,
+                format!(
+                    "catalog row {} ({}) has no source: write {}",
+                    row.id, row.title, row.source.path
+                ),
+            );
+        }
     }
 }
 
@@ -2663,6 +2714,115 @@ mod tests {
         assert_eq!(stale_hits(&store), 1);
         crate::boardreadme::write(&store).unwrap();
         assert_eq!(stale_hits(&store), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-005 R-9: one hint for no facts record; an error per problem of an invalid catalog,
+    /// naming the row; a warning per applying row whose source is missing; nothing else with no
+    /// catalog.
+    #[test]
+    fn doctor_reports_missing_facts_and_unsourced_rows() {
+        let (store, dir) = fixture();
+        let catalog_issues = |r: &Report| -> Vec<Issue> {
+            r.issues
+                .iter()
+                .filter(|i| i.message.contains("catalog") || i.message.contains("project facts"))
+                .cloned()
+                .collect()
+        };
+        // No facts record and no catalog: the one hint, and nothing else.
+        for report in [run(&store).unwrap(), run_project(&store, "demo").unwrap()] {
+            let found = catalog_issues(&report);
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert_eq!(found[0].severity, Severity::Warning);
+            assert_eq!(found[0].message, "no project facts — `kanbanr facts set …`");
+        }
+
+        // A facts record silences the hint; the starter catalog names each applying written row
+        // whose source is missing.
+        crate::facts::save(
+            &store,
+            "demo",
+            &crate::facts::Facts {
+                production: vec!["library".into()],
+                parts: vec!["library".into()],
+                data: vec!["none".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::catalog::init(&store, "demo", false).unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                &format!("# Context\n\n{}\n", "The system reads a board. ".repeat(8)),
+            )
+            .unwrap();
+        let report = run_project(&store, "demo").unwrap();
+        let found = catalog_issues(&report);
+        assert!(
+            found.iter().all(|i| i.severity == Severity::Warning),
+            "{found:?}"
+        );
+        let mut rows: Vec<String> = found
+            .iter()
+            .map(|i| i.message.split_whitespace().nth(2).unwrap().to_string())
+            .collect();
+        rows.sort();
+        // Library facts: interfaces applies; data-model, deployment, configuration and
+        // observability do not. Context has its doc.
+        assert_eq!(
+            rows,
+            vec![
+                "behaviour",
+                "component-docs",
+                "components",
+                "interfaces",
+                "security"
+            ],
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|i| i.message
+                == "catalog row behaviour (Behaviour and processes) has no source: write architecture/behaviour.md"),
+            "{found:?}"
+        );
+        assert_eq!(
+            catalog_issues(&run(&store).unwrap()).len(),
+            found.len(),
+            "run and run_project agree"
+        );
+
+        // A switched-off row is not reported.
+        crate::catalog::set_row(&store, "demo", "security", false, "covered by the README")
+            .unwrap();
+        let found = catalog_issues(&run_project(&store, "demo").unwrap());
+        assert!(
+            !found.iter().any(|i| i.message.contains("row security")),
+            "{found:?}"
+        );
+
+        // An invalid catalog is an error per problem, naming the row, and nothing else.
+        // Hand-edited: written past `save`, which would refuse it.
+        let mut bad = crate::catalog::load(&store, "demo").unwrap().unwrap();
+        bad.rows
+            .iter_mut()
+            .find(|r| r.id == "context")
+            .unwrap()
+            .answers = vec!["which".into()];
+        let path = store.project_dir("demo").join(crate::catalog::CATALOG_FILE);
+        std::fs::write(&path, crate::yaml::to_string(&bad).unwrap()).unwrap();
+        let found = catalog_issues(&run_project(&store, "demo").unwrap());
+        assert!(!found.is_empty());
+        assert!(
+            found.iter().all(|i| i.severity == Severity::Error),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|i| i.message.contains("row \"context\"")),
+            "{found:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
