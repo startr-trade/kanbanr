@@ -681,7 +681,10 @@ fn a_run_prepares_its_results_at_the_named_commit_not_the_checkout() {
     assert!(label.contains("check MT-1"), "{r}");
     assert_eq!(walkthrough_test(&w)["checked_rev"], FIXED_SHA);
     let setup = std::fs::read_to_string(w.runs.join("r1/raw/setup.log")).unwrap();
-    assert!(setup.contains(&format!("evidence_rev {FIXED_SHA}\n")), "{setup}");
+    assert!(
+        setup.contains(&format!("evidence_rev {FIXED_SHA}\n")),
+        "{setup}"
+    );
     assert!(setup.contains("evidence_rev_from --rev\n"), "{setup}");
     let _ = std::fs::remove_dir_all(&w.root);
 }
@@ -728,6 +731,104 @@ fn a_run_without_rev_uses_the_builds_commit_or_refuses() {
             "{shown}"
         );
     }
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
+/// `kanbanr walkthrough prepare` on a world's target board.
+fn prepare(w: &World, batch: &str, runs: &[&str]) -> Output {
+    let mut args = vec![
+        "--data-dir".to_string(),
+        w.target_board.display().to_string(),
+        "--project".into(),
+        "target".into(),
+        "walkthrough".into(),
+        "prepare".into(),
+        "--batch".into(),
+        batch.into(),
+    ];
+    args.extend(runs.iter().map(|r| w.runs.join(r).display().to_string()));
+    Command::new(cli())
+        .args(&args)
+        .current_dir(&w.target_project)
+        .env("KANBANR_BOARD_FENCE", &w.root)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("CLAUDECODE")
+        .output()
+        .unwrap()
+}
+
+/// DEF-089 R-4 (for FTR-054): two `--no-batch` runs of one build make one batch with
+/// `walkthrough prepare`: one prepared record per manual marker, the walkthrough-kind test
+/// recorded once, both at the runs' shared revision. Runs of two builds are refused and prepare
+/// nothing; preparing the same runs again prepares nothing twice.
+#[cfg(unix)]
+#[test]
+fn two_runs_prepare_one_batch() {
+    const OTHER_SHA: &str = "fedcba9876543210fedcba9876543210fedcba98";
+    let w = world("joint");
+    let rb = runbook_file(&w, "smoke", "");
+    for name in ["j1", "j2"] {
+        let out = run_walkthrough_with(&w, &rb, name, &["--rev", FIXED_SHA, "--no-batch"]);
+        let shown = text(&out);
+        assert!(out.status.success(), "{shown}");
+        assert!(
+            shown.contains(
+                "no batch prepared (--no-batch): prepare it with `kanbanr walkthrough prepare`"
+            ),
+            "{shown}"
+        );
+    }
+    let out = run_walkthrough_with(&w, &rb, "j3", &["--rev", OTHER_SHA, "--no-batch"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        prepared_records(&w).is_empty(),
+        "--no-batch puts nothing on the board"
+    );
+    assert_ne!(walkthrough_test(&w)["state"], "green");
+    // Two builds: refused, nothing prepared.
+    let out = prepare(&w, "b3", &["j1", "j3"]);
+    let shown = text(&out);
+    assert!(!out.status.success(), "{shown}");
+    assert!(
+        shown.contains("two builds are not one release's evidence"),
+        "{shown}"
+    );
+    assert!(prepared_records(&w).is_empty(), "{shown}");
+    assert_ne!(walkthrough_test(&w)["state"], "green");
+    // One build: one batch.
+    let out = prepare(&w, "b2", &["j1", "j2"]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    let records = prepared_records(&w);
+    assert_eq!(
+        records.len(),
+        1,
+        "one manual marker, one record: {records:?}\n{shown}"
+    );
+    let r = &records[0];
+    assert_eq!(r["batch"], "b2", "{r}");
+    assert_eq!(r["fields"]["check"], "MT-1", "{r}");
+    assert_eq!(r["fields"]["checked_rev"], FIXED_SHA, "{r}");
+    let label = r["sources"][0]["label"].as_str().unwrap_or("");
+    assert!(label.contains("j1:2.1+j2:2.1"), "{r}");
+    assert_eq!(
+        shown.matches("recorded walkthrough test: MT-W").count(),
+        1,
+        "{shown}"
+    );
+    let test2 = walkthrough_test(&w);
+    assert_eq!(test2["state"], "green", "{test2}");
+    assert_eq!(test2["checked_rev"], FIXED_SHA, "{test2}");
+    // Again: nothing prepared twice.
+    let out = prepare(&w, "b2", &["j1", "j2"]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    assert!(
+        shown.contains("MT-1: already prepared in batch b2"),
+        "{shown}"
+    );
+    assert_eq!(prepared_records(&w).len(), 1, "{shown}");
     let _ = std::fs::remove_dir_all(&w.root);
 }
 
