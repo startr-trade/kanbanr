@@ -35,6 +35,9 @@ use runbook::{Expect, Runbook, Step, lint};
 
 /// `kanbanr walkthrough …`
 #[derive(Subcommand)]
+// `Run`'s arguments outgrew the other variants with `--rev` (DEF-089); the value is parsed once per
+// process, so its size does not matter.
+#[allow(clippy::large_enum_variant)]
 pub enum WalkthroughCmd {
     /// Run a runbook headlessly: the developer's Claude Code session in a scratch project, every
     /// question answered from the runbook, every decision taken on the scratch board by the scripted
@@ -1737,16 +1740,13 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let batch = if running.setup_failed {
         Ok(BatchOutcome::default())
     } else {
-        let commit = SetupLog::read(&dirs)
-            .ok()
-            .and_then(|l| l.get("kanbanr").and_then(version_commit));
         prepare_batch(
             cli,
             &running.checks,
             &running.runbook,
             &name,
             &target_board,
-            commit.as_deref(),
+            &rev,
         )
     };
     println!();
@@ -1840,13 +1840,18 @@ pub fn evidence_rev(
              commit you vouch for"
         ));
     }
-    Err("the binary under test names no commit (it was built without git metadata), so its \
+    Err(
+        "the binary under test names no commit (it was built without git metadata), so its \
          results could not say what they proved: rebuild it from a checkout, or pass --rev \
          <commit>"
-        .to_string())
+            .to_string(),
+    )
 }
 
 /// The commit a `kanbanr --version` line names: `kanbanr 0.7.0 (<sha>, built …)`.
+// Kept for reading a setup log's `kanbanr` line (DEF-089's Design); the run itself now takes its
+// revision from `evidence_rev`.
+#[cfg_attr(not(test), allow(dead_code))]
 fn version_commit(line: &str) -> Option<String> {
     let inner = line.split_once('(')?.1;
     let sha = inner.split([',', ')']).next()?.trim();
@@ -1855,17 +1860,18 @@ fn version_commit(line: &str) -> Option<String> {
 
 /// Put every measured check of the run on the target board, one per marker. A `walkthrough:`
 /// test is the run's own automated evidence: recorded with the tests route as `kanbanr test`
-/// records any automated result, at the commit of the binary under test — no person's verdict is
-/// involved, so none is asked for. A `manual:` test is a person's check: prepared as a
-/// `manual-test` record in one batch named for the run, for the person to confirm (ADR-0018). A
-/// check whose steps checked nothing is not put anywhere.
+/// records any automated result, at `rev` (the commit of the build under test, DEF-089) — no
+/// person's verdict is involved, so none is asked for. A `manual:` test is a person's check:
+/// prepared as a `manual-test` record in one batch named for the run, for the person to confirm
+/// (ADR-0018), carrying `rev` and its check id. A check whose steps checked nothing is not put
+/// anywhere.
 fn prepare_batch(
     cli: &crate::Cli,
     checks: &[CheckResult],
     runbook: &Runbook,
     batch: &str,
     target_board: &Path,
-    binary_commit: Option<&str>,
+    rev: &str,
 ) -> Result<BatchOutcome> {
     let checks = merge_checks(checks);
     let mut out = BatchOutcome::default();
@@ -1900,15 +1906,16 @@ fn prepare_batch(
                 .push(format!("{} ({}): {NOT_MEASURED}", c.marker, c.step));
             continue;
         }
-        let note = format!("walkthrough run {batch} step {}: {}", c.step, c.why);
+        let note = format!(
+            "walkthrough run {batch} step {} ({}): {}",
+            c.step, c.marker, c.why
+        );
         if kind_of(&def.item, &def.requirement, &def.test).as_deref() == Some("walkthrough") {
-            let mut body = serde_json::json!({
+            let body = serde_json::json!({
                 "state": if c.passed { "green" } else { "red" },
                 "note": note,
+                "checked_rev": rev,
             });
-            if let Some(sha) = binary_commit {
-                body["checked_rev"] = serde_json::json!(sha);
-            }
             match backend.write_in(
                 crate::Method::Put,
                 &format!(
@@ -1936,8 +1943,16 @@ fn prepare_batch(
         let body = serde_json::json!({
             "kind": "manual-test",
             "subject": {"item": def.item, "requirement": def.requirement, "test": def.test},
-            "fields": {"state": if c.passed { "green" } else { "red" }, "note": c.why},
-            "sources": [{"label": format!("walkthrough run {batch} step {}", c.step)}],
+            "fields": {
+                "state": if c.passed { "green" } else { "red" },
+                "note": c.why,
+                "checked_rev": rev,
+                "check": c.marker,
+            },
+            "sources": [{"label": format!(
+                "walkthrough run {batch} step {}, check {}",
+                c.step, c.marker
+            )}],
             "by": "Claude",
             "batch": batch,
         });
@@ -1995,14 +2010,23 @@ mod tests {
             Ok(("6a973c690bb2".to_string(), "the build"))
         );
         let dirty = evidence_rev("abc1234-dirty", None).unwrap_err();
-        assert!(dirty.contains("--rev") && dirty.contains("abc1234"), "{dirty}");
+        assert!(
+            dirty.contains("--rev") && dirty.contains("abc1234"),
+            "{dirty}"
+        );
         assert!(dirty.contains("modified tree"), "{dirty}");
         let unknown = evidence_rev("unknown", None).unwrap_err();
         assert!(unknown.contains("--rev"), "{unknown}");
         assert!(unknown.contains("names no commit"), "{unknown}");
         assert_eq!(
-            evidence_rev("abc1234-dirty", Some("0123456789abcdef0123456789abcdef01234567")),
-            Ok(("0123456789abcdef0123456789abcdef01234567".to_string(), "--rev"))
+            evidence_rev(
+                "abc1234-dirty",
+                Some("0123456789abcdef0123456789abcdef01234567")
+            ),
+            Ok((
+                "0123456789abcdef0123456789abcdef01234567".to_string(),
+                "--rev"
+            ))
         );
         assert_eq!(
             evidence_rev("unknown", Some(" ABCDEF1 ")),
