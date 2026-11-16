@@ -970,7 +970,7 @@ pub fn returned_steps(cadence: &Cadence, version: &str) -> Vec<String> {
         steps.push("Run the release gate again for the new tip and record the result".to_string());
     }
     if let Some(stage) = holding(ReleaseAction::MoveMain) {
-        steps.push(format!("Promote to {stage}"));
+        steps.push(format!("Promote {version} to {stage}"));
     }
     if !cadence.commit_gates.is_empty()
         || gates
@@ -2813,9 +2813,9 @@ fn work_out(
         } else if i > cut_stage && i == last {
             format!("Confirm {}: ship {version}", stages[i])
         } else if i > cut_stage {
-            format!("Confirm {}", stages[i])
+            format!("Confirm {} for {version}", stages[i])
         } else {
-            format!("Promote to {}", stages[i])
+            format!("Promote {version} to {}", stages[i])
         }
     };
     let tag_ready = missing.is_empty();
@@ -2823,8 +2823,8 @@ fn work_out(
         _ if awaiting && tag_ready => format!("Ship {version}"),
         _ if awaiting => "Waiting for the tag workflow".to_string(),
         Direction::Forward => button_for(target),
-        Direction::Again => format!("Promote to {stage} again"),
-        Direction::Back => format!("Move back to {stage}"),
+        Direction::Again => format!("Promote {version} to {stage} again"),
+        Direction::Back => format!("Move {version} back to {stage}"),
     };
     let after = if direction == Direction::Back {
         String::new()
@@ -4100,14 +4100,10 @@ fn branch_to_delete(
             path.display()
         )));
     }
-    let tip = coderepo::rev_parse(repo, branch)?;
-    let remote = match coderepo::upstream_of(repo, branch) {
-        Some(up) => Some(up),
-        None => coderepo::remote_branches_containing(repo, &tip)?
-            .into_iter()
-            .next(),
-    };
-    if let Some(remote) = remote {
+    // Only the release branch itself on a remote (its upstream, or `origin/<branch>`) keeps it: a
+    // tip merely contained in a pushed main does not, so a candidate with no commits of its own
+    // stays undoable after main is pushed (coordinator, 17 Nov 2026).
+    if let Some(remote) = coderepo::upstream_of(repo, branch) {
         return Err(CoreError::Unsupported(format!(
             "`{branch}` is on {remote}: delete it there first"
         )));
@@ -5801,7 +5797,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(plan.ready, "{:#?}", plan.missing);
-        assert_eq!(plan.button, "Promote to main");
+        assert_eq!(plan.button, "Promote v1 to main");
         let held: Vec<(&str, bool)> = plan
             .conditions
             .iter()
@@ -6204,7 +6200,7 @@ pub(crate) mod tests {
         assert_eq!(after.to, "main");
         let again = after.again.expect("offered");
         assert_eq!(again.stage, "candidate");
-        assert_eq!(again.button, "Promote to candidate again");
+        assert_eq!(again.button, "Promote v0.2.0 to candidate again");
         assert_eq!(
             again.does,
             ["commits the version 0.2.0, the changelog heading and draft notes to release/v0.2.0"]
@@ -8246,7 +8242,7 @@ pub(crate) mod tests {
             plan.confirm && !plan.ships && plan.steps.is_empty(),
             "{plan:#?}"
         );
-        assert_eq!(plan.button, "Confirm test");
+        assert_eq!(plan.button, "Confirm test for v1");
         let done = super::promote(
             &store,
             "shop",
@@ -8621,7 +8617,7 @@ pub(crate) mod tests {
             [
                 "Update the release notes",
                 "Run the release gate again for the new tip and record the result",
-                "Promote to main",
+                "Promote v1 to main",
                 "Push main and wait for CI",
                 "Cut v1"
             ]
@@ -8629,12 +8625,12 @@ pub(crate) mod tests {
         c.commit_gates.clear();
         assert_eq!(
             super::returned_steps(&c, "v1"),
-            ["Update the release notes", "Promote to main", "Cut v1"]
+            ["Update the release notes", "Promote v1 to main", "Cut v1"]
         );
         c.release_prepare.notes = None;
         assert_eq!(
             super::returned_steps(&c, "v1"),
-            ["Promote to main", "Cut v1"]
+            ["Promote v1 to main", "Cut v1"]
         );
         clean(&dir, &repo);
     }
@@ -8969,6 +8965,45 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    // ---- DEF-034: the button names the release and the stage ----
+
+    /// DEF-034 R-2: every stage button names the release it acts on and the stage — forward,
+    /// again, back, a confirmation before the last stage and the one that ships — and the cut and
+    /// the sent-back steps say the same.
+    #[test]
+    fn the_plan_button_names_the_release_and_the_stage() {
+        let (store, dir, repo) = board_and_repo("def034-buttons");
+        configure(
+            &store,
+            "release_stages: [candidate, review, main, tag, test, staging]\n\
+             release_gates:\n  candidate: { on_enter: [branch] }\n  \
+             main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n",
+        );
+        let button = |to: &str| plan_to(&store, &repo, to).button;
+        assert_eq!(button("candidate"), "Promote v1 to candidate");
+        assert_eq!(button("main"), "Promote v1 to main");
+        assert_eq!(button("tag"), "Cut v1");
+        assert_eq!(button("test"), "Confirm test for v1");
+        assert_eq!(button("staging"), "Confirm staging: ship v1");
+
+        let promote =
+            |to: &str| super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo));
+        promote("candidate").unwrap();
+        assert_eq!(button("candidate"), "Promote v1 to candidate again");
+        promote("review").unwrap();
+        assert_eq!(button("review"), "Promote v1 to review again");
+        let back = plan_to(&store, &repo, "candidate");
+        assert!(back.needs_reason, "{back:#?}");
+        assert_eq!(back.button, "Move v1 back to candidate");
+
+        let cadence = store.load_meta("shop").unwrap().config.cadence;
+        assert_eq!(
+            super::returned_steps(&cadence, "v1"),
+            ["Promote v1 to main", "Cut v1"]
+        );
+        clean(&dir, &repo);
+    }
+
     // ---- DEF-034: release undo ----
 
     /// Candidate makes the branch, review is a board-only stage, tag moves main and tags.
@@ -9045,6 +9080,43 @@ pub(crate) mod tests {
         assert_eq!(entered.into_iter().collect::<Vec<_>>(), ["candidate"]);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-034 R-4: a candidate branch with no commits of its own, whose tip a pushed main
+    /// contains, is not on a remote: only the release branch itself there (its upstream or
+    /// `origin/release/<V>`) keeps it, so the undo deletes it (coordinator, 17 Nov 2026).
+    #[test]
+    fn undo_deletes_a_candidate_branch_whose_tip_only_a_pushed_main_contains() {
+        let (store, dir, repo) = board_and_repo("undo-main-pushed");
+        configure(&store, UNDO);
+        super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let bare = with_remote(&repo);
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v1").unwrap(),
+            coderepo::rev_parse(&repo, "origin/main").unwrap(),
+            "the candidate has no commits of its own and main is pushed"
+        );
+        assert!(coderepo::upstream_of(&repo, "release/v1").is_none());
+
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.now_at, "");
+        assert_eq!(done.branch_deleted, "release/v1");
+        assert!(done.commits_removed.is_empty());
+        assert!(!coderepo::branch_exists(&repo, "release/v1"));
+        assert_eq!(release_v1(&store).branch, "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     /// DEF-034 R-4: undo refuses a tagged release, a stage that moved main or tagged, a branch on

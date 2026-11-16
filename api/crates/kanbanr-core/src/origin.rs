@@ -105,7 +105,7 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
                 _,
                 "releases",
                 _,
-                "promote" | "cut" | "patch-from-tag"
+                "promote" | "cut" | "patch-from-tag" | "undo"
             ]
             | ["projects", _, "gate-results"]
             | ["projects", _, "prepared", _, "confirm" | "reject"]
@@ -327,6 +327,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "releases", _, "promote"]) => Verdict::Promote,
         ("POST", ["projects", _, "releases", _, "cut"]) => Verdict::Cut,
         ("POST", ["projects", _, "releases", _, "patch-from-tag"]) => Verdict::PatchFromTag,
+        // Stepping a stage back is the person's, as taking it was (DEF-034).
+        ("POST", ["projects", _, "releases", _, "undo"]) => Verdict::Promote,
         ("POST", ["projects", _, "gate-results"]) => Verdict::GateResult,
         ("POST", ["projects", _, "prepared", _, "confirm"]) => Verdict::ConfirmPrepared,
         ("POST", ["projects", _, "prepared", _, "reject"]) => Verdict::RejectPrepared,
@@ -465,6 +467,8 @@ pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {
         ["adr", "reject"] => Some(Verdict::RejectAdr),
         ["release", "promote"] if !has("--plan") => Some(Verdict::Promote),
         ["release", "cut"] => Some(Verdict::Cut),
+        // Undoing a stage taken by mistake is the person's, as the promotion was (DEF-034).
+        ["release", "undo"] => Some(Verdict::Promote),
         // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
         // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
         ["release", "add"] if has("--from-failed-tag") => Some(Verdict::PatchFromTag),
@@ -704,6 +708,43 @@ mod tests {
         assert!(!is_verdict_route("POST", "/projects/p/prepared"));
         assert!(stamps_origin("POST", "/projects/p/prepared"));
         assert!(!stamps_origin("GET", "/projects/p/prepared"));
+    }
+
+    /// DEF-034 R-5: `release undo` is a verdict, the person's as the promotion is: the command and
+    /// the route both map to `Verdict::Promote` (so core's guard refuses the route without the
+    /// hook), the route is stamped with its origin, and Claude is refused it.
+    #[test]
+    fn release_undo_is_a_verdict_refused_to_claude() {
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let rest = w(&["release", "undo", "v0.6.0", "--reason", "wrong release"]);
+        assert_eq!(
+            verdict_of_command(&["release", "undo"], &rest),
+            Some(Verdict::Promote)
+        );
+        let route = "/projects/p/releases/v0.6.0/undo";
+        assert_eq!(verdict_of_route("POST", route), Some(Verdict::Promote));
+        assert_eq!(verdict_of_route("GET", route), None);
+        assert!(is_verdict_route("POST", route));
+        assert!(!is_verdict_route("GET", route));
+        assert!(stamps_origin("POST", route));
+        let s = stamp(
+            "POST",
+            route,
+            Some(&json!({"by": "Ada", "reason": "wrong release", "origin": "monitor"})),
+            Origin::Conversation,
+        )
+        .unwrap();
+        assert_eq!(from_body(&s), "conversation");
+
+        // Run by Claude (CLAUDECODE set), the undo is refused; run by the person, it is not.
+        let claude = Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| "1".to_string()));
+        assert_eq!(claude, Origin::Conversation);
+        let ctx = DecisionContext::monitor_mode();
+        let verdict = verdict_of_command(&["release", "undo"], &rest).unwrap();
+        let why = verdict_refusal(verdict, Taker::of_origin(claude), &ctx)
+            .expect("Claude is refused the undo");
+        assert!(why.contains("kanbanr prepare"), "{why}");
+        assert_eq!(verdict_refusal(verdict, Taker::Person, &ctx), None);
     }
 
     // ---- a scratch board -----------------------------------------------------------------

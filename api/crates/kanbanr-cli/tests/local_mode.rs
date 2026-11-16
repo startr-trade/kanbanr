@@ -9429,7 +9429,10 @@ fn promote_plan_changes_nothing() {
         &work,
         &["release", "promote", "v1.0.0", "--plan"],
     ));
-    assert!(said.contains("v1.0.0: Promote to candidate"), "{said}");
+    assert!(
+        said.contains("v1.0.0: Promote v1.0.0 to candidate"),
+        "{said}"
+    );
     assert!(said.contains("makes release/v1.0.0 from main"), "{said}");
     assert!(
         said.contains("ready: `kanbanr release promote v1.0.0 candidate`"),
@@ -9457,7 +9460,7 @@ fn promote_plan_changes_nothing() {
     let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
     assert!(done.contains("makes release/v1.0.0 from main"), "{done}");
     assert!(
-        done.contains("next: `kanbanr release promote v1.0.0` (Promote to test)"),
+        done.contains("next: `kanbanr release promote v1.0.0` (Promote v1.0.0 to test)"),
         "{done}"
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -13973,5 +13976,81 @@ fn a_manual_result_for_an_item_before_its_build_stage_is_refused() {
         &work,
         &["test", "FEAT-001", "R-1", test, "planned"],
     ));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-034 R-4: a candidate taken by mistake is stepped back from the CLI — `--reason` is
+/// required, the text says what was undone, by whom, where the release is now and which branch
+/// went with the commits kanbanr wrote on it — and the branch and the stage are gone.
+#[test]
+fn release_undo_steps_a_mistaken_candidate_back_from_the_cli() {
+    let (base, work) = release_scratch("release-undo");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The board is this test's own, under the temporary folder (L-41).
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let (board_c, base_c) = (board.canonicalize().unwrap(), base.canonicalize().unwrap());
+    assert!(
+        board_c.starts_with(&base_c),
+        "{board:?} is not under {base:?}"
+    );
+    let branch_there = || {
+        !ok(git_in(
+            &base,
+            &work,
+            &["branch", "--list", "release/v1.0.0"],
+        ))
+        .trim()
+        .is_empty()
+    };
+
+    let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(done.contains("v1.0.0 -> candidate"), "{done}");
+    assert!(branch_there());
+
+    // --reason is required.
+    let refused = run_in(&base, &work, &["release", "undo", "v1.0.0"]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("--reason"), "{err}");
+    assert!(branch_there(), "a refused undo changes nothing");
+
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "undo",
+            "v1.0.0",
+            "--reason",
+            "promoted the wrong release",
+        ],
+    ));
+    assert!(said.contains("v1.0.0: undid candidate (by A, "), "{said}");
+    assert!(said.contains("); now at no stage"), "{said}");
+    assert!(said.contains("deleted release/v1.0.0 ("), "{said}");
+    assert!(said.contains("commit(s) kanbanr wrote: "), "{said}");
+    assert!(!branch_there(), "the branch kanbanr made is gone");
+
+    let list = ok(run_in(&base, &work, &["--json", "release", "list"]));
+    let releases: serde_json::Value = serde_json::from_str(&list).unwrap();
+    let r = &releases[0];
+    assert_eq!(r["version"], "v1.0.0");
+    assert_eq!(r["stage"].as_str().unwrap_or(""), "", "no stage: {r}");
+    let last = r["stages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["undoes"], "candidate", "{last}");
+    assert_eq!(last["reason"], "promoted the wrong release", "{last}");
+
+    // The newest change is now the undo: it is not undone again.
+    let again = run_in(
+        &base,
+        &work,
+        &["release", "undo", "v1.0.0", "--reason", "again"],
+    );
+    assert!(!again.status.success());
+    let err = String::from_utf8_lossy(&again.stderr);
+    assert!(err.contains("already an undo"), "{err}");
     let _ = std::fs::remove_dir_all(&base);
 }
