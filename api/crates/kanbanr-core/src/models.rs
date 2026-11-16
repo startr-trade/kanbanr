@@ -1590,7 +1590,12 @@ mod tests {
         assert_eq!(t.reads, ["api/src/models.rs"]);
         assert_eq!(t.estimate_h, Some(2.5));
         assert!(t.has_footprint());
-        assert_eq!(t.extra.len(), 1, "only the unknown key is in extra: {:?}", t.extra);
+        assert_eq!(
+            t.extra.len(),
+            1,
+            "only the unknown key is in extra: {:?}",
+            t.extra
+        );
         assert_eq!(
             t.extra.get("future_key"),
             Some(&serde_json::Value::String("kept".into()))
