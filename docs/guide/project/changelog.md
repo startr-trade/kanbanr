@@ -23,6 +23,8 @@ All notable changes to kanbanr are documented here. The format follows
   katalogr's, is let through like kanbanr's own block refresh (DEF-092).
 - `kanbanr git tidy` lists a finished item's merged branch even while an agent scope issued for
   that item is still in force, and names the scope to revoke (DEF-096).
+- A refusal on the default branch no longer calls setup's commit the one exception when it also
+  names the block refresh (DEF-085).
 
 ## [0.7.0] - 2026-11-16
 
