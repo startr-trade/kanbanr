@@ -260,6 +260,7 @@ fn reads_code_repo(dispatch_path: &str) -> bool {
         segs.as_slice(),
         ["projects", _, "git", "model"]
             | ["projects", _, "git", "doctor"]
+            | ["projects", _, "git", "tidy"]
             | ["projects", _, "guards"]
             | ["projects", _, "releases", _, "plan"]
             | ["projects", _, "releases", _, "notes"]

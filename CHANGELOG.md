@@ -10,6 +10,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 - A flagged text stays flagged after an edit, and the Review page shows the edit and its diff;
   Claude is refused an edit to another item's approved spec (DEF-050).
+### Added
+
+- **`kanbanr git tidy [--yes]` lists the merged branches that can go and deletes them locally
+  after one confirmation.** It covers finished items' merged branches and finished agents'
+  `worktree-agent-*` branches, never an unmerged or checked-out branch and never the remote, and
+  prints each deleted branch's tip (DEF-051).
+
+### Fixed
+
+- Sprint close no longer needs one answer per merged branch, and a revoked scope's merged agent
+  branch is deleted (DEF-051).
 
 ## [0.6.0] - 2026-11-14
 

@@ -210,6 +210,36 @@ pub fn delete_branch(root: &Path, name: &str) -> Result<()> {
     git(root, &["branch", "-D", name]).map(|_| ())
 }
 
+/// Delete the local branch `name` only when it is fully merged into `into`, is not checked out in
+/// any worktree and exists (DEF-051). It never touches a remote. `git branch -d` is not used: it
+/// judges "merged" against HEAD, which is the wrong test here.
+pub fn delete_merged_branch(root: &Path, name: &str, into: &str) -> Result<()> {
+    if name.is_empty() || name.starts_with('-') || into.starts_with('-') {
+        return Err(CoreError::Git(format!("refusing branch name `{name}`")));
+    }
+    if !branch_exists(root, name) {
+        return Err(CoreError::Git(format!("branch {name} does not exist")));
+    }
+    if !branch_exists(root, into) {
+        return Err(CoreError::Git(format!("branch {into} does not exist")));
+    }
+    if !is_ancestor(
+        root,
+        &format!("refs/heads/{name}"),
+        &format!("refs/heads/{into}"),
+    ) {
+        return Err(CoreError::Git(format!(
+            "branch {name} is not merged into {into}"
+        )));
+    }
+    if worktree_of(root, name).is_some() {
+        return Err(CoreError::Git(format!(
+            "branch {name} is checked out in a worktree"
+        )));
+    }
+    git(root, &["branch", "-D", name]).map(|_| ())
+}
+
 /// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
 /// `for-each-ref` and one `branch --merged`.
 pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
@@ -850,6 +880,46 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// DEF-051 R-1: only a merged, unoccupied branch goes, and nothing else is touched.
+    #[test]
+    fn delete_merged_branch_refuses_an_unmerged_or_checked_out_branch() {
+        let repo = scratch_repo("delete-merged");
+        create_branch_from(&repo, "feat/merged", "main").unwrap();
+        create_branch_from(&repo, "feat/unmerged", "main").unwrap();
+        git(&repo, &["checkout", "-q", "feat/unmerged"]).unwrap();
+        commit_file(&repo, "u.txt", "u\n", "unmerged work");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        // unmerged: refused, kept
+        assert!(delete_merged_branch(&repo, "feat/unmerged", "main").is_err());
+        assert!(branch_exists(&repo, "feat/unmerged"));
+        // missing, and option-looking names: refused
+        assert!(delete_merged_branch(&repo, "feat/nope", "main").is_err());
+        assert!(delete_merged_branch(&repo, "-D", "main").is_err());
+        // checked out in the current worktree: refused
+        git(&repo, &["checkout", "-q", "feat/merged"]).unwrap();
+        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
+        assert!(branch_exists(&repo, "feat/merged"));
+        // checked out in another worktree: refused
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let wt = std::env::temp_dir().join(format!("kanbanr-coderepo-{}-wt", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        git(
+            &repo,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "feat/merged"],
+        )
+        .unwrap();
+        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
+        git(
+            &repo,
+            &["worktree", "remove", "--force", wt.to_str().unwrap()],
+        )
+        .unwrap();
+        // merged and free: deleted
+        delete_merged_branch(&repo, "feat/merged", "main").unwrap();
+        assert!(!branch_exists(&repo, "feat/merged"));
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
