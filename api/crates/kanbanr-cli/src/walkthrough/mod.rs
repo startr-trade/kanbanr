@@ -126,6 +126,10 @@ pub struct RunArgs {
     /// unknown build): every result the run puts on this board names it.
     #[arg(long)]
     pub rev: Option<String>,
+    /// Put nothing on this board: the run's checks wait in its folder for `kanbanr walkthrough
+    /// prepare`, which makes one batch of several runs of one build.
+    #[arg(long)]
+    pub no_batch: bool,
 }
 
 /// The most answers one step's say gives before it records a finding and goes on.
@@ -218,6 +222,23 @@ pub fn merge_checks(checks: &[CheckResult]) -> Vec<CheckResult> {
             }
         })
         .collect()
+}
+
+/// The checks of several runs as one result per marker (DEF-089 R-4, for FTR-054): each result's
+/// `step` is prefixed with its run's name (`togaf-v080-1:6.20a`), then [`merge_checks`] runs over
+/// the whole list, so a marker passed only if every step that measured it, in every run, passed;
+/// an unmeasured result beside a measured one is ignored, and failed reasons name their run's step.
+pub fn checks_across(runs: &[(String, Vec<CheckResult>)]) -> Vec<CheckResult> {
+    let all: Vec<CheckResult> = runs
+        .iter()
+        .flat_map(|(run, checks)| {
+            checks.iter().map(move |c| CheckResult {
+                step: format!("{run}:{}", c.step),
+                ..c.clone()
+            })
+        })
+        .collect();
+    merge_checks(&all)
 }
 
 /// Where runs are kept by default: outside every repository and outside the temporary directory.
@@ -1737,13 +1758,13 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     // The batch on the target board.
     // A run whose setup never made its board prepares nothing: its checks say nothing about the
     // guide, only that the run could not follow it.
-    let batch = if running.setup_failed {
+    let batch = if running.setup_failed || args.no_batch {
         Ok(BatchOutcome::default())
     } else {
         prepare_batch(
             cli,
             &running.checks,
-            &running.runbook,
+            &running.runbook.checks,
             &name,
             &target_board,
             &rev,
@@ -1766,6 +1787,11 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         Ok(_) if running.setup_failed => {
             println!(
                 "no batch prepared: setup did not complete, so the run says nothing about the guide"
+            )
+        }
+        Ok(_) if args.no_batch => {
+            println!(
+                "no batch prepared (--no-batch): prepare it with `kanbanr walkthrough prepare`"
             )
         }
         Ok(o) => {
@@ -1848,27 +1874,17 @@ pub fn evidence_rev(
     )
 }
 
-/// The commit a `kanbanr --version` line names: `kanbanr 0.7.0 (<sha>, built …)`.
-// Kept for reading a setup log's `kanbanr` line (DEF-089's Design); the run itself now takes its
-// revision from `evidence_rev`.
-#[cfg_attr(not(test), allow(dead_code))]
-fn version_commit(line: &str) -> Option<String> {
-    let inner = line.split_once('(')?.1;
-    let sha = inner.split([',', ')']).next()?.trim();
-    (sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_string())
-}
-
 /// Put every measured check of the run on the target board, one per marker. A `walkthrough:`
 /// test is the run's own automated evidence: recorded with the tests route as `kanbanr test`
 /// records any automated result, at `rev` (the commit of the build under test, DEF-089) — no
 /// person's verdict is involved, so none is asked for. A `manual:` test is a person's check:
 /// prepared as a `manual-test` record in one batch named for the run, for the person to confirm
 /// (ADR-0018), carrying `rev` and its check id. A check whose steps checked nothing is not put
-/// anywhere.
+/// anywhere. `defs` are the check definitions: one runbook's, or several runs' merged.
 fn prepare_batch(
     cli: &crate::Cli,
     checks: &[CheckResult],
-    runbook: &Runbook,
+    defs: &BTreeMap<String, runbook::CheckRef>,
     batch: &str,
     target_board: &Path,
     rev: &str,
@@ -1896,7 +1912,7 @@ fn prepare_batch(
     };
     let repo = crate::scm::repo_root();
     for c in &checks {
-        let Some(def) = runbook.checks.get(&c.marker) else {
+        let Some(def) = defs.get(&c.marker) else {
             out.skipped
                 .push(format!("{}: not defined under checks", c.marker));
             continue;
@@ -2043,18 +2059,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_binary_commit_is_read_from_its_version_line() {
-        assert_eq!(
-            version_commit(
-                "kanbanr 0.6.0 (6a973c690bb2a0909aae0b8e1f5a75e867cec7f1, built 2026-11-14)"
-            )
-            .as_deref(),
-            Some("6a973c690bb2a0909aae0b8e1f5a75e867cec7f1")
-        );
-        assert_eq!(version_commit("kanbanr 0.6.0"), None);
-    }
-
     /// A check on a step that checked nothing is "not measured", never passed: alone it stays so,
     /// and beside a measured step it is ignored (the vacuous MT-5 pass of the second real run).
     #[test]
@@ -2117,5 +2121,57 @@ mod tests {
         assert_eq!(both.len(), 1);
         assert!(both[0].passed);
         assert_eq!(both[0].step, "1.3+4.1");
+    }
+
+    /// DEF-089 R-4 (FTR-054): the checks of two runs are one result per marker. A marker failed in
+    /// one run fails, naming that run's step; passed in both passes; measured in one run only (or
+    /// unmeasured in the other) takes the measured verdict.
+    #[test]
+    fn checks_from_two_runs_merge_into_one_result_per_marker() {
+        let unmeasured = |marker: &str, step: &str| CheckResult {
+            measured: false,
+            passed: false,
+            why: NOT_MEASURED.into(),
+            ..check(marker, step, false, "")
+        };
+        let togaf = vec![
+            check("MT-1", "2.1", true, "ok"),
+            check("MT-10", "6.20a", true, "ok"),
+            unmeasured("MT-3", "3.1"),
+        ];
+        let agile = vec![
+            check("MT-1", "2.4", false, "the offer was missing"),
+            check("MT-10", "5.2", true, "ok"),
+            check("MT-6", "4.1", false, "a board claim failed"),
+            check("MT-3", "3.2", true, "ok"),
+        ];
+        let merged = checks_across(&[
+            ("togaf-v080-1".to_string(), togaf),
+            ("agile-v080-1".to_string(), agile),
+        ]);
+        let by = |m: &str| {
+            merged
+                .iter()
+                .find(|c| c.marker == m)
+                .unwrap_or_else(|| panic!("no {m} in {merged:?}"))
+        };
+        assert_eq!(merged.len(), 4, "one result per marker: {merged:?}");
+        let mt1 = by("MT-1");
+        assert!(mt1.measured && !mt1.passed, "{mt1:?}");
+        assert_eq!(mt1.step, "togaf-v080-1:2.1+agile-v080-1:2.4");
+        assert_eq!(mt1.why, "agile-v080-1:2.4: the offer was missing");
+        let mt10 = by("MT-10");
+        assert!(mt10.measured && mt10.passed, "{mt10:?}");
+        assert_eq!(mt10.step, "togaf-v080-1:6.20a+agile-v080-1:5.2");
+        let mt6 = by("MT-6");
+        assert!(mt6.measured && !mt6.passed, "{mt6:?}");
+        assert_eq!(mt6.step, "agile-v080-1:4.1");
+        assert_eq!(mt6.why, "agile-v080-1:4.1: a board claim failed");
+        let mt3 = by("MT-3");
+        assert!(mt3.measured && mt3.passed, "{mt3:?}");
+        assert_eq!(mt3.step, "togaf-v080-1:3.1+agile-v080-1:3.2");
+        // Markers keep the order they were first named in, across the runs.
+        let order: Vec<&str> = merged.iter().map(|c| c.marker.as_str()).collect();
+        assert_eq!(order, ["MT-1", "MT-10", "MT-3", "MT-6"]);
     }
 }
