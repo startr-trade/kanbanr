@@ -578,7 +578,7 @@ fn unsupported<T>(msg: impl Into<String>) -> Result<T> {
 
 /// A decision of the person's is stamped by one of their own front ends, whatever route reached
 /// here.
-fn person_stamp(stamp: &Stamp, what: &str) -> Result<()> {
+pub(crate) fn person_stamp(stamp: &Stamp, what: &str) -> Result<()> {
     match Origin::parse(&stamp.origin) {
         Some(Origin::Monitor | Origin::Terminal) => Ok(()),
         _ => unsupported(format!(
