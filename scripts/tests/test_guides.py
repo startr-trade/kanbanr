@@ -3,7 +3,7 @@
     python3 -m unittest scripts/tests/test_guides.py
 
 The tests are named for the requirement they prove, so the loader below takes every public method
-of the four classes, not only those that start with `test`.
+of the five classes, not only those that start with `test`.
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ HOSTS = [
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def flat(text: str) -> str:
+    """The text with every run of whitespace, line breaks included, as one space."""
+    return " ".join(text.split())
 
 
 def section(text: str, heading: str) -> str:
@@ -157,9 +162,59 @@ class SkillTests(unittest.TestCase):
                 self.assertTrue("starting today" in planning)
 
 
+class ProcessTests(unittest.TestCase):
+    """DOC-010: the guides state the process their preset defines."""
+
+    def every_guide_states_the_chore_path_its_preset_has(self) -> None:
+        """R-1: each guide's chore sentence equals its preset's paths.chore.stages."""
+        checked = set()
+        for name in WITH_CLAUDE:
+            text = read(GUIDES / f"{name}-with-claude.md")
+            if "### Chores" not in text:
+                continue
+            with self.subTest(guide=name):
+                chores = flat(text.split("### Chores")[1].split("\n## ")[0])
+                m = re.search(r"It goes (.+?), skipping", chores)
+                self.assertIsNotNone(m, "the Chores section has no 'It goes ..., skipping' sentence")
+                guide = m.group(1).split(" → ")
+                preset = read(ROOT / "api/crates/kanbanr-core/presets" / f"{name}.yaml")
+                p = re.search(r"(?m)^  chore:\n    stages: \[(.*?)\]", preset)
+                self.assertIsNotNone(p, "the preset has no paths.chore.stages")
+                stages = [s.strip() for s in p.group(1).split(",")]
+                self.assertEqual(guide, stages)
+            checked.add(name)
+        self.assertTrue({"togaf", "scrum", "agile", "design-control"} <= checked, f"checked only {checked}")
+
+    def the_agile_chore_merges_at_review_after_docs_folded(self) -> None:
+        """R-1: the agile chore merges at Review after the docs-folded sign-off."""
+        text = read(GUIDES / "agile-with-claude.md")
+        chores = flat(text.split("### Chores")[1].split("\n## ")[0])
+        self.assertTrue("Review is still where its branch merges into the sprint" in chores)
+        self.assertTrue("**Sign off docs-folded**" in chores)
+        self.assertFalse("skipping Design and Review" in text)
+
+    def every_sprint_guide_says_a_manual_check_comes_before_docs_folded(self) -> None:
+        """R-2: docs-folded waits for a Passed manual check, in a paragraph and in the stage table."""
+        for name, row in (("agile", "| **Review**"), ("scrum", "| **Done**")):
+            with self.subTest(guide=name):
+                text = read(GUIDES / f"{name}-with-claude.md")
+                self.assertTrue("**A manual check comes before docs-folded.**" in flat(text))
+                lines = [line for line in text.splitlines() if line.startswith(row)]
+                self.assertEqual(len(lines), 1, f"expected one table line starting {row!r}")
+                self.assertTrue("**Passed**" in lines[0])
+                self.assertTrue("**Manual checks**" in lines[0])
+
+    def every_sprint_guide_says_a_granted_delegation_waits_for_the_mode(self) -> None:
+        """R-3: a granted delegation does nothing until the mode is delegated."""
+        for name in ("agile", "scrum", "togaf"):
+            with self.subTest(guide=name):
+                text = flat(read(GUIDES / f"{name}-with-claude.md"))
+                self.assertTrue("A granted delegation does nothing until you set **Mode** to **delegated**" in text)
+
+
 def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: str | None) -> unittest.TestSuite:
     suite = unittest.TestSuite()
-    for cls in (PipelineTests, WordingTests, ExampleTests, SkillTests):
+    for cls in (PipelineTests, WordingTests, ExampleTests, SkillTests, ProcessTests):
         for name in sorted(vars(cls)):
             if not name.startswith("_") and callable(getattr(cls, name)):
                 suite.addTest(cls(name))
