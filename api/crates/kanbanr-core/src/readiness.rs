@@ -478,15 +478,7 @@ impl Context {
             active_sprint: crate::sprints::active_on(&all_sprints, today).map(|a| a.code.clone()),
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
-            build_onward: config.role_status(crate::config::Role::Build).map(|build| {
-                config
-                    .statuses
-                    .iter()
-                    .skip_while(|s| **s != build)
-                    .filter(|s| !config.is_no_op(s))
-                    .cloned()
-                    .collect()
-            }),
+            build_onward: crate::manual::build_onward(config),
             unshipped_releases: if config.cadence.releases {
                 crate::releases::load(store, id)
                     .map(|rs| {
