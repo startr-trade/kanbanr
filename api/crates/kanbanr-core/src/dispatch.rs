@@ -1589,6 +1589,19 @@ fn dispatch_routes(
                 },
             )?)
         }
+        // DEF-034: `{by, reason, origin}` — step the release's newest stage back while nothing is
+        // pushed or tagged; undoing the change that made release/<V> deletes it.
+        ("POST", ["projects", p, "releases", version, "undo"]) => {
+            ser(&crate::releases::undo_stage(
+                store,
+                p,
+                &percent_decode(version),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "reason").unwrap_or_default(),
+                &crate::origin::from_body(b),
+                repo,
+            )?)
+        }
         // FTR-026: `{version, by, link?, notes?}`: a patch release started from the release's
         // failed tag result, with a defect carrying the run's link and the notes.
         ("POST", ["projects", p, "releases", version, "patch-from-tag"]) => {
@@ -2870,6 +2883,10 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             body.and_then(|b| str_field(b, "stage"))
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "its next stage".into())
+        ),
+        ["projects", _p, "releases", v, "undo"] => format!(
+            "undo the newest stage of release {}",
+            percent_decode(v)
         ),
         ["projects", _p, "releases", v] if del => format!("remove release {}", percent_decode(v)),
         ["projects", _p, "sprints", c] if del => format!("remove sprint {c}"),
