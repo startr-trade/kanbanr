@@ -980,6 +980,10 @@ branches; fix it before going on.
   the tag**, by hand, in this order: Promote to main, push main, CI, record the result, Cut, push
   the tag. Give that order when asked about pushing, and say nothing needs pushing before Promote
   to main. A cut that requires `pushed` waits until main is pushed (and CI has run on it).
+- **A stage taken by mistake is undone by the person** with `kanbanr release undo <V> --reason …`
+  while nothing is pushed or tagged: it steps back the newest stage only, and deletes
+  `release/<V>` when it made the branch and every commit on it is kanbanr's. Claude never runs it.
+  After a push or a tag, the way on is a patch release.
 - **Remote CI belongs to the release, not to an item.** Never give an item a task or a test that
   needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
   which CI needs first. An item's tests run on this machine. The remote run is the release's `ci`
@@ -1561,6 +1565,7 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr sprint edit SP-001 [--name N] [--goal G] [--start D] [--length 2w | --end D] [--capacity N|0]   # only while planned
 kanbanr sprint remove SP-001                      # only an empty, unstarted sprint
 kanbanr release remove v0.1.0                     # only an empty, unstarted release
+kanbanr release undo v0.1.0 --reason "…"           # the user's; refused when Claude runs it. Steps the newest stage back while nothing is pushed or tagged
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest

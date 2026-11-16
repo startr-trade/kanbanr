@@ -178,7 +178,7 @@ steps:
     say: "Move every item in v0.1.0 on to Review, if it has not moved already."
   - id: "6.5"
     decide: {promote: {release: v0.1.0, to: candidate}}
-    offer: {page: releases, button: "Promote to candidate"}
+    offer: {page: releases, button: "Promote v0.1.0 to candidate"}
     expect: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.6"
     say: "Write the release notes and the changelog for readers."
@@ -208,7 +208,7 @@ steps:
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.13"
     decide: {promote: {release: v0.1.0, to: main}}
-    offer: {page: releases, button: "Promote to main"}
+    offer: {page: releases, button: "Promote v0.1.0 to main"}
     expect: {board: {release: {version: v0.1.0, stage: main}}}
   - id: "6.14"
     push: {repo: code, refspec: main}

@@ -180,7 +180,7 @@ steps:
     say: "Move every item in v0.1.0 on to Migration, if it has not moved already."
   - id: "6.4"
     decide: {promote: {release: v0.1.0, to: candidate}}
-    offer: {page: releases, button: "Promote to candidate"}
+    offer: {page: releases, button: "Promote v0.1.0 to candidate"}
     expect: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.5"
     say: "Write the release notes and the changelog for readers."
@@ -234,7 +234,7 @@ steps:
     say: "Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
   - id: "6.17"
     decide: {promote: {release: v0.1.0, to: main}}
-    offer: {page: releases, button: "Promote to main"}
+    offer: {page: releases, button: "Promote v0.1.0 to main"}
     expect: {board: {release: {version: v0.1.0, stage: main}}}
   - id: "6.18"
     push: {repo: code, refspec: main}
