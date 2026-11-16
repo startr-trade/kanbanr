@@ -66,6 +66,7 @@ pub mod prepared;
 pub mod project;
 pub mod query;
 pub mod readiness;
+pub mod recover;
 pub mod refs;
 pub mod releasegates;
 pub mod releaseprep;

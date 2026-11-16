@@ -783,19 +783,36 @@ pub fn move_item(
     });
     // A real merge into a release past its first stage returns it there (DEF-031). The merge and
     // the move are done and consistent; if only the stage write fails, say how to finish it.
-    let (mut sent_back, mut note) = (None, None);
+    let (mut sent_back, mut notes) = (None, Vec::new());
+    // The merge commit goes on the move that integrated the item, so a position at the item
+    // finds it once the branch is gone (FTR-004). The merge and the move are done: a failure
+    // here is said, never an error.
+    let mut moved = moved;
+    if !already {
+        match store.record_merge_commit(id, code, to, &sha) {
+            Ok(()) => {
+                if let Some(last) = moved.history.last_mut().filter(|t| t.to == to) {
+                    last.merge_commit = sha.clone();
+                }
+            }
+            Err(e) => notes.push(format!(
+                "the merge commit was not recorded: {e}; positions find it by its Refs trailer"
+            )),
+        }
+    }
     if let (Some(version), false) = (&forward_needed, already) {
         match crate::releases::send_back(store, id, version, code, by) {
             Ok(sent) => sent_back = sent,
             Err(e) => {
                 let first = config.cadence.stages().first().cloned().unwrap_or_default();
-                note = Some(format!(
+                notes.push(format!(
                     "could not return {version} to {first}: {e}; do it with kanbanr release \
                      promote {version} {first} --reason \"{code} merged\""
                 ));
             }
         }
     }
+    let note = (!notes.is_empty()).then(|| notes.join("; "));
     // What the merge brought in may be named by docs and items that did not change with it. A
     // failure to read the history is no reason to fail a move that is already done.
     let drift = crate::docdrift::flags_for_item(store, id, code, repo).unwrap_or_default();
@@ -971,6 +988,8 @@ pub fn sprint_close(
                     worktree.display()
                 )));
             }
+            // Read before the fast-forward: the tip the sprint closed at (FTR-004).
+            let closed_commit = crate::coderepo::rev_parse(repo, &line).ok();
             crate::coderepo::create_tag(repo, code, &line, &format!("sprint {code}"))?;
             let old = match crate::coderepo::fast_forward(repo, &main, &line) {
                 Ok(old) => old,
@@ -979,7 +998,7 @@ pub fn sprint_close(
                     return Err(e);
                 }
             };
-            match crate::sprints::close(store, id, code, carry_to) {
+            match crate::sprints::close_at(store, id, code, carry_to, closed_commit.as_deref()) {
                 Ok(sprint) => {
                     tagged = Some(code.to_string());
                     sprint
@@ -991,7 +1010,14 @@ pub fn sprint_close(
                 }
             }
         }
-        _ => crate::sprints::close(store, id, code, carry_to)?,
+        _ => {
+            // Not automated, but the branch is there: its tip is still the sprint's closing
+            // commit (FTR-004).
+            let closed_commit = repo
+                .filter(|repo| crate::coderepo::branch_exists(repo, &line))
+                .and_then(|repo| crate::coderepo::rev_parse(repo, &line).ok());
+            crate::sprints::close_at(store, id, code, carry_to, closed_commit.as_deref())?
+        }
     };
     let catch_up = match (repo, carry_to.map(str::trim)) {
         (Some(repo), Some(next)) if automated && !next.is_empty() && next != "backlog" => {
@@ -1632,6 +1658,180 @@ mod tests {
         let f = project.feature(&code).unwrap();
         assert_eq!(f.history.last().unwrap().origin, "");
         assert!(crate::readiness::open_overrides(f).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-004 R-5: the move that integrates an item records its merge commit on the transition it
+    /// appends, and the item answers it; a move whose branch the line already held merged nothing
+    /// and records nothing.
+    #[test]
+    fn integrating_an_item_records_its_merge_commit_on_the_transition() {
+        let (store, dir, repo, code) = gated_integrating("ftr004-merge");
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            Some("the sign-off is not needed here"),
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        let merged = moved.merged.clone().unwrap();
+        assert!(!merged.already);
+        assert_eq!(
+            merged.sha,
+            crate::coderepo::rev_parse(&repo, "main").unwrap()
+        );
+        assert_eq!(moved.feature.merge_commit(), Some(merged.sha.as_str()));
+        assert!(moved.note.is_none(), "{:?}", moved.note);
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        let last = f.history.last().unwrap();
+        assert_eq!(last.to, "Completed");
+        assert_eq!(last.merge_commit, merged.sha);
+        assert_eq!(f.merge_commit(), Some(merged.sha.as_str()));
+        // Only the integrating move carries it.
+        assert!(
+            f.history[..f.history.len() - 1]
+                .iter()
+                .all(|t| t.merge_commit.is_empty())
+        );
+        // Recorded once: a second record is refused and changes nothing.
+        assert!(
+            store
+                .record_merge_commit("demo", &code, "Completed", "0".repeat(40).as_str())
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&code)
+                .unwrap()
+                .merge_commit(),
+            Some(merged.sha.as_str())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // The line already holds the branch: nothing merged, nothing recorded.
+        let (store, dir, repo, code) = gated_integrating("ftr004-already");
+        let branch = crate::coderepo::current_branch(&repo).unwrap();
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        crate::coderepo::git(&repo, &["merge", "-q", "--ff-only", &branch]).unwrap();
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            Some("the sign-off is not needed here"),
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        assert!(moved.merged.as_ref().unwrap().already);
+        assert_eq!(moved.feature.merge_commit(), None);
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        assert_eq!(f.history.last().unwrap().to, "Completed");
+        assert_eq!(f.merge_commit(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A project with sprints on (git model as given) and SP-001 running, with `sprint/SP-001`
+    /// one commit ahead of main and checked out.
+    fn running_sprint(
+        tag: &str,
+        git_model: bool,
+    ) -> (Store, std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-gm-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = git_model;
+        cadence.sprints = true;
+        cadence.releases = false;
+        store.set_cadence("demo", None, cadence).unwrap();
+        let today = crate::gantt::fmt_date(crate::sprints::today());
+        let sprint = crate::sprints::add(&store, "demo", &today, Some(14), "g", None, "").unwrap();
+        assert_eq!(sprint.code, "SP-001");
+        crate::sprints::start(&store, "demo", "SP-001").unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(tag);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", "sprint/SP-001"]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v1\n", "sprint work");
+        (store, dir, repo)
+    }
+
+    /// FTR-004 R-5: closing a sprint records the tip of `sprint/<SP>` as its closing commit, both
+    /// when the git model closes it (tag and fast-forward) and when it only closes the record; a
+    /// key this version does not know survives the load and save the close makes (FEAT-151).
+    #[test]
+    fn closing_a_sprint_records_its_closing_commit() {
+        // Automated: the tip read before main is fast-forwarded to it.
+        let (store, dir, repo) = running_sprint("ftr004-close-auto", true);
+        let tip = crate::coderepo::rev_parse(&repo, "sprint/SP-001").unwrap();
+        let file = store.project_dir("demo").join("sprints.yaml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        let marked = text.replacen(
+            "code: SP-001",
+            "code: SP-001\n  from_a_newer_kanbanr: kept",
+            1,
+        );
+        assert_ne!(marked, text);
+        std::fs::write(&file, marked).unwrap();
+        let closed = sprint_close(&store, "demo", "SP-001", None, Some(&repo)).unwrap();
+        assert_eq!(closed.tagged.as_deref(), Some("SP-001"));
+        assert_eq!(closed.sprint.closed_commit, tip);
+        assert_eq!(crate::coderepo::rev_parse(&repo, "main").unwrap(), tip);
+        let stored = crate::sprints::load(&store, "demo").unwrap();
+        assert_eq!(stored[0].closed_commit, tip);
+        assert_eq!(
+            stored[0].extra.get("from_a_newer_kanbanr"),
+            Some(&serde_json::json!("kept"))
+        );
+        assert!(
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains("from_a_newer_kanbanr: kept")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // Not automated, but the branch is there: its tip, and nothing in git changes.
+        let (store, dir, repo) = running_sprint("ftr004-close-plain", false);
+        let tip = crate::coderepo::rev_parse(&repo, "sprint/SP-001").unwrap();
+        let main = crate::coderepo::rev_parse(&repo, "main").unwrap();
+        let closed = sprint_close(&store, "demo", "SP-001", None, Some(&repo)).unwrap();
+        assert!(closed.tagged.is_none());
+        assert_eq!(closed.sprint.closed_commit, tip);
+        assert_eq!(crate::coderepo::rev_parse(&repo, "main").unwrap(), main);
+        assert_eq!(
+            crate::sprints::load(&store, "demo").unwrap()[0].closed_commit,
+            tip
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // No repository: nothing to read, nothing recorded.
+        let (store, dir, repo) = running_sprint("ftr004-close-norepo", false);
+        let closed = sprint_close(&store, "demo", "SP-001", None, None).unwrap();
+        assert!(closed.sprint.closed_commit.is_empty());
+        assert!(
+            !std::fs::read_to_string(store.project_dir("demo").join("sprints.yaml"))
+                .unwrap()
+                .contains("closed_commit")
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

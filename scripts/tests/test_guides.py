@@ -236,6 +236,14 @@ class ProcessTests(unittest.TestCase):
                 text = flat(read(GUIDES / f"{name}-with-claude.md"))
                 self.assertTrue("A granted delegation does nothing until you set **Mode** to **delegated**" in text)
 
+    def every_with_claude_guide_says_a_granted_delegation_waits_for_the_mode(self) -> None:
+        """DOC-011 R-1: every with-claude guide says a granted delegation waits for the mode."""
+        for name in WITH_CLAUDE:
+            with self.subTest(guide=name):
+                text = flat(read(GUIDES / f"{name}-with-claude.md"))
+                self.assertTrue("A granted delegation does nothing until you set **Mode** to **delegated**" in text)
+                self.assertTrue('under "Decisions here"' in text)
+
 
 def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: str | None) -> unittest.TestSuite:
     suite = unittest.TestSuite()
