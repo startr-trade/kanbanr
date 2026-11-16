@@ -104,6 +104,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor shows agent scopes and who made each change": LOCAL,
             "Live updates settle before the monitor refetches": LOCAL,
             "The monitor's data cache shares reads and re-reads only changed slices": LOCAL,
+            "The Review page says a grant cannot be checked and why": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

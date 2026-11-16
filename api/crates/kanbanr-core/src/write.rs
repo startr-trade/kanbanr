@@ -745,7 +745,7 @@ fn decide_group(
 /// person-only routes, and a batch that approves, read the project's decisions. A decisions file
 /// that does not parse refuses every delegated verdict and person-only route with its error, and
 /// judges the rest as `monitor` mode.
-fn judge(
+pub(crate) fn judge(
     store: &Store,
     method: &str,
     path: &str,
@@ -825,12 +825,23 @@ fn judge(
         return Ok(None);
     }
     // Provenance (T9): only a grant kanbanr wrote, in a committed file, is honoured.
-    if !decisions::granted_through_kanbanr(store, &p, &named) {
-        return Err(refuse(format!(
-            "{named} was not granted through kanbanr: {} was changed outside it, or the grant \
-             was written into the file by hand. The person grants it again on the Review page.",
-            decisions::DECISIONS_FILE
-        )));
+    match decisions::grant_provenance(store, &p, &named) {
+        decisions::Provenance::ThroughKanbanr => {}
+        decisions::Provenance::Elsewhere => {
+            return Err(refuse(format!(
+                "{named} was not granted through kanbanr: {} was changed outside it, or the \
+                 grant was written into the file by hand. The person grants it again on the \
+                 Review page.",
+                decisions::DECISIONS_FILE
+            )));
+        }
+        // DEF-080: a grant nobody can check is never honoured, and the refusal says why.
+        decisions::Provenance::Unverifiable(why) => {
+            return Err(refuse(format!(
+                "{named} could not be checked: {why}. Nothing is taken under it until kanbanr \
+                 can read the board's history."
+            )));
+        }
     }
     Ok(Some(named))
 }

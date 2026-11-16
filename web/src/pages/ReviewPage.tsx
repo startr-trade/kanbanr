@@ -613,6 +613,12 @@ function DecisionsHere({
                 · <strong>not granted through kanbanr</strong>: nothing is taken under it
               </>
             ) : null}
+            {g.grant_unverifiable ? (
+              <>
+                {" "}
+                · <strong>can't be checked</strong>: {g.grant_unverifiable}; nothing is taken under it until it can
+              </>
+            ) : null}
             {view.mode === "delegated" && g.permission_rules_checked ? (
               g.permission_rules_missing?.length ? (
                 <>

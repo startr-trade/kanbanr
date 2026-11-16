@@ -358,6 +358,10 @@ jobs:
       # (DEF-082).
       - name: The monitor draws no text under 13 px
         run: npm run check:a11y-type
+      # A delegation whose grant cannot be checked, because the board's history cannot be read,
+      # says so and why on the Review page, not "not granted through kanbanr" (DEF-080).
+      - name: The Review page says a grant cannot be checked and why
+        run: npm run check:grant-unverifiable
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

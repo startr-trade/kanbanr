@@ -1425,6 +1425,10 @@
             "description": "Names no items, kinds or milestone on purpose: every item.",
             "type": "boolean"
           },
+          "grant_unverifiable": {
+            "description": "Granted, but the board's history cannot be read, so where the grant came from cannot be\nchecked: why, naming the repository (DEF-080). Claude's verdicts under it are refused.",
+            "type": "string"
+          },
           "granted": {
             "$ref": "#/components/schemas/Stamp"
           },
