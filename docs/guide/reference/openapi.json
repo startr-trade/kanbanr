@@ -361,6 +361,36 @@
           }
         ]
       },
+      "AsOf": {
+        "description": "The revisions and time a background drift result was computed at.",
+        "properties": {
+          "board_rev": {
+            "description": "The board's HEAD commit, read before the run.",
+            "type": "string"
+          },
+          "code_rev": {
+            "description": "The code repository's HEAD commit, read before the run.",
+            "type": "string"
+          },
+          "finished_at": {
+            "description": "When the run finished, RFC 3339.",
+            "type": "string"
+          },
+          "took_ms": {
+            "description": "How long the run took, in milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "board_rev",
+          "code_rev",
+          "finished_at",
+          "took_ms"
+        ],
+        "type": "object"
+      },
       "BoardCard": {
         "description": "A single feature as it appears on the cross-project board.",
         "properties": {
@@ -2496,6 +2526,75 @@
         ],
         "type": "object"
       },
+      "Latest": {
+        "description": "The latest background drift result for a project, kept in the daemon's memory only (ADR-0005).",
+        "properties": {
+          "as_of": {
+            "$ref": "#/components/schemas/AsOf",
+            "description": "The last result's revisions and time; absent before the first result."
+          },
+          "count": {
+            "description": "The flags in the last result; 0 when there is none.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed_at": {
+            "description": "When the last run failed, RFC 3339, even beside a result.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why drift is unavailable ([`NEEDS_REPO`]), or the last run's error.",
+            "type": "string"
+          },
+          "recomputing": {
+            "description": "A run is going beside the last result.",
+            "type": "boolean"
+          },
+          "report": {
+            "$ref": "#/components/schemas/Report",
+            "description": "The last result; absent with `?flags=false` or before the first result."
+          },
+          "state": {
+            "$ref": "#/components/schemas/LatestState"
+          }
+        },
+        "required": [
+          "state",
+          "count"
+        ],
+        "type": "object"
+      },
+      "LatestState": {
+        "description": "Where the daemon's background drift result stands.",
+        "oneOf": [
+          {
+            "const": "fresh",
+            "description": "The last result is at the current board and code revisions.",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "description": "A change came after the last result; a run is queued or going.",
+            "type": "string"
+          },
+          {
+            "const": "computing",
+            "description": "No result yet.",
+            "type": "string"
+          },
+          {
+            "const": "unavailable",
+            "description": "There is no code repository, so drift is never computed.",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "description": "The last run failed and there is no result.",
+            "type": "string"
+          }
+        ]
+      },
       "Lesson": {
         "properties": {
           "at": {
@@ -4408,6 +4507,32 @@
         ],
         "type": "string"
       },
+      "Report": {
+        "description": "Every flag for the board (or one item), with when it was generated, so two runs can be compared\nlater (FTR-013 R-8).",
+        "properties": {
+          "flags": {
+            "description": "Grouped by linked text: one flag per text, across the items that flagged it.",
+            "items": {
+              "$ref": "#/components/schemas/Flag"
+            },
+            "type": "array"
+          },
+          "generated_at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          },
+          "since": {
+            "description": "The date the log was read from; empty when all of an item's history was read.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "generated_at",
+          "since",
+          "flags"
+        ],
+        "type": "object"
+      },
       "Requirement": {
         "additionalProperties": true,
         "description": "One requirement: a single behaviour, stated so it can be tested.",
@@ -6061,6 +6186,56 @@
           }
         },
         "summary": "A documentation file's bytes, such as an image"
+      }
+    },
+    "/api/projects/{project}/drift/latest": {
+      "get": {
+        "operationId": "getProjectsDriftLatest",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include the flags; true when absent. With false, only the state, revisions and count.",
+            "in": "query",
+            "name": "flags",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Latest"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The latest background drift result, with its revisions and age"
       }
     },
     "/api/projects/{project}/events": {

@@ -1368,6 +1368,73 @@ pub struct Report {
     pub flags: Vec<Flag>,
 }
 
+// ---- the latest background result (FTR-045) ---------------------------------------------------
+
+/// Where the daemon's background drift result stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum LatestState {
+    /// The last result is at the current board and code revisions.
+    Fresh,
+    /// A change came after the last result; a run is queued or going.
+    Stale,
+    /// No result yet.
+    Computing,
+    /// There is no code repository, so drift is never computed.
+    Unavailable,
+    /// The last run failed and there is no result.
+    Failed,
+}
+
+/// The revisions and time a background drift result was computed at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AsOf {
+    /// The board's HEAD commit, read before the run.
+    pub board_rev: String,
+    /// The code repository's HEAD commit, read before the run.
+    pub code_rev: String,
+    /// When the run finished, RFC 3339.
+    pub finished_at: String,
+    /// How long the run took, in milliseconds.
+    pub took_ms: u64,
+}
+
+/// The latest background drift result for a project, kept in the daemon's memory only (ADR-0005).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Latest {
+    pub state: LatestState,
+    /// The last result's revisions and time; absent before the first result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<AsOf>,
+    /// A run is going beside the last result.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recomputing: bool,
+    /// The flags in the last result; 0 when there is none.
+    pub count: usize,
+    /// The last result; absent with `?flags=false` or before the first result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Report>,
+    /// Why drift is unavailable ([`NEEDS_REPO`]), or the last run's error.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// When the last run failed, RFC 3339, even beside a result.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub failed_at: String,
+}
+
+impl Latest {
+    /// The same answer without the flags: state, revisions and count only.
+    pub fn summary(&self) -> Latest {
+        Latest {
+            report: None,
+            ..self.clone()
+        }
+    }
+}
+
 /// Where `kanbanr drift` looks back to by default: the date of the latest shipped release's tag,
 /// else 60 days before now.
 pub fn default_since(store: &Store, project: &str) -> String {
@@ -2406,6 +2473,79 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-045 (supports R-2): the summary keeps state, revisions and count and drops the flags;
+    /// empty fields are left out of the JSON.
+    #[test]
+    fn latest_serialises_without_flags_when_asked() {
+        let flag = Flag {
+            target: Target {
+                kind: TargetKind::Doc,
+                id: "guide/intro.md".into(),
+                title: "Intro".into(),
+                path: "guide/intro.md".into(),
+            },
+            via: vec!["FEAT-1".into()],
+            hits: vec![],
+            commits: vec![],
+            target_changed_at: "2026-11-01T00:00:00Z".into(),
+            edits: vec![],
+            diff: String::new(),
+            diff_truncated: false,
+        };
+        let full = Latest {
+            state: LatestState::Fresh,
+            as_of: Some(AsOf {
+                board_rev: "b".repeat(40),
+                code_rev: "c".repeat(40),
+                finished_at: "2026-11-17T10:00:00Z".into(),
+                took_ms: 48_700,
+            }),
+            recomputing: false,
+            count: 1,
+            report: Some(Report {
+                generated_at: "2026-11-17T10:00:00Z".into(),
+                since: "2026-10-01".into(),
+                flags: vec![flag],
+            }),
+            reason: String::new(),
+            failed_at: String::new(),
+        };
+        let with: serde_json::Value = serde_json::to_value(&full).unwrap();
+        assert_eq!(with["state"], "fresh");
+        assert_eq!(with["report"]["flags"].as_array().unwrap().len(), 1);
+
+        let summary = full.summary();
+        assert_eq!(summary.report, None);
+        assert_eq!(summary.count, 1);
+        assert_eq!(summary.as_of, full.as_of);
+        let without: serde_json::Value = serde_json::to_value(&summary).unwrap();
+        let keys: Vec<&str> = without
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["state", "as_of", "count"]);
+        assert_eq!(without["as_of"]["took_ms"], 48_700);
+
+        // Round trip, and the kebab-case states.
+        let back: Latest = serde_json::from_value(without).unwrap();
+        assert_eq!(back, summary);
+        let computing = Latest {
+            state: LatestState::Computing,
+            as_of: None,
+            recomputing: true,
+            count: 0,
+            report: None,
+            reason: String::new(),
+            failed_at: String::new(),
+        };
+        let v = serde_json::to_value(&computing).unwrap();
+        assert_eq!(v["state"], "computing");
+        assert_eq!(v["recomputing"], true);
+        assert!(v.get("as_of").is_none() && v.get("reason").is_none());
     }
 }
 
