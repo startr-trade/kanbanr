@@ -530,6 +530,7 @@ mod tests {
             code_repo: None,
             gens: Arc::new(Generations::default()),
             memo: Arc::new(Memo::new(MEMO_CAP_BYTES)),
+            slices: tokio::sync::broadcast::channel(4).0,
             background: Arc::new(OnceLock::new()),
         };
         (st, dir)

@@ -220,36 +220,62 @@ pub async fn project_activity(
     ))
 }
 
+/// A `slices` SSE event: the JSON of what changed (DEF-081).
+fn slices_event(s: &crate::watcher::Slices) -> Option<Result<Event, Infallible>> {
+    serde_json::to_string(s)
+        .ok()
+        .map(|data| Ok(Event::default().event("slices").data(data)))
+}
+
+/// `GET /api/projects/:project/events`: `changed` with the project id, as in API v1, and
+/// `slices` with what changed on this project's board (DEF-081).
 pub async fn project_events(
     State(st): State<AppState>,
     Path(project): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = st.tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(move |msg| {
+    let changed = {
+        let project = project.clone();
+        BroadcastStream::new(st.tx.subscribe()).filter_map(move |msg| {
+            let project = project.clone();
+            async move {
+                match msg {
+                    Ok(changed) if changed == project || changed == "*" => {
+                        Some(Ok(Event::default().event("changed").data(changed)))
+                    }
+                    _ => None,
+                }
+            }
+        })
+    };
+    let slices = BroadcastStream::new(st.slices.subscribe()).filter_map(move |msg| {
         let project = project.clone();
         async move {
             match msg {
-                Ok(changed) if changed == project || changed == "*" => {
-                    Some(Ok(Event::default().event("changed").data(changed)))
-                }
+                Ok(s) if s.project == project => slices_event(&s),
                 _ => None,
             }
         }
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(futures::stream::select(changed, slices)).keep_alive(KeepAlive::default())
 }
 
+/// `GET /api/events`: `changed` for every project, and every project's `slices` (DEF-081).
 pub async fn all_events(
     State(st): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = st.tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
+    let changed = BroadcastStream::new(st.tx.subscribe()).filter_map(|msg| async move {
         match msg {
             Ok(changed) => Some(Ok(Event::default().event("changed").data(changed))),
             Err(_) => None,
         }
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    let slices = BroadcastStream::new(st.slices.subscribe()).filter_map(|msg| async move {
+        match msg {
+            Ok(s) => slices_event(&s),
+            Err(_) => None,
+        }
+    });
+    Sse::new(futures::stream::select(changed, slices)).keep_alive(KeepAlive::default())
 }
 
 // ---- write routes (single-writer daemon, FEAT-034; mounted only when --allow-writes) ----------
@@ -344,10 +370,24 @@ fn run_write(
             for w in &out.warnings {
                 eprintln!("kanbanr: {w}");
             }
-            // Tell the live monitor which project changed (or "*" for structural changes).
-            let _ = st
-                .tx
-                .send(project_id(dispatch_path).unwrap_or_else(|| "*".to_string()));
+            // The memo misses from here on: the generation is bumped before anyone is told
+            // (DEF-081). Then tell the live monitor which project changed (or "*" for structural
+            // changes), and, since the commit may touch several files, that everything in it did.
+            match project_id(dispatch_path) {
+                Some(project) => {
+                    let r#gen = st.gens.bump(&project);
+                    let _ = st.tx.send(project.clone());
+                    let _ = st.slices.send(crate::watcher::Slices {
+                        project,
+                        r#gen,
+                        tags: vec!["*".to_string()],
+                    });
+                }
+                None => {
+                    st.gens.bump_all();
+                    let _ = st.tx.send("*".to_string());
+                }
+            }
             ([("content-type", "application/json")], out.body).into_response()
         }
         // The same status a read failing the same way answers with (FEAT-176): core's mapping, not
