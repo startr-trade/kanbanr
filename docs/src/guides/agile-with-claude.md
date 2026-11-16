@@ -11,8 +11,11 @@ releases. You don't need to learn any commands:
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
 - **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
-  review of small defects, and until when. It proposes a delegation; you grant it on the
-  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
+  review of small defects, and until when. Setup proposes two, for Claude to take the
+  **design-review** of small defects and chores and the **docs-folded** sign-off of every item,
+  besides any Claude proposes when you ask. You **Grant** each one on the **Review** page, under
+  "Decisions here". A granted delegation does nothing until you set **Mode** to **delegated** there
+  and click **Change**. Whatever Claude decides under it comes back there for you to keep or undo.
   If Claude Code runs in auto mode, its safety check may stop a delegated command. When you grant a
   delegation, kanbanr offers the one allow rule that lets it through; say yes to Claude, or run the
   command it names.
@@ -88,11 +91,16 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 | **Design** | Drafts the definition: statement, goals and requirements | **Approve** |
 | **Develop** | Writes the design and its task list, names a test for each requirement, and starts the item's branch | **Sign off design-review** |
 | **Test** | Builds on the item's branch and commits | Nothing |
-| **Review** | Records the green tests and updates the docs | **Sign off docs-folded** |
+| **Review** | Records the green tests and updates the docs | **Sign off docs-folded**, once every requirement has a green test: a manual check counts once you click **Passed** under **Manual checks** |
 | **Released** | Nothing: the cut moves it here | Nothing |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
+
+**A manual check comes before docs-folded.** When only a person can judge a requirement, Claude
+names one manual check for the item. It waits on the Review page under **Manual checks**, with what
+to check. Do the check and click **Passed** or **Failed**. **Sign off docs-folded** is offered only
+after it is Passed, so if you are waiting for the sign-off, look there first.
 
 **Claude's overrides come to you.** If Claude moves an item past a gate, it says why and the move
 waits on the Review page with that reason, even on an item you approved. **Ratify** it there; until
@@ -113,8 +121,10 @@ moves past a gate unless you say why, and that reason stays on the item.
 
 ### Chores
 
-A chore doesn't walk every stage. It goes Plan → Develop → Test → Released, skipping Design and Review, because their
-questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+A chore doesn't walk every stage. It goes Plan → Develop → Test → Review → Released, skipping
+Design, because its questions don't fit small maintenance work. Review is still where its branch
+merges into the sprint, so it waits for **Sign off docs-folded** there like any item. Tell Claude
+it's a chore when you ask for it.
 
 > Pin the CI image: it's a chore.
 
