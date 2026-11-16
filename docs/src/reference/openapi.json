@@ -29,7 +29,7 @@
             }
           }
         },
-        "description": "The board was written by a newer kanbanr than this daemon; upgrade it."
+        "description": "The board was written by a newer kanbanr than this daemon; upgrade it. Or, for a view or position read, no checkout here holds the position asked for: the body names the position the checkout does hold."
       },
       "E500": {
         "content": {
@@ -594,6 +594,21 @@
         "required": [
           "gaps",
           "next"
+        ],
+        "type": "object"
+      },
+      "ChangedPath": {
+        "description": "One uncommitted path: its raw blob id, absent for a deleted path.",
+        "properties": {
+          "blob": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
@@ -2233,6 +2248,67 @@
         ],
         "type": "object"
       },
+      "GraphEdge": {
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "\"holds\".",
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "kind",
+          "to"
+        ],
+        "type": "object"
+      },
+      "GraphNode": {
+        "properties": {
+          "blob": {
+            "type": "string"
+          },
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "diagrams": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "\"folder\" or \"doc\".",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "name",
+          "path"
+        ],
+        "type": "object"
+      },
       "Health": {
         "description": "The liveness probe's answer: `GET /healthz`.",
         "properties": {
@@ -3183,6 +3259,65 @@
           "name",
           "description",
           "programs"
+        ],
+        "type": "object"
+      },
+      "PositionAnswer": {
+        "description": "What `kanbanr position --json` prints and `GET /projects/{p}/position` returns (FTR-003).",
+        "properties": {
+          "changed": {
+            "description": "The dirty part, sorted by path.",
+            "items": {
+              "$ref": "#/components/schemas/ChangedPath"
+            },
+            "type": "array"
+          },
+          "live": {
+            "$ref": "#/components/schemas/PositionRef"
+          },
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "`live.text()`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "live",
+          "text",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "PositionRef": {
+        "description": "One repository's position (CD-2). Serialises as `{\"repo\",\"commit\",\"dirty\"}`, absent parts null.",
+        "properties": {
+          "commit": {
+            "description": "40 lower-case hex, or None for a directory with no commit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dirty": {
+            "description": "64 lower-case hex, or None when the checkout is clean.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "commit",
+          "dirty"
         ],
         "type": "object"
       },
@@ -5134,6 +5269,113 @@
         ],
         "type": "object"
       },
+      "ViewAnswer": {
+        "description": "What a view answers with: the same shape as katalogr's ViewAnswer, so one renderer draws both.\nField order is the wire order; no `serde_json::Value` is in it (its key order would follow the\nbuild's `preserve_order` feature and break \"same bytes\").",
+        "properties": {
+          "exact": {
+            "type": "boolean"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/ViewGraph"
+          },
+          "mermaid": {
+            "type": "string"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/PositionRef"
+            },
+            "type": "array"
+          },
+          "query": {
+            "$ref": "#/components/schemas/ViewQueryJson"
+          },
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view_format": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view_id": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "view_format",
+          "exact",
+          "positions",
+          "query",
+          "mermaid",
+          "graph"
+        ],
+        "type": "object"
+      },
+      "ViewGraph": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "type": "array"
+          },
+          "shown": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "edges",
+          "nodes",
+          "shown",
+          "title",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ViewQueryJson": {
+        "properties": {
+          "args": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "op": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "args"
+        ],
+        "type": "object"
+      },
       "Waiting": {
         "properties": {
           "code": {
@@ -6222,6 +6464,47 @@
         "summary": "The manual tests waiting for a person: each one not yet green, with its requirement and the check to make, live work first, then finished work"
       }
     },
+    "/api/projects/{project}/position": {
+      "get": {
+        "operationId": "getProjectsPosition",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The live position of the code repository the daemon was started in: its commit plus a hash of the uncommitted changes, and the changed paths"
+      }
+    },
     "/api/projects/{project}/prepared": {
       "get": {
         "operationId": "getProjectsPrepared",
@@ -6676,6 +6959,75 @@
           }
         },
         "summary": "One sprint's report"
+      }
+    },
+    "/api/projects/{project}/views/docs": {
+      "get": {
+        "operationId": "getProjectsViewsDocs",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The folder whose markdown files are drawn (default docs).",
+            "in": "query",
+            "name": "root",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The most files drawn (default 60).",
+            "in": "query",
+            "name": "max-nodes",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A position text: a commit, or a commit plus `+` and a dirty hash. A clean commit is read from the repository; a dirty position only while the checkout is at it, else a 409.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewAnswer"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The markdown docs under a folder, drawn at the live position or at `at`, with an ID that repeats while the position, the board and the question repeat; an ID only when the answer is exact"
       }
     },
     "/api/projects/{project}/workflow": {

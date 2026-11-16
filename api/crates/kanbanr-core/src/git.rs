@@ -225,6 +225,14 @@ pub fn is_clean(dir: &Path) -> Result<(), Vec<String>> {
     if paths.is_empty() { Ok(()) } else { Err(paths) }
 }
 
+/// The board repository's HEAD commit, 40 hex; None when `dir` is not a repository or has no
+/// commit yet (FTR-003: the board commit in a view's facts part).
+pub fn head_commit(dir: &Path) -> Option<String> {
+    let repo = Repository::open(dir).ok()?;
+    let head = repo.head().ok()?;
+    Some(head.peel_to_commit().ok()?.id().to_string())
+}
+
 /// Set the repo-local commit identity (used by local mode: `kanbanr identity --name --email`).
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
     crate::project::assert_inside_fence(dir); // FEAT-195

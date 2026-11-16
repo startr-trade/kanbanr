@@ -160,6 +160,19 @@ Zachman coverage has no column nothing answers (`kanbanr trace MS-… --zachman`
 `kanbanr doctor` before merging a sprint or cutting a release: it lists every coverage rule a
 view still fails.
 
+### A view is exact at a position
+
+`kanbanr view docs` draws the docs at a **position**: a commit and a hash of the uncommitted
+changes. The answer says which position it reflects and whether it is exact, and an exact answer
+has an **ID** that repeats whenever the position, the board commit and the question repeat. So an
+ID you saw last week names the same picture today, and a different ID means something moved. A
+view that could not be read consistently (a file changed under it) has no ID and a warning.
+
+Two things to know. A submodule's own state does not move the position (a committed change to the
+submodule's pointer does). And a checkout whose filters change bytes (`core.autocrlf`,
+`text=auto`) reads as changed where `git status` says it is clean, so there a view is exact only
+at the live position, never at the commit.
+
 ### Drift as work lands
 
 A doc can name `--since` or a route that an item then changed, and stay as it was. kanbanr finds

@@ -409,6 +409,33 @@ pub(crate) fn query_param(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// Refuses a query string holding a key outside `allowed`, so a misspelt argument cannot silently
+/// become a default (L-22).
+pub(crate) fn only_params(query: Option<&str>, allowed: &[&str]) -> Result<()> {
+    for kv in query.unwrap_or("").split('&').filter(|kv| !kv.is_empty()) {
+        let key = kv.split_once('=').map_or(kv, |(k, _)| k);
+        if !allowed.contains(&key) {
+            return Err(CoreError::Unsupported(format!(
+                "unknown query parameter '{key}' (allowed: {})",
+                if allowed.is_empty() {
+                    "none".to_string()
+                } else {
+                    allowed.join(", ")
+                }
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The code repository a position or view read needs (FTR-003).
+fn position_repo(repo: Option<&std::path::Path>) -> Result<&std::path::Path> {
+    repo.ok_or_else(|| CoreError::PositionUnavailable {
+        wanted: "the checkout's position".into(),
+        available: vec![],
+    })
+}
+
 /// A boolean query-string flag: present with no/empty/"true"/"1" value -> true.
 fn query_flag(query: Option<&str>, key: &str) -> bool {
     match query_param(query, key) {
@@ -864,6 +891,35 @@ fn dispatch_routes(
                 report.issues.extend(git_drift(store, p, repo));
             }
             ser(&report)
+        }
+        // The checkout's live position (FTR-003).
+        ("GET", ["projects", p, "position"]) => {
+            only_params(query, &[])?;
+            ser(&crate::position::position_answer(position_repo(repo)?, p)?)
+        }
+        // The docs view at the live position or `at` (FTR-003): the answer's own bytes.
+        ("GET", ["projects", p, "views", "docs"]) => {
+            only_params(query, &["root", "max-nodes", "at"])?;
+            let root = position_repo(repo)?;
+            let docs_root = query_param(query, "root").unwrap_or_else(|| "docs".into());
+            let max_nodes = match query_param(query, "max-nodes") {
+                Some(n) => n.parse::<usize>().map_err(|_| {
+                    CoreError::Unsupported(format!("max-nodes must be a number, not '{n}'"))
+                })?,
+                None => 60,
+            };
+            let at = query_param(query, "at").filter(|s| !s.is_empty());
+            store.load_meta(p)?;
+            let facts = crate::views::project_facts(store, p);
+            let answer = crate::views::docs_view_live(
+                root,
+                p,
+                &facts,
+                at.as_deref(),
+                &docs_root,
+                max_nodes,
+            )?;
+            Ok(String::from_utf8_lossy(&crate::views::answer_bytes(&answer)).into_owned())
         }
         // The docs and items that name what work changed and have not changed since (FTR-013).
         ("GET", ["projects", p, "drift"]) => {

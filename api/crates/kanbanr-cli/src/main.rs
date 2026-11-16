@@ -159,6 +159,27 @@ enum Command {
     /// Print the data folder (board) this directory uses. With --json, also where that came from,
     /// the recommended `<repo>.kanbanr` folder, and existing kanbanr folders next to the project.
     Where,
+    /// Print the checkout's position: its commit plus a hash of what is uncommitted (FTR-003), the
+    /// text katalogr computes byte for byte. Needs no board; run it from the project folder.
+    Position,
+    /// A view of the project at a position (FTR-003). `kanbanr view docs` draws the markdown docs
+    /// under a folder at the live checkout, or at `--at`, with an ID that repeats whenever the
+    /// position, the board and the question repeat. Exits 2 for a position text that is not one
+    /// and 6 for a position no checkout here holds.
+    View {
+        /// Which view: `docs`.
+        op: String,
+        /// The folder whose markdown files are drawn.
+        #[arg(long, default_value = "docs")]
+        root: String,
+        /// The most files drawn.
+        #[arg(long = "max-nodes", default_value_t = 60)]
+        max_nodes: usize,
+        /// A position text (`<commit>` or `<commit>+<dirty>`): a clean commit is answered from the
+        /// repository with nothing checked out; a dirty position only while the checkout is at it.
+        #[arg(long)]
+        at: Option<String>,
+    },
     /// Show recent activity for the project (from its changelog).
     Activity,
     /// Show / test the notification events log for the project (FEAT-036). Events are emitted
@@ -2118,6 +2139,8 @@ fn command_access(cmd: &Command) -> Access {
         Command::Whoami
         | Command::Open { .. }
         | Command::Where
+        | Command::Position
+        | Command::View { .. }
         | Command::Activity
         | Command::Trace { .. }
         | Command::Why { .. }
@@ -6884,6 +6907,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
+        // A position needs no board (FTR-003).
+        Command::Position => return run_position(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
         Command::Git(GitCmd::Model { sprints, releases })
             if cadence_query(sprints, releases).is_some() && no_board_here(cli).is_some() =>
@@ -6938,12 +6963,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::Serve { .. }
         | Command::Open { .. }
         | Command::Where
+        | Command::Position
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
         | Command::Editor(_)
         | Command::Hooks(_) => {
             unreachable!()
         }
+        Command::View {
+            op,
+            root,
+            max_nodes,
+            at,
+        } => run_view(cli, &client, op, root, *max_nodes, at.as_deref()),
         Command::Sync => {
             // Said as it is (FEAT-142): a failed push used to be followed by "nothing to sync".
             let (ahead, outcome) = client.sync()?;
@@ -8796,6 +8828,128 @@ fn run_migrate(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
 
 /// `kanbanr drift` (FTR-013): every flag, grouped by linked text. A read; it reports and never
 /// fails on what it finds.
+/// `kanbanr position` (FTR-003): the checkout's live position, with no board needed. The repository
+/// is named by the board's project id, or by the folder when there is no board.
+fn run_position(cli: &Cli) -> anyhow::Result<()> {
+    let root = code_repo().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+    let repo = if no_board_here(cli).is_some() {
+        eprintln!("repo: named after the folder; no board here");
+        root.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repo".to_string())
+    } else {
+        require_project(cli)?
+    };
+    let answer = kanbanr_core::position::position_answer(&root, &repo)?;
+    if cli.json {
+        println!("{}", serde_json::to_string(&answer)?);
+        return Ok(());
+    }
+    let branch = coderepo::current_branch(&root).unwrap_or_else(|| "(detached)".to_string());
+    println!("{}", answer.text);
+    println!("repo:    {}", answer.live.repo);
+    println!("branch:  {branch}");
+    println!(
+        "commit:  {}",
+        answer
+            .live
+            .commit
+            .as_deref()
+            .unwrap_or("none (no commit yet)")
+    );
+    println!("changed: {} uncommitted path(s)", answer.changed.len());
+    for c in answer.changed.iter().take(20) {
+        let in_head = answer.live.commit.is_some()
+            && coderepo::git(&root, &["cat-file", "-e", &format!("HEAD:{}", c.path)]).is_ok();
+        let (mark, blob) = match (&c.blob, in_head) {
+            (None, _) => ('D', String::new()),
+            (Some(b), true) => ('M', format!("  <- blob {}", &b[..8.min(b.len())])),
+            (Some(b), false) => ('A', format!("  <- blob {}", &b[..8.min(b.len())])),
+        };
+        println!("  {mark} {}{blob}", c.path);
+    }
+    if answer.changed.len() > 20 {
+        println!("  ... and {} more", answer.changed.len() - 20);
+    }
+    Ok(())
+}
+
+/// `kanbanr view <op>` (FTR-003): exit 2 for a position text that is not one, 6 for a position no
+/// checkout here holds.
+fn run_view(
+    cli: &Cli,
+    client: &Backend,
+    op: &str,
+    root: &str,
+    max_nodes: usize,
+    at: Option<&str>,
+) -> anyhow::Result<()> {
+    if op != "docs" {
+        eprintln!("kanbanr: unknown view '{op}' (the views are: docs)");
+        std::process::exit(2);
+    }
+    let p = require_project(cli)?;
+    if let Some(text) = at
+        && let Err(e) = kanbanr_core::position::PositionRef::parse(&p, text)
+    {
+        eprintln!("kanbanr: {e}");
+        std::process::exit(2);
+    }
+    let repo = code_repo().ok_or_else(|| {
+        anyhow::anyhow!("a view reads the code repository: run it from the project folder")
+    })?;
+    let mut path = format!(
+        "/projects/{p}/views/docs?root={}&max-nodes={max_nodes}",
+        urlencode(root)
+    );
+    if let Some(text) = at {
+        path.push_str(&format!("&at={}", urlencode(text)));
+    }
+    let resp = match client.get_in(&path, Some(&repo)) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(kanbanr_core::CoreError::PositionUnavailable { wanted, available }) =
+                e.downcast_ref::<kanbanr_core::CoreError>()
+            {
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "error": "position-unavailable",
+                            "wanted": wanted,
+                            "available": available,
+                        })
+                    );
+                } else {
+                    eprintln!("kanbanr: {e}");
+                }
+                std::process::exit(6);
+            }
+            return Err(e);
+        }
+    };
+    let answer: kanbanr_core::views::ViewAnswer = serde_json::from_str(&resp)?;
+    if cli.json {
+        println!("{resp}");
+        return Ok(());
+    }
+    print!("{}", answer.mermaid);
+    match (&answer.view_id, answer.exact) {
+        (Some(id), true) => println!("view: {id}"),
+        _ => {
+            let why = answer.warnings.first().map_or("see the warnings", |w| w);
+            println!("not exact ({why})");
+        }
+    }
+    if let Some(pos) = answer.positions.first() {
+        println!("at: {}", pos.text());
+    }
+    for w in &answer.warnings {
+        eprintln!("warning: {w}");
+    }
+    Ok(())
+}
+
 fn run_drift(
     cli: &Cli,
     client: &Backend,

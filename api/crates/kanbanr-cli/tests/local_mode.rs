@@ -12564,3 +12564,296 @@ fn sprint_close_says_when_merged_branches_can_go() {
     assert!(all.lines().any(|b| b == "worktree-agent-old"), "{all}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---- positions and views (FTR-003) ----
+
+/// A scratch code repository named `shop` with two docs and a board of its own, committed clean.
+/// Under the temporary directory, never in this repository (L-41).
+fn view_scratch(tag: &str) -> (PathBuf, PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(
+        &base,
+        &work,
+        &["init", "-q", "--initial-branch=main"],
+    ));
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    ok(git_in(&base, &work, &["config", "core.autocrlf", "false"]));
+    let empty = base.join("empty-excludes");
+    std::fs::write(&empty, "").unwrap();
+    ok(git_in(
+        &base,
+        &work,
+        &["config", "core.excludesFile", empty.to_str().unwrap()],
+    ));
+    std::fs::create_dir_all(work.join("docs")).unwrap();
+    std::fs::write(work.join("docs/overview.md"), "# Overview\n").unwrap();
+    std::fs::write(work.join("docs/guide.md"), "# Guide\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let board = String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout).unwrap();
+    assert!(
+        std::fs::canonicalize(board.trim())
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {board}"
+    );
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "--no-verify", "-m", "[no-ref] docs"],
+    ));
+    (base, work)
+}
+
+fn out_of(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).to_string()
+}
+
+/// R-8: in a repository with no board, the text form, the folder-name note, and `--json`.
+#[test]
+fn cli_position_prints_the_checkout_position_without_a_board() {
+    let (base, work) = togaf_scratch("pos-noboard");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(
+        &base,
+        &work,
+        &["init", "-q", "--initial-branch=main"],
+    ));
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    std::fs::write(work.join("a.txt"), "one\n").unwrap();
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(&base, &work, &["commit", "-q", "-m", "one"]));
+    let head = tip(&base, &work, "HEAD");
+    let o = ok(run_in(&base, &work, &["position"]));
+    let text = out_of(&o);
+    assert_eq!(text.lines().next().unwrap(), head, "{text}");
+    assert!(text.contains("repo:    shop"), "{text}");
+    assert!(text.contains("branch:  main"), "{text}");
+    assert!(text.contains("changed: 0 uncommitted path(s)"), "{text}");
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("repo: named after the folder; no board here")
+    );
+    std::fs::write(work.join("a.txt"), "two\n").unwrap();
+    std::fs::write(work.join("b.txt"), "new\n").unwrap();
+    let text = out_of(&ok(run_in(&base, &work, &["position"])));
+    assert!(text.contains("changed: 2 uncommitted path(s)"), "{text}");
+    assert!(text.contains("  M a.txt  <- blob "), "{text}");
+    assert!(text.contains("  A b.txt  <- blob "), "{text}");
+    let json: serde_json::Value =
+        serde_json::from_str(&out_of(&ok(run_in(&base, &work, &["--json", "position"])))).unwrap();
+    let blob_a = kanbanr_core::position::blob_id(b"two\n");
+    let blob_b = kanbanr_core::position::blob_id(b"new\n");
+    let dirty = kanbanr_core::position::dirty_hash([
+        (b"a.txt".as_slice(), Some(blob_a.as_str())),
+        (b"b.txt".as_slice(), Some(blob_b.as_str())),
+    ])
+    .unwrap();
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["live"]["repo"], "shop");
+    assert_eq!(json["live"]["commit"], head.as_str());
+    assert_eq!(json["live"]["dirty"], dirty.as_str());
+    assert_eq!(json["text"], format!("{head}+{dirty}").as_str());
+    assert_eq!(json["changed"].as_array().unwrap().len(), 2);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// R-8: `view docs` prints the Mermaid, the ID and the position; `--json` is the answer's bytes.
+#[test]
+fn cli_view_docs_prints_mermaid_and_the_id() {
+    let (base, work) = view_scratch("view-docs");
+    let o = run_in(&base, &work, &["view", "docs"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = out_of(&o);
+    assert!(text.starts_with("flowchart LR"), "{text}");
+    assert!(text.contains("guide.md") && text.contains("overview.md"));
+    let head = tip(&base, &work, "HEAD");
+    assert!(text.contains("view: v1-"), "{text}");
+    assert!(text.contains(&format!("at: {head}")), "{text}");
+    let mermaid: String = text
+        .lines()
+        .take_while(|l| !l.starts_with("view: "))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert!(kanbanr_core::diagrams::lint_source(&mermaid).is_empty());
+    let o = run_in(&base, &work, &["--json", "view", "docs"]);
+    let body = out_of(&o);
+    let answer: kanbanr_core::views::ViewAnswer = serde_json::from_str(body.trim()).unwrap();
+    assert_eq!(
+        kanbanr_core::views::answer_bytes(&answer),
+        body.trim().as_bytes()
+    );
+    assert!(answer.exact);
+    assert!(kanbanr_core::position::is_view_id(
+        answer.view_id.as_deref().unwrap()
+    ));
+    assert_eq!(answer.positions[0].repo, "shop");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// R-6: a position no checkout holds is exit 6, with the text or, under `--json`, the shape.
+#[test]
+fn cli_view_at_an_unknown_position_exits_6() {
+    let (base, work) = view_scratch("view-at6");
+    let head = tip(&base, &work, "HEAD");
+    let unknown = "1".repeat(40);
+    let o = run_in(&base, &work, &["view", "docs", "--at", &unknown]);
+    assert_eq!(o.status.code(), Some(6));
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(
+        err.contains(&format!(
+            "position {unknown} is not here: this checkout is at {head}"
+        )),
+        "{err}"
+    );
+    let o = run_in(&base, &work, &["--json", "view", "docs", "--at", &unknown]);
+    assert_eq!(o.status.code(), Some(6));
+    let v: serde_json::Value = serde_json::from_str(out_of(&o).trim()).unwrap();
+    assert_eq!(v["error"], "position-unavailable");
+    assert_eq!(v["wanted"], unknown.as_str());
+    assert_eq!(v["available"][0]["commit"], head.as_str());
+    assert_eq!(v["available"][0]["repo"], "shop");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// R-1: text that is not a position is a usage error, exit 2.
+#[test]
+fn cli_view_refuses_a_bad_at_text_with_exit_2() {
+    let (base, work) = view_scratch("view-at2");
+    let o = run_in(&base, &work, &["view", "docs", "--at", "zz"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("bad position"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// R-9: a not-exact answer's warning is a `warning:` line on stderr, and in `warnings` in JSON. An
+/// uncommitted doc whose name is not UTF-8 cannot be read back at the position (SPK-001), which
+/// makes the answer not exact on both reads.
+#[cfg(unix)]
+#[test]
+fn cli_view_prints_warnings_on_stderr_and_in_json() {
+    use std::os::unix::ffi::OsStrExt;
+    let (base, work) = view_scratch("view-warn");
+    let name = std::ffi::OsStr::from_bytes(b"docs/bad\xff.md");
+    std::fs::write(work.join(name), "# odd\n").unwrap();
+    let o = run_in(&base, &work, &["view", "docs"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let warning = "the checkout changed while the view was read; try again";
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains(&format!("warning: {warning}")),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(out_of(&o).contains("not exact ("));
+    assert!(!out_of(&o).contains("view: v1-"));
+    let o = run_in(&base, &work, &["--json", "view", "docs"]);
+    let v: serde_json::Value = serde_json::from_str(out_of(&o).trim()).unwrap();
+    assert_eq!(v["exact"], false);
+    assert!(v.get("view_id").is_none());
+    assert_eq!(v["warnings"][0], warning);
+    assert!(!String::from_utf8_lossy(&o.stderr).contains("warning:"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// R-8: SPK-001's proof on the shipped commands: main, a branch and the live checkout with an
+/// uncommitted edit give three positions and three IDs, each repeated byte for byte.
+#[test]
+fn cli_position_and_view_docs_repeat_at_main_a_branch_and_uncommitted() {
+    let (base, work) = view_scratch("view-proof");
+    let good = |args: &[&str]| -> String {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        out_of(&o)
+    };
+    let both = |label: &str| -> (String, String) {
+        let (p1, v1) = (
+            good(&["--json", "position"]),
+            good(&["--json", "view", "docs"]),
+        );
+        let (p2, v2) = (
+            good(&["--json", "position"]),
+            good(&["--json", "view", "docs"]),
+        );
+        assert_eq!(p1, p2, "{label}: position repeats");
+        assert_eq!(v1, v2, "{label}: view repeats byte for byte");
+        (p1, v1)
+    };
+    let id_of = |v: &str| -> String {
+        serde_json::from_str::<serde_json::Value>(v.trim()).unwrap()["view_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let main_commit = tip(&base, &work, "HEAD");
+    let (p_main, v_main) = both("main");
+    // A branch with other content.
+    git_in(&base, &work, &["checkout", "-q", "-b", "feat/x"]);
+    commit_file_in(&base, &work, "docs/extra.md", "# Extra\n", "[no-ref] extra");
+    let (p_branch, v_branch) = both("branch");
+    // An uncommitted edit.
+    std::fs::write(work.join("docs/overview.md"), "# Edited\n").unwrap();
+    let (p_live, v_live) = both("uncommitted");
+    let ids = [id_of(&v_main), id_of(&v_branch), id_of(&v_live)];
+    assert_eq!(
+        ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        3
+    );
+    let texts: Vec<String> = [&p_main, &p_branch, &p_live]
+        .iter()
+        .map(|p| {
+            serde_json::from_str::<serde_json::Value>(p.trim()).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        texts
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    assert_eq!(texts[0], main_commit);
+    // Main's position, asked for from the branch with nothing checked out, gives main's ID.
+    let there = good(&["--json", "view", "docs", "--at", &main_commit]);
+    assert_eq!(id_of(&there), ids[0]);
+    assert_eq!(tip(&base, &work, "HEAD"), tip(&base, &work, "feat/x"));
+    // The library's proof agrees on the same repository.
+    let table = kanbanr_core::views::proof(
+        &work,
+        "shop",
+        "f",
+        "docs/guide.md",
+        &[Some("main"), Some("feat/x"), None],
+        "docs",
+        60,
+    )
+    .unwrap();
+    assert!(table.ok, "{}", table.render());
+    let _ = std::fs::remove_dir_all(&base);
+}
