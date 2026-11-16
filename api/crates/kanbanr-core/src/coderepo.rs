@@ -696,8 +696,11 @@ pub fn changed_since_fork(
         )));
     }
     for rev in [line, branch] {
-        git(root, &["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")])
-            .map_err(|_| CoreError::Git(format!("{rev} does not exist")))?;
+        git(
+            root,
+            &["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")],
+        )
+        .map_err(|_| CoreError::Git(format!("{rev} does not exist")))?;
     }
     if !is_ancestor(root, branch, line) {
         return changed_files(root, line, branch);
@@ -1263,9 +1266,11 @@ pub(crate) mod tests {
 
         // A branch with no commits of its own, never merged.
         create_branch_from(&repo, "feat/empty", "line").unwrap();
-        assert!(changed_since_fork(&repo, "line", "feat/empty")
-            .unwrap()
-            .is_empty());
+        assert!(
+            changed_since_fork(&repo, "line", "feat/empty")
+                .unwrap()
+                .is_empty()
+        );
         assert!(changed_since_fork(&repo, "nope", "feat/x").is_err());
         assert!(changed_since_fork(&repo, "line", "nope").is_err());
         let _ = std::fs::remove_dir_all(&repo);
