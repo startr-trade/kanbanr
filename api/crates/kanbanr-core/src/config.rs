@@ -601,6 +601,55 @@ impl Cadence {
         }
     }
 
+    /// Require `gate` at release stage `stage` because baseline entry `from` promised it
+    /// (FTR-033). A stage that declares no gate of its own gets one copied from the gate in
+    /// force, so its default actions stay; a repeat of the same gate and entry adds nothing.
+    /// Refused, naming the stages there are, when the project has no such stage.
+    pub fn add_stage_gate(&mut self, stage: &str, gate: &str, from: &str) -> Result<(), String> {
+        let stage = stage.trim();
+        let stages = self.stages();
+        if !stages.iter().any(|s| s == stage) {
+            return Err(format!(
+                "the baseline asks release stage '{stage}' to require the `{gate}` gate, but \
+                 '{stage}' is not a release stage of this project — its stages are {}",
+                stages.join(", ")
+            ));
+        }
+        if !self.release_gates.contains_key(stage) {
+            let effective = self
+                .effective_release_gates()
+                .into_iter()
+                .find(|(s, _)| s == stage)
+                .map(|(_, g)| g)
+                .unwrap_or_default();
+            self.release_gates.insert(stage.to_string(), effective);
+        }
+        let held = self
+            .release_gates
+            .get_mut(stage)
+            .expect("inserted above when absent");
+        if !held.gates.iter().any(|g| g.gate == gate && g.from == from) {
+            held.gates.push(crate::releasegates::StageGate {
+                gate: gate.to_string(),
+                from: from.to_string(),
+                extra: Default::default(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Drop every stage gate whose `from` names one of `entries` (FTR-033): the entry was
+    /// superseded, or its pack removed. Returns how many were dropped.
+    pub fn remove_stage_gates_from(&mut self, entries: &[String]) -> usize {
+        let mut dropped = 0;
+        for g in self.release_gates.values_mut() {
+            let before = g.gates.len();
+            g.gates.retain(|s| !entries.contains(&s.from));
+            dropped += before - g.gates.len();
+        }
+        dropped
+    }
+
     /// A stage list must name each stage once, and none blank. An empty list is not checked here:
     /// it means the default, and refusing an explicitly empty one is the caller's (FEAT-183).
     pub fn validate_stages(stages: &[String]) -> Result<(), String> {

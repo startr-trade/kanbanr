@@ -84,6 +84,10 @@ pub struct Adr {
     /// Why it was rejected: a rejected decision is still a record, and its reason is the record.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+    /// The engineering-baseline entry this decision records (`B-003`, FTR-033), written when the
+    /// person accepts the revision that adds it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub baseline: String,
     /// Front-matter keys this version does not know, kept (FEAT-151).
     #[serde(
         flatten,
@@ -289,7 +293,19 @@ fn scaffold(title: &str) -> String {
 }
 
 /// Scaffold a new decision and write it into the board's doc tree.
-pub fn create(store: &Store, project: &str, title: &str, mut adr: Adr) -> Result<Adr> {
+pub fn create(store: &Store, project: &str, title: &str, adr: Adr) -> Result<Adr> {
+    create_with_body(store, project, title, adr, scaffold(title))
+}
+
+/// [`create`] with the document's prose given (its `# title` heading included), for a decision
+/// written whole, as an accepted baseline constraint's is (FTR-033). A non-empty `status` is kept.
+pub fn create_with_body(
+    store: &Store,
+    project: &str,
+    title: &str,
+    mut adr: Adr,
+    body: String,
+) -> Result<Adr> {
     // A new decision names known values only, in their one spelling (MNT-009).
     crate::vocab::canonicalise_adr(&mut adr, true)?;
     let existing = list(store, project)?;
@@ -304,7 +320,7 @@ pub fn create(store: &Store, project: &str, title: &str, mut adr: Adr) -> Result
             .to_string();
     }
     adr.title = title.to_string();
-    adr.body = scaffold(title);
+    adr.body = body;
     let slug = crate::scm::slug(title);
     adr.path = format!(
         "{FOLDER}/{}-{slug}.md",

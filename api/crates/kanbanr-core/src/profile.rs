@@ -1629,7 +1629,7 @@ fn record_line(r: &Records, label: &str) -> String {
 
 /// The packs to ask from: those in the baseline in its order, a removed pack skipped, then any
 /// the baseline does not list yet (setup, before the packs are recorded) in the order given.
-fn followed<'a>(
+pub(crate) fn followed<'a>(
     packs: &'a [(ProfileSource, ProfileFile)],
     baseline: &crate::baseline::Baseline,
 ) -> Vec<&'a (ProfileSource, ProfileFile)> {
@@ -1655,7 +1655,7 @@ fn followed<'a>(
 
 /// Every area's chosen options across the baseline's standing answers, its proposed revisions
 /// and the answers given so far.
-fn answer_set(
+pub(crate) fn answer_set(
     baseline: &crate::baseline::Baseline,
     given: &[crate::baseline::Answer],
 ) -> BTreeMap<String, BTreeSet<String>> {
@@ -1688,7 +1688,7 @@ fn answer_set(
 }
 
 /// Whether an area's `when` holds against the answer set; an unanswered gating area never does.
-fn when_holds(area: &Area, set: &BTreeMap<String, BTreeSet<String>>) -> bool {
+pub(crate) fn when_holds(area: &Area, set: &BTreeMap<String, BTreeSet<String>>) -> bool {
     match &area.when {
         None => true,
         Some(w) => set
@@ -2563,5 +2563,79 @@ areas:
             ["*.tsx", "SQL", "migrations/"]
         );
         assert!(t("").is_empty());
+    }
+
+    /// R-5: removing a pack keeps its entries and ADRs, stops asking and checking its areas, and
+    /// adding it again restores it unchanged.
+    #[test]
+    fn a_removed_pack_keeps_its_entries_and_stops_asking() {
+        use crate::baseline::{self, tests::*};
+        let (store, dir, _) = board(true);
+        for name in ["core", "data"] {
+            let f = builtin(name).unwrap();
+            baseline::add_pack(&store, "demo", name, &f, Library::Builtin, stamp()).unwrap();
+        }
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        accept_it(&store, &v);
+        let design = "## Design\n\nAdds `migrations/0002.sql` and a query on the database.\n";
+        let all: Vec<(ProfileSource, ProfileFile)> = ["core", "data"]
+            .iter()
+            .map(|n| {
+                let f = builtin(n).unwrap();
+                (f.source(n, Library::Builtin), f)
+            })
+            .collect();
+        let before = baseline::load(&store, "demo").unwrap();
+        assert!(!baseline::touched(&before, design).is_empty());
+        let open: Vec<String> = baseline::open_areas(&all, &before, design)
+            .into_iter()
+            .map(|o| o.area)
+            .collect();
+        assert!(open.contains(&"migrations".to_string()), "{open:?}");
+        let adrs = crate::adr::list(&store, "demo").unwrap().len();
+        assert_eq!(adrs, 1);
+
+        let held = baseline::remove_pack(&store, "demo", "core", person())
+            .unwrap_err()
+            .to_string();
+        assert!(held.contains("requires pack 'core'"), "{held}");
+        baseline::remove_pack(&store, "demo", "data", person()).unwrap();
+        let b = baseline::load(&store, "demo").unwrap();
+        assert_eq!(b.entries, before.entries, "entries stay");
+        assert_eq!(
+            baseline::in_force(&b).len(),
+            baseline::in_force(&before).len()
+        );
+        assert_eq!(crate::adr::list(&store, "demo").unwrap().len(), adrs);
+        assert!(baseline::touched(&b, design).is_empty());
+        assert!(baseline::contradictions(&b, "## Design\n\nthe database is SQLite\n").is_empty());
+        let data_areas: Vec<String> = builtin("data")
+            .unwrap()
+            .areas
+            .iter()
+            .map(|a| a.id.clone())
+            .collect();
+        assert!(
+            baseline::open_areas(&all, &b, design)
+                .iter()
+                .all(|o| !data_areas.contains(&o.area))
+        );
+        let asked = ask(&all, &b, &[], Asks::FirstNeed, None, None, Some(design), "");
+        assert!(
+            asked.ask.iter().all(|a| !data_areas.contains(&a.id)),
+            "{:?}",
+            asked.ask
+        );
+        assert!(asked.answered.iter().all(|a| !data_areas.contains(a)));
+
+        let f = builtin("data").unwrap();
+        baseline::add_pack(&store, "demo", "data", &f, Library::Builtin, stamp()).unwrap();
+        let again = baseline::load(&store, "demo").unwrap();
+        assert_eq!(again.entries, before.entries);
+        assert_eq!(again.areas, before.areas);
+        assert_eq!(again.revisions, before.revisions);
+        assert!(again.packs.iter().all(|p| p.removed.is_none()));
+        assert!(!baseline::touched(&again, design).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

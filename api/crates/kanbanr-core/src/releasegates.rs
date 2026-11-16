@@ -215,6 +215,24 @@ pub struct ReleaseGate {
     pub after: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_enter: Vec<ReleaseAction>,
+    /// Gates the project's engineering baseline requires here (FTR-033): each needs a passed
+    /// result for the release tip before a release enters the stage. Written when the person
+    /// accepts a baseline revision; an older binary keeps the key through `extra` and does not
+    /// enforce it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<StageGate>,
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: Extra,
+}
+
+/// One gate a release stage requires because a baseline entry promised it (FTR-033): `gate` is a
+/// gate name as `kanbanr gate record` takes it, `from` the entry (`B-007`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct StageGate {
+    pub gate: String,
+    pub from: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
@@ -309,7 +327,10 @@ pub struct ReleaseStageView {
 impl ReleaseGate {
     /// Nothing is required before entering and nothing happens on entering (FTR-020).
     pub fn is_inert(&self) -> bool {
-        self.requires.is_empty() && self.after.is_empty() && self.on_enter.is_empty()
+        self.requires.is_empty()
+            && self.after.is_empty()
+            && self.on_enter.is_empty()
+            && self.gates.is_empty()
     }
 }
 
@@ -1100,5 +1121,51 @@ mod tests {
             cadence("release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch] } }\n")
                 .unwrap();
         assert!(!crate::yaml::to_string(&plain).unwrap().contains("after"));
+    }
+
+    /// FTR-033 compat: a binary that knows no `gates` reads them into `extra` and writes them
+    /// back unchanged; this one reads them as stage gates.
+    #[test]
+    fn an_older_reader_keeps_stage_gates_through_extra() {
+        /// `ReleaseGate` as 0.7 has it: no `gates`.
+        #[derive(Debug, Default, Serialize, Deserialize)]
+        struct OlderGate {
+            #[serde(default, skip_serializing_if = "String::is_empty")]
+            purpose: String,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            requires: Vec<ReleaseCheck>,
+            #[serde(default, skip_serializing_if = "Vec::is_empty")]
+            on_enter: Vec<ReleaseAction>,
+            #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+            extra: Extra,
+        }
+        let yaml = "requires: [items_finished]\non_enter: [move_main]\n\
+                    gates:\n- gate: sast\n  from: B-007\n";
+        let older: OlderGate = crate::yaml::from_str(yaml).unwrap();
+        assert!(older.extra.contains_key("gates"), "{older:?}");
+        let written = crate::yaml::to_string(&older).unwrap();
+        let back: ReleaseGate = crate::yaml::from_str(&written).unwrap();
+        assert_eq!(
+            back.gates,
+            vec![StageGate {
+                gate: "sast".into(),
+                from: "B-007".into(),
+                extra: Extra::default(),
+            }]
+        );
+        assert_eq!(back.requires, vec![ReleaseCheck::ItemsFinished]);
+        assert!(back.extra.is_empty());
+        // And this binary writes them where the older one found them.
+        let again = crate::yaml::to_string(&back).unwrap();
+        let older_again: OlderGate = crate::yaml::from_str(&again).unwrap();
+        assert_eq!(older_again.extra, older.extra);
+        // A stage holding only baseline gates is not inert: it requires something.
+        assert!(
+            !ReleaseGate {
+                gates: back.gates.clone(),
+                ..ReleaseGate::default()
+            }
+            .is_inert()
+        );
     }
 }
