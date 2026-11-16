@@ -111,6 +111,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "No tracked merge leftovers (*.orig, *.rej)": LOCAL,
             "The version being built has release notes": LOCAL,
             "The guides cover the pipeline and a product people use": LOCAL,
+            "The privacy scan's own tests pass": LOCAL,
             "The pipeline follows the shared Rust CI practices": LOCAL,
             "The docs layout holds": LOCAL,
             "Every gate check is described in Working with Claude": LOCAL,
@@ -803,6 +804,8 @@ def main(argv: list[str] | None = None) -> int:
     say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
     ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_guides.py"], ROOT)
     say("make ci: the guides cover the pipeline and a product people use (DOC-007)", ok, out)
+    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_privacy_scan.py"], ROOT)
+    say("make ci: the privacy scan lists what a public board would show (MNT-012)", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()
