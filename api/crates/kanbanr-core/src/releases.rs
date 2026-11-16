@@ -142,6 +142,10 @@ pub struct StageChange {
     /// (DEF-043). Empty on every other change.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_untested: Vec<String>,
+    /// The stage this change undid (`kanbanr release undo`, DEF-034); empty on every other change.
+    /// An older binary keeps it in `extra` and reads the change as a move back to `stage`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub undoes: String,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
@@ -3063,11 +3067,17 @@ fn merged_fix(project: &Project, version: &str) -> String {
 /// The stages of `stages` (the project's, in order) the release has been moved forward into. The
 /// stage changes are read oldest first: a change into a stage at or after the previous one counts,
 /// a change back to an earlier stage does not, and a stage a named promotion jumped over leaves no
-/// change (FTR-021). A change to a stage no longer in the list never counts.
+/// change (FTR-021). A change to a stage no longer in the list never counts. An undo (DEF-034)
+/// takes the stage it undid back out of the set.
 pub fn entered_stages(release: &Release, stages: &[String]) -> BTreeSet<String> {
     let mut entered = BTreeSet::new();
     let mut previous: Option<usize> = None;
     for c in &release.stages {
+        if !c.undoes.is_empty() {
+            entered.remove(&c.undoes);
+            previous = stages.iter().position(|s| *s == c.stage);
+            continue;
+        }
         let Some(at) = stages.iter().position(|s| *s == c.stage) else {
             continue;
         };
@@ -3800,6 +3810,249 @@ pub fn promote_with(
     done.forward_into = integration;
     done.next = next_hint(store, id, version, repo, &done, &w.main);
     Ok(done)
+}
+
+/// What `release undo` did (DEF-034).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Undone {
+    pub release: Release,
+    /// The change pushed: `stage` is where the release is now, `undoes` the stage it undid.
+    pub undone: StageChange,
+    /// The stage the release is at now; empty for no stage.
+    pub now_at: String,
+    /// The branch deleted, when the undo took back the change that made it; else empty.
+    pub branch_deleted: String,
+    /// The commits the deleted branch held beyond main, every one kanbanr's.
+    pub commits_removed: Vec<CommitLine>,
+}
+
+/// Step a release's newest stage change back (DEF-034), while nothing has been pushed or tagged.
+///
+/// Only the newest change is ever undone; an earlier mistake is two undos. A change a merge sent
+/// back (DEF-031), an undo, a stage that moved main or tagged, a tagged release, and a branch on a
+/// remote, checked out, or holding a commit kanbanr did not write are refused, each with nothing
+/// changed. Undoing the change that made the release branch deletes the branch. Raw data is kept:
+/// the undo is a new change, and nothing is removed from `stages`.
+pub fn undo_stage(
+    store: &Store,
+    id: &str,
+    version: &str,
+    by: &str,
+    reason: &str,
+    origin: &str,
+    repo: Option<&Path>,
+) -> Result<Undone> {
+    let refuse = |m: String| Err(CoreError::Unsupported(m));
+    // 1. The release, and who and why.
+    let project = cadence_on(store, id)?;
+    let cadence = &project.config.cadence;
+    let mut releases = load(store, id)?;
+    let Some(index) = releases.iter().position(|r| r.version == version) else {
+        return refuse(format!("no release {version}"));
+    };
+    let release = releases[index].clone();
+    if release.state != ReleaseState::Planned {
+        return refuse(format!(
+            "{version} has shipped: a release never moves back from production"
+        ));
+    }
+    if !release.superseded_by.is_empty() {
+        return refuse(format!(
+            "{version} was superseded by {}: it never ships, and its tag stays in the repository",
+            release.superseded_by
+        ));
+    }
+    if !release.tagged_at.is_empty() {
+        return refuse(format!(
+            "{version} is tagged: a tag is never undone; start a patch release instead"
+        ));
+    }
+    let by = by.trim();
+    if by.is_empty() {
+        return refuse(
+            "a stage change must name who made it: pass `by` (the CLI defaults it to the board's \
+             commit identity)"
+                .into(),
+        );
+    }
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return refuse(format!(
+            "undoing {version}'s newest stage needs a reason (--reason)"
+        ));
+    }
+    // 2. The newest change.
+    let Some(c) = release.stages.last().cloned() else {
+        return refuse(format!("{version} has no stage change to undo"));
+    };
+    if !c.item.is_empty() {
+        return refuse(format!(
+            "{version}'s newest change is {}'s merge sending it back to {}: that is not undone",
+            c.item, c.stage
+        ));
+    }
+    if !c.undoes.is_empty() {
+        return refuse(format!(
+            "{version}'s newest change is already an undo (of {})",
+            c.undoes
+        ));
+    }
+    // 3. The stages that change entered: none may have moved main or tagged.
+    let prev = release
+        .stages
+        .len()
+        .checked_sub(2)
+        .map(|i| release.stages[i].clone());
+    let stages = cadence.stages();
+    let gates = cadence.effective_release_gates();
+    let from_index = prev
+        .as_ref()
+        .and_then(|p| stages.iter().position(|s| *s == p.stage));
+    if let Some(to_index) = stages.iter().position(|s| *s == c.stage) {
+        for i in from_index.map_or(0, |i| i + 1)..=to_index {
+            let Some((name, gate)) = gates.get(i) else {
+                continue;
+            };
+            let what = if gate.on_enter.contains(&ReleaseAction::MoveMain) {
+                "moved main"
+            } else if gate.on_enter.contains(&ReleaseAction::Tag) {
+                "tagged"
+            } else {
+                continue;
+            };
+            return refuse(format!(
+                "`{name}` {what}: main never moves back and a tag is never undone; start a patch \
+                 release instead"
+            ));
+        }
+    }
+    // 4. The code repository: no tag, and a branch to delete only when it may go.
+    let mut delete: Option<(String, String, Vec<CommitLine>)> = None;
+    match repo {
+        Some(repo) => {
+            if coderepo::tag_exists(repo, version) {
+                return refuse(format!(
+                    "{version} is tagged: a tag is never undone; start a patch release instead"
+                ));
+            }
+            let main = cadence
+                .main_branch
+                .clone()
+                .unwrap_or_else(|| coderepo::default_branch(repo));
+            if let Some(branch) = branch_to_delete(&release, prev.as_ref(), repo, version, &main)? {
+                let tip = coderepo::rev_parse(repo, &branch)?;
+                let commits = coderepo::commits_between(repo, &main, &branch)?
+                    .into_iter()
+                    .map(|k| CommitLine {
+                        sha: k.sha,
+                        subject: k.subject,
+                    })
+                    .collect();
+                delete = Some((branch, tip, commits));
+            }
+        }
+        None => {
+            if makes_branch(&release, prev.as_ref()) {
+                return refuse(needs_repo_text(version, &c.stage));
+            }
+        }
+    }
+    // 5. The one git step.
+    if let (Some(repo), Some((branch, _, _))) = (repo, &delete) {
+        coderepo::delete_branch(repo, branch)?;
+    }
+    // 6. The board.
+    let now_at = prev.map(|p| p.stage).unwrap_or_default();
+    let change = StageChange {
+        stage: now_at.clone(),
+        by: by.to_string(),
+        at: crate::now_rfc3339(),
+        reason: reason.to_string(),
+        origin: origin.to_string(),
+        undoes: c.stage.clone(),
+        ..Default::default()
+    };
+    {
+        let r = &mut releases[index];
+        r.stage = now_at.clone();
+        r.stages.push(change.clone());
+        if delete.is_some() {
+            r.branch.clear();
+        }
+    }
+    if let Err(e) = save(store, id, &releases) {
+        if let (Some(repo), Some((branch, tip, _))) = (repo, &delete) {
+            let back = coderepo::create_branch_from(repo, branch, tip).err();
+            return Err(rolled_back(e, back));
+        }
+        return Err(e);
+    }
+    let (branch_deleted, commits_removed) = delete
+        .map(|(b, _, commits)| (b, commits))
+        .unwrap_or_default();
+    Ok(Undone {
+        release: releases[index].clone(),
+        undone: change,
+        now_at,
+        branch_deleted,
+        commits_removed,
+    })
+}
+
+/// Whether the newest change is the one that made the release branch: the release has a branch and
+/// was at no stage before that change (DEF-034).
+fn makes_branch(release: &Release, prev: Option<&StageChange>) -> bool {
+    !release.branch.is_empty() && prev.is_none_or(|p| p.stage.is_empty())
+}
+
+/// The whole decision "is there a branch to delete, and may it go" for `release undo` (DEF-034):
+/// `None` when the undo leaves the branch alone; the branch when it goes; a refusal naming why it
+/// may not. It goes only when every commit it has beyond `main` is kanbanr's (`Release <V>: …`),
+/// and it is neither checked out nor on a remote.
+fn branch_to_delete(
+    release: &Release,
+    prev: Option<&StageChange>,
+    repo: &Path,
+    version: &str,
+    main: &str,
+) -> Result<Option<String>> {
+    let branch = release.branch.as_str();
+    if !makes_branch(release, prev) || !coderepo::branch_exists(repo, branch) {
+        return Ok(None);
+    }
+    // DEF-071: an adopted branch is kept.
+    if let Some(path) = coderepo::worktree_of(repo, branch) {
+        return Err(CoreError::Unsupported(format!(
+            "`{branch}` is checked out in {}: switch that worktree off it first",
+            path.display()
+        )));
+    }
+    let tip = coderepo::rev_parse(repo, branch)?;
+    let remote = match coderepo::upstream_of(repo, branch) {
+        Some(up) => Some(up),
+        None => coderepo::remote_branches_containing(repo, &tip)?
+            .into_iter()
+            .next(),
+    };
+    if let Some(remote) = remote {
+        return Err(CoreError::Unsupported(format!(
+            "`{branch}` is on {remote}: delete it there first"
+        )));
+    }
+    let prefix = format!("Release {version}:");
+    if let Some(k) = coderepo::commits_between(repo, main, branch)?
+        .into_iter()
+        .find(|k| !k.subject.starts_with(&prefix))
+    {
+        return Err(CoreError::Unsupported(format!(
+            "`{branch}` has a commit kanbanr did not write: {} {}; delete the branch yourself if \
+             you mean to",
+            short(&k.sha),
+            k.subject
+        )));
+    }
+    Ok(Some(branch.to_string()))
 }
 
 /// The configured notes file at the release tip, when there is one to read (DEF-005).
@@ -8584,5 +8837,204 @@ pub(crate) mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // ---- DEF-034: release undo ----
+
+    /// Candidate makes the branch, review is a board-only stage, tag moves main and tags.
+    const UNDO: &str = "release_stages: [candidate, review, tag]\n\
+         release_gates:\n  candidate: { on_enter: [branch] }\n  \
+         tag: { on_enter: [move_main, tag] }\n";
+
+    fn undo(store: &Store, repo: Option<&Path>) -> crate::error::Result<super::Undone> {
+        super::undo_stage(
+            store,
+            "shop",
+            "v1",
+            "Ada",
+            "promoted by mistake",
+            "terminal",
+            repo,
+        )
+    }
+
+    fn release_v1(store: &Store) -> super::Release {
+        super::load(store, "shop")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.version == "v1")
+            .unwrap()
+    }
+
+    fn stage_names(store: &Store) -> Vec<String> {
+        store.load_meta("shop").unwrap().config.cadence.stages()
+    }
+
+    /// DEF-034 R-4: undo steps the newest stage back; undoing the change that made the release
+    /// branch deletes it when every commit on it is kanbanr's, and a board-only stage keeps it.
+    #[test]
+    fn undo_steps_the_newest_stage_back_and_deletes_a_branch_only_kanbanr_wrote() {
+        let (store, dir, repo) = board_and_repo("undo-ok");
+        configure(&store, UNDO);
+        let promote =
+            |to: &str| super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo));
+        promote("candidate").unwrap();
+        coderepo::git(&repo, &["checkout", "-q", "release/v1"]).unwrap();
+        commit_file(&repo, "NOTES", "notes\n", "Release v1: notes");
+        coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.now_at, "");
+        assert_eq!(done.undone.stage, "");
+        assert_eq!(done.undone.undoes, "candidate");
+        assert_eq!(done.undone.reason, "promoted by mistake");
+        assert_eq!(done.undone.origin, "terminal");
+        assert_eq!(done.branch_deleted, "release/v1");
+        assert_eq!(done.commits_removed.len(), 1, "{:?}", done.commits_removed);
+        assert_eq!(done.commits_removed[0].subject, "Release v1: notes");
+        assert!(!coderepo::branch_exists(&repo, "release/v1"));
+        let r = release_v1(&store);
+        assert_eq!(r.stage, "");
+        assert_eq!(r.branch, "");
+        assert_eq!(r.stages.len(), 2, "raw data is kept: {:?}", r.stages);
+        assert!(super::entered_stages(&r, &stage_names(&store)).is_empty());
+
+        // Candidate again, then the board-only review: undo goes back to candidate, branch kept.
+        promote("candidate").unwrap();
+        promote("review").unwrap();
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.now_at, "candidate");
+        assert_eq!(done.undone.undoes, "review");
+        assert_eq!(done.branch_deleted, "");
+        assert!(done.commits_removed.is_empty());
+        assert!(coderepo::branch_exists(&repo, "release/v1"));
+        let r = release_v1(&store);
+        assert_eq!(r.stage, "candidate");
+        assert_eq!(r.branch, "release/v1");
+        let entered = super::entered_stages(&r, &stage_names(&store));
+        assert_eq!(entered.into_iter().collect::<Vec<_>>(), ["candidate"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-034 R-4: undo refuses a tagged release, a stage that moved main or tagged, a branch on
+    /// a remote or checked out, a branch with a commit kanbanr did not write, a merge's send-back
+    /// and an undo — each with nothing changed.
+    #[test]
+    fn undo_refuses_a_tagged_pushed_or_main_moving_stage_and_a_foreign_commit() {
+        let (store, dir, repo) = board_and_repo("undo-no");
+        configure(&store, UNDO);
+        // Nothing to undo yet.
+        let err = undo(&store, Some(&repo)).unwrap_err().to_string();
+        assert!(err.contains("no stage change"), "{err}");
+        super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let before = super::load(&store, "shop").unwrap();
+        let unchanged = |err: String, want: &str| {
+            assert!(err.contains(want), "want `{want}` in: {err}");
+            assert_eq!(super::load(&store, "shop").unwrap(), before, "{err}");
+            assert!(coderepo::branch_exists(&repo, "release/v1"), "{err}");
+        };
+
+        // 1. Who and why.
+        let no_reason = super::undo_stage(&store, "shop", "v1", "Ada", " ", "", Some(&repo));
+        unchanged(no_reason.unwrap_err().to_string(), "needs a reason");
+        let no_by = super::undo_stage(&store, "shop", "v1", "", "why", "", Some(&repo));
+        unchanged(no_by.unwrap_err().to_string(), "must name who");
+
+        // 4. A person's commit on the branch: kept, and named.
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        let err = undo(&store, Some(&repo)).unwrap_err().to_string();
+        unchanged(err, "has a commit kanbanr did not write");
+        let err = undo(&store, Some(&repo)).unwrap_err().to_string();
+        assert!(err.contains("fix on the release"), "{err}");
+        coderepo::git(&repo, &["branch", "-f", "release/v1", "main"]).unwrap();
+
+        // 4. Tagged in the repository.
+        coderepo::git(&repo, &["tag", "v1", "release/v1"]).unwrap();
+        unchanged(
+            undo(&store, Some(&repo)).unwrap_err().to_string(),
+            "v1 is tagged",
+        );
+        coderepo::git(&repo, &["tag", "-d", "v1"]).unwrap();
+
+        // 4. Checked out in a worktree.
+        let wt = std::env::temp_dir().join(format!("kanbanr-undo-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        coderepo::git(
+            &repo,
+            &["worktree", "add", "-q", &wt.to_string_lossy(), "release/v1"],
+        )
+        .unwrap();
+        unchanged(
+            undo(&store, Some(&repo)).unwrap_err().to_string(),
+            "is checked out in",
+        );
+        coderepo::git(
+            &repo,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        )
+        .unwrap();
+
+        // 4. Without the code repository, the branch cannot go.
+        unchanged(
+            undo(&store, None).unwrap_err().to_string(),
+            "needs the code repository",
+        );
+
+        // 4. On a remote.
+        let bare = with_remote(&repo);
+        plain_git(&repo, &["push", "-q", "origin", "release/v1"]);
+        unchanged(
+            undo(&store, Some(&repo)).unwrap_err().to_string(),
+            "is on origin",
+        );
+
+        // 1. Tagged on the board.
+        let mut tagged = before.clone();
+        tagged[0].tagged_at = "2026-11-08T10:00:00Z".into();
+        super::save(&store, "shop", &tagged).unwrap();
+        let err = undo(&store, None).unwrap_err().to_string();
+        assert!(err.contains("v1 is tagged"), "{err}");
+        assert_eq!(super::load(&store, "shop").unwrap(), tagged);
+
+        // 2. A merge's send-back, and an undo, are not undone.
+        let mut sent_back = before.clone();
+        sent_back[0].stages.last_mut().unwrap().item = "FEAT-009".into();
+        super::save(&store, "shop", &sent_back).unwrap();
+        let err = undo(&store, None).unwrap_err().to_string();
+        assert!(err.contains("FEAT-009's merge"), "{err}");
+        let mut undone = before.clone();
+        undone[0].stages.last_mut().unwrap().undoes = "review".into();
+        super::save(&store, "shop", &undone).unwrap();
+        let err = undo(&store, None).unwrap_err().to_string();
+        assert!(err.contains("already an undo"), "{err}");
+
+        // 3. A stage that moved main and tagged.
+        let mut at_tag = before.clone();
+        at_tag[0].stage = "tag".into();
+        let mut to_tag = at_tag[0].stages[0].clone();
+        to_tag.stage = "tag".into();
+        at_tag[0].stages.push(to_tag);
+        super::save(&store, "shop", &at_tag).unwrap();
+        let err = undo(&store, None).unwrap_err().to_string();
+        assert!(
+            err.contains("`tag` moved main") && err.contains("patch release"),
+            "{err}"
+        );
+        assert_eq!(super::load(&store, "shop").unwrap(), at_tag);
+        assert!(coderepo::branch_exists(&repo, "release/v1"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 }
