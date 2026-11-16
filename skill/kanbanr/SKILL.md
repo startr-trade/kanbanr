@@ -240,7 +240,29 @@ known:
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
   version and the target date, then `kanbanr release add`. If an empty planned release exists,
-  reuse it; a mistaken empty one is `kanbanr release remove <V>`.
+  reuse it; a mistaken empty one is `kanbanr release remove <V>`. **The first release has a
+  checklist, finished before you name Promote to candidate** (the `next, for Claude:` lines
+  `release add` prints say the same):
+  (a) `kanbanr config release-prepare` with no flag shows what is configured. When it writes
+  nothing, propose it in **one** AskUserQuestion, the answers read from the repository and
+  recommended first: the manifest for `--version-file` (`Cargo.toml`, `package.json`,
+  `pyproject.toml`, or the file the person names), `CHANGELOG.md` for `--changelog` when it
+  exists, and the notes path (the doc site's releases folder if there is one,
+  `docs/src/releases/{version}.md` for an mdBook, else `RELEASES/{version}.md`). Run the command
+  the answer gives.
+  (b) When there is no `CHANGELOG.md`, offer a chore in the same message ("a CHANGELOG.md in Keep a
+  Changelog form, with an `## [Unreleased]` heading", planned into the release) and file it on yes,
+  by the chore rule below.
+  (c) When `kanbanr release stages` shows the tag waits for `ci`, or `kanbanr config show --json`
+  has `cadence.has_ci: true`, propose a **pipeline item** planned into this release, designed by
+  the rules in "Designing CI or a release workflow", as one multi-select question whose options are
+  the stages (format and lint, test, build, scan, publish or release) and the manual no-publish
+  run, not CI jobs alone.
+  (d) Only when (a) to (c) are done or declined, say what **Promote to candidate** will do (the
+  branch, the version files, the changelog heading, the notes draft) and that it is on the Releases
+  page. Never name the button first and configure afterwards. If the person has already clicked,
+  say the one command that prepares again (`kanbanr release promote <V> candidate`, theirs, in
+  their terminal; [DEF-057](/p/kanbanr/feature/DEF-057) gives the Releases page a button for it).
 - A started sprint is a record and is not edited. A sprint or release that holds items, a stage,
   a branch or a patch is not removed.
 
@@ -431,7 +453,10 @@ under "Lighter paths"; the built-in processes give `chore` one) skips the stages
 out. Do not walk a chore through stages its path omits, and do not pad answers to satisfy a stage it
 never meets: `kanbanr check` lists only the next stage on its path. Its first move asks the path's
 own conditions too (a statement, goals and requirements), so draft those once. Make one with
-`kanbanr feature add --kind chore`. The approval and the sign-offs the stage it enters asks for
+`kanbanr feature add --kind chore`. A chore you file yourself (a CHANGELOG, a pin, a pipeline) is
+asked for like one the person asks for: draft its statement, goal and one EARS invariant, and put
+them to the person as **one** AskUserQuestion (confirm, or change) before
+`kanbanr feature add --kind chore`; never file a chore with a blank definition. The approval and the sign-offs the stage it enters asks for
 stay the user's, as ever.
 
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
@@ -574,7 +599,11 @@ match a process by hand.
 
 The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
 `kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
-table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
+table — and offer to work through it. Before any `--override`, run `kanbanr check <CODE> --json`
+again and read the gate's gaps at that moment: a sign-off or approval given while you were asking
+closes them. If the gap is gone, move without `--override`. Override only a gap still there, with
+the user's reason; kanbanr records no override a gate did not need, and says `gate: the gate was
+met`. `--override "<reason>"` is for genuine emergencies, with the
 user's reason, and the item then needs ratifying. An override is yours to explain and the person's
 to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
 --reason … --source …`) and tell the person it waits on the Review page. The item does not ship
@@ -893,8 +922,9 @@ branches; fix it before going on.
   to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
-- **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
-  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: propose
+- **Designing CI or a release workflow.** Design the pipeline with the first release, or when the
+  user asks. The book's page *Designing CI and the release workflow* says the same; never point
+  the person at a source path. Make it an item with its own definition: propose
   separate stages (lint, test, build, then scan and publish in the release workflow), each a job
   that can be rerun alone, passing what it built to the next as an artifact; caches keyed on the
   lock files and saved from main only; a timeout on every job; a superseded run cancelled; and the
@@ -1337,7 +1367,7 @@ kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severi
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when Claude runs it
 kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back (the user's too); the earlier entry stays as history
-kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
+kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded (after a fresh `kanbanr check`)
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
 kanbanr mirror enable --repo owner/repo [--allow-public] | disable | status [--all]

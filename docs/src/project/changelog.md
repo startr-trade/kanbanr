@@ -13,6 +13,11 @@ All notable changes to kanbanr are documented here. The format follows
 - Setup can commit its `.kanbanr` marker, `CLAUDE.md` and `.gitignore` on the default branch of a
   repository that already has commits: the guard and the git hooks take that one `[no-ref]`
   commit, with the git model on or off, until the marker is committed (DEF-067).
+### Fixed
+
+- Claude proposes the release files, a CHANGELOG chore and the pipeline item when the first release
+  is planned, before it names Promote to candidate; `release add` says what the first release still
+  needs; an override a gate did not need is no longer recorded (DEF-056).
 
 ## [0.6.0] - 2026-11-14
 
