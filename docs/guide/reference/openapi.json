@@ -2481,6 +2481,67 @@
         ],
         "type": "object"
       },
+      "ItemRow": {
+        "description": "One item in the list.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "milestone": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "req_proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sprint": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tests_planned": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests_red": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "milestone",
+          "req_total",
+          "req_proven",
+          "tests_red",
+          "tests_planned",
+          "stale"
+        ],
+        "type": "object"
+      },
       "Judgement": {
         "properties": {
           "at": {
@@ -6618,6 +6679,121 @@
           }
         },
         "summary": "The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included"
+      }
+    },
+    "/api/projects/{project}/items": {
+      "get": {
+        "operationId": "getProjectsItems",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items of this kind, compared lower-cased and trimmed; `none` for items with no kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items in this status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items in this milestone.",
+            "in": "query",
+            "name": "milestone",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items whose definition serves this charter goal.",
+            "in": "query",
+            "name": "goal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items planned into this sprint.",
+            "in": "query",
+            "name": "sprint",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items assigned to this release.",
+            "in": "query",
+            "name": "release",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items whose evidence shows this: a red test, a planned test, stale evidence, a requirement unproven, every requirement proven, or a requirement with no test.",
+            "in": "query",
+            "name": "evidence",
+            "required": false,
+            "schema": {
+              "enum": [
+                "red",
+                "planned",
+                "stale",
+                "unproven",
+                "proven",
+                "untested"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ItemRow"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Items, filtered"
       }
     },
     "/api/projects/{project}/lessons": {

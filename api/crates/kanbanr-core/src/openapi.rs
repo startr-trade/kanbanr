@@ -477,6 +477,67 @@ pub fn public_routes() -> Vec<RouteDoc> {
             ],
             response: Response::Json(schema_of::<crate::docdrift::Latest>),
         },
+        // ---- items, filtered (FTR-048) ----
+        RouteDoc {
+            path: "/api/projects/{project}/items",
+            summary: "Items, filtered",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "kind",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items of this kind, compared lower-cased and trimmed; \
+                                  `none` for items with no kind.",
+                },
+                Param {
+                    name: "status",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items in this status.",
+                },
+                Param {
+                    name: "milestone",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items in this milestone.",
+                },
+                Param {
+                    name: "goal",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items whose definition serves this charter goal.",
+                },
+                Param {
+                    name: "sprint",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items planned into this sprint.",
+                },
+                Param {
+                    name: "release",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only items assigned to this release.",
+                },
+                Param {
+                    name: "evidence",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::OneOf(crate::items::Evidence::VALUES),
+                    description: "Only items whose evidence shows this: a red test, a planned \
+                                  test, stale evidence, a requirement unproven, every \
+                                  requirement proven, or a requirement with no test.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::items::ItemRow>>),
+        },
         // ---- activity ----
         RouteDoc {
             path: "/api/projects/{project}/activity",

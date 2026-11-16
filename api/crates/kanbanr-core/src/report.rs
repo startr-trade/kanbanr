@@ -66,6 +66,67 @@ impl Coverage {
     }
 }
 
+/// What one item's requirements and tests prove (FTR-048): the rule [`run`]'s coverage and stale
+/// lists use, and the one the items list and the Overview filter and count by.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ItemEvidence {
+    /// The item's requirements.
+    pub req_total: usize,
+    /// Requirements with at least one green test.
+    pub req_proven: usize,
+    /// Tests whose last result is red.
+    pub tests_red: usize,
+    /// Tests named but not yet run.
+    pub tests_planned: usize,
+    /// Requirements with no test named at all.
+    pub untested_reqs: usize,
+    /// A green on one of its requirements was recorded against a revision other than `head_rev`.
+    pub stale: bool,
+}
+
+/// A requirement is proven by at least one green test.
+fn requirement_proven(r: &crate::models::Requirement) -> bool {
+    r.tests.iter().any(|t| t.state == TestState::Green)
+}
+
+/// A green recorded against an older revision is a claim about code that has since changed;
+/// report it rather than counting it as proof.
+fn requirement_stale(r: &crate::models::Requirement, head: &str) -> bool {
+    r.tests
+        .iter()
+        .any(|t| t.state == TestState::Green && !t.checked_rev.is_empty() && t.checked_rev != head)
+}
+
+/// The evidence of one item, read against `head_rev` (no head: nothing is stale).
+pub fn item_evidence(f: &FeatureItem, head_rev: Option<&str>) -> ItemEvidence {
+    let mut e = ItemEvidence::default();
+    let Some(def) = &f.definition else {
+        return e;
+    };
+    for r in &def.requirements {
+        e.req_total += 1;
+        if requirement_proven(r) {
+            e.req_proven += 1;
+        }
+        if r.tests.is_empty() {
+            e.untested_reqs += 1;
+        }
+        e.tests_red += r.tests.iter().filter(|t| t.state == TestState::Red).count();
+        e.tests_planned += r
+            .tests
+            .iter()
+            .filter(|t| t.state == TestState::Planned)
+            .count();
+        if let Some(head) = head_rev
+            && requirement_stale(r, head)
+        {
+            e.stale = true;
+        }
+    }
+    e
+}
+
 /// Build the report for one project.
 pub fn run(store: &Store, id: &str, window: &Window, head_rev: Option<&str>) -> Result<Report> {
     let project = store.load_meta(id)?;
@@ -119,24 +180,17 @@ pub fn run(store: &Store, id: &str, window: &Window, head_rev: Option<&str>) -> 
             }
         }
 
-        if let Some(def) = &f.definition {
-            for r in &def.requirements {
-                coverage.total += 1;
-                if r.tests.iter().any(|t| t.state == TestState::Green) {
-                    coverage.proven += 1;
-                }
-                // A green recorded against an older revision is a claim about code that has since
-                // changed; report it rather than counting it as proof.
-                if let Some(head) = head_rev {
-                    let stale = r.tests.iter().any(|t| {
-                        t.state == TestState::Green
-                            && !t.checked_rev.is_empty()
-                            && t.checked_rev != head
-                    });
-                    if stale {
-                        stale_evidence.push(format!("{}/{}", f.code, r.id));
-                    }
-                }
+        // One rule for proof and staleness, shared with the items list and the Overview (FTR-048).
+        let evidence = item_evidence(f, head_rev);
+        coverage.total += evidence.req_total;
+        coverage.proven += evidence.req_proven;
+        if let (Some(head), Some(def)) = (head_rev, &f.definition) {
+            for r in def
+                .requirements
+                .iter()
+                .filter(|r| requirement_stale(r, head))
+            {
+                stale_evidence.push(format!("{}/{}", f.code, r.id));
             }
         }
     }
