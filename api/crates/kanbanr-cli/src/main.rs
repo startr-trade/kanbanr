@@ -1437,6 +1437,10 @@ enum PrepareCmd {
         /// `commit:<sha>`, or a bare label such as what the person said. At least one.
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
     },
     /// Prepare a promotion after the tag: what was checked, for the person to confirm.
     Promotion {
@@ -1450,6 +1454,10 @@ enum PrepareCmd {
         /// Where the evidence came from (see `prepare signoff --help`). At least one.
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
     },
     /// Prepare a gate result: what the run said, read from the CI, for the person to confirm.
     Gate {
@@ -1473,6 +1481,10 @@ enum PrepareCmd {
         /// Where else the evidence came from (see `prepare signoff --help`).
         #[arg(long = "source", value_name = "S")]
         sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
     },
     /// Prepare a ratification: why the work went ahead, for the person to confirm.
     Ratify {
@@ -1483,6 +1495,10 @@ enum PrepareCmd {
         /// Where the evidence came from (see `prepare signoff --help`). At least one.
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
     },
     /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
     /// change and it is still right, or a correction is filed. Run it from the project folder.
@@ -11229,6 +11245,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             note,
             doc,
             sources: s,
+            batch: _,
         } => (
             json!({
                 "kind": "signoff",
@@ -11243,6 +11260,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             stage,
             checked,
             sources: s,
+            batch: _,
         } => (
             json!({
                 "kind": "promotion",
@@ -11260,6 +11278,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             url,
             note,
             sources: s,
+            batch: _,
         } => {
             let sha = gate_commit(code_repo().as_deref(), commit.as_deref(), *passed)?;
             let mut fields = json!({"passed": *passed});
@@ -11315,7 +11334,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             note,
             rev,
             sources: s,
-            batch,
+            batch: _,
         } => {
             let mut fields = json!({"state": if *failed { "red" } else { "green" }});
             if let Some(note) = note {
@@ -11324,21 +11343,21 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             if let Some(rev) = rev {
                 fields["checked_rev"] = json!(rev);
             }
-            let mut body = json!({
-                "kind": "manual-test",
-                "subject": {"item": code, "requirement": requirement, "test": test},
-                "fields": fields,
-                "sources": sources(s)?,
-            });
-            if let Some(b) = batch {
-                body["batch"] = json!(b);
-            }
-            (body, format!("the result of {code} {requirement}"))
+            (
+                json!({
+                    "kind": "manual-test",
+                    "subject": {"item": code, "requirement": requirement, "test": test},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("the result of {code} {requirement}"),
+            )
         }
         PrepareCmd::Ratify {
             code,
             reason,
             sources: s,
+            batch: _,
         } => (
             json!({
                 "kind": "ratification",
@@ -11350,6 +11369,10 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
         ),
     };
     let mut body = body;
+    let batch = batch_of(cmd);
+    if let Some(b) = batch {
+        body["batch"] = json!(b);
+    }
     body["by"] = json!(verdict_author(cli, None)?);
     let resp = client.write_in(
         Method::Post,
@@ -11371,11 +11394,25 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
     }
     let page = kanbanr_core::prepared::page_of(v["kind"].as_str().unwrap_or(""));
     println!(
-        "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}",
+        "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}{}",
         v["id"].as_str().unwrap_or(""),
-        monitor_url()
+        monitor_url(),
+        batch.map(|b| format!(" in batch {b}")).unwrap_or_default()
     );
     Ok(())
+}
+
+/// The batch a prepare command names (FTR-037, FTR-055), for the five that take one: one place
+/// writes it to the record's body.
+fn batch_of(cmd: &PrepareCmd) -> Option<&String> {
+    match cmd {
+        PrepareCmd::Signoff { batch, .. }
+        | PrepareCmd::Promotion { batch, .. }
+        | PrepareCmd::Gate { batch, .. }
+        | PrepareCmd::Ratify { batch, .. }
+        | PrepareCmd::Test { batch, .. } => batch.as_ref(),
+        PrepareCmd::Text { .. } | PrepareCmd::List { .. } => None,
+    }
 }
 
 fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {

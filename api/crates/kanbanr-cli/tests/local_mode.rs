@@ -12244,6 +12244,182 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-055 R-1, R-3: `prepare gate`, `ratify`, `signoff` and `promotion` take `--batch`, and each
+/// record carries it; a batch name with whitespace is refused; `prepare text` takes no batch.
+#[test]
+fn every_prepare_command_takes_a_batch() {
+    let (base, work) = release_scratch_with("ftr055-batch", false);
+    assert_board_is_scratch(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let head = String::from_utf8_lossy(&git_in(&base, &work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    // A stage after the tag, so a promotion is a confirmation that can be prepared.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "cadence",
+            "--release-stages",
+            "candidate,main,tag,test",
+        ],
+    ));
+    for (stage, act) in [("main", "move_main"), ("tag", "tag"), ("test", "")] {
+        ok(run_in(
+            &base,
+            &work,
+            &["config", "release-stage", stage, "--on-enter", act],
+        ));
+    }
+    for stage in ["candidate", "main", "tag"] {
+        ok(run_in(
+            &base,
+            &work,
+            &["release", "promote", "v1.0.0", stage],
+        ));
+    }
+    // An item Claude moved past its gate with an override: a bypass to ratify. The gates hold
+    // once the charter is set.
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    let made = ok(run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Till",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let made: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Take the money\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "define", &code, "--file", def.to_str().unwrap()],
+    ));
+    ok(in_session(
+        &base,
+        &work,
+        &["move", &code, "In Progress", "--override", "outage"],
+    ));
+    let gate = ok(in_session(
+        &base,
+        &work,
+        &[
+            "prepare", "gate", "ci", "--passed", "--commit", &head, "--source", "the run",
+            "--batch", "wave-1",
+        ],
+    ));
+    let said = String::from_utf8_lossy(&gate.stdout);
+    assert!(said.contains(" in batch wave-1"), "{said}");
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "prepare", "ratify", &code, "--reason", "r", "--source", "s", "--batch", "wave-1",
+        ],
+    ));
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "prepare",
+            "signoff",
+            &code,
+            "docs-folded",
+            "--note",
+            "n",
+            "--source",
+            "s",
+            "--batch",
+            "wave-1",
+        ],
+    ));
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "prepare",
+            "promotion",
+            "v1.0.0",
+            "--checked",
+            "c",
+            "--source",
+            "s",
+            "--batch",
+            "wave-1",
+        ],
+    ));
+    let list = ok(in_session(&base, &work, &["--json", "prepare", "list"]));
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = v.as_array().unwrap();
+    let mut kinds: Vec<&str> = rows.iter().map(|r| r["kind"].as_str().unwrap()).collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        ["gate-result", "promotion", "ratification", "signoff"],
+        "{v}"
+    );
+    assert!(rows.iter().all(|r| r["batch"] == "wave-1"), "{v}");
+    // A batch name is part of a route: whitespace is refused.
+    let bad = in_session(
+        &base,
+        &work,
+        &[
+            "prepare", "ratify", &code, "--reason", "r", "--source", "s", "--batch", "a b",
+        ],
+    );
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("no slash or whitespace"),
+        "{}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
+    // `prepare text` is not the person's decision: it takes no batch (R-3).
+    let text = in_session(
+        &base,
+        &work,
+        &[
+            "prepare",
+            "text",
+            &code,
+            "doc:design/cart.md",
+            "--still-right",
+            "--why",
+            "w",
+            "--batch",
+            "wave-1",
+        ],
+    );
+    assert!(!text.status.success());
+    assert!(
+        String::from_utf8_lossy(&text.stderr).contains("unexpected argument '--batch'"),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A TOGAF board whose System Design gate also asks for `design-review` (FTR-028), and a runner
 /// for commands inside a Claude session (`CLAUDECODE=1`).
 fn delegation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
