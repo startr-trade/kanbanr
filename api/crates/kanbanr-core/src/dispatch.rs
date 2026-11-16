@@ -2514,7 +2514,9 @@ fn dispatch_routes(
         // ---- items, filtered (FTR-048) ----
         ("GET", ["projects", p, "items"]) => {
             let filter = crate::items::parse_filter(query)?;
-            ser(&crate::items::list(store, p, &filter)?)
+            // Staleness is judged against the code repository's HEAD; with none, nothing is stale.
+            let head = repo.and_then(|r| crate::coderepo::rev_parse(r, "HEAD").ok());
+            ser(&crate::items::list(store, p, &filter, head.as_deref())?)
         }
 
         // ---- project charter (FEAT-046) ----
