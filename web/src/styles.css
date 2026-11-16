@@ -47,11 +47,11 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   color: var(--muted);
 }
 .tab:hover { background: var(--panel-2); text-decoration: none; }
-.tab.active { background: var(--accent-2); color: var(--on-accent); }
+.tab.active { background: var(--accent-strong); color: var(--on-accent-strong); }
 
 /* Theme toggle in the topbar */
 .theme-toggle {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--panel-2);
   color: var(--muted);
   border-radius: 8px;
@@ -205,7 +205,7 @@ input:focus-visible,
    what "style it as a button rather than as a label" was asking for, and what shipping `.btn` on the
    label surface did not deliver. */
 .btn {
-  background: var(--control); border: 1px solid var(--border);
+  background: var(--control); border: 1px solid var(--border-strong);
   border-radius: 8px; padding: 6px 12px; color: var(--text); font-size: var(--fs-1);
   font-family: inherit; font-weight: 500; cursor: pointer;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
@@ -235,7 +235,7 @@ input:focus-visible,
 /* A primary action that is not available yet must not look like one that is (FEAT-212: the cut
    waits for main to be pushed): no accent fill, until it can be pressed. */
 .btn-primary:disabled {
-  background: var(--control); color: var(--muted); border-color: var(--border); filter: none;
+  background: var(--control); color: var(--muted); border-color: var(--border-strong); filter: none;
 }
 
 /* ---- review queue (FEAT-067, separated in FEAT-076) ---- */
@@ -263,7 +263,7 @@ input:focus-visible,
 .review-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
 /* The reason a decision is rejected (FEAT-153): a field, so it reads as one. */
 .review-reason {
-  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; min-width: 220px; flex: 1 1 220px;
 }
 .review-reason:focus { outline: none; border-color: var(--accent); }
@@ -425,7 +425,7 @@ input:focus-visible,
 
 /* ---- board search ---- */
 .board-search {
-  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; min-width: 280px;
 }
 .board-search:focus { outline: none; border-color: var(--accent); }
@@ -433,7 +433,7 @@ input:focus-visible,
 /* ---- per-page selector ---- */
 .per-page { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); }
 .per-page select {
-  padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border);
+  padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
 }
 .per-page select:focus { outline: none; border-color: var(--accent); }
@@ -445,7 +445,7 @@ input:focus-visible,
 }
 .pager button {
   width: 26px; height: 24px; line-height: 1; font-size: var(--fs-3);
-  border-radius: 6px; border: 1px solid var(--border);
+  border-radius: 6px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); cursor: pointer;
 }
 .pager button:hover:not(:disabled) { border-color: var(--accent); }
@@ -456,7 +456,7 @@ input:focus-visible,
 .code-copy {
   position: absolute; top: 6px; right: 6px;
   font-size: var(--fs-1); padding: 2px 8px; border-radius: 6px; cursor: pointer;
-  background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border-strong); color: var(--muted);
   opacity: 0; transition: opacity 0.15s;
 }
 .markdown pre:hover .code-copy { opacity: 1; }
@@ -541,7 +541,7 @@ input:focus-visible,
   font: inherit;
   color: var(--text);
   background: var(--panel-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 0.5rem 0.6rem;
   resize: vertical;
@@ -603,7 +603,7 @@ input:focus-visible,
 .prepared-panel dt { color: var(--muted); }
 .prepared-panel dd { margin: 0; white-space: pre-wrap; }
 .prepared-panel input {
-  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-strong);
   background: var(--panel); color: var(--text); font: inherit; min-width: 220px;
 }
 .prepared-sources { margin: 4px 0; padding-left: 18px; }

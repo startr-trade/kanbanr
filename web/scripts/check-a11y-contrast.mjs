@@ -4,6 +4,8 @@
 //   web::check_contrast_pairs — `failures(tokens.css)` is empty: every text pair 4.5:1, every
 //     boundary and the focus ring 3:1. Unit cases pin the formula: white on #5b8cff is 3.16 (the
 //     dark Passed button before the fix), black on white is 21, and aliases resolve.
+//   web::check_contrast_fixes_are_the_chosen_values (R-8) — the greys and the filled accent the
+//     person chose on 16 Nov 2026, option A for every row.
 //
 // Usage: npm run check:a11y-contrast
 import { readFileSync } from "node:fs";
@@ -40,6 +42,22 @@ function report(name, problems) {
     problems.push(`${f.theme}: ${f.pair.fg} on ${f.pair.bg} ${measured}, below ${f.pair.min}:1 (${f.pair.where})`);
   }
   report("web::check_contrast_pairs", problems);
+}
+
+// R-8
+{
+  const problems = [];
+  const themes = parseTokens(tokensCss);
+  const want = {
+    light: { "--text-subtle": "#616b78", "--warn": "#875f00", "--ok": "#177233" },
+    dark: { "--text-subtle": "#959daa", "--accent": "#5b8cff", "--on-accent": "#0f1115" },
+  };
+  for (const [theme, values] of Object.entries(want)) {
+    for (const [k, v] of Object.entries(values)) {
+      if (themes[theme][k] !== v) problems.push(`${theme}: ${k} is ${themes[theme][k]}, expected ${v}`);
+    }
+  }
+  report("web::check_contrast_fixes_are_the_chosen_values", problems);
 }
 
 if (failed) process.exit(1);
