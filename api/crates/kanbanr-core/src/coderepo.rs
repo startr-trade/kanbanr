@@ -233,7 +233,8 @@ pub fn staged_paths(root: &Path) -> Option<Vec<String>> {
     )
 }
 
-/// Does the repository's CLAUDE.md differ from HEAD's only inside the generated block (DEF-083)?
+/// Does the repository's CLAUDE.md differ from HEAD's only inside generated blocks, kanbanr's or
+/// any other tool's (DEF-083, DEF-092)?
 /// HEAD's copy is `git cat-file blob HEAD:CLAUDE.md`, or "" when HEAD has none. The candidates are
 /// the index's copy (`:CLAUDE.md`, when it has one) and, with `worktree`, `root/CLAUDE.md` on disk.
 /// True when any candidate satisfies `claude::block_only_change(head, candidate)`. Fails safe:
@@ -1214,6 +1215,32 @@ pub(crate) mod tests {
         std::fs::write(bare.join("CLAUDE.md"), format!("{BEGIN}\n\nA\n\n{END}\n")).unwrap();
         assert!(claude_block_refresh(&bare, true));
         let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    /// DEF-092 R-1: a rewrite of katalogr's block beside kanbanr's is a refresh, from the tree
+    /// and from the index; a line outside both blocks is not.
+    #[test]
+    fn a_katalogr_block_refresh_is_read_from_the_index_and_the_tree() {
+        use crate::claude::{BEGIN, END};
+        let file = |k: &str| {
+            format!(
+                "# p\n\n{BEGIN}\n\nA\n\n{END}\n\n<!-- katalogr:begin -->\n{k}\n<!-- katalogr:end -->\n"
+            )
+        };
+        let repo = scratch_repo("katalogr-refresh");
+        commit_file(&repo, "CLAUDE.md", &file("K1"), "claude");
+        assert!(!claude_block_refresh(&repo, true), "nothing changed");
+        std::fs::write(repo.join("CLAUDE.md"), file("K2")).unwrap();
+        assert!(claude_block_refresh(&repo, true), "the tree");
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(claude_block_refresh(&repo, true));
+        assert!(claude_block_refresh(&repo, false), "the index");
+        // A line outside both blocks is the author's: no refresh.
+        std::fs::write(repo.join("CLAUDE.md"), format!("{}mine\n", file("K2"))).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
