@@ -707,4 +707,122 @@ mod tests {
             "{ not json"
         );
     }
+
+    /// The hook script the binary carries, as `skill install` writes it.
+    fn embedded_script(rel: &str) -> String {
+        crate::skill::SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == rel)
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap_or_else(|| panic!("{rel} is not embedded"))
+    }
+
+    /// DEF-093 R-4, R-5: both SessionStart scripts print `kanbanr recover`, keep the 0.7.0
+    /// sequence only as the fallback for an older kanbanr, cut that fallback to the budget, and
+    /// still always exit 0.
+    #[test]
+    fn the_session_start_scripts_print_the_budgeted_summary() {
+        let cases = [
+            (
+                "hooks/session-start.sh",
+                "if ! kanbanr \"${PROJECT_ARGS[@]}\" recover 2>/dev/null; then",
+                "kanbanr \"${PROJECT_ARGS[@]}\" board",
+                "| head -c \"${KANBANR_SESSION_BUDGET:-8000}\"",
+            ),
+            (
+                "hooks/session-start.ps1",
+                "$out = & kanbanr recover 2>$null",
+                "& kanbanr board",
+                "| Out-String | ForEach-Object { $_.Substring(0, [Math]::Min($_.Length, $budget)) }",
+            ),
+        ];
+        for (rel, recover_call, board_call, cut) in cases {
+            let text = embedded_script(rel);
+            let at = |needle: &str| {
+                let found: Vec<_> = text.match_indices(needle).map(|(i, _)| i).collect();
+                assert_eq!(found.len(), 1, "{rel}: `{needle}` once, found {}", found.len());
+                found[0]
+            };
+            let (recover, board, cut) = (at(recover_call), at(board_call), at(cut));
+            assert!(
+                recover < board && board < cut,
+                "{rel}: the 0.7.0 sequence runs only when recover fails, and is cut to the budget"
+            );
+            let last = text
+                .lines()
+                .map(str::trim)
+                .rfind(|l| !l.is_empty() && !l.starts_with('#'));
+            assert_eq!(last, Some("exit 0"), "{rel} ends with exit 0");
+        }
+        #[cfg(target_os = "linux")]
+        run_session_start_against_a_stub();
+    }
+
+    /// Runs the embedded `session-start.sh` in a temp dir whose PATH starts with a stub
+    /// `kanbanr`: no real board is read or written (L-41). Linux only: macOS's bash 3.2 stops at
+    /// the script's `"${PROJECT_ARGS[@]}"` of an empty array under `set -u`.
+    #[cfg(target_os = "linux")]
+    fn run_session_start_against_a_stub() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_claude_dir(false);
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let board: String = (0..400)
+            .map(|n| format!("  - FTR-{n:03} [Planned] a planned item, long enough to add up [0/0]\n"))
+            .collect();
+        assert!(board.len() > 20_000);
+        std::fs::write(bin.join("board.txt"), &board).unwrap();
+        let stub = bin.join("kanbanr");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             case \"$1\" in\n\
+             recover) if [ -n \"${STUB_RECOVER:-}\" ]; then echo RECOVERED; exit 0; fi\n\
+             echo \"error: unrecognized subcommand 'recover'\" >&2; exit 2 ;;\n\
+             board) cat \"$(dirname \"$0\")/board.txt\" ;;\n\
+             *) exit 0 ;;\n\
+             esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let work = dir.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join(".kanbanr"), "project = \"stub\"\n").unwrap();
+        let script = dir.join("session-start.sh");
+        std::fs::write(&script, embedded_script("hooks/session-start.sh")).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let run = |recover_works: bool| {
+            let mut cmd = std::process::Command::new("bash");
+            cmd.arg(&script)
+                .current_dir(&work)
+                .env("PATH", &path)
+                .env_remove("KANBANR_PROJECT")
+                .env_remove("KANBANR_SESSION_BUDGET")
+                .env_remove("KANBANR_DATA_DIR");
+            if recover_works {
+                cmd.env("STUB_RECOVER", "1");
+            } else {
+                cmd.env_remove("STUB_RECOVER");
+            }
+            cmd.output().unwrap()
+        };
+
+        // A kanbanr with `recover`: its output is the hook's, and nothing else runs.
+        let out = run(true);
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "RECOVERED\n");
+
+        // An older kanbanr: the 0.7.0 sequence, cut to the budget, and still exit 0.
+        let out = run(false);
+        assert!(out.status.success(), "exit 0");
+        assert!(out.stdout.len() <= 8000, "{} bytes", out.stdout.len());
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.starts_with("## kanbanr — recovered project state (SessionStart)"));
+        assert!(text.contains("FTR-000"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
