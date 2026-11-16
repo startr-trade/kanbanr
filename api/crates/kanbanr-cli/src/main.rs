@@ -17,6 +17,8 @@ use clap::{Args, Parser, Subcommand};
 use kanbanr_core::coderepo;
 use kanbanr_core::docs::DocFolder;
 use kanbanr_core::project::{DataDirSource, Marker};
+// The words of one simple shell command, with quotes removed: core's reader (FTR-059).
+use kanbanr_core::shellwrap::shell_words;
 use kanbanr_core::{Project, project};
 use serde_json::{Map, Value, json};
 use std::io::{IsTerminal, Write};
@@ -4986,6 +4988,20 @@ fn heredoc_delimiters(line: &str) -> Vec<(String, bool)> {
     found
 }
 
+/// `part` from its first word past the leading wrappers [`kanbanr_core::shellwrap::command_start`]
+/// sets aside (FTR-059 R-3): `rtk git commit -m x` reads as `git commit -m x`. Words are taken as
+/// whitespace-separated, as [`commit_invocation`] reads them.
+fn past_wrappers(part: &str) -> &str {
+    let words: Vec<&str> = part.split_whitespace().collect();
+    let (start, _) = kanbanr_core::shellwrap::command_start(&words);
+    let mut rest = part;
+    for word in &words[..start] {
+        let at = rest.find(word).map_or(rest.len(), |i| i + word.len());
+        rest = &rest[at..];
+    }
+    rest
+}
+
 /// Is this shell command a `git commit`? Deliberately narrow: `git -C x commit`, `git commit`, and
 /// the same after a `&&`. Anything cleverer risks guessing wrong about someone's shell.
 fn is_git_commit(command: &str) -> bool {
@@ -4998,9 +5014,12 @@ fn is_git_commit(command: &str) -> bool {
 /// Scanning the whole command line for `-m` matched those two characters wherever they occurred —
 /// in prose, in another flag, in a heredoc the guard was never given — and refused commits whose
 /// message was perfectly correct.
+///
+/// The part is returned from its first word past any wrapper (`rtk`, `sudo`, `env A=1`, …,
+/// FTR-059), so every reader of it ([`skips_hooks`], [`inline_message`]) judges the bare command.
 fn commit_invocation(command: &str) -> Option<&str> {
-    command.split("&&").find(|part| {
-        let mut words = part.split_whitespace().skip_while(|w| *w == "sudo");
+    command.split("&&").map(past_wrappers).find(|part| {
+        let mut words = part.split_whitespace();
         if words.next().is_none_or(|w| !w.ends_with("git")) {
             return false;
         }
@@ -5045,10 +5064,8 @@ fn commit_directory(command: &str, base: &Path, home: Option<&Path>) -> Option<P
     let mut dir = base.to_path_buf();
     for part in command.split("&&") {
         let words = shell_words(part);
-        let mut words = words
-            .iter()
-            .map(String::as_str)
-            .skip_while(|w| *w == "sudo");
+        let (start, _) = kanbanr_core::shellwrap::command_start(&words);
+        let mut words = words[start..].iter().map(String::as_str);
         match words.next() {
             Some("cd") => {
                 dir = match words.next() {
@@ -5074,41 +5091,6 @@ fn commit_directory(command: &str, base: &Path, home: Option<&Path>) -> Option<P
         }
     }
     Some(dir)
-}
-
-/// The words of one simple shell command, with quotes removed and quoted text kept (`cd "a b"` is
-/// two words). Only what [`commit_directory`] needs: no expansion, no escapes beyond `\"`.
-fn shell_words(part: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut in_word = false;
-    let mut quote: Option<char> = None;
-    let mut prev = '\0';
-    for c in part.chars() {
-        match quote {
-            Some(q) if c == q && prev != '\\' => quote = None,
-            Some(_) => current.push(c),
-            None if c == '"' || c == '\'' => {
-                quote = Some(c);
-                in_word = true;
-            }
-            None if c.is_whitespace() => {
-                if in_word {
-                    words.push(std::mem::take(&mut current));
-                    in_word = false;
-                }
-            }
-            None => {
-                current.push(c);
-                in_word = true;
-            }
-        }
-        prev = c;
-    }
-    if in_word {
-        words.push(current);
-    }
-    words
 }
 
 /// Does this command line ask git to skip the commit hooks?
@@ -8172,54 +8154,30 @@ fn run_check_push(client: Option<&Backend>) -> anyhow::Result<()> {
     anyhow::bail!("{}", kanbanr_core::agentscope::push_refusal(&id))
 }
 
-/// The simple commands of a command line: split at `&&`, `||`, `;`, `|` and newlines, each as its
-/// words with leading `VAR=value` assignments and `sudo` set aside (returned separately).
+/// The simple commands of a command line: split at `&&`, `||`, `;`, `|` and newlines (core's
+/// [`kanbanr_core::shellwrap::simple_words`]), each as its words past every leading wrapper
+/// [`kanbanr_core::shellwrap::command_start`] sets aside (FTR-059), and what those wrappers
+/// carried, returned separately: their assignments (`A=1`) and their arguments (`-u CLAUDECODE`,
+/// `-u alice`), without the wrappers' own names. A reader of the first word so sees the bare
+/// command, and a reader of the assignments still sees `env -u CLAUDECODE`.
 fn simple_commands(command: &str) -> Vec<(Vec<String>, Vec<String>)> {
-    let mut parts = vec![String::new()];
-    let mut quote: Option<char> = None;
-    let chars: Vec<char> = command.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        match quote {
-            Some(q) => {
-                if c == q {
-                    quote = None;
-                }
-                parts.last_mut().unwrap().push(c);
-            }
-            None if c == '"' || c == '\'' => {
-                quote = Some(c);
-                parts.last_mut().unwrap().push(c);
-            }
-            None if c == ';'
-                || c == '\n'
-                || c == '|'
-                || (c == '&' && chars.get(i + 1) == Some(&'&')) =>
-            {
-                if c == '&' || (c == '|' && chars.get(i + 1) == Some(&'|')) {
-                    i += 1;
-                }
-                parts.push(String::new());
-            }
-            None => parts.last_mut().unwrap().push(c),
-        }
-        i += 1;
-    }
-    parts
-        .iter()
-        .map(|p| {
-            let words = shell_words(p);
+    const WRAPPER_WORDS: [&str; 8] = [
+        "sudo", "env", "command", "exec", "nohup", "time", "nice", "rtk",
+    ];
+    kanbanr_core::shellwrap::simple_words(command)
+        .into_iter()
+        .map(|mut words| {
+            let (start, _) = kanbanr_core::shellwrap::command_start(&words);
+            let rest = words.split_off(start);
             let mut env = Vec::new();
-            let mut rest = Vec::new();
+            let mut after_rtk = false;
             for w in words {
-                if rest.is_empty() && (w == "sudo" || w == "env") {
-                    continue;
-                }
-                if rest.is_empty() && w.contains('=') && !w.starts_with('-') {
+                let base = w.rsplit(['/', '\\']).next().unwrap_or(&w);
+                let is_name = !w.contains('=')
+                    && (WRAPPER_WORDS.contains(&base) || (after_rtk && w == "proxy"));
+                after_rtk = is_name && base == "rtk";
+                if !is_name {
                     env.push(w);
-                } else {
-                    rest.push(w);
                 }
             }
             (env, rest)
@@ -13366,6 +13324,182 @@ mod tests {
         assert!(scm_context_in(&other).is_err());
         assert!(scm_context_in(&session.join("../other")).is_err());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// FTR-059 R-3: a command run through a wrapper (a command-rewriting hook's `rtk`, or `rtk
+    /// proxy`, `env A=1`, `sudo`, `time`) is judged exactly as the bare command, by every reader on
+    /// the guard's path.
+    #[test]
+    fn the_guard_judges_a_wrapped_command_as_the_bare_one() {
+        use kanbanr_core::agentscope::Caller;
+        let base = Path::new("/work/repo");
+        let home = Some(Path::new("/home/me"));
+        let url = "http://h:1/p/p/review";
+        let bare_commands = [
+            r#"git commit -m "x""#,
+            "git -C sub commit -m x",
+            "git commit --no-verify -m x",
+            "kanbanr approve FTR-1",
+        ];
+        // The bare answers are the ones expected, so the comparison below means something.
+        assert!(is_git_commit(bare_commands[0]));
+        assert_eq!(inline_message(bare_commands[0]).as_deref(), Some("x"));
+        assert_eq!(
+            commit_directory(bare_commands[1], base, home),
+            Some(base.join("sub"))
+        );
+        assert!(skips_hooks(bare_commands[2]));
+        assert!(!is_git_commit(bare_commands[3]));
+        assert!(verdict_refusal(bare_commands[3], url, Caller::Coordinator).is_some());
+        for bare in bare_commands {
+            for wrapper in ["rtk ", "rtk proxy ", "env A=1 ", "sudo ", "time "] {
+                let wrapped = format!("{wrapper}{bare}");
+                let w = wrapped.as_str();
+                assert_eq!(is_git_commit(w), is_git_commit(bare), "is_git_commit: {w}");
+                assert_eq!(
+                    commit_directory(w, base, home),
+                    commit_directory(bare, base, home),
+                    "commit_directory: {w}"
+                );
+                assert_eq!(skips_hooks(w), skips_hooks(bare), "skips_hooks: {w}");
+                assert_eq!(
+                    inline_message(w),
+                    inline_message(bare),
+                    "inline_message: {w}"
+                );
+                assert_eq!(
+                    verdict_refusal(w, url, Caller::Coordinator),
+                    verdict_refusal(bare, url, Caller::Coordinator),
+                    "verdict_refusal: {w}"
+                );
+            }
+        }
+        // Combined wrappers, and a wrapper's own flag that is not git's.
+        assert!(is_git_commit("sudo -u a env X=1 rtk git commit -m x"));
+        assert!(
+            !skips_hooks("sudo -n git commit -m x"),
+            "sudo's -n is not git's"
+        );
+        assert!(
+            verdict_refusal(
+                "rtk proxy env A=1 kanbanr approve FTR-1",
+                url,
+                Caller::Coordinator
+            )
+            .is_some()
+        );
+        // R-11: not wrappers, so not commits.
+        for command in [
+            "echo rtk git commit -m x",
+            "rtkx git commit -m x",
+            "my-rtk git commit -m x",
+        ] {
+            assert!(!is_git_commit(command), "{command}");
+        }
+        // `env -u CLAUDECODE` is set aside as a wrapper and still seen naming the caller.
+        assert!(
+            verdict_refusal(
+                "env -u CLAUDECODE kanbanr approve FTR-1",
+                url,
+                Caller::Coordinator
+            )
+            .is_some()
+        );
+        assert!(names_the_caller(&simple_commands(
+            "rtk env -u CLAUDECODE ls"
+        )));
+    }
+
+    /// FTR-059 R-4: kanbanr's guards only ever deny or stay silent. Whatever other hooks on the
+    /// same event do, kanbanr never allows a call nor rewrites its input, so it can never let
+    /// through what another tool denied. The one exception is the walkthrough's own
+    /// `AskUserQuestion` answerer, which only `kanbanr walkthrough answer` runs, on a scratch
+    /// project's settings.
+    #[test]
+    fn kanbanr_guards_only_ever_deny_or_stay_silent() {
+        // The patterns are assembled, so this test's own text does not match them.
+        let decision_key = format!("\"{}\":", "permissionDecision");
+        let rewrite_key = ["updated", "Input"].concat();
+        let main = include_str!("main.rs");
+        let squeezed: String = main.split_whitespace().collect::<Vec<_>>().join(" ");
+        let decisions: Vec<&str> = squeezed
+            .match_indices(&decision_key)
+            .map(|(i, _)| {
+                squeezed[i + decision_key.len()..]
+                    .trim_start()
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+            })
+            .collect();
+        assert!(
+            decisions.len() >= 3,
+            "the guards' decisions are found: {decisions:?}"
+        );
+        for value in &decisions {
+            assert_eq!(*value, "\"deny\"", "every permissionDecision is deny");
+        }
+        assert!(
+            !main.contains(&rewrite_key),
+            "no guard rewrites a call's input"
+        );
+        // `"allow"` as a decision's value, in any form. (`"allow": args.allow`, the workflow's
+        // transition flag sent to the board, is a key, not a decision.)
+        let allow_value = format!(": \"{}\"", "allow");
+        assert!(!squeezed.contains(&allow_value), "no guard allows a call");
+
+        // The exception: walkthrough/answer.rs's hook_output allows, with the questions answered.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let answer = std::fs::read_to_string(src.join("walkthrough/answer.rs")).unwrap();
+        assert!(answer.contains(&rewrite_key));
+        // hook_output is called only inside answer.rs, by run_hook ...
+        let mut files = Vec::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
+            }
+        }
+        let answer_path = src.join("walkthrough").join("answer.rs");
+        let call = |name: &str| format!("{}{name}(", "answer::");
+        for f in &files {
+            if *f == answer_path {
+                continue;
+            }
+            let text = std::fs::read_to_string(f).unwrap();
+            assert!(!text.contains(&call("hook_output")), "{}", f.display());
+            for line in text.lines().filter(|l| l.contains(&call("run_hook"))) {
+                assert!(
+                    f.ends_with("walkthrough/mod.rs"),
+                    "{} calls run_hook: {line}",
+                    f.display()
+                );
+            }
+        }
+        // ... and run_hook only in the `WalkthroughCmd::Answer` arm.
+        let module = std::fs::read_to_string(src.join("walkthrough/mod.rs")).unwrap();
+        let calls: Vec<usize> = module
+            .match_indices(&call("run_hook"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(calls.len(), 1, "run_hook is called once");
+        let arm = module
+            .find("WalkthroughCmd::Answer =>")
+            .expect("the Answer arm");
+        let next_arm = module[arm + 1..]
+            .find("WalkthroughCmd::")
+            .map(|i| arm + 1 + i)
+            .unwrap();
+        assert!(
+            arm < calls[0] && calls[0] < next_arm,
+            "run_hook is called from the Answer arm only"
+        );
     }
 
     /// FEAT-082: the guard located the message with `find("-m")` — two characters, anywhere in the
