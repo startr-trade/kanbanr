@@ -179,8 +179,10 @@ project"** (or anything equivalent):
      charter is agreed, or changed, after that commit, `kanbanr claude sync` changes `CLAUDE.md`
      on the default branch again: commit it alone at once,
      `git add CLAUDE.md && git commit -m "[no-ref] refresh the kanbanr block"`. The hooks and the
-     guard take that commit while nothing outside the kanbanr markers changed. Left uncommitted,
-     it makes Promote to main refuse the dirty checkout later.
+     guard take that commit while nothing outside the generated blocks changed: kanbanr's, or any
+     other tool's such as katalogr's (`<!-- <tool>:begin -->` … `<!-- <tool>:end -->`), so another
+     tool's sync is committed the same way, alone with a `[no-ref]` reason. Left uncommitted, it
+     makes Promote to main refuse the dirty checkout later.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
@@ -1231,8 +1233,9 @@ gates, tell the user what differs and ask which holds.
 - `kanbanr claude sync` writes a marked block into the project's `CLAUDE.md` with its purpose,
   goals, non-goals and constraints, and regenerates that block whenever the charter changes.
   Everything outside the markers belongs to the author. When it changes the block on the default
-  branch, commit `CLAUDE.md` alone with `[no-ref] refresh the kanbanr block`; on an item's branch
-  it goes in that item's next commit. **Never hand-copy the charter into instructions** —
+  branch, commit `CLAUDE.md` alone with `[no-ref] refresh the kanbanr block`; the same holds for
+  any other tool's generated block (katalogr's, say), committed alone with a `[no-ref]` reason. On
+  an item's branch it goes in that item's next commit. **Never hand-copy the charter into instructions** —
   reference it.
 - `kanbanr hooks install` registers the hooks for **this project** (`<project>/.claude/settings.json`),
   not the machine; `--global` is the opt-in. A checkout with no board carries none of them.
