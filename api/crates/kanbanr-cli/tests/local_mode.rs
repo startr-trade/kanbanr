@@ -13094,6 +13094,106 @@ fn git_tidy_deletes_merged_branches_after_one_confirmation_and_keeps_unmerged_on
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-096 R-1, R-4: a finished item's merged branch is listed and deleted even while a scope
+/// issued for it (never claimed, so no worktree) is in force; the listing and the deletion name the
+/// scope to revoke, and tidy itself leaves the scope in force.
+#[test]
+fn git_tidy_names_the_scope_left_on_a_finished_item() {
+    let (base, work) = togaf_scratch("def096-tidy");
+    git_model_board(&base, &work, false, false);
+    assert_board_is_scratch(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    // A scope needs the hooks that tell an agent from the coordinator (FEAT-214), as `ScopeFx`.
+    std::fs::create_dir_all(work.join(".claude")).unwrap();
+    let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
+    let settings = serde_json::json!({ "hooks": {
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PostToolUse": [hook("Bash", "kanbanr capture")],
+    }});
+    std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["todo", "add", "FEAT-001", "--description", "work"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "add", "FEAT-001", "TL-001", "--text", "one"],
+    ));
+    // The agent would switch to the branch in its own worktree: this checkout leaves it.
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let issued = ok(run_in(
+        &base,
+        &work,
+        &["scope", "issue", "build", "FEAT-001"],
+    ));
+    let id = issued.split_whitespace().nth(1).unwrap().to_string();
+    assert!(id.starts_with("SC-"), "{issued}");
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    ));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    let note = format!(
+        "  (scope {id} is still in force for FEAT-001, which is finished: revoke it with kanbanr \
+         scope revoke {id} --reason \"FEAT-001 finished\")"
+    );
+
+    let listed = ok(run_in(&base, &work, &["git", "tidy"]));
+    assert!(listed.contains("feat/FEAT-001-cart"), "{listed}");
+    assert!(listed.contains(&note), "{listed}");
+
+    let done = ok(run_in(&base, &work, &["git", "tidy", "--yes"]));
+    assert!(done.contains("deleted feat/FEAT-001-cart (was "), "{done}");
+    assert!(done.contains(&note), "{done}");
+    let left = ok(git_in(
+        &base,
+        &work,
+        &["branch", "--format=%(refname:short)"],
+    ));
+    assert!(
+        !left.lines().any(|b| b == "feat/FEAT-001-cart"),
+        "the branch survived: {left}"
+    );
+    // Tidy never revokes (R-4).
+    let scopes: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "scope", "list"]))).unwrap();
+    let s = scopes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("{id} not listed: {scopes}"));
+    assert_eq!(s["state"], "issued", "{s}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-051 R-1: closing a sprint says, in one line, that merged branches can go, and names the
 /// command; it deletes nothing itself.
 #[test]

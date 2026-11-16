@@ -4276,6 +4276,20 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
             let p = require_project(cli)?;
             let root =
                 scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            // A scope still in force for a finished item: name it so it can be revoked (DEF-096).
+            let held_note = |c: &Value| -> Option<String> {
+                let id = c["held_by"].as_str()?;
+                Some(match c["item"].as_str() {
+                    Some(item) => format!(
+                        "  (scope {id} is still in force for {item}, which is finished: revoke it \
+                         with kanbanr scope revoke {id} --reason \"{item} finished\")"
+                    ),
+                    None => format!(
+                        "  (scope {id} is still in force for a finished item: revoke it with \
+                         kanbanr scope revoke {id} --reason \"item finished\")"
+                    ),
+                })
+            };
             if !*yes {
                 let resp = client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))?;
                 if cli.json {
@@ -4299,6 +4313,9 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                             .get(..7)
                             .unwrap_or_default()
                     );
+                    if let Some(note) = held_note(c) {
+                        println!("{note}");
+                    }
                 }
                 println!(
                     "nothing deleted; run `kanbanr git tidy --yes` to delete these {}",
@@ -4306,6 +4323,20 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
+            // The outcome names no scope: read the listing first for the notes (DEF-096).
+            let notes: std::collections::BTreeMap<String, String> = if cli.json {
+                Default::default()
+            } else {
+                let listed: Value = serde_json::from_str(
+                    &client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))?,
+                )?;
+                listed["candidates"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c["branch"].as_str()?.to_string(), held_note(c)?)))
+                    .collect()
+            };
             let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/git/tidy"),
@@ -4317,15 +4348,19 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 println!("{}", pretty(&resp));
             } else {
                 for d in v["deleted"].as_array().into_iter().flatten() {
+                    let branch = d["branch"].as_str().unwrap_or_default();
                     println!(
                         "deleted {} (was {})",
-                        d["branch"].as_str().unwrap_or_default(),
+                        branch,
                         d["tip"]
                             .as_str()
                             .unwrap_or_default()
                             .get(..7)
                             .unwrap_or_default()
                     );
+                    if let Some(note) = notes.get(branch) {
+                        println!("{note}");
+                    }
                 }
                 for k in v["skipped"].as_array().into_iter().flatten() {
                     println!(

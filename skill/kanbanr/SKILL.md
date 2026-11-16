@@ -1017,7 +1017,9 @@ branches; fix it before going on.
   `kanbanr git tidy`. If it lists branches, ask once with AskUserQuestion: one question, "Delete
   these N merged branches?", the list in the preview, options Delete / Keep. On Delete run
   `kanbanr git tidy --yes` and report what went, with each tip. Never ask per branch, and never
-  delete a branch by hand with `git branch`. It is local only; the user prunes remotes.
+  delete a branch by hand with `git branch`. It is local only; the user prunes remotes. If tidy
+  names a scope still in force for a finished item, revoke it (`kanbanr scope revoke …`) after the
+  tidy.
 - **Designing CI or a release workflow.** Design the pipeline with the first release, or when the
   user asks. The book's page *Designing CI and the release workflow* says the same; never point
   the person at a source path. Make it an item with its own definition: propose
