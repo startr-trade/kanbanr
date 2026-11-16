@@ -48,7 +48,13 @@ for (const file of walk(root)) {
  * so this asserts the two vocabularies do not share a surface. It is the one visual property that
  * is mechanically checkable from the stylesheet, and it is the one that failed.
  */
-const css = readFileSync(new URL("../src/styles.css", import.meta.url).pathname, "utf8");
+// The stylesheet is styles.css plus the UI kit's files it imports first (FTR-046): the themes moved
+// to ui/tokens.css, so every check here reads the three together.
+const stylesheet = () =>
+  ["../src/styles.css", "../src/ui/tokens.css", "../src/ui/ui.css"]
+    .map((f) => readFileSync(new URL(f, import.meta.url).pathname, "utf8"))
+    .join("\n");
+const css = stylesheet();
 const ruleFor = (selector) => {
   const m = css.match(new RegExp(`\\n\\${selector}\\s*\\{([^}]*)\\}`));
   return m ? m[1] : null;
@@ -145,7 +151,7 @@ for (const [key, count] of seen) {
  * was looking at — which is why this is checked rather than eyeballed.
  */
 {
-  const css = readFileSync(new URL("../src/styles.css", import.meta.url).pathname, "utf8");
+  const css = stylesheet();
   const defined = new Set([...css.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((m) => m[1]));
   const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
   for (const token of [...used].sort()) {

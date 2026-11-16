@@ -1,0 +1,5 @@
+/*
+ * The UI kit's component rules (FTR-046). Tokens only: no hex colour, no rgb(), no px font-size —
+ * `npm run check:ui-tokens` holds this file to that, and every var() here must be defined in
+ * tokens.css. Each component's rules land with the component.
+ */

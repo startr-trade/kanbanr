@@ -1,0 +1,108 @@
+/*
+ * The monitor's design tokens (FTR-046). New CSS uses only the semantic names defined here; the
+ * old names (`--panel`, `--muted`, `--todo`, …) stay as aliases until every rule has moved
+ * (DEF-082 T3).
+ *
+ * A theme is selected on `:root` and on any `[data-theme]` element, so the /ui gallery can show the
+ * other theme in a nested wrapper. The aliases and derived tones sit in a block that matches every
+ * theme element, so they are recomputed inside a nested theme rather than inherited from the root.
+ *
+ * Decided by the person on 16 Nov 2026: the type scale (R-9), the severity palette (R-10), no page
+ * cap with prose at 80ch and 36 px rows (R-11). The greys and the filled accent are DEF-082's rows
+ * of the same decision; until DEF-082 T2 lands they keep today's values.
+ */
+
+/* Dark theme: the default. */
+:root, [data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1d212b;
+  --border: #2a2f3a;
+  --text: #e6e9ef;
+  --text-muted: #9aa3b2;
+  --text-subtle: #6e7681;
+  --accent: #5b8cff;
+  --accent-strong: #3a6df0;
+  --on-accent: #fff;     /* text on an accent-filled surface */
+  --ok: #3fb950;
+  --warn: #d29922;
+  --error: #ff7b72;
+  /* A control's own surface (FEAT-081). `.btn` used to reuse `--panel-2`, the label surface, so a
+     button was a chip with squarer corners — visibly a tag whatever its class said. */
+  --control: #2b313d;
+  --control-hover: #363d4c;
+  /* The kanbanr mark (FEAT-133): the startr.trade family palette, dark cut. */
+  --brand-ink: #aeb6e8;
+  --brand-done: #f49d1a;
+}
+
+/* Light theme — applied when <html data-theme="light"> (set by the toggle / OS preference). */
+[data-theme="light"] {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --border: #d7dce3;
+  --text: #1b1f27;
+  --text-muted: #5a6573;
+  --text-subtle: #8a93a0;
+  --accent: #2f5fe0;
+  --accent-strong: #3a6df0;
+  --on-accent: #fff;
+  --ok: #177233;
+  --warn: #875f00;
+  --error: #b3262f;
+  --control: #ffffff;
+  --control-hover: #f3f5f8;
+  --brand-ink: #26317e;
+  --brand-done: #e8871e;
+}
+
+/* Every theme: the scales, the tone pairs and the old names. */
+:root, [data-theme] {
+  /* Type (R-9): chips, hints and table meta 13 px; body and cells 14; section titles 16; page
+     sections 18; the page h1 22. */
+  --fs-1: 0.8125rem;
+  --fs-2: 0.875rem;
+  --fs-3: 1rem;
+  --fs-4: 1.125rem;
+  --fs-5: 1.375rem;
+
+  /* Space and radius. */
+  --sp-1: 0.25rem;
+  --sp-2: 0.5rem;
+  --sp-3: 0.75rem;
+  --sp-4: 1rem;
+  --sp-5: 1.5rem;
+  --sp-6: 2rem;
+  --r-1: 4px;
+  --r-2: 8px;
+
+  /* Layout (R-11): no page-width cap, prose held to a readable measure, single-line rows. */
+  --page-max: none;
+  --page-pad: 24px;
+  --prose-max: 80ch;
+  --row-h: 36px;
+
+  /* Severity (R-10): a pill's text is its tone's fg; its background is that fg at 12% over the
+     surface. */
+  --info: var(--accent);
+  --ok-fg: var(--ok);
+  --warn-fg: var(--warn);
+  --error-fg: var(--error);
+  --info-fg: var(--info);
+  --ok-bg: color-mix(in srgb, var(--ok-fg) 12%, var(--surface));
+  --warn-bg: color-mix(in srgb, var(--warn-fg) 12%, var(--surface));
+  --error-bg: color-mix(in srgb, var(--error-fg) 12%, var(--surface));
+  --info-bg: color-mix(in srgb, var(--info-fg) 12%, var(--surface));
+
+  /* The old names, as aliases of the new ones. */
+  --panel: var(--surface);
+  --panel-2: var(--surface-2);
+  --muted: var(--text-muted);
+  --todo: var(--text-subtle);
+  --accent-2: var(--accent-strong);
+  --good: var(--ok);
+  --wip: var(--warn);
+  --done: var(--ok);
+  --radius: 10px;
+}

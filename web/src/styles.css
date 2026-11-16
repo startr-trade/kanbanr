@@ -1,49 +1,7 @@
-:root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1d212b;
-  --border: #2a2f3a;
-  --text: #e6e9ef;
-  --muted: #9aa3b2;
-  --accent: #5b8cff;
-  --accent-2: #3a6df0;
-  --good: #3fb950;
-  --warn: #d29922;
-  --todo: #6e7681;
-  --wip: #d29922;
-  --done: #3fb950;
-  --on-accent: #fff;     /* text on an accent-filled surface */
-  /* A control's own surface (FEAT-081). `.btn` used to reuse `--panel-2`, the label surface, so a
-     button was a chip with squarer corners — visibly a tag whatever its class said. */
-  --control: #2b313d;
-  --control-hover: #363d4c;
-  --radius: 10px;
-  /* The kanbanr mark (FEAT-133): the startr.trade family palette, dark cut. */
-  --brand-ink: #aeb6e8;
-  --brand-done: #f49d1a;
-}
-
-/* Light theme — applied when <html data-theme="light"> (set by the toggle / OS preference). */
-:root[data-theme="light"] {
-  --bg: #f6f7f9;
-  --panel: #ffffff;
-  --panel-2: #eef1f5;
-  --border: #d7dce3;
-  --text: #1b1f27;
-  --muted: #5a6573;
-  --accent: #2f5fe0;
-  --accent-2: #3a6df0;
-  --good: #1a7f37;
-  --warn: #9a6700;
-  --todo: #8a93a0;
-  --wip: #9a6700;
-  --done: #1a7f37;
-  --on-accent: #fff;
-  --control: #ffffff;
-  --control-hover: #f3f5f8;
-  --brand-ink: #26317e;
-  --brand-done: #e8871e;
-}
+/* The design tokens and the UI kit come first (FTR-046): the colour themes that used to be
+   declared here now live in ui/tokens.css, and the old names stay there as aliases. */
+@import "./ui/tokens.css";
+@import "./ui/ui.css";
 
 * { box-sizing: border-box; }
 
@@ -122,10 +80,10 @@ input:focus-visible,
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
 
-.content { padding: 22px; max-width: 1200px; margin: 0 auto; }
-/* The 1200px measure is for reading. A board is not read line by line; it needs every column in
-   view, and a six-status workflow (TOGAF) needs ~1,550px — so the board takes the window (FEAT-107).
-   A browser without :has() keeps the capped page, which still works, with a scrollbar. */
+.content { padding: 22px; max-width: var(--page-max); margin: 0 auto; }
+/* The page is uncapped (FTR-046 R-11): `--page-max` is none, and prose is held to `--prose-max`
+   instead. A board needs every column in view — a six-status workflow (TOGAF) needs ~1,550px — so
+   it takes the window whatever the page width is (FEAT-107). */
 .content:has(> .board-page) { max-width: none; }
 
 .page-head { display: flex; align-items: center; gap: 12px; }
@@ -417,6 +375,7 @@ input:focus-visible,
 .diagram-problems h3 { font-size: 14px; margin: 4px 0 6px; color: var(--warn); }
 .diagram-problems ul { margin: 0; padding-left: 18px; }
 .diagram-problems li { margin: 4px 0; }
+.markdown { max-width: var(--prose-max); }
 .markdown img { max-width: 100%; height: auto; border-radius: 6px; }
 .markdown h1 { font-size: 22px; }
 .markdown h2 { font-size: 18px; }
