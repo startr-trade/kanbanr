@@ -837,6 +837,45 @@ impl Monitor {
         }
     }
 
+    /// Before a sign-off: when the item shows **Approve** on the Review page because its approval
+    /// lapsed or text was added since (`lapsed`, `added`), approve it again first, as the guide says
+    /// ("Approve first, then sign off"). Returns the item's code when it approved; a never-approved
+    /// item (`missing`) is left alone, since the runbook is to approve it.
+    pub fn reapprove_if_lapsed(
+        &self,
+        project: &str,
+        sel: &ItemSel,
+        by: &str,
+        step: &str,
+    ) -> Result<Option<String>> {
+        let Some(item) = self.resolve(project, sel)? else {
+            return Ok(None);
+        };
+        let lapsed = self.review(project)?.into_iter().any(|e| {
+            e["code"] == item.code.as_str()
+                && matches!(e["approval"].as_str(), Some("lapsed" | "added"))
+        });
+        if !lapsed {
+            return Ok(None);
+        }
+        let out = self.decide(
+            project,
+            &Decision::Approve(ItemSel::Code(item.code.clone())),
+            by,
+            step,
+            None,
+        )?;
+        if !out.ok() {
+            bail!(
+                "approving {} again answered {}: {}",
+                item.code,
+                out.status,
+                out.body
+            );
+        }
+        Ok(Some(item.code))
+    }
+
     /// What `--pause-at-decisions` polls: the record a decision changes, as the page reads it.
     pub fn fingerprint(&self, project: &str, decision: &Decision) -> Result<String> {
         let p = urlencode(project);
@@ -2034,6 +2073,63 @@ pub(crate) mod tests {
             pick(&items, &ItemSel::TitleMatches("readme|cart".into())),
             Pick::Ambiguous(_)
         ));
+    }
+
+    /// RC1 (harness half): a sign-off on an item whose approval lapsed approves it again first, as
+    /// the guide says, and says so; an item still approved is left alone.
+    #[test]
+    fn a_lapsed_approval_is_given_again_before_a_signoff() {
+        let (run, base, monitor) = scratch_board("reapprove");
+        let by = monitor.approver().unwrap();
+        let sel = ItemSel::Code("FEAT-001".into());
+        assert!(
+            monitor
+                .decide("shop", &Decision::Approve(sel.clone()), &by, "3.2", None)
+                .unwrap()
+                .ok()
+        );
+        assert_eq!(
+            monitor
+                .reapprove_if_lapsed("shop", &sel, &by, "3.5")
+                .unwrap(),
+            None
+        );
+        // The definition changes after the approval: it lapses, and the Review page offers Approve.
+        let store = kanbanr_core::Store::new(run.board());
+        let mut def = store
+            .load("shop")
+            .unwrap()
+            .feature("FEAT-001")
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.statement = "A shopper's basket survives between visits, for a week".into();
+        store
+            .set_feature_definition("shop", "FEAT-001", Some(def))
+            .unwrap();
+        let approve = Offer {
+            page: "review".into(),
+            button: "Approve".into(),
+            subject: Some(sel.clone()),
+        };
+        assert_eq!(
+            monitor.offers("shop", &approve, None).unwrap(),
+            Found::Offered
+        );
+        assert_eq!(
+            monitor
+                .reapprove_if_lapsed("shop", &sel, &by, "3.5")
+                .unwrap()
+                .as_deref(),
+            Some("FEAT-001")
+        );
+        assert!(matches!(
+            monitor.offers("shop", &approve, None).unwrap(),
+            Found::Absent(_)
+        ));
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

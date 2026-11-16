@@ -774,6 +774,28 @@ impl Running {
                 .offer
                 .clone()
                 .expect("lint: a decide step has an offer");
+            // A sign-off on an item whose approval lapsed: approve first, as the guide says. The
+            // person needs to know the lapse happened; it is not a failure.
+            if let (runbook::Decision::Signoff { item, .. }, Some(m), false) =
+                (decision, self.monitor.as_ref(), self.pause)
+            {
+                let by = m.approver().unwrap_or_else(|_| "the person".into());
+                match m.reapprove_if_lapsed(&project, item, &by, &id) {
+                    Ok(Some(code)) => self.finding(
+                        &id,
+                        "reapproved",
+                        format!("{code}'s approval had lapsed: the Review page showed Approve"),
+                        "approved again before the sign-off, as the guide says".into(),
+                    ),
+                    Ok(None) => {}
+                    Err(e) => self.finding(
+                        &id,
+                        "decision-failed",
+                        "approving again before the sign-off".into(),
+                        e.to_string(),
+                    ),
+                }
+            }
             self.screenshot(&id, &offer.page, "before");
             let found = match self.monitor.as_ref() {
                 Some(m) => m.offers(&project, &offer, Some(decision)),
