@@ -80,6 +80,7 @@ pub mod review;
 pub mod reviewgroups;
 pub mod scm;
 pub mod server;
+pub mod shellwrap;
 pub mod sprints;
 pub mod store;
 pub mod systembaseline;
