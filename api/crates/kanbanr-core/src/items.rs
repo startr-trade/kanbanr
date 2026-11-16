@@ -126,16 +126,29 @@ pub fn parse_filter(query: Option<&str>) -> Result<ItemFilter> {
 }
 
 /// The project's items that `filter` matches, in index order.
-pub fn list(store: &Store, p: &str, filter: &ItemFilter) -> Result<Vec<ItemRow>> {
+///
+/// `head_rev` is the code repository's HEAD, which staleness is judged against: a green recorded
+/// against another revision is stale. With no code repository (`None`), `stale` is never true
+/// and `evidence=stale` lists nothing.
+pub fn list(
+    store: &Store,
+    p: &str,
+    filter: &ItemFilter,
+    head_rev: Option<&str>,
+) -> Result<Vec<ItemRow>> {
     let project = store.load_meta(p)?;
     Ok(project
         .features
         .iter()
-        .filter_map(|f| row_if_matching(f, filter))
+        .filter_map(|f| row_if_matching(f, filter, head_rev))
         .collect())
 }
 
-fn row_if_matching(f: &FeatureItem, filter: &ItemFilter) -> Option<ItemRow> {
+fn row_if_matching(
+    f: &FeatureItem,
+    filter: &ItemFilter,
+    head_rev: Option<&str>,
+) -> Option<ItemRow> {
     let kind = normal_kind(f.kind.as_deref());
     if let Some(want) = &filter.kind {
         let want = want.trim().to_lowercase();
@@ -166,9 +179,7 @@ fn row_if_matching(f: &FeatureItem, filter: &ItemFilter) -> Option<ItemRow> {
             return None;
         }
     }
-    // The list reads no code repository, so it has no head to judge staleness against: `stale`
-    // here is what `item_evidence` says with no head.
-    let e = item_evidence(f, None);
+    let e = item_evidence(f, head_rev);
     if let Some(want) = filter.evidence {
         let holds = match want {
             Evidence::Red => e.tests_red > 0,
@@ -283,7 +294,7 @@ mod tests {
     /// The codes a query lists, sorted: which items match, apart from their order.
     fn listed(store: &Store, query: &str) -> Vec<String> {
         let filter = parse_filter(Some(query)).unwrap();
-        let mut codes: Vec<String> = list(store, "demo", &filter)
+        let mut codes: Vec<String> = list(store, "demo", &filter, None)
             .unwrap()
             .into_iter()
             .map(|r| r.code)
@@ -334,7 +345,7 @@ mod tests {
         );
 
         // No filter: every item, in index order (the order `load_meta` reads them in).
-        let all = list(&store, "demo", &ItemFilter::default()).unwrap();
+        let all = list(&store, "demo", &ItemFilter::default(), None).unwrap();
         let index: Vec<String> = store
             .load_meta("demo")
             .unwrap()
@@ -379,6 +390,7 @@ mod tests {
             &store,
             "demo",
             &parse_filter(Some("evidence=planned")).unwrap(),
+            None,
         )
         .unwrap()[0];
         assert_eq!(
@@ -510,6 +522,104 @@ mod tests {
                 stale: true,
             }
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-9: `evidence=stale` lists the items with a green recorded against a revision other than
+    /// HEAD; with no code repository (no head), nothing is stale.
+    #[test]
+    fn stale_evidence_matches_items_whose_green_test_predates_head() {
+        let (store, dir) = fixture();
+        let current = store
+            .add_feature("demo", "Current", "", "M", None)
+            .unwrap()
+            .code;
+        let behind = store
+            .add_feature("demo", "Behind", "", "M", None)
+            .unwrap()
+            .code;
+        let unrevved = store
+            .add_feature("demo", "Unrevved", "", "M", None)
+            .unwrap()
+            .code;
+        let failing = store
+            .add_feature("demo", "Failing", "", "M", None)
+            .unwrap()
+            .code;
+        for (code, test) in [
+            (&current, "c::ok"),
+            (&behind, "b::ok"),
+            (&unrevved, "u::ok"),
+            (&failing, "f::red"),
+        ] {
+            define(&store, code, &[], vec![requirement("R-1", &[test])]);
+        }
+        store
+            .set_test_state(
+                "demo",
+                &current,
+                "R-1",
+                "c::ok",
+                TestState::Green,
+                Some("head"),
+            )
+            .unwrap();
+        store
+            .set_test_state(
+                "demo",
+                &behind,
+                "R-1",
+                "b::ok",
+                TestState::Green,
+                Some("older"),
+            )
+            .unwrap();
+        // A green with no revision recorded is not judged stale.
+        store
+            .set_test_state("demo", &unrevved, "R-1", "u::ok", TestState::Green, None)
+            .unwrap();
+        // A red against an older revision is not stale evidence: only greens are.
+        store
+            .set_test_state(
+                "demo",
+                &failing,
+                "R-1",
+                "f::red",
+                TestState::Red,
+                Some("older"),
+            )
+            .unwrap();
+
+        let stale = parse_filter(Some("evidence=stale")).unwrap();
+        let at = |head: Option<&str>| -> Vec<String> {
+            list(&store, "demo", &stale, head)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.code)
+                .collect()
+        };
+        assert_eq!(at(Some("head")), [behind.clone()]);
+        // At the older revision, the item tested at `head` is the one behind it.
+        assert_eq!(at(Some("older")), [current.clone()]);
+        // No code repository: stale is never true.
+        assert!(at(None).is_empty());
+
+        // The row's flag says the same, and agrees with the report's stale list.
+        let rows = list(&store, "demo", &ItemFilter::default(), Some("head")).unwrap();
+        let flagged: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.stale)
+            .map(|r| r.code.as_str())
+            .collect();
+        assert_eq!(flagged, [behind.as_str()]);
+        let report = crate::report::run(
+            &store,
+            "demo",
+            &crate::report::Window::default(),
+            Some("head"),
+        )
+        .unwrap();
+        assert_eq!(report.stale_evidence, vec![format!("{behind}/R-1")]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
