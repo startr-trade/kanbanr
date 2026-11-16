@@ -269,6 +269,10 @@ jobs:
       # (DEF-057).
       - name: A candidate whose preparation changed offers Promote to candidate again
         run: npm run check:release-again
+      # A release button names the release and the stage, and a direct press asks before it acts
+      # (DEF-034).
+      - name: A release button names the release and asks first
+        run: npm run check:release-confirm
       # A release's notes show on the Releases page, editable only on a write-enabled monitor before
       # the cut (FEAT-216).
       - name: A release's notes show and are edited from the Releases page

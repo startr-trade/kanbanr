@@ -17,7 +17,7 @@ const base = {
   cut: false,
   confirm: false,
   ships: false,
-  button: "Promote to main",
+  button: "Promote v0.3.0 to main",
   conditions: [{ check: "items_finished", stage: "main", holds: true, detail: "2 planned item(s), all finished" }],
   steps: [{ action: "move_main", stage: "main", does: "fast-forwards main to release/v0.3.0 (abc1234)", noop: false }],
   release_tip: "abc1234def",
@@ -29,7 +29,7 @@ const base = {
 };
 const offer = {
   stage: "candidate",
-  button: "Promote to candidate again",
+  button: "Promote v0.3.0 to candidate again",
   does: ["commits the version 0.3.0 to release/v0.3.0"],
   ready: true,
   missing: [],

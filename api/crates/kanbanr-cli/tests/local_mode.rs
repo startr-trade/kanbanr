@@ -14402,3 +14402,85 @@ fn an_empty_boards_session_summary_keeps_its_full_form() {
     assert!(!text.contains("### Read more"), "{text}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-034 R-1: `kanbanr release list` prints releases newest first by version, in its text and
+/// in `--json`, whatever order they were added in; a version that does not parse comes after
+/// every parsed one, and a pre-release just before its release.
+#[test]
+fn release_list_prints_newest_first() {
+    let (base, work) = togaf_scratch("release-list-order");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The board is this test's own, under the temporary folder (L-41).
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let (board_c, base_c) = (board.canonicalize().unwrap(), base.canonicalize().unwrap());
+    assert!(
+        board_c.starts_with(&base_c),
+        "{board:?} is not under {base:?}"
+    );
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
+    ));
+    for v in [
+        "v0.3.0",
+        "v0.2.1",
+        "v0.10.0",
+        "v0.5.1",
+        "next",
+        "v0.5.0-rc.1",
+        "v0.5.0",
+    ] {
+        ok(run_in(&base, &work, &["release", "add", v]));
+    }
+    let want = [
+        "v0.10.0",
+        "v0.5.1",
+        "v0.5.0",
+        "v0.5.0-rc.1",
+        "v0.3.0",
+        "v0.2.1",
+        "next",
+    ];
+
+    let text = ok(run_in(&base, &work, &["release", "list"]));
+    let printed: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert_eq!(printed, want, "{text}");
+
+    let json = ok(run_in(&base, &work, &["--json", "release", "list"]));
+    let releases: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let listed: Vec<&str> = releases
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(listed, want, "{json}");
+    let _ = std::fs::remove_dir_all(&base);
+}

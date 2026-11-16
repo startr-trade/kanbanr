@@ -1405,7 +1405,7 @@ pub struct ReleasePlan {
     /// The merge that sent the release back and the steps from there, until it is cut (DEF-031).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub returned: Option<Returned>,
-    /// What the one button says: "Promote to main", "Cut v0.2.1", "Promote to main again".
+    /// What the one button says: "Promote v0.2.0 to main", "Cut v0.2.1", "Promote v0.2.0 to main again".
     pub button: String,
     pub conditions: Vec<PlanCondition>,
     pub steps: Vec<PlanStep>,
@@ -1447,7 +1447,7 @@ pub struct ReleasePlan {
 pub struct AgainOffer {
     /// The stage entered again: `plan.from`.
     pub stage: String,
-    /// What the button says: the Again plan's `button`, "Promote to candidate again".
+    /// What the button says: the Again plan's `button`, "Promote v0.2.0 to candidate again".
     pub button: String,
     /// What it would do, one sentence per step that runs: "commits the version 0.1.1 to release/v0.1.1".
     pub does: Vec<String>,
