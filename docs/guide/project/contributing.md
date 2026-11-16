@@ -43,10 +43,23 @@ From the repo root (the `Makefile` wraps the common flows):
 
 ```bash
 make build          # cargo build --release (api/) + web build
-make test           # cargo test --workspace (unit + Docker-less integration)
+make test           # scripts/test.sh: unit + Docker-less integration, through cargo-nextest when installed
 make install-cli    # build the monitor, then install the CLI with it and the skill baked in
 make itest          # packaging smoke: build the image + Docker smoke test (needs Docker)
 ```
+
+**The tests run through cargo-nextest when it is installed** (`cargo install cargo-nextest
+--locked`). `make test`, `make ci` and CI all run `scripts/test.sh`: it uses
+`cargo nextest run --locked --workspace --no-fail-fast`, then the doctests with
+`cargo test --doc` (nextest skips them), and falls back to `cargo test --locked --workspace
+--no-fail-fast` when nextest is not installed. `KANBANR_TEST_RUNNER=cargo` or `=nextest` forces
+the runner; `scripts/test.sh --ignored …` runs the ignored suite either way. Each nextest run
+writes a JUnit report with every test's time to `api/target/nextest/default/junit.xml`
+(`api/.config/nextest.toml`); `python3 scripts/check_junit.py <report>` checks it and names the
+slowest test. A test still running after 60 s is printed as `SLOW` (the `slow-timeout`), so a slow
+test shows on every run. `make ci` keeps the Test step's full output and report per run under
+`~/.cache/kanbanr-ci/runs/<time>-<sha>/` and never prunes them; CI uploads each system's report as
+the `junit-<os>` artifact.
 
 **Tests never touch a real board.** Cargo sets `KANBANR_BOARD_FENCE=temp` for everything it runs
 in `api/` (`api/.cargo/config.toml`), and any board outside the system temporary directory stops
@@ -84,7 +97,7 @@ It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellch
 ```bash
 cd api && cargo fmt --all --check          # formatting
 cd api && cargo clippy --locked --workspace -- -D warnings   # lints (warnings are errors)
-cd api && cargo test --locked --workspace
+scripts/test.sh                            # tests (nextest when installed, else cargo test)
 cd web && npm ci && npm run build          # web type-check + build
 ```
 
