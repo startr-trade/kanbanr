@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The skill asks the styling approach even when the person has already described the look, and
+  records only what they said as theirs. It has build agents run the project's formatter and linter
+  before each commit. It reads the queue and `kanbanr check` before saying what waits, gives page
+  addresses with `/p/<project>/`, and never names a kanbanr command as a test (DEF-084).
 - Claude keeps a test the person named with the kind and name they gave, uses `walkthrough:` tests
   only for what a kanbanr run can see on the board, the monitor or the remote, and settles test
   names in the runner's form before asking for approval, so its own corrections no longer lapse an
