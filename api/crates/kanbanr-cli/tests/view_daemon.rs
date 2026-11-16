@@ -1283,7 +1283,7 @@ fn release_plan_route_matches_promote() {
         let plan = get(&format!(
             "{url}/api/projects/shop/releases/v1.0.0/plan?fetch=1"
         ));
-        assert_eq!(plan["button"], "Promote to candidate", "{plan}");
+        assert_eq!(plan["button"], "Promote v1.0.0 to candidate", "{plan}");
         assert_eq!(plan["ready"], true, "{plan}");
         assert_eq!(plan["repo"], true, "{plan}");
         assert_eq!(
@@ -1319,10 +1319,10 @@ fn release_plan_route_matches_promote() {
         assert_eq!(done["branch_created"], "release/v1.0.0");
         assert_eq!(
             done["next"],
-            "next: `kanbanr release promote v1.0.0` (Promote to test)"
+            "next: `kanbanr release promote v1.0.0` (Promote v1.0.0 to test)"
         );
         let next = get(&format!("{url}/api/projects/shop/releases/v1.0.0/plan"));
-        assert_eq!(next["button"], "Promote to test", "{next}");
+        assert_eq!(next["button"], "Promote v1.0.0 to test", "{next}");
         assert_eq!(releases_yaml(&board)[0]["stage"], "candidate");
     }
 

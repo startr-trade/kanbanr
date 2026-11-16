@@ -9256,7 +9256,7 @@ fn promote_plan_changes_nothing() {
         &work,
         &["release", "promote", "v1.0.0", "--plan"],
     ));
-    assert!(said.contains("v1.0.0: Promote to candidate"), "{said}");
+    assert!(said.contains("v1.0.0: Promote v1.0.0 to candidate"), "{said}");
     assert!(said.contains("makes release/v1.0.0 from main"), "{said}");
     assert!(
         said.contains("ready: `kanbanr release promote v1.0.0 candidate`"),
@@ -9284,7 +9284,7 @@ fn promote_plan_changes_nothing() {
     let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
     assert!(done.contains("makes release/v1.0.0 from main"), "{done}");
     assert!(
-        done.contains("next: `kanbanr release promote v1.0.0` (Promote to test)"),
+        done.contains("next: `kanbanr release promote v1.0.0` (Promote v1.0.0 to test)"),
         "{done}"
     );
     let _ = std::fs::remove_dir_all(&base);
