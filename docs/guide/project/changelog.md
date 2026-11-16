@@ -19,6 +19,9 @@ All notable changes to kanbanr are documented here. The format follows
   nothing until the mode is set to delegated on the Review page (DOC-011).
 - An item whose branch is merged into its release still reads its changed docs as built, so
   docs-folded can be given after the merge (DEF-091).
+- The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
+  what is in progress, what waits for you and the sprint and release, and counts the rest, instead
+  of printing every item (DEF-093).
 
 ## [0.7.0] - 2026-11-16
 

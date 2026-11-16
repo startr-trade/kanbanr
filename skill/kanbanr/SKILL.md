@@ -1333,6 +1333,10 @@ Before doing project work in a new or resumed session, **recover the state from 
 run `kanbanr board` and read the relevant feature items (`kanbanr feature show …`,
 `kanbanr todo list …`). Continue exactly where the project left off; do not restart from memory.
 
+The session start prints a summary sized to fit (`kanbanr recover`): what is in progress, what
+waits for the person, the sprint and release. Read `kanbanr board` when you need every item; never
+assume an item is absent because the summary did not list it.
+
 ## Keep the tool updated — before AND after every task
 
 Treat kanbanr updates as part of doing the work, not an afterthought:
@@ -1500,6 +1504,7 @@ kanbanr claude sync [--show]                    # refresh the generated block in
 kanbanr claude permissions [--write]            # the Claude Code allow rules for delegated commands; --write adds the missing ones to .claude/settings.local.json, with the person's yes
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
+kanbanr recover [--budget BYTES]                # the plan to resume from, sized for a session start (8000 bytes; $KANBANR_SESSION_BUDGET)
 kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
