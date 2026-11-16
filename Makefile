@@ -21,7 +21,7 @@ IMAGE ?= kanbanr:latest
 help:
 	@echo "Targets:"
 	@echo "  build         Build the Rust workspace + web SPA"
-	@echo "  test          Unit + Docker-less integration (CLI local writes + 'kanbanr serve' reads)"
+	@echo "  test          Unit + Docker-less integration, through cargo-nextest when installed (scripts/test.sh; KANBANR_TEST_RUNNER=cargo forces cargo test)"
 	@echo "  itest         Packaging smoke: build the image + run the Docker smoke test"
 	@echo "  ci            Every CI check that can run off GitHub, before a push (scripts/ci-local.sh)"
 	@echo "  audit         Supply chain: cargo deny + cargo audit + npm audit (fails on findings)"
@@ -43,14 +43,14 @@ build:
 	cd api && cargo build --locked --release
 
 test:
-	cd api && cargo test --locked
+	scripts/test.sh
 
 # Packaging smoke: run the real Docker image with the docker CLI and confirm it boots and
 # serves the read-only view. Functional coverage is in `make test` (no Docker). The test is
 # #[ignore]d, so build the image first.
 itest: docker-build
 	docker build -f docker/Dockerfile -t kanbanr:itest .
-	cd api && cargo test --locked -p kanbanr-cli -- --ignored
+	scripts/test.sh --ignored -p kanbanr-cli
 
 # The CLI alone, without the monitor baked in (`make install-cli` builds the monitor first).
 cli:
