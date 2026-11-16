@@ -10,50 +10,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
-- The guides name agile as the default process, and say a patch starts as a candidate (DOC-009)
-- The agile guide says chores skip Review and omits that a granted delegation does nothing until the mode changes (DOC-010)
-- A shared position, and a view ID (FTR-003)
-- Milestones are listed newest first (FTR-031)
-- The monitor says which kanbanr it runs, and warns when it is behind the code (FTR-036)
-- Walkthroughs that run themselves: the guide's runs driven headlessly, decisions taken on the scratch board by a scripted person, every question and board claim captured (FTR-037)
-
-### Fixed
-
-- The docs_updated gate ignores board docs linked under a design's Affects docs (DEF-047)
-- A release reads as shipped before its tag's workflow has passed (DEF-049)
-- Sprint close asks about each merged branch, and agent branches are left behind (DEF-051)
-- A board's README names kanbanr, not the project it tracks (DEF-053)
-- Claude doesn't prepare a project's first release: release files, the pipeline and override checks (DEF-056)
-- A build in a git worktree keeps the commit of its first build (DEF-058)
-- A granted delegation can't be used when Claude Code runs in auto mode (DEF-060)
-- kanbanr capture records nothing from Vitest 5, pytest -v or Playwright runs (DEF-061)
-- The stop check counts a sprint catch-up merge as agent work ahead of the board (DEF-063)
-- Ratifying an override at an already-ratified definition rev records nothing, and the Review page keeps asking (DEF-064)
-- The Claude docs guard judges a worktree's files by the main checkout's path and refuses the book, the changelog and the skill (DEF-065)
-- A position on a checkout with line-ending conversion reads dirty, where katalogr's contract now says clean (DEF-066)
-- A Python standard-library project's unittest results are never captured, so no test reaches green (DEF-068)
-- doctor warns that a chore has no Design section, though a chore's path has no design stage (DEF-069)
-- Claude re-kinds or renames a test the person named, and each change lapses the approval (DEF-073)
-- doctor judges a stage's docs_updated from when the item entered it, so a doc folded just before the move warns afterwards (DEF-074)
-- Agreeing the charter after setup leaves CLAUDE.md modified on main, so Promote to main refuses the dirty checkout (DEF-083)
-- The skill leaves the styling approach undecided, skips the formatter, misreports what is waiting, and names tests capture can't read (DEF-084)
-- The skill asks the styling approach even when the person has already described the look, and
-  records only what they said as theirs. It has build agents run the project's formatter and linter
-  before each commit. It reads the queue and `kanbanr check` before saying what waits, gives page
-  addresses with `/p/<project>/`, and never names a kanbanr command as a test (DEF-084).
-- Claude keeps a test the person named with the kind and name they gave, uses `walkthrough:` tests
-  only for what a kanbanr run can see on the board, the monitor or the remote, and settles test
-  names in the runner's form before asking for approval, so its own corrections no longer lapse an
-  approval (DEF-073).
-- Claude proposes the release files, a CHANGELOG chore and the pipeline item when the first release
-  is planned, before it names Promote to candidate; `release add` says what the first release still
-  needs; an override a gate did not need is no longer recorded (DEF-056).
-- `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
-  Playwright list-reporter lines (project, location and duration dropped); a name reported more
-  than once in a run is green only if every line passed (DEF-061).
-
-### Added
-
+- **`kanbanr claude permissions [--write]`: the Claude Code allow rules for delegated commands
+  (DEF-060).** In delegated mode it lists the rule each delegation in force needs
+  (`Bash(kanbanr signoff:*)` and the like) as allowed or missing; `--write` adds the missing ones to
+  the project's `.claude/settings.local.json`. The Review page and `kanbanr decisions grant` name
+  the missing rule.
+- **`kanbanr git tidy [--yes]` lists the merged branches that can go and deletes them locally
+  after one confirmation.** It covers finished items' merged branches and finished agents'
+  `worktree-agent-*` branches, never an unmerged or checked-out branch and never the remote, and
+  prints each deleted branch's tip (DEF-051).
 - **Walkthroughs run themselves (FTR-037).** `kanbanr walkthrough run <runbook>` follows a guide's
   runbook (a board doc under `walkthroughs/`) from an empty folder to a cut release with no person
   present: it drives a Claude Code session headlessly on a scratch project inside a fence, answers
@@ -71,20 +36,97 @@ All notable changes to kanbanr are documented here. The format follows
   `walkthrough` is automated evidence a run proves, never a manual check. `kanbanr serve --bind
   127.0.0.1:0` now answers on the port it got and names it. Two runbooks, `walkthroughs/togaf.md`
   and `walkthroughs/agile.md`, ship on the board.
+- **A shared position and a view ID (FTR-003).** `kanbanr position` prints the checkout's position
+  (commit plus a hash of uncommitted changes), computed byte for byte as katalogr computes it;
+  `kanbanr view docs` is the first view answered for a position, with an ID that repeats whenever
+  the position, the board and the question repeat. `--at` answers a clean commit from the
+  repository with nothing checked out (exit 6, HTTP 409, for a position no checkout holds). The
+  daemon serves `GET /projects/{p}/position` and `GET /projects/{p}/views/docs`.
+- The monitor shows the kanbanr version and commit it runs, and warns when the board was last
+  written by a newer one (FTR-036).
+
+### Changed
+
+- The guides and the setup interview recommend agile for a new project, and every release guide says a patch release starts at candidate (DOC-009).
+- **Milestones are listed newest first (FTR-031).** `kanbanr milestone list` (text and `--json`) and
+  the monitor's Milestones page put the highest code first, so the milestone being worked on is at
+  the top; `--oldest-first` gives the creation order. The Schedule view and a milestone's
+  dependencies keep their dependency order.
+
+### Fixed
+
+- The skill asks the styling approach even when the person has already described the look, and
+  records only what they said as theirs. It has build agents run the project's formatter and linter
+  before each commit. It reads the queue and `kanbanr check` before saying what waits, gives page
+  addresses with `/p/<project>/`, and never names a kanbanr command as a test (DEF-084).
+- Claude keeps a test the person named with the kind and name they gave, uses `walkthrough:` tests
+  only for what a kanbanr run can see on the board, the monitor or the remote, and settles test
+  names in the runner's form before asking for approval, so its own corrections no longer lapse an
+  approval (DEF-073).
+- Claude proposes the release files, a CHANGELOG chore and the pipeline item when the first release
+  is planned, before it names Promote to candidate; `release add` says what the first release still
+  needs; an override a gate did not need is no longer recorded (DEF-056).
+- `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
+  Playwright list-reporter lines (project, location and duration dropped); a name reported more
+  than once in a run is green only if every line passed (DEF-061).
+- The agile guide's chore path matches the process: a chore passes Review, where it merges after
+  **docs-folded**. The agile and scrum guides now say that **docs-folded** waits for a passed manual
+  check and that a granted delegation does nothing until the mode is set to delegated (DOC-010).
+- The `docs_updated` gate also requires the board docs a Design links under Affects docs to have
+  changed (DEF-047). A doc the Design only reads is marked `unchanged` on its line.
+- A release whose tag stage is last now reads as tagged until its tag workflow's passed result is
+  recorded, then ships (DEF-049).
+- Sprint close no longer needs one answer per merged branch, and a revoked scope's merged agent
+  branch is deleted (DEF-051).
+- **A granted delegation can be used when Claude Code runs in auto mode (DEF-060).** The allow rule
+  that lets the delegated command past auto mode's safety check is offered at the grant, and Claude
+  asks once before `kanbanr claude permissions --write` adds it.
+- **A board's README leads with the project it tracks, not with kanbanr (DEF-053).** The heading
+  names the project, its line links the code repository recorded on the project (`kanbanr init`
+  records the folder's remote; `kanbanr project edit --repository URL`, `--repository-private on`
+  names a private one without a link), and kanbanr is named as the tool below. `kanbanr doctor`
+  names a project with no recorded repository on a shared board, and a README whose generated
+  block is out of date; `kanbanr readme` and `kanbanr claude sync` refresh it.
+- The Releases page offers Promote to candidate again when a candidate's release-prepare
+  configuration changed since it was prepared; `release promote --plan` says the same under
+  `again:` (DEF-057).
+- **A build in a linked git worktree is stamped with the commit it was built from (DEF-058).**
+  `build.rs` watched `.git/HEAD` and `.git/refs/heads`, which exist only in a plain clone; in a
+  worktree nothing was watched and `--version` kept the first build's commit. It now asks git where
+  HEAD, the refs and `packed-refs` live (`git rev-parse --git-path`), so a checkout, a commit or a
+  fast-forward in a worktree reruns it. A test checks the crate twice in a scratch worktree; the
+  release gate runs it.
+- A flagged text stays flagged after an edit, and the Review page shows the edit and its diff;
+  Claude is refused an edit to another item's approved spec (DEF-050).
+- **A sprint catch-up merge is no longer agent work ahead of the board (DEF-063).**
+  `kanbanr scope drift`, the Stop hook, session start and `git doctor` count a build agent's own
+  non-merge commits, not the merges that bring a sprint, release or main branch into its item
+  branch, nor what those branches already hold.
+- **Ratifying an override Claude made at a definition the person had already ratified now records
+  it (DEF-064).** The repeat rule treated a second ratification at the same revision as already
+  recorded, while the Review page kept asking for the open override; now a ratification is a
+  repeat only when no override waits, so the second one is recorded, closes the override, and the
+  page stops asking. A disabled Approve or Ratify button on the Review page now says beneath it
+  what is missing and who provides it, instead of only in a tooltip.
+- The Claude docs guard judges a file in a linked worktree by its own repository's path, so the
+  book, the changelog and the skill are no longer refused there (DEF-065).
+- **A checkout with line-ending conversion reads clean (DEF-066).** A position compares each
+  working file as git would store it (`core.autocrlf`, `core.eol`, the `text`, `eol`, `crlf` and
+  `ident` attributes), so a Windows or `core.autocrlf` checkout no longer reads as changed and
+  kanbanr and katalogr give it the same position and view ID. Driver filters such as LFS are never
+  run.
+- `kanbanr capture` reads `python -m unittest -v` results as `module.Class.test` (Python 3.10's
+  form and a docstring's two-line form too; a failed subtest turns its test red), and tells Claude
+  when a test run printed nothing it can read, naming the forms it reads (DEF-068).
+- `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
+  is no longer warned that it has no Design section (DEF-069).
 - doctor no longer warns that a doc folded just before a move has not changed: it re-judges the
   `docs_updated` gate an item has passed from when the item entered the stage it moved from, as the
   move did (DEF-074).
-### Fixed
-
 - Agreeing or changing the charter after setup no longer leaves `CLAUDE.md` modified on the
   default branch: the guard and the git hooks take one `[no-ref]` commit of `CLAUDE.md` that
   changes only its generated kanbanr block, with the git model on or off, so Promote to main is
   not refused for it (DEF-083).
-### Fixed
-
-- The agile guide's chore path matches the process: a chore passes Review, where it merges after
-  **docs-folded**. The agile and scrum guides now say that **docs-folded** waits for a passed manual
-  check and that a granted delegation does nothing until the mode is set to delegated (DOC-010).
 
 ## [0.6.1] - 2026-11-16
 
