@@ -148,28 +148,76 @@ pub fn merge(existing: &str, block: &str) -> String {
     }
 }
 
-/// The author's part of a CLAUDE.md: the text before BEGIN and after END, each trimmed and joined
-/// by one "\n" (an empty part dropped), or the whole text trimmed when there is no BEGIN…END pair
-/// with END after BEGIN. "\r\n" is read as "\n" first. Pure (DEF-083).
-pub fn outside_block(text: &str) -> String {
+/// The name in a generated block's begin line, `None` for any other line. The line, trimmed,
+/// starts `<!-- `, then a name (`[A-Za-z0-9][A-Za-z0-9_-]*`), then `:begin`, followed by
+/// whitespace, `-` or nothing, and ends with `-->`. So `<!-- katalogr:beginning -->` is no begin
+/// line (DEF-092).
+fn begin_name(line: &str) -> Option<&str> {
+    let t = line.trim();
+    if !t.ends_with("-->") {
+        return None;
+    }
+    let rest = t.strip_prefix("<!-- ")?;
+    let len = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .unwrap_or(rest.len());
+    let name = &rest[..len];
+    if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let after = rest[len..].strip_prefix(":begin")?;
+    match after.chars().next() {
+        None | Some('-') => Some(name),
+        Some(c) if c.is_whitespace() => Some(name),
+        Some(_) => None,
+    }
+}
+
+/// The line, trimmed, is exactly `<!-- <name>:end -->` (DEF-092).
+fn is_end(line: &str, name: &str) -> bool {
+    line.trim() == format!("<!-- {name}:end -->")
+}
+
+/// The author's part of a CLAUDE.md: everything outside every generated block. A block runs from
+/// a begin line (`<!-- <name>:begin …-->`) to the first later line `<!-- <name>:end -->` with the
+/// same name, whatever the tool; a begin with no such end is ordinary text, and a begin inside an
+/// open block is that block's content. The kept segments between blocks are each trimmed, empty
+/// ones dropped, and joined by one "\n". "\r\n" is read as "\n" first. Pure (DEF-083, DEF-092).
+pub fn outside_blocks(text: &str) -> String {
     let t = text.replace("\r\n", "\n");
-    let Some(s) = t.find(BEGIN) else {
-        return t.trim().to_string();
-    };
-    let Some(e) = t[s..].find(END).map(|i| s + i) else {
-        return t.trim().to_string();
-    };
-    [t[..s].trim(), t[e + END.len()..].trim()]
-        .into_iter()
-        .filter(|part| !part.is_empty())
+    let lines: Vec<&str> = t.split('\n').collect();
+    let mut segments: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let close = begin_name(lines[i]).and_then(|name| {
+            (i + 1..lines.len()).find(|&j| is_end(lines[j], name))
+        });
+        match close {
+            Some(j) => {
+                segments.push(current.join("\n"));
+                current.clear();
+                i = j + 1;
+            }
+            None => {
+                current.push(lines[i]);
+                i += 1;
+            }
+        }
+    }
+    segments.push(current.join("\n"));
+    segments
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// `before` and `after` differ, and only inside the generated block:
-/// `before != after && outside_block(before) == outside_block(after)`. Pure (DEF-083).
+/// `before` and `after` differ, and only inside generated blocks (any tool's):
+/// `before != after && outside_blocks(before) == outside_blocks(after)`. Pure (DEF-083, DEF-092).
 pub fn block_only_change(before: &str, after: &str) -> bool {
-    before != after && outside_block(before) == outside_block(after)
+    before != after && outside_blocks(before) == outside_blocks(after)
 }
 
 /// The board path to suggest for a file the guard refuses, or `None` when the write is not the
@@ -607,6 +655,102 @@ mod tests {
         ));
         // HEAD with no CLAUDE.md reads as empty: a block-only file is a refresh.
         assert!(block_only_change("", &block_a));
+    }
+
+    /// DEF-083's `outside_block`, kept here to show `outside_blocks` reads kanbanr's block alone
+    /// the same way.
+    fn old_outside_block(text: &str) -> String {
+        let t = text.replace("\r\n", "\n");
+        let Some(s) = t.find(BEGIN) else {
+            return t.trim().to_string();
+        };
+        let Some(e) = t[s..].find(END).map(|i| s + i) else {
+            return t.trim().to_string();
+        };
+        [t[..s].trim(), t[e + END.len()..].trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// DEF-092 R-1, R-3: a change confined to any tool's generated block, katalogr's or one
+    /// kanbanr has never heard of, is a block refresh.
+    #[test]
+    fn a_change_confined_to_any_generated_block_is_a_block_only_change() {
+        let kan = |x: &str| format!("{BEGIN}\n\n{x}\n\n{END}\n");
+        let kat = |x: &str| format!("<!-- katalogr:begin -->\n{x}\n<!-- katalogr:end -->\n");
+        let k1 = format!("# app\n\n{}\n{}", kan("A"), kat("K1"));
+        let k2 = format!("# app\n\n{}\n{}", kan("A"), kat("K2"));
+        // Only katalogr's block changed.
+        assert!(block_only_change(&k1, &k2), "{k2}");
+        // katalogr's block added to a file that had only kanbanr's, and removed again.
+        let only_kanbanr = format!("# app\n\n{}", kan("A"));
+        assert!(block_only_change(&only_kanbanr, &k1));
+        assert!(block_only_change(&k1, &only_kanbanr));
+        // Both blocks changed at once.
+        let both = format!("# app\n\n{}\n{}", kan("B"), kat("K2"));
+        assert!(block_only_change(&k1, &both));
+        // The author's text between the blocks is still the author's.
+        let between = format!("# app\n\n{}\nmore\n{}", kan("A"), kat("K2"));
+        assert!(!block_only_change(&k1, &between));
+        // A third tool: no list of names, the marker form is the rule (R-3).
+        let t1 = format!("{k1}\n<!-- tool3:begin -->\nX\n<!-- tool3:end -->\n");
+        let t2 = format!("{k1}\n<!-- tool3:begin -->\nY\n<!-- tool3:end -->\n");
+        assert!(block_only_change(&t1, &t2));
+        assert!(block_only_change(&k1, &t2));
+        // `-->` right after `:begin` is a begin line too.
+        let tight = format!("{k1}\n<!-- t_4-x:begin-->\nX\n<!-- t_4-x:end -->\n");
+        assert!(block_only_change(&k1, &tight));
+        // With kanbanr's block alone, the reading is DEF-083's.
+        let first = merge("# app\n", &kan("A"));
+        let cases = [
+            "# app\n".to_string(),
+            first.clone(),
+            merge(&first, &kan("B")),
+            merge(&first.replace("# app", "# app2"), &kan("B")),
+            first.replace('\n', "\r\n"),
+            format!("# app\n\n{BEGIN}\n\nA\n"),
+            format!("{END}\n# app\n{BEGIN}\nA\n"),
+            format!("# app\n\n{}\n\nafter\n", kan("A")),
+            String::new(),
+            kan("A"),
+        ];
+        for case in &cases {
+            assert_eq!(outside_blocks(case), old_outside_block(case), "{case:?}");
+        }
+    }
+
+    /// DEF-092 R-2: a block is only one read by its whole markers; anything else is the author's.
+    #[test]
+    fn a_generated_block_is_read_by_its_whole_markers() {
+        let changed = |text: &str| !block_only_change(text, &text.replace("K1", "K2"));
+        // A name that only starts with `begin`.
+        assert!(changed(
+            "# app\n<!-- katalogr:beginning -->\nK1\n<!-- katalogr:end -->\n"
+        ));
+        // A begin with no end.
+        assert!(changed("# app\n<!-- katalogr:begin -->\nK1\n"));
+        // An end with another name.
+        assert!(changed(
+            "# app\n<!-- katalogr:begin -->\nK1\n<!-- other:end -->\n"
+        ));
+        // An end inside prose, on the same line as text.
+        assert!(changed(
+            "# app\n<!-- katalogr:begin -->\nK1 <!-- katalogr:end -->\n"
+        ));
+        // A begin line that does not close its comment.
+        assert!(changed(
+            "# app\n<!-- katalogr:begin\nK1\n<!-- katalogr:end -->\n"
+        ));
+        // A begin inside an open block is that block's content.
+        let nested = "# app\n<!-- a:begin -->\n<!-- b:begin -->\nK1\n<!-- a:end -->\n";
+        assert!(block_only_change(nested, &nested.replace("K1", "K2")));
+        assert_eq!(begin_name("  <!-- katalogr:begin -->  "), Some("katalogr"));
+        assert_eq!(begin_name(BEGIN), Some("kanbanr"));
+        assert_eq!(begin_name("<!-- -x:begin -->"), None);
+        assert!(is_end(END, "kanbanr"));
+        assert!(!is_end(END, "katalogr"));
     }
 
     /// FEAT-136: the board's remote becomes the address a contributor clones; a local path does not.
