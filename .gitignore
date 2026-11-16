@@ -42,3 +42,14 @@ docs/book
 dist-sbom/
 *.orig
 *.rej
+
+# The hosted site's deploy settings (FTR-030): secrets and state never enter
+# git; the *.example files stay tracked. deploy/tests/check_tfvars.py checks it.
+*.sensitive.auto.tfvars
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+deploy/compose/.env
+deploy/compose/boards.conf

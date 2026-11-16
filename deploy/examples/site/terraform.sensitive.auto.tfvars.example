@@ -1,0 +1,8 @@
+# Copy to terraform.sensitive.auto.tfvars (git ignores it) and fill in.
+# One entry per board that needs a credential, keyed by the board's name:
+# a token that can only read that repository (HTTPS remote), or a read-only
+# deploy key's private key in OpenSSH format (SSH remote). A public board needs
+# no entry. The value also ends up in state: see "Hosting a read-only monitor".
+board_credentials = {
+  board-a = "<read-only token or deploy key; delete the entry for a public board>"
+}
