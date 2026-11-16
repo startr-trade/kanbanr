@@ -417,7 +417,7 @@ fn names_in_line(path: &str, content: &str, state: &mut FileState, out: &mut BTr
 }
 
 /// The names a patch put in the code, by pattern. The input is the text of `git log -p -U0` for
-/// one commit (or any unified diff); lines of documentation files are ignored.
+/// one commit (or any unified diff); lines of documentation and test files are ignored (DEF-072).
 pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
     let mut out = BTreeSet::new();
     let mut file: Option<String> = None;
@@ -429,7 +429,7 @@ pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
             state = FileState::default();
             file = rest.rsplit_once(" b/").map(|(_, b)| b.to_string());
             if let Some(path) = file.as_deref()
-                && !is_documentation(path)
+                && !(is_documentation(path) || is_test_path(path))
             {
                 out.insert(Name::new(NameKind::File, path));
             }
@@ -449,7 +449,7 @@ pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
         let Some(content) = line.strip_prefix(['+', '-']) else {
             continue;
         };
-        if path != OPENAPI && is_documentation(path) {
+        if path != OPENAPI && (is_documentation(path) || is_test_path(path)) {
             continue;
         }
         names_in_line(path, content, &mut state, &mut out);
@@ -1907,6 +1907,23 @@ mod tests {
         );
         assert!(is_documentation("docs/x/y.png"));
         assert!(!is_documentation("api/src/lib.rs"));
+    }
+
+    /// DEF-072 R-3: a commit that changes only test files puts no name in the code, so it flags
+    /// no text; the same lines in shipped code do.
+    #[test]
+    fn a_test_only_commit_names_nothing() {
+        let line = ["+    run(\"--some-flag\", \"KANBANR_X\");"];
+        let patch = format!(
+            "{}{}",
+            file_patch("api/crates/kanbanr-cli/tests/local_mode.rs", &line),
+            file_patch("web/src/__tests__/x.ts", &line),
+        );
+        assert_eq!(names_in_diff(&patch), BTreeSet::new());
+        let shipped = names_in_diff(&file_patch("src/main.rs", &line));
+        assert!(has(&shipped, NameKind::Flag, "--some-flag"), "{shipped:?}");
+        assert!(has(&shipped, NameKind::Env, "KANBANR_X"), "{shipped:?}");
+        assert!(has(&shipped, NameKind::File, "src/main.rs"), "{shipped:?}");
     }
 
     /// DEF-072 R-4, R-5: test files are told by folder and file name alone, by constants; the
