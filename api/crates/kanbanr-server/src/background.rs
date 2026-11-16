@@ -135,9 +135,12 @@ impl Background {
             projects: Mutex::new(projects),
             notify: Notify::new(),
         });
+        // Subscribed before any task runs, so no change after start is missed.
+        let slices = inner.st.slices.subscribe();
         let tasks = vec![
             tokio::spawn(worker(Arc::clone(&inner))),
             tokio::spawn(head_poll(Arc::clone(&inner))),
+            tokio::spawn(on_slices(Arc::clone(&inner), slices)),
         ];
         Arc::new(Background { inner, tasks })
     }
@@ -296,6 +299,36 @@ async fn head_poll(inner: Arc<Inner>) {
     }
 }
 
+/// The tag the worker's own `Slices` carries after a run (A1 shared API §2).
+const DRIFT_TAG: &str = "drift";
+
+/// Every `Slices` for a project the worker keeps pokes it (DEF-081's slices). The worker's own
+/// event, tagged only `drift`, is ignored, or each pass would start the next. Missed events (the
+/// channel lagged) poke every project, since what changed is no longer known.
+async fn on_slices(
+    inner: Arc<Inner>,
+    mut rx: tokio::sync::broadcast::Receiver<crate::watcher::Slices>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+    loop {
+        match rx.recv().await {
+            Ok(s) => {
+                if !s.tags.is_empty() && s.tags.iter().all(|t| t == DRIFT_TAG) {
+                    continue;
+                }
+                inner.poke(&s.project);
+            }
+            Err(RecvError::Lagged(_)) => {
+                let projects: Vec<String> = inner.lock().keys().cloned().collect();
+                for p in projects {
+                    inner.poke(&p);
+                }
+            }
+            Err(RecvError::Closed) => break,
+        }
+    }
+}
+
 /// One pass for `project`: warm, then drift (only with a repo), then finish.
 async fn pass(inner: Arc<Inner>, project: String) {
     let repo = inner.lock().get(&project).and_then(|ps| ps.repo.clone());
@@ -307,6 +340,7 @@ async fn pass(inner: Arc<Inner>, project: String) {
         Ok(o) => o,
         Err(_) => Some(Err("drift run panicked".to_string())),
     };
+    let mut finished = false;
     let notify = {
         let mut map = inner.lock();
         let Some(ps) = map.get_mut(&project) else {
@@ -316,6 +350,7 @@ async fn pass(inner: Arc<Inner>, project: String) {
             Some(Ok((report, as_of))) => {
                 ps.last = Some((report, as_of));
                 ps.failure = None;
+                finished = true;
             }
             Some(Err(e)) => ps.failure = Some((e, kanbanr_core::now_rfc3339())),
             None => {}
@@ -329,6 +364,14 @@ async fn pass(inner: Arc<Inner>, project: String) {
             false
         }
     };
+    // Open pages re-read the latest result: the worker alone sends the `drift` tag.
+    if finished {
+        let _ = inner.st.slices.send(crate::watcher::Slices {
+            r#gen: inner.st.gens.of(Some(&project)),
+            project,
+            tags: vec![DRIFT_TAG.to_string()],
+        });
+    }
     if notify {
         inner.notify.notify_one();
     }
@@ -600,6 +643,111 @@ mod tests {
             l.state == LatestState::Fresh && l.as_of.is_some_and(|a| a.code_rev == head)
         })
         .await;
+        drop(bg);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
+    /// The tags of a board change, as the watcher sends them.
+    fn slices(tags: &[&str]) -> crate::watcher::Slices {
+        crate::watcher::Slices {
+            project: "demo".into(),
+            r#gen: 1,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slices_event_for_the_project_triggers_a_run() {
+        let (st, dir) = board("slices");
+        let code = code_repo("slices-code");
+        let (gated, release) = Gated::new();
+        let bg = start(&st, gated.clone(), &code);
+        until("the first run", || gated.runs() == 1).await;
+        release.send(Ok(report(0))).unwrap();
+        until("fresh", || {
+            bg.latest("demo", false).state == LatestState::Fresh
+        })
+        .await;
+        // Another project's change pokes nothing here.
+        let mut other = slices(&["items"]);
+        other.project = "elsewhere".into();
+        st.slices.send(other).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(gated.runs(), 1, "a change to another project runs nothing");
+        st.slices.send(slices(&["item:FTR-001", "items"])).unwrap();
+        until("a run after the board change", || gated.runs() == 2).await;
+        release.send(Ok(report(0))).unwrap();
+        until("fresh again", || {
+            bg.latest("demo", false).state == LatestState::Fresh
+        })
+        .await;
+        drop(bg);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_finished_run_sends_a_drift_slices_event() {
+        let (st, dir) = board("sends");
+        let code = code_repo("sends-code");
+        let mut rx = st.slices.subscribe();
+        let (gated, release) = Gated::new();
+        let bg = start(&st, gated.clone(), &code);
+        until("the first run", || gated.runs() == 1).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing is sent before a run finishes"
+        );
+        release.send(Ok(report(1))).unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("a slices event within 10 s")
+            .unwrap();
+        assert_eq!(got.project, "demo");
+        assert_eq!(got.tags, vec!["drift".to_string()]);
+        assert_eq!(got.r#gen, st.gens.of(Some("demo")));
+        assert_eq!(bg.latest("demo", false).state, LatestState::Fresh);
+
+        // A failed run sends nothing: the result open pages show has not changed.
+        bg.poke("demo");
+        until("the second run", || gated.runs() == 2).await;
+        release
+            .send(Err(kanbanr_core::CoreError::Refused("git broke".into())))
+            .unwrap();
+        until("the failure", || {
+            !bg.latest("demo", false).failed_at.is_empty()
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(rx.try_recv().is_err(), "a failed run sends no drift event");
+        drop(bg);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_pass_triggers_no_second_pass_through_its_own_drift_event() {
+        let (st, dir) = board("own");
+        let code = code_repo("own-code");
+        let mut rx = st.slices.subscribe();
+        let (gated, release) = Gated::new();
+        let bg = start(&st, gated.clone(), &code);
+        until("the first run", || gated.runs() == 1).await;
+        release.send(Ok(report(0))).unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the drift event")
+            .unwrap();
+        assert_eq!(got.tags, vec!["drift".to_string()]);
+        // Well past the debounce: the worker's own event started no pass.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(gated.runs(), 1, "the drift event pokes nothing");
+        assert_eq!(bg.latest("demo", false).state, LatestState::Fresh);
+        // A drift tag beside a board tag is a board change, and runs.
+        st.slices.send(slices(&["drift", "items"])).unwrap();
+        until("a run after a board change", || gated.runs() == 2).await;
+        release.send(Ok(report(0))).unwrap();
         drop(bg);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&code);

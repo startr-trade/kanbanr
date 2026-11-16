@@ -214,6 +214,15 @@ decide:
 Without the code repository the check is skipped, the Review page says so, and the sign-off is
 offered as before. A skipped check is never read as "no drift".
 
+On the monitor, drift is computed in the background, not when a page asks. A daemon started in the
+code repository runs it a couple of seconds after the board changes, or within 30 seconds of a new
+commit, one run at a time, and keeps the latest result in memory only. Pages show that result with
+the code revision and age it was computed at ("as of 3f2a1c9, 4 min ago"), add "recomputing…" while a
+newer run goes, and say "computing…" until the first run after a restart finishes, which takes about
+as long as `kanbanr drift` does. A monitor with no code repository says "Drift unavailable: this
+monitor has no code repository". Before a docs-folded sign-off, `kanbanr drift` is still the
+current read.
+
 ### When docs-folded is offered
 
 The `docs-folded` sign-off says the documents are folded into the record, so it is offered only

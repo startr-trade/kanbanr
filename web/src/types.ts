@@ -1302,3 +1302,40 @@ export interface Slices {
   gen: number;
   tags: string[];
 }
+
+/** The revisions and time a background drift result was computed at (FTR-045). */
+export interface DriftAsOf {
+  /** The board's HEAD commit, read before the run. */
+  board_rev: string;
+  /** The code repository's HEAD commit, read before the run. */
+  code_rev: string;
+  /** When the run finished, RFC 3339. */
+  finished_at: string;
+  /** How long the run took, in milliseconds. */
+  took_ms: number;
+}
+
+/** The board-wide drift report a background run produced (FTR-013, FTR-045). */
+export interface DriftReport {
+  generated_at: string;
+  since: string;
+  flags: DriftFlag[];
+}
+
+/** The latest background drift result for a project, from the daemon's memory (FTR-045):
+ * `GET /projects/{p}/drift/latest[?flags=false]`. */
+export interface DriftLatest {
+  state: "fresh" | "stale" | "computing" | "unavailable" | "failed";
+  /** Absent before the first result. */
+  as_of?: DriftAsOf;
+  /** A run is going beside the last result. */
+  recomputing?: boolean;
+  /** The flags in the last result; 0 when there is none. */
+  count: number;
+  /** Absent with `?flags=false` or before the first result. */
+  report?: DriftReport;
+  /** Why drift is unavailable, or the last run's error. */
+  reason?: string;
+  /** When the last run failed, RFC 3339, even beside a result. */
+  failed_at?: string;
+}

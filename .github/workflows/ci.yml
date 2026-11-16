@@ -338,6 +338,10 @@ jobs:
       # and one menu open at a time that Escape closes (FTR-047).
       - name: The monitor's navigation lists every page once, grouped into areas
         run: npm run check:nav
+      # The latest background drift result is labelled with its code revision and age, recomputing
+      # while a newer run goes, and unavailable without a code repository (FTR-045).
+      - name: The monitor labels background drift with its revision and age
+        run: npm run check:drift-age
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

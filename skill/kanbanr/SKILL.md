@@ -900,7 +900,9 @@ Before the move:
   the flag open after an edit and shows the person the edit and its diff. Another item's approved
   spec is refused to you; return a proposed change, do not edit it. The record carries who settled
   it and at which revision; a new commit that names the text again, or a later edit to it, puts it
-  back among those left. The person never fills these in;
+  back among those left. The person never fills these in. The monitor shows the last background run
+  with its age; `kanbanr drift` is still the authoritative, current read before a docs-folded
+  sign-off;
 - say **docs-folded** is waiting for the user's sign-off on the Review page only once it is offered,
   which is once no text is left to settle.
 
