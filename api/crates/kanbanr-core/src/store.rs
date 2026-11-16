@@ -2327,6 +2327,10 @@ impl Store {
             text: text.to_string(),
             state: TaskState::NotStarted,
             changed_at: None,
+            depends_on: vec![],
+            writes: vec![],
+            reads: vec![],
+            estimate_h: None,
         };
         list.tasks.push(task.clone());
         f.updated_at = now_rfc3339();

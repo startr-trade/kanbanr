@@ -46,6 +46,20 @@ pub struct Task {
     /// Absent on tasks no kanbanr since FEAT-214 has changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_at: Option<String>,
+    /// The tasks this one waits on (FTR-060): `T3` and `TL-002/T3` in this item,
+    /// `CODE/TL-001/T3` in another, `project:CODE/TL-001/T3` in another project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// The files this task writes (FTR-060): repository-relative, `/`-separated; a folder ends in
+    /// `/`. Empty means the footprint is unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<String>,
+    /// The files this task only reads (FTR-060), in the same form as `writes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<String>,
+    /// The estimate in agent-hours (FTR-060), more than 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate_h: Option<f64>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -55,6 +69,14 @@ pub struct Task {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
+}
+
+impl Task {
+    /// Whether the task records the files it writes (FTR-060); without them its footprint is
+    /// unknown and it runs alone within its item.
+    pub fn has_footprint(&self) -> bool {
+        !self.writes.is_empty()
+    }
 }
 
 /// A persistent todo-list attached to a feature item. A feature (acting as an epic) can hold
@@ -1543,6 +1565,43 @@ requirements:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FTR-060 R-1: a task without the new fields reads with their defaults and writes none of
+    /// them back; a task with them, and a key no kanbanr knows, round-trips, the key in `extra`.
+    #[test]
+    fn a_tasks_new_fields_are_skipped_when_empty_and_round_trip() {
+        let bare: Task = crate::yaml::from_str("key: T1\ntext: build it\nstate: NotStarted\n")
+            .expect("a task without the new fields reads");
+        assert!(bare.depends_on.is_empty());
+        assert!(bare.writes.is_empty());
+        assert!(bare.reads.is_empty());
+        assert_eq!(bare.estimate_h, None);
+        assert!(!bare.has_footprint());
+        assert!(bare.extra.is_empty());
+        let out = crate::yaml::to_string(&bare).unwrap();
+        for k in ["depends_on", "writes", "reads", "estimate_h"] {
+            assert!(!out.contains(k), "{k} is written for an empty task: {out}");
+        }
+
+        let full = "key: T3\ntext: wire it\nstate: InProgress\ndepends_on:\n- T1\n- FTR-041/TL-001/T1\nwrites:\n- api/src/lib.rs\n- docs/guide/\nreads:\n- api/src/models.rs\nestimate_h: 2.5\nfuture_key: kept\n";
+        let t: Task = crate::yaml::from_str(full).expect("a task with the new fields reads");
+        assert_eq!(t.depends_on, ["T1", "FTR-041/TL-001/T1"]);
+        assert_eq!(t.writes, ["api/src/lib.rs", "docs/guide/"]);
+        assert_eq!(t.reads, ["api/src/models.rs"]);
+        assert_eq!(t.estimate_h, Some(2.5));
+        assert!(t.has_footprint());
+        assert_eq!(t.extra.len(), 1, "only the unknown key is in extra: {:?}", t.extra);
+        assert_eq!(
+            t.extra.get("future_key"),
+            Some(&serde_json::Value::String("kept".into()))
+        );
+        let again: Task = crate::yaml::from_str(&crate::yaml::to_string(&t).unwrap()).unwrap();
+        assert_eq!(again.depends_on, t.depends_on);
+        assert_eq!(again.writes, t.writes);
+        assert_eq!(again.reads, t.reads);
+        assert_eq!(again.estimate_h, t.estimate_h);
+        assert_eq!(again.extra, t.extra);
+    }
 
     /// FTR-031 R-1: milestones list newest first, by the number after the last dash.
     #[test]

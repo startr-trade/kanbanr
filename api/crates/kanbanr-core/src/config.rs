@@ -135,6 +135,10 @@ pub struct ProjectConfig {
     /// case. Absent: every kind walks every stage, and absent stays absent on disk.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paths: BTreeMap<String, KindPath>,
+    /// How tasks are planned against each other (FTR-060). Absent: `CHANGELOG.md` is the one
+    /// append-only file, and absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "TaskConfig::is_default")]
+    pub tasks: TaskConfig,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -264,6 +268,45 @@ impl DiagramsConfig {
     /// Nothing set: what an absent key means, and why it stays absent.
     pub fn is_default(&self) -> bool {
         *self == DiagramsConfig::default()
+    }
+}
+
+/// How tasks are planned against each other (FTR-060).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TaskConfig {
+    /// Files every item appends to: two tasks writing one of them never conflict, the merge
+    /// queue orders them. Absent: `["CHANGELOG.md"]`.
+    #[serde(default = "TaskConfig::default_append_only")]
+    pub append_only: Vec<String>,
+    /// Keys a newer kanbanr wrote here, kept and written back unchanged.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+impl TaskConfig {
+    /// The append-only files when the project names none.
+    pub fn default_append_only() -> Vec<String> {
+        vec!["CHANGELOG.md".to_string()]
+    }
+
+    /// Nothing set: what an absent key means, and why it stays absent.
+    pub fn is_default(&self) -> bool {
+        *self == TaskConfig::default()
+    }
+}
+
+impl Default for TaskConfig {
+    fn default() -> Self {
+        TaskConfig {
+            append_only: TaskConfig::default_append_only(),
+            extra: Default::default(),
+        }
     }
 }
 
@@ -1085,6 +1128,7 @@ impl WorkflowFile {
             codes: Default::default(),
             coverage: Vec::new(),
             paths: path_keys(self.paths),
+            tasks: Default::default(),
         };
         config.schema_version = config.required_schema_version();
         config
