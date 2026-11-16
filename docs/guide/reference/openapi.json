@@ -5083,6 +5083,12 @@
       "Sprint": {
         "additionalProperties": true,
         "properties": {
+          "build_slots": {
+            "description": "How many builds can run at once beside those lanes (FTR-061). None when not stated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "capacity": {
             "description": "What the sprint can take, in the project's estimate unit.",
             "format": "double",
@@ -5112,6 +5118,12 @@
           "goal": {
             "description": "What this sprint is for, in a sentence.",
             "type": "string"
+          },
+          "lanes": {
+            "description": "How many agent lanes can work at once, for agent-built work: capacity stated as lanes\nand build slots instead of days (FTR-061). None when not stated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           },
           "name": {
             "type": "string"
@@ -5154,6 +5166,12 @@
         "additionalProperties": true,
         "description": "A sprint as a report: its record, what it holds, and how it burned down.",
         "properties": {
+          "build_slots": {
+            "description": "How many builds can run at once beside those lanes (FTR-061). None when not stated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "burndown": {
             "items": {
               "$ref": "#/components/schemas/BurndownDay"
@@ -5208,6 +5226,12 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "lanes": {
+            "description": "How many agent lanes can work at once, for agent-built work: capacity stated as lanes\nand build slots instead of days (FTR-061). None when not stated.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           },
           "name": {
             "type": "string"
