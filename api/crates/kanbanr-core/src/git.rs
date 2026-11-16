@@ -91,6 +91,29 @@ pub fn has_unpushed(dir: &Path) -> bool {
     dir.join(UNPUSHED_FILE).exists()
 }
 
+/// The git directory of the repository whose worktree is `dir` (FTR-035): `dir/.git` when it is a
+/// folder; the folder a `.git` file's `gitdir:` line names when it is a linked worktree's pointer
+/// (relative to `dir` when the line is relative); `dir/.git` otherwise. Read from the file system
+/// only, with no git process, so a hook can call it on every question it hears.
+#[must_use]
+pub fn git_dir(dir: &Path) -> std::path::PathBuf {
+    let dot_git = dir.join(".git");
+    if dot_git.is_file()
+        && let Ok(text) = std::fs::read_to_string(&dot_git)
+        && let Some(line) = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))
+    {
+        let named = Path::new(line.trim());
+        if !named.as_os_str().is_empty() {
+            return if named.is_absolute() {
+                named.to_path_buf()
+            } else {
+                dir.join(named)
+            };
+        }
+    }
+    dot_git
+}
+
 /// Ensure the data repo ignores machine-local files (the secrets file, the write lock, and the
 /// debounced-push marker), and stop tracking the secrets file if a pre-existing repo happened to
 /// track it (the file stays on disk; it just leaves the index/history going forward).
