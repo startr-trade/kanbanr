@@ -3,3 +3,31 @@
  * `npm run check:ui-tokens` holds this file to that, and every var() here must be defined in
  * tokens.css. Each component's rules land with the component.
  */
+
+/* Tabs (R-1, R-12): underlined, never a filled pill. The selected tab keeps --text and is marked by
+   a 2 px --accent bar under it, so it never depends on text on an accent fill. */
+.ui-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-4);
+}
+.ui-tab {
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: var(--r-1) var(--r-1) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-2);
+  cursor: pointer;
+}
+.ui-tab:hover { background: var(--surface-2); }
+.ui-tab[aria-selected="true"] {
+  box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 600;
+}
+.ui-tab[aria-disabled="true"] { color: var(--text-muted); cursor: not-allowed; }
+.ui-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ui-count { color: var(--text-muted); font-size: var(--fs-1); font-weight: 400; }

@@ -334,6 +334,10 @@ jobs:
       # work before they can (FTR-046).
       - name: The UI kit's renderer draws a component
         run: npm run check:ui-render
+      # Tabs with counts open on the requested, preferred or largest tab, are a real tablist, and
+      # mark the selected tab with an underline, never an accent fill (FTR-046).
+      - name: The UI kit's tabs pick, render and underline correctly
+        run: npm run check:ui-tabs
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
