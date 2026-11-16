@@ -41,6 +41,9 @@ All notable changes to kanbanr are documented here. The format follows
   tests or docs the item does not name (DEF-072).
 - Rejecting a prepared result on the Review page shows that it was rejected and hides the form,
   and a second press while the call is in flight sends nothing (DEF-090).
+- Releases list newest first by version on the Releases page and in `kanbanr release list`; a
+  release button names the release and the stage and asks before it acts; `kanbanr release undo
+  <V> --reason …` steps a mistaken stage back while nothing is pushed or tagged (DEF-034).
 
 ## [0.7.0] - 2026-11-16
 

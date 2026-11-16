@@ -396,15 +396,22 @@ same whichever you use. A read-only monitor shows the command instead.
   design-review, covers the whole spec as it was when you gave it. If the spec changes later, the
   item returns to the Review page showing only the changed lines, with the whole spec on request,
   and you sign again. The item's page marks the sign-off "changed since sign-off".
-- **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
-  and one button named for its next step — **Promote to \<next stage\>**, or **Cut \<VERSION\>**
-  for the last — until it ships. This is `kanbanr release promote <VERSION>`. Beside the button,
-  the page says what the step will do ("fast-forwards main to release/v0.3.0", "tags abc1234
-  …"); for the cut, it shows the commit it tags, what ships and what carries over, so one click
-  cuts. A candidate whose release-prepare configuration changed since it was prepared also offers
-  **Promote to candidate again**, named for what it redoes (`kanbanr release promote <VERSION>
-  candidate`); it is shown only while entering candidate again would change something. There is no
-  second confirmation: the stage's conditions keep it safe. Until the plan is
+- **Promote.** The Releases page lists releases newest first by version (v0.10.0 above v0.9.0, a
+  patch such as v0.5.1 above v0.5.0, a pre-release just below its release; versions that are not
+  numbers come last, in the order they were added), as `kanbanr release list` does. Each release
+  shows its stage, with the stage history on hover, and one button that names the release and its
+  next step — **Promote \<VERSION\> to \<next stage\>**, or **Cut \<VERSION\>** for the last —
+  until it ships. This is `kanbanr release promote <VERSION>`. Beside the button, the page says
+  what the step will do ("fast-forwards main to release/v0.3.0", "tags abc1234 …"); for the cut,
+  it shows the commit it tags, what ships and what carries over. A candidate whose release-prepare
+  configuration changed since it was prepared also offers **Promote \<VERSION\> to candidate
+  again**, named for what it redoes (`kanbanr release promote <VERSION> candidate`); it is shown
+  only while entering candidate again would change something. A press asks before it acts: the
+  button turns into the question ("Promote v0.6.0 to candidate?"), the same button and
+  **Cancel**. The second press promotes the release the button names; Cancel leaves it where it
+  was. A prepared confirmation and a confirmation after the tag keep their one press. After a
+  promotion the page names the way back: a stage taken by mistake is undone with
+  `kanbanr release undo <VERSION> --reason …` while nothing is pushed or tagged. Until the plan is
   ready the button is disabled and the page lists what is missing with its fix ("push main
   (`git push origin main`), then wait for CI"), with **Check again** to read the plan once more.
   A release with nothing planned into it shows no button, only how to plan into it. The steps act

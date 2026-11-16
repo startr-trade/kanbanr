@@ -145,9 +145,9 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 - **An override Claude makes** (inside a Claude Code session, or by a delegated agent) records
   where it was made, and waits on the Review page for you to ratify it even when the item was
   approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item
-  does not ship: Promote to main and the cut carry it, saying why. Your own overrides, from your
-  terminal or the monitor, are your decision already and wait for nothing. Ratifying records each
-  override on its own, even at a definition you already ratified.
+  does not ship: **Promote \<VERSION\> to main** and the cut carry it, saying why. Your own
+  overrides, from your terminal or the monitor, are your decision already and wait for nothing.
+  Ratifying records each override on its own, even at a definition you already ratified.
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
@@ -469,7 +469,7 @@ cadence:
 | action | does |
 |---|---|
 | `branch` | makes `release/<V>` from the line of integration, nothing checked out |
-| `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below); entering the stage again redoes it when the configuration changed since, which the Releases page offers as Promote to candidate again |
+| `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below); entering the stage again redoes it when the configuration changed since, which the Releases page offers as **Promote \<VERSION\> to candidate again** |
 | `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
 | `tag` | tags the release tip `<V>` ("Release <V>"); the stage holding it is the cut, and any stage after it only confirms |
 
