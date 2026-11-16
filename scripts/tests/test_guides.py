@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-GUIDES = ROOT / "docs/src/guides"
+GUIDES = ROOT / "docs/guide/guides"
 SKILL = ROOT / "skill/kanbanr/SKILL.md"
 PAGE = "delivery-pipeline.md"
 
@@ -81,7 +81,7 @@ class PipelineTests(unittest.TestCase):
 
     def the_index_and_summary_list_the_pipeline_page(self) -> None:
         self.assertTrue(PAGE in read(GUIDES / "index.md"))
-        self.assertTrue(f"guides/{PAGE}" in read(ROOT / "docs/src/SUMMARY.md"))
+        self.assertTrue(f"guides/{PAGE}" in read(ROOT / "docs/guide/SUMMARY.md"))
 
 
 class WordingTests(unittest.TestCase):
@@ -98,7 +98,7 @@ class WordingTests(unittest.TestCase):
 class ExampleTests(unittest.TestCase):
     def first_item_prompts_describe_a_person(self) -> None:
         paths = [GUIDES / f"{p}-with-claude.md" for p in WITH_CLAUDE]
-        paths.append(ROOT / "docs/src/using/with-claude.md")
+        paths.append(ROOT / "docs/guide/using/with-claude.md")
         for path in paths:
             text = read(path)
             # "What it looked like in practice" is the record of a real walkthrough.
@@ -135,7 +135,7 @@ class ExampleTests(unittest.TestCase):
                 name = f"{process}-{kind}.md"
                 with self.subTest(guide=name):
                     self.assertTrue("A patch release starts at **candidate**" in read(GUIDES / name))
-        processes = read(ROOT / "docs/src/using/processes.md")
+        processes = read(ROOT / "docs/guide/using/processes.md")
         self.assertFalse("the patch starts at the first stage" in processes)
 
 

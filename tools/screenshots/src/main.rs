@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let project = env("KANBANR_PROJECT", "kanbanr");
     let feature = env("KANBANR_FEATURE", "FEAT-001");
     let milestone = env("KANBANR_MILESTONE", "MS-001");
-    let out = env("OUT_DIR", "docs/src/images");
+    let out = env("OUT_DIR", "docs/guide/images");
     // A portfolio only means anything across several projects, and kanbanr's own board is one — so
     // these pages are shot against the demo board `tools/demo/portfolio.sh` builds, by pointing
     // KANBANR_URL at a daemon serving it and setting PORTFOLIO_ONLY=1.

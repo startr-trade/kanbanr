@@ -3,7 +3,7 @@ title = "kanbanr"
 description = "A git-backed board that is the system of record for Claude-driven development"
 authors = ["The kanbanr Authors"]
 language = "en"
-src = "src"
+src = "guide"
 
 [output.html]
 default-theme = "rust"

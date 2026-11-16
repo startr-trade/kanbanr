@@ -11,7 +11,7 @@ name: Release
 #      kanbanr itself ships as these archives, the installers and the image, never as a crate;
 #      its crates declare `publish = false` (FEAT-024).
 #
-# Secrets/setup required (see docs/src/project/open-sourcing.md → "Accounts, keys & credentials"):
+# Secrets/setup required (see docs/guide/project/open-sourcing.md → "Accounts, keys & credentials"):
 #   - GHCR: none — uses the automatic GITHUB_TOKEN (needs `packages: write`, set below).
 #   - crates.io (ears-classifier and mermaid-lint only): set repo variable PUBLISH_CRATES=true, plus the repo
 #     secret CARGO_REGISTRY_TOKEN or Trusted Publishing. Without PUBLISH_CRATES the job is skipped.
@@ -95,8 +95,8 @@ jobs:
           fi
           # Every release opens with its notes (FEAT-154). Refused here, before anything is built,
           # rather than published with a blank page.
-          if [ ! -s "docs/src/releases/${tag}.md" ]; then
-            echo "::error::no release notes for ${tag}: write docs/src/releases/${tag}.md and list it in docs/src/releases/index.md." >&2
+          if [ ! -s "docs/guide/releases/${tag}.md" ]; then
+            echo "::error::no release notes for ${tag}: write docs/guide/releases/${tag}.md and list it in docs/guide/releases/index.md." >&2
             exit 1
           fi
           # The VS Code extension ships in the release too (FEAT-152), under the same version.
@@ -380,7 +380,7 @@ jobs:
           ATTEST_RELEASE: ${{ vars.ATTEST_RELEASE }}
         run: |
           set -eu
-          python3 - "docs/src/releases/${GITHUB_REF_NAME}.md" "$RUNNER_TEMP/notes.md" <<'PY'
+          python3 - "docs/guide/releases/${GITHUB_REF_NAME}.md" "$RUNNER_TEMP/notes.md" <<'PY'
           import re, sys
           src, out = sys.argv[1], sys.argv[2]
           text = open(src).read()

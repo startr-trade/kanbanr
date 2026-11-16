@@ -103,8 +103,8 @@ codeql:
 check-docs:
 	cd web && npm ci && npm run check:docs
 	tools/docs/sync.sh
-	git diff --exit-code -- docs/src/project/changelog.md \
-		|| { echo "docs/src/project/changelog.md was stale: synced — commit it" >&2; exit 1; }
+	git diff --exit-code -- docs/guide/project/changelog.md \
+		|| { echo "docs/guide/project/changelog.md was stale: synced — commit it" >&2; exit 1; }
 
 # Depends on `web`, because the monitor is compiled INTO the binary (FEAT-084): without the built
 # SPA present, build.rs embeds nothing and `kanbanr serve` would quietly have no web view.
