@@ -1192,6 +1192,8 @@ impl Store {
         state: crate::models::TestState,
         checked_rev: Option<&str>,
     ) -> Result<FeatureItem> {
+        // A manual result before the item's build stage checks nothing that exists (DEF-076).
+        crate::manual::refuse_before_build(project, code, requirement, test, state)?;
         let feature = project.feature_mut(code)?;
         let definition = feature
             .definition

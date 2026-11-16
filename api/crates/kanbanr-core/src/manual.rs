@@ -5,9 +5,10 @@
 //! folder, written once and never rewritten, as `gates::record` does. The test's `state` and
 //! `checked_rev` on the item are set as `kanbanr test` sets them; nothing new goes on `TestRef`.
 
+use crate::config::ProjectConfig;
 use crate::error::{CoreError, Result};
 use crate::models::TestState;
-use crate::store::Store;
+use crate::store::{Project, Store};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -62,6 +63,74 @@ pub struct ManualWaiting {
     pub checked_rev: String,
     /// The newest kept result for this test, so a failed check shows who failed it.
     pub last: Option<ManualResult>,
+    /// The build stage the check opens at (DEF-076); empty when the check is due.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub opens_at: String,
+}
+
+/// The build stage and the stages at or after it, in workflow order, no-ops excluded (FTR-018,
+/// DEF-076). `None` when no stage holds the build role, which counts every stage as build onward.
+/// [`crate::readiness::Context`] reads its `build_onward` from here, so the two cannot disagree.
+pub fn build_onward(config: &ProjectConfig) -> Option<std::collections::BTreeSet<String>> {
+    let build = config.role_status(crate::config::Role::Build)?;
+    Some(
+        config
+            .statuses
+            .iter()
+            .skip_while(|s| **s != build)
+            .filter(|s| !config.is_no_op(s))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Where a manual check of an item at `status` opens (DEF-076): `Some(build)` when the workflow
+/// has a build role and `status` comes before it in the workflow's order (no-ops skipped); `None`
+/// when the check is due, or the workflow has no build role.
+pub fn opens_at(config: &ProjectConfig, status: &str) -> Option<String> {
+    let build = config.role_status(crate::config::Role::Build)?;
+    if config.is_no_op(status) {
+        return None;
+    }
+    let onward = build_onward(config)?;
+    let at = config.statuses.iter().position(|s| s == status)?;
+    let build_at = config.statuses.iter().position(|s| *s == build)?;
+    (at < build_at && !onward.contains(status)).then_some(build)
+}
+
+/// Refuse a manual result for an item that has not reached its build stage (DEF-076): before
+/// then nothing exists to check. Acts only on a manual test set green or red; setting a test back
+/// to planned, or any other kind of test, is never refused here.
+pub fn refuse_before_build(
+    project: &Project,
+    code: &str,
+    requirement: &str,
+    test: &str,
+    state: TestState,
+) -> Result<()> {
+    if state == TestState::Planned {
+        return Ok(());
+    }
+    let Some(f) = project.features.iter().find(|f| f.code == code) else {
+        return Ok(());
+    };
+    let manual = f
+        .definition
+        .as_ref()
+        .and_then(|d| d.requirements.iter().find(|r| r.id == requirement))
+        .and_then(|r| r.tests.iter().find(|t| t.name == test))
+        .is_some_and(|t| t.kind.eq_ignore_ascii_case("manual"));
+    if !manual {
+        return Ok(());
+    }
+    match opens_at(&project.config, &f.status) {
+        Some(build) => Err(unsupported(format!(
+            "{code} is at {}: its manual check opens at {build}, once the code it checks exists. \
+             Record it then.",
+            f.status
+        ))),
+        None => Ok(()),
+    }
 }
 
 fn unsupported(msg: String) -> CoreError {
@@ -171,18 +240,24 @@ pub fn results(store: &Store, id: &str, code: Option<&str>) -> Result<Vec<Manual
 }
 
 /// The manual tests waiting for a person (DEF-040 decision 1): every item not in a no-op status,
-/// live work first, then finished work, each in board order, then requirement order.
+/// live work first, then finished work, each in board order, then requirement order. Checks not
+/// yet due (DEF-076: the item is before its build stage) come after every due one, with
+/// `opens_at` set.
 pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
     let project = store.load_meta(id)?;
     let kept = results(store, id, None)?;
     let mut live = Vec::new();
     let mut done = Vec::new();
+    let mut not_due = Vec::new();
     for f in &project.features {
         if project.config.is_no_op(&f.status) {
             continue;
         }
         let Some(def) = &f.definition else { continue };
-        let out = if project.config.counts_as_done(&f.status) {
+        let opens = opens_at(&project.config, &f.status).unwrap_or_default();
+        let out = if !opens.is_empty() {
+            &mut not_due
+        } else if project.config.counts_as_done(&f.status) {
             &mut done
         } else {
             &mut live
@@ -206,11 +281,13 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
                         .rev()
                         .find(|k| k.code == f.code && k.requirement == r.id && k.test == t.name)
                         .cloned(),
+                    opens_at: opens.clone(),
                 });
             }
         }
     }
     live.extend(done);
+    live.extend(not_due);
     Ok(live)
 }
 
@@ -323,6 +400,8 @@ mod tests {
                 }),
             )
             .unwrap();
+        // A manual check opens at the build stage, Scheduled here (DEF-076).
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
         store
             .set_test_state(
                 "demo",
@@ -365,6 +444,102 @@ mod tests {
         assert_eq!(w[0].test, "manual: looks right");
         assert_eq!(w[0].state, "red");
         assert_eq!(w[0].last.as_ref().map(|l| l.by.as_str()), Some("Ada L"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    /// A workflow whose Build gate makes the branch: Backlog → Design → Build → Review → Done,
+    /// with Dropped as a no-op.
+    fn build_workflow() -> ProjectConfig {
+        let mut c = ProjectConfig::default_for("demo");
+        let all: Vec<String> = ["Backlog", "Design", "Build", "Review", "Done", "Dropped"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        c.statuses = all.clone();
+        c.default_state = "Backlog".into();
+        c.displayed_states = all[..5].to_vec();
+        c.no_op_states = vec!["Dropped".into()];
+        c.terminal_states = vec!["Done".into()];
+        c.transitions = all
+            .iter()
+            .map(|from| {
+                (
+                    from.clone(),
+                    all.iter().filter(|to| *to != from).cloned().collect(),
+                )
+            })
+            .collect();
+        c.gates.clear();
+        c.gates.insert(
+            "Build".into(),
+            crate::config::Gate {
+                on_enter: vec![crate::config::Action::Branch],
+                ..Default::default()
+            },
+        );
+        c
+    }
+
+    /// DEF-076 R-1: a manual check opens at the item's build stage and stays open after it; with
+    /// no build role it is always open; checks not yet due come after the due ones.
+    #[test]
+    fn a_manual_check_is_not_due_before_its_item_reaches_its_build_stage() {
+        let config = build_workflow();
+        assert_eq!(opens_at(&config, "Backlog").as_deref(), Some("Build"));
+        assert_eq!(opens_at(&config, "Design").as_deref(), Some("Build"));
+        for due in ["Build", "Review", "Done", "Dropped"] {
+            assert_eq!(opens_at(&config, due), None, "{due}");
+        }
+        // The same order as the readiness context's build stage, so the two cannot disagree.
+        let onward = build_onward(&config).unwrap();
+        for s in &config.statuses {
+            if !config.is_no_op(s) {
+                assert_eq!(opens_at(&config, s).is_none(), onward.contains(s), "{s}");
+            }
+        }
+        // No build role: a declared gate that makes no branch.
+        let mut none = build_workflow();
+        none.gates.get_mut("Build").unwrap().on_enter.clear();
+        assert_eq!(none.role_status(crate::config::Role::Build), None);
+        for s in &none.statuses {
+            assert_eq!(opens_at(&none, s), None, "{s}");
+        }
+
+        let (store, dir) = fixture();
+        store.save_config("demo", &config).unwrap();
+        let mut codes = Vec::new();
+        for (title, status) in [("Early", "Design"), ("Built", "Build"), ("Later", "Review")] {
+            let f = store.add_feature("demo", title, "", "MS-1", None).unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: "THE SYSTEM SHALL work.".into(),
+                            tests: vec![test("manual: it works", "manual")],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.move_feature("demo", &f.code, status).unwrap();
+            codes.push(f.code);
+        }
+        let w = waiting(&store, "demo").unwrap();
+        let rows: Vec<(&str, &str)> = w
+            .iter()
+            .map(|r| (r.code.as_str(), r.opens_at.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (codes[1].as_str(), ""),
+                (codes[2].as_str(), ""),
+                (codes[0].as_str(), "Build"),
+            ]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

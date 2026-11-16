@@ -856,6 +856,18 @@ pub fn prepare(
                     subject.item, subject.requirement, subject.test
                 )));
             }
+            // Not before the item's build stage (DEF-076).
+            crate::manual::refuse_before_build(
+                &project,
+                &subject.item,
+                &subject.requirement,
+                &subject.test,
+                if state == "green" {
+                    crate::models::TestState::Green
+                } else {
+                    crate::models::TestState::Red
+                },
+            )?;
             let checked = match fields.get("checked_rev").and_then(Value::as_str) {
                 Some(r) => r.to_string(),
                 None => repo
@@ -2498,6 +2510,8 @@ mod tests {
                 }),
             )
             .unwrap();
+        // A manual check opens at the build stage (DEF-076).
+        store.move_feature("demo", &code, "Scheduled").unwrap();
         let body = |test: &str, batch: Option<&str>| {
             let mut b = serde_json::json!({"kind": "manual-test",
                 "subject": {"item": code, "requirement": "R-1", "test": format!("manual: check {test}")},
@@ -2651,6 +2665,57 @@ mod tests {
         );
     }
 
+    /// DEF-076 R-2: a manual-test record is not prepared for an item before its build stage; at
+    /// the build stage it is.
+    #[test]
+    fn a_manual_test_record_is_not_prepared_for_an_item_before_its_build_stage() {
+        use crate::models::{Requirement, TestRef};
+        let (store, _dir, code) = board_with_item(false);
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![TestRef {
+                            name: "manual: the cart looks right".into(),
+                            kind: "manual".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let body = serde_json::json!({"kind": "manual-test",
+            "subject": {"item": code, "requirement": "R-1", "test": "manual: the cart looks right"},
+            "fields": {"state": "green", "checked_rev": "abc1234"},
+            "sources": [{"label": "what the person said"}],
+            "origin": "conversation"});
+        // The default workflow builds at Scheduled; the item is at Planned.
+        let refused = prepare(&store, "demo", &body, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains(&format!(
+                "{code} is at Planned: its manual check opens at Scheduled, once the code it \
+                 checks exists. Record it then."
+            )),
+            "{refused}"
+        );
+        assert!(
+            list(&store, "demo", &ListQuery::default(), None)
+                .unwrap()
+                .is_empty()
+        );
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        assert!(prepare(&store, "demo", &body, None).is_ok());
+    }
+
     /// DEF-040 R-2: a result the person states in the conversation is prepared as a manual-test
     /// record, refused to confirm from the conversation, and confirmed from the monitor; the test
     /// takes the state, and the kept result names the person, the origin and the record.
@@ -2685,6 +2750,8 @@ mod tests {
                 }),
             )
             .unwrap();
+        // A manual check opens at the build stage (DEF-076).
+        store.move_feature("demo", &code, "Scheduled").unwrap();
         let body = |test: &str, state: &str| {
             serde_json::json!({"kind": "manual-test",
                 "subject": {"item": code, "requirement": "R-1", "test": test},

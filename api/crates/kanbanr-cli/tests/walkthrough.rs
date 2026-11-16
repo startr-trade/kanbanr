@@ -190,6 +190,15 @@ fn world(name: &str) -> World {
         "--file",
         &def.display().to_string(),
     ]);
+    // A manual check opens at the item's build stage (DEF-076): the run's check of FEAT-001 is
+    // prepared only once the item is built.
+    k(&[
+        "move",
+        "FEAT-001",
+        "In Progress",
+        "--override",
+        "a fixture: the manual check needs a built item",
+    ]);
     // An item whose test a run proves: kind walkthrough.
     k(&[
         "feature",
@@ -515,7 +524,7 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
     // The item on the target board is as it was: nothing recorded, only prepared.
     let item = std::fs::read_to_string(
         w.target_board
-            .join("projects/target/features/Planned/FEAT-001.yaml"),
+            .join("projects/target/features/In Progress/FEAT-001.yaml"),
     )
     .unwrap();
     // Read as YAML, never grepped: the writer quotes a value that would read as a number.
