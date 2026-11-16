@@ -322,6 +322,10 @@ jobs:
       # no action offered: scopes are issued and revoked from the CLI (FEAT-214).
       - name: The monitor shows agent scopes and who made each change
         run: npm run check:agent-scopes
+      # One shared cache serves every page: a read in flight is shared, a live change re-reads only
+      # the slices it names, and loading is never drawn as empty (DEF-081).
+      - name: The monitor's data cache shares reads and re-reads only changed slices
+        run: npm run check:data-cache
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
