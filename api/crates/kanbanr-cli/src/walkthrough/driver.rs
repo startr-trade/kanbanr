@@ -148,6 +148,9 @@ pub struct Session {
     stdin: Option<ChildStdin>,
     lines: Receiver<Option<String>>,
     transcript: std::fs::File,
+    /// Lines in `stream.jsonl` so far, the `# >>>` input lines included: what a finding's
+    /// transcript line is counted in, so it is the line `sed -n` shows.
+    transcript_lines: usize,
     session_id: String,
     cost_so_far: f64,
     turns: u32,
@@ -168,7 +171,11 @@ impl Session {
         let transcripts = cfg.run_dir.join("raw").join("transcripts");
         std::fs::create_dir_all(&transcripts)
             .with_context(|| format!("could not make {}", transcripts.display()))?;
-        let transcript = super::append_to(transcripts.join("stream.jsonl"))?;
+        let stream = transcripts.join("stream.jsonl");
+        let transcript_lines = std::fs::read_to_string(&stream)
+            .map(|t| t.lines().count())
+            .unwrap_or(0);
+        let transcript = super::append_to(stream)?;
         let stderr = super::append_to(transcripts.join("stderr.txt"))?;
         let mut cmd = Command::new(&cfg.claude);
         cmd.arg("-p")
@@ -233,6 +240,7 @@ impl Session {
             stdin: Some(stdin),
             lines: rx,
             transcript,
+            transcript_lines,
             session_id: String::new(),
             cost_so_far: 0.0,
             turns: 0,
@@ -241,6 +249,11 @@ impl Session {
             agents: Default::default(),
             quiet: cfg.quiet,
         })
+    }
+
+    /// The number of the transcript's last line, as the file counts it (input lines included).
+    pub fn transcript_line(&self) -> usize {
+        self.transcript_lines
     }
 
     /// Background agents running now.
@@ -319,6 +332,7 @@ impl Session {
             last_line = Instant::now();
             out.lines += 1;
             writeln!(self.transcript, "{got}")?;
+            self.transcript_lines += 1;
             let Ok(ev) = serde_json::from_str::<Value>(&got) else {
                 continue;
             };
@@ -380,6 +394,7 @@ impl Session {
         self.turns += 1;
         let line = Self::envelope(text);
         writeln!(self.transcript, "# >>> {line}")?;
+        self.transcript_lines += 1;
         // A closed pipe is the process gone: the stop, not an error, so the run goes on to its
         // captures.
         if stdin.write_all(format!("{line}\n").as_bytes()).is_err() {
@@ -414,6 +429,7 @@ impl Session {
             };
             turn.lines += 1;
             writeln!(self.transcript, "{got}")?;
+            self.transcript_lines += 1;
             let Ok(ev) = serde_json::from_str::<Value>(&got) else {
                 continue;
             };
@@ -779,6 +795,7 @@ pub(crate) mod tests {
         );
         assert!(t2.cost_usd.abs() < 1e-9, "{t2:?}");
         assert_eq!(s.turns(), 2);
+        let s_line = s.transcript_line();
         s.end();
         let transcript = std::fs::read_to_string(dir.join("raw/transcripts/stream.jsonl")).unwrap();
         assert_eq!(
@@ -796,6 +813,8 @@ pub(crate) mod tests {
             2
         );
         assert!(transcript.contains("\"subtype\":\"init\""));
+        // A finding's line is the file's own line number, the input lines counted too.
+        assert_eq!(s_line, transcript.lines().count());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -525,7 +525,7 @@ impl Running {
             kind,
             board,
             truth,
-            line: self.lines,
+            line: self.session.transcript_line(),
         };
         eprintln!("finding: {f}");
         let _ = append_finding(&self.dirs, &f);
