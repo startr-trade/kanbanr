@@ -29,6 +29,8 @@ All notable changes to kanbanr are documented here. The format follows
 - The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
   what is in progress, what waits for you and the sprint and release, and counts the rest, instead
   of printing every item (DEF-093).
+- A refusal on the default branch no longer calls setup's commit the one exception when it also
+  names the block refresh (DEF-085).
 
 ## [0.7.0] - 2026-11-16
 
