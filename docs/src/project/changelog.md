@@ -70,6 +70,12 @@ All notable changes to kanbanr are documented here. The format follows
 - doctor no longer warns that a doc folded just before a move has not changed: it re-judges the
   `docs_updated` gate an item has passed from when the item entered the stage it moved from, as the
   move did (DEF-074).
+### Fixed
+
+- Agreeing or changing the charter after setup no longer leaves `CLAUDE.md` modified on the
+  default branch: the guard and the git hooks take one `[no-ref]` commit of `CLAUDE.md` that
+  changes only its generated kanbanr block, with the git model on or off, so Promote to main is
+  not refused for it (DEF-083).
 
 ## [0.6.1] - 2026-11-16
 
