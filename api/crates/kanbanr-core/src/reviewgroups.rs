@@ -2,8 +2,8 @@
 //! the decision it needs, so one confirmation applies one decision to the rows the person chose.
 //!
 //! [`summary`] counts each group, [`slice`] lists one group's rows and [`evidence`] reads one row
-//! in full. They only read the board (ADR-0005): each group decision is written through the single
-//! routes the page posts today.
+//! in full. They only read the board (ADR-0005). [`ops`] turns one group decision into the single
+//! routes the page posts today, one verdict per row, which the write path records in one commit.
 
 use crate::Store;
 use crate::adr::Adr;
@@ -12,7 +12,7 @@ use crate::error::{CoreError, Result};
 use crate::manual::ManualWaiting;
 use crate::prepared::PreparedView;
 use crate::review::{ApprovalKind, ReviewEntry};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Approve a definition never approved, lapsed, or added to.
@@ -827,6 +827,275 @@ pub fn evidence(
     Ok(out)
 }
 
+// ---- group decisions -------------------------------------------------------------------------
+
+/// The most rows one group decision may carry: a guard, not a page size.
+pub const MAX_DECISION_ITEMS: usize = 200;
+
+/// One decision the person took for several rows of one group (FTR-038 R-3): the body of
+/// `POST /projects/{p}/review/decide`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct GroupDecision {
+    pub group: String,
+    /// The group's action, `undo` for the delegated group's second button, or `reject` to turn
+    /// down the selected prepared records.
+    pub action: String,
+    pub by: String,
+    /// The release, for `which-release`.
+    pub target: String,
+    /// A reason; no group action needs one (R-11), so it is kept only where a route takes it.
+    pub reason: String,
+    pub items: Vec<DecisionItem>,
+}
+
+/// One selected row, with the pins the slice showed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(default)]
+pub struct DecisionItem {
+    pub key: String,
+    pub code: String,
+    pub rev: String,
+    pub spec_rev: String,
+    pub signoff: String,
+    pub requirement: String,
+    pub test: String,
+    pub prepared: String,
+}
+
+/// One verdict a group decision makes, through its own route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerdictOp {
+    /// The row it decides.
+    pub key: String,
+    pub method: String,
+    pub path: String,
+    pub body: serde_json::Value,
+    /// The answer to keep once the verdict is made, when the row's prepared record made it.
+    pub resolution: Option<crate::prepared::Resolution>,
+}
+
+/// `s` as one path segment: everything but unreserved characters percent-encoded.
+fn segment(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn refuse(why: String) -> CoreError {
+    CoreError::Unsupported(why)
+}
+
+/// Each selected row of `d` as its own verdict route, read against the group as it is now. The
+/// paths are built from the group key and each row as the board holds it, never from the body.
+/// A prepared row expands through [`crate::prepared::expand`], so its record resolves; any other
+/// row posts the single route the page posts today. Refused, with nothing to write, when there
+/// are no items (or more than [`MAX_DECISION_ITEMS`]), when a row is no longer in the group or
+/// cannot be decided, or when two rows would make different verdicts. `repo` is the code
+/// repository the page judges blocks with (a docs-folded row's texts left), so a row the page
+/// shows blocked is refused here too.
+pub fn ops(
+    store: &Store,
+    p: &str,
+    d: &GroupDecision,
+    origin: crate::origin::Origin,
+    repo: Option<&Path>,
+) -> Result<Vec<VerdictOp>> {
+    use serde_json::{Value, json};
+    if d.items.is_empty() {
+        return Err(refuse(
+            "a group decision names the rows it decides: none were selected".into(),
+        ));
+    }
+    if d.items.len() > MAX_DECISION_ITEMS {
+        return Err(refuse(format!(
+            "a group decision takes at most {MAX_DECISION_ITEMS} rows; {} were sent",
+            d.items.len()
+        )));
+    }
+    let by = d.by.trim();
+    if by.is_empty() {
+        return Err(refuse(
+            "a group decision must name who gave it: pass `by` (the monitor sends the board's \
+             commit identity)"
+                .into(),
+        ));
+    }
+    if !is_known(&d.group) {
+        return Err(refuse(format!("there is no review group '{}'", d.group)));
+    }
+    let group = slice(store, p, &d.group, repo)?;
+    let action = d.action.trim().to_ascii_lowercase();
+    let own = group.action.to_ascii_lowercase();
+    let undo = action == "undo" && d.group == DELEGATED;
+    let reject = action == "reject";
+    if !(action == own || undo || reject) {
+        return Err(refuse(format!(
+            "'{}' is not a decision the {} group takes: it takes {}",
+            d.action, group.label, group.action
+        )));
+    }
+    let target = d.target.trim();
+    if d.group == WHICH_RELEASE && !reject && !group.choices.iter().any(|c| c == target) {
+        return Err(refuse(format!(
+            "plan into which release? '{target}' is not a planned release: choose one of {}",
+            group.choices.join(", ")
+        )));
+    }
+    let pins = |item: &DecisionItem| {
+        let mut b = json!({"by": by});
+        for (k, v) in [("rev", &item.rev), ("spec_rev", &item.spec_rev)] {
+            if !v.is_empty() {
+                b[k] = Value::String(v.clone());
+            }
+        }
+        b
+    };
+    let mut out = Vec::with_capacity(d.items.len());
+    let mut verdict: Option<Option<crate::origin::Verdict>> = None;
+    for item in &d.items {
+        let name = if item.code.is_empty() {
+            &item.key
+        } else {
+            &item.code
+        };
+        let Some(row) = group.rows.iter().find(|r| r.key == item.key) else {
+            return Err(refuse(format!(
+                "{name} is no longer waiting in {}; the page re-reads",
+                group.label
+            )));
+        };
+        if !row.blocked.is_empty() {
+            return Err(refuse(format!(
+                "{} cannot be decided here: {}",
+                row.code, row.blocked
+            )));
+        }
+        if !item.prepared.is_empty() && item.prepared != row.prepared {
+            return Err(refuse(format!(
+                "{}'s prepared record is no longer {}; the page re-reads",
+                row.code, item.prepared
+            )));
+        }
+        let code = segment(&row.code);
+        let op = if reject {
+            if row.prepared.is_empty() {
+                return Err(refuse(format!(
+                    "{} has nothing prepared to reject: only prepared records are turned down \
+                     from the group",
+                    row.code
+                )));
+            }
+            VerdictOp {
+                key: row.key.clone(),
+                method: "POST".into(),
+                path: format!("/projects/{p}/prepared/{}/reject", segment(&row.prepared)),
+                body: json!({"by": by}),
+                resolution: None,
+            }
+        } else if !item.prepared.is_empty() || (d.group == MANUAL && !row.prepared.is_empty()) {
+            let e = crate::prepared::expand(store, p, &row.prepared, &pins(item), origin)?;
+            VerdictOp {
+                key: row.key.clone(),
+                method: e.method,
+                path: e.path,
+                body: e.body,
+                resolution: Some(e.resolution),
+            }
+        } else {
+            let (path, body) = match d.group.as_str() {
+                APPROVE => (format!("/projects/{p}/features/{code}/approve"), pins(item)),
+                RATIFY => (format!("/projects/{p}/features/{code}/ratify"), pins(item)),
+                WHICH_RELEASE => (
+                    format!("/projects/{p}/releases/{}/plan", segment(target)),
+                    json!({"items": [row.code]}),
+                ),
+                DELEGATION => (
+                    format!(
+                        "/projects/{p}/decisions/delegations/{}/grant",
+                        segment(&row.key)
+                    ),
+                    json!({"by": by, "rev": item.rev}),
+                ),
+                DELEGATED => (
+                    format!("/projects/{p}/decisions/reviews"),
+                    json!({
+                        "decision": row.key,
+                        "verdict": if undo { "undo" } else { "keep" },
+                        "by": by,
+                    }),
+                ),
+                ADR => (
+                    format!("/projects/{p}/adrs/{}/accept", segment(&row.key)),
+                    json!({"by": by}),
+                ),
+                MANUAL => {
+                    return Err(refuse(format!(
+                        "{} cannot be decided here: {DO_THE_CHECK}",
+                        row.code
+                    )));
+                }
+                key => match signoff_of_key(key) {
+                    Some(name) => (
+                        format!("/projects/{p}/features/{code}/signoff/{}", segment(&name)),
+                        pins(item),
+                    ),
+                    None => {
+                        return Err(refuse(format!("there is no review group '{key}'")));
+                    }
+                },
+            };
+            VerdictOp {
+                key: row.key.clone(),
+                method: "POST".into(),
+                path,
+                body,
+                resolution: None,
+            }
+        };
+        let v = crate::origin::verdict_of_route(&op.method, &op.path);
+        match verdict {
+            None => verdict = Some(v),
+            Some(first) if first != v => {
+                return Err(refuse(format!(
+                    "one group decision makes one kind of verdict: {} would make another; \
+                     decide it in its own group",
+                    row.code
+                )));
+            }
+            Some(_) => {}
+        }
+        out.push(op);
+    }
+    Ok(out)
+}
+
+/// `Some(project)` for `POST /projects/{p}/review/decide`, the group decision route.
+pub fn decide_route(method: &str, path: &str) -> Option<String> {
+    if !method.eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    match seg.as_slice() {
+        ["projects", p, "review", "decide"] => Some(p.to_string()),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,5 +1410,56 @@ mod tests {
             "an empty group is absent: {groups:#?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-038 R-3: a group decision judges blocks exactly as the page does, against the code
+    /// repository: a docs-folded row with a text left is blocked on the page and refused by the
+    /// decision, with nothing to write; read without the repository the row would look ready.
+    #[test]
+    fn a_row_the_page_blocks_on_drift_is_refused_by_the_decision() {
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let key = crate::method::DOCS_FOLDED;
+        let page = slice(&store, "demo", key, Some(&repo)).unwrap();
+        let row = page
+            .rows
+            .iter()
+            .find(|r| r.code == code)
+            .unwrap_or_else(|| panic!("{code} waits in {key}: {page:?}"))
+            .clone();
+        assert!(
+            row.blocked.contains("settles 1 text"),
+            "the page blocks the row on its drift: {row:?}"
+        );
+        let decision = GroupDecision {
+            group: key.into(),
+            action: page.action.clone(),
+            by: "Ada L".into(),
+            items: vec![DecisionItem {
+                key: row.key.clone(),
+                code: row.code.clone(),
+                rev: row.rev.clone(),
+                spec_rev: row.spec_rev.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let e = ops(
+            &store,
+            "demo",
+            &decision,
+            crate::origin::Origin::Monitor,
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains(&code), "{e}");
+        assert!(e.contains("cannot be decided here"), "{e}");
+        assert!(e.contains(&row.blocked), "{e}");
+        // Without the repository the drift is not read, so the same row is not blocked: the
+        // decide route must pass the repository for the refusal above to hold.
+        let blind = slice(&store, "demo", key, None).unwrap();
+        let unread = blind.rows.iter().find(|r| r.code == code).unwrap();
+        assert!(unread.blocked.is_empty(), "{unread:?}");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

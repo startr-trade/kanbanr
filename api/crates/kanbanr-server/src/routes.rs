@@ -278,7 +278,9 @@ pub(crate) fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a 
 /// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor`,
 /// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), and the readiness and review reads that judge the repository
 /// docs of an item (DEF-033), the drift reads (FTR-013), and the items list, whose stale evidence
-/// is judged against HEAD (FTR-048), query string aside.
+/// is judged against HEAD (FTR-048), and the Review page's group decision, which judges a row's
+/// blocks as the page does (FTR-038), query string aside. (A write gets the repository from
+/// `run_write` either way; the decide route is listed so the set says which routes read it.)
 pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -299,6 +301,7 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "position"]
             | ["projects", _, "views", _]
             | ["projects", _, "items"]
+            | ["projects", _, "review", "decide"]
     )
 }
 

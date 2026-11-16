@@ -1854,6 +1854,13 @@ fn dispatch_routes(
                     .into(),
             ))
         }
+        // A group decision makes one verdict per row, each the person's, so only the write path
+        // takes it: each row goes through its own route, in one commit (FTR-038).
+        ("POST", ["projects", _p, "review", "decide"]) => Err(CoreError::Unsupported(
+            "a group decision is taken through the write path, which records each verdict as \
+             the person"
+                .into(),
+        )),
         // A confirmation makes the person's verdict, so only the write path takes it: it expands
         // into the verdict's own route (FTR-034).
         ("POST", ["projects", _p, "prepared", _id, "confirm"]) => Err(CoreError::Unsupported(
