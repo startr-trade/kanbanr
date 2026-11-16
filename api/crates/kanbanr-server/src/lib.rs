@@ -17,7 +17,7 @@ mod embedded;
 pub mod memo;
 mod origin;
 mod routes;
-mod watcher;
+pub mod watcher;
 mod write;
 
 pub use write::PushPolicy;
@@ -53,6 +53,8 @@ pub struct AppState {
     pub gens: Arc<memo::Generations>,
     /// The read memo: GET bodies kept per stamp, and the ETags they answer with (DEF-081).
     pub memo: Arc<memo::Memo>,
+    /// Broadcast of what changed on a board, by slice tag: the `slices` SSE event (DEF-081).
+    pub slices: broadcast::Sender<watcher::Slices>,
     /// The background worker (FTR-045): drift computed after each change, and warm summary reads.
     /// Set once the state is built, since the worker needs the state.
     pub background: Arc<OnceLock<Arc<background::Background>>>,
@@ -101,6 +103,7 @@ pub async fn run_with(
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
     let (tx, _rx) = broadcast::channel::<String>(256);
+    let (slices, _slices_rx) = broadcast::channel::<watcher::Slices>(256);
     let meta_repo: Option<PathBuf> = code_repo.as_ref().map(|(_, p)| p.clone());
     let state = AppState {
         store,
@@ -111,6 +114,7 @@ pub async fn run_with(
         code_repo,
         gens: Arc::new(memo::Generations::default()),
         memo: Arc::new(memo::Memo::new(memo::MEMO_CAP_BYTES)),
+        slices: slices.clone(),
         background: Arc::new(OnceLock::new()),
     };
     // Drift in the background, for the project whose code repository the daemon was started in
@@ -122,8 +126,14 @@ pub async fn run_with(
         repos,
     ));
 
-    // Watch the data folder and push SSE "changed" events as the CLI edits files.
-    let _watcher = watcher::spawn(data_dir.join("projects"), tx.clone())?;
+    // Watch the data folder and push SSE "changed" and "slices" events as the CLI edits files; each
+    // change bumps the project's generation, so the memo misses at once (DEF-081).
+    let _watcher = watcher::spawn(
+        data_dir.join("projects"),
+        tx.clone(),
+        slices,
+        Arc::clone(&state.gens),
+    )?;
 
     let mut api = Router::new()
         .route("/portfolio", get(routes::portfolio))
