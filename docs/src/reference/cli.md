@@ -109,7 +109,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr decisions revoke DLG-n --reason "…"` | revokes a delegation, or discards a proposal; it stays on the record |
 | `kanbanr decisions review <decision> --keep\|--undo [--reason …]` | keeps or undoes a decision taken under a delegation (its reference is as `decisions show` lists it); an undo withdraws it. The person's own |
 | `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back, with a reason it refuses to go without; the record of having given it stays |
-| `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
+| `kanbanr capture` | reads a test run's output — cargo test, Vitest (verbose), pytest `-v`, Playwright (list) — (run by the hook; you never call it) |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |
 | `kanbanr index` | rebuild the per-project cache from the source-of-truth files |

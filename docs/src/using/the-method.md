@@ -95,7 +95,13 @@ kanbanr tests [--write]                          # tracked tests that no longer 
 
 A PostToolUse hook reads the output of every test run you make and flips the tracked tests to match,
 stamped with the project revision it saw. Name a test exactly as your runner prints it
-(`cart::retains_for_seven_days`, `src/cart.test.ts`) or the run cannot find it. A green recorded at
+(`cart::retains_for_seven_days`, `src/cart.test.ts`) or the run cannot find it. The hook reads
+cargo, Vitest (`--reporter=verbose`: `src/App.test.tsx > title shows the basket item count`, the
+duration dropped), pytest (`-v`: `tests/test_x.py::test_y`) and Playwright (`--reporter=list`:
+`e2e/basket.spec.ts › kept basket › basket is kept`, or the titles alone; project, location and
+duration dropped). Vitest's default reporter and Playwright's `line` and `dot` reporters print no
+per-test pass line, so a run under them records nothing. A name reported more than once in a run
+is green only if every line passed. A green recorded at
 an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
 it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
 only when a person really did it.
