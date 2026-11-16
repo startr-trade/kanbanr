@@ -1,0 +1,6 @@
+# cargo-nextest, for make test, make ci and CI alike (MNT-010).
+[profile.default]
+fail-fast = false
+slow-timeout = { period = "60s" }
+[profile.default.junit]
+path = "junit.xml"
