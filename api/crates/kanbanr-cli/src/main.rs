@@ -3835,6 +3835,37 @@ fn run_adr(cli: &Cli, client: &Backend, cmd: &AdrCmd) -> anyhow::Result<()> {
     }
 }
 
+/// The route `kanbanr lessons` reads.
+fn lessons_path(p: &str, for_item: Option<&str>, all: bool) -> String {
+    let mut query = Vec::new();
+    if let Some(code) = for_item {
+        query.push(format!("for={}", urlencode(code)));
+    }
+    if all {
+        query.push("all=1".to_string());
+    }
+    format!(
+        "/projects/{p}/lessons{}{}",
+        if query.is_empty() { "" } else { "?" },
+        query.join("&")
+    )
+}
+
+/// The text `kanbanr lessons` prints, also gathered by `kanbanr recover` (DEF-093).
+fn lessons_text(
+    client: &Backend,
+    p: &str,
+    for_item: Option<&str>,
+    all: bool,
+) -> anyhow::Result<String> {
+    let resp = client.get(&lessons_path(p, for_item, all))?;
+    let lessons: Vec<kanbanr_core::lessons::Lesson> = serde_json::from_str(&resp)?;
+    if lessons.is_empty() {
+        return Ok("(nothing learned here yet)\n".to_string());
+    }
+    Ok(lessons.iter().map(lesson_line).collect())
+}
+
 /// Lessons (FEAT-055). Confidence is printed as a percentage, with what it came from, because a
 /// lesson you cannot trace is advice — and advice with a number on it is worse than advice.
 fn lesson_line(l: &kanbanr_core::lessons::Lesson) -> String {
@@ -6060,12 +6091,23 @@ fn require_project(cli: &Cli) -> anyhow::Result<String> {
 /// Print recent activity (from the project's changelog file).
 fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let p = require_project(cli)?;
-    let resp = client.get(&format!("/projects/{p}/activity"))?;
     if cli.json {
+        let resp = client.get(&format!("/projects/{p}/activity"))?;
         println!("{}", pretty(&resp));
-    } else if let Some(arr) = serde_json::from_str::<Value>(&resp)?.as_array() {
+    } else {
+        print!("{}", activity_text(client, &p)?);
+    }
+    Ok(())
+}
+
+/// The text `kanbanr activity` prints, also gathered by `kanbanr recover` (DEF-093).
+fn activity_text(client: &Backend, p: &str) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    let resp = client.get(&format!("/projects/{p}/activity"))?;
+    let mut out = String::new();
+    if let Some(arr) = serde_json::from_str::<Value>(&resp)?.as_array() {
         if arr.is_empty() {
-            println!("(no activity yet)");
+            out.push_str("(no activity yet)\n");
         }
         for a in arr {
             // A write made under an agent scope says so, as the monitor does (FEAT-214 R-7).
@@ -6073,7 +6115,8 @@ fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
                 serde_json::from_value::<kanbanr_core::agentscope::ByAgent>(a["by_agent"].clone())
                     .map(|b| format!(", {b}"))
                     .unwrap_or_default();
-            println!(
+            let _ = writeln!(
+                out,
                 "{:<20} {:<14} {}{by}",
                 a["time"].as_str().unwrap_or(""),
                 a["actor"].as_str().unwrap_or(""),
@@ -6081,7 +6124,7 @@ fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             );
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 /// Show / test the project's notification events log (FEAT-036).
@@ -6769,6 +6812,44 @@ fn project_drift(
         .process_drift(project, personal_processes().as_deref())?)
 }
 
+/// The text `kanbanr process status` prints, also gathered by `kanbanr recover` (DEF-093).
+fn process_status_text(
+    p: &str,
+    drift: Option<&kanbanr_core::library::Drift>,
+    if_changed: bool,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let Some(drift) = drift else {
+        if !if_changed {
+            let _ = writeln!(
+                out,
+                "{p} uses no saved process (`kanbanr process list` shows them)"
+            );
+        }
+        return out;
+    };
+    if !if_changed {
+        let s = &drift.source;
+        let version = if s.version == 0 {
+            String::new()
+        } else {
+            format!(" v{}", s.version)
+        };
+        let _ = writeln!(
+            out,
+            "{p} uses {}{version} ({}){}",
+            s.name,
+            s.library.as_str(),
+            if drift.is_current() { ", current" } else { "" }
+        );
+    }
+    for m in drift.messages() {
+        let _ = writeln!(out, "{m}");
+    }
+    out
+}
+
 /// `process status`, `diff` and `update` (FEAT-170): these read a project, so they need a board.
 fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
@@ -6787,29 +6868,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                 );
                 return Ok(());
             }
-            let Some(drift) = drift else {
-                if !if_changed {
-                    println!("{p} uses no saved process (`kanbanr process list` shows them)");
-                }
-                return Ok(());
-            };
-            if !if_changed {
-                let s = &drift.source;
-                let version = if s.version == 0 {
-                    String::new()
-                } else {
-                    format!(" v{}", s.version)
-                };
-                println!(
-                    "{p} uses {}{version} ({}){}",
-                    s.name,
-                    s.library.as_str(),
-                    if drift.is_current() { ", current" } else { "" }
-                );
-            }
-            for m in drift.messages() {
-                println!("{m}");
-            }
+            print!("{}", process_status_text(&p, drift.as_ref(), *if_changed));
             Ok(())
         }
         ProcessCmd::Diff { name } => {
@@ -7175,29 +7234,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Lesson(cmd) => run_lesson(cli, &client, cmd),
         Command::Lessons { for_item, all } => {
             let p = require_project(cli)?;
-            let mut query = Vec::new();
-            if let Some(code) = for_item {
-                query.push(format!("for={}", urlencode(code)));
-            }
-            if *all {
-                query.push("all=1".to_string());
-            }
-            let resp = client.get(&format!(
-                "/projects/{p}/lessons{}{}",
-                if query.is_empty() { "" } else { "?" },
-                query.join("&")
-            ))?;
             if cli.json {
+                let resp = client.get(&lessons_path(&p, for_item.as_deref(), *all))?;
                 println!("{}", pretty(&resp));
                 return Ok(());
             }
-            let lessons: Vec<kanbanr_core::lessons::Lesson> = serde_json::from_str(&resp)?;
-            if lessons.is_empty() {
-                println!("(nothing learned here yet)");
-            }
-            for l in &lessons {
-                print!("{}", lesson_line(l));
-            }
+            print!("{}", lessons_text(&client, &p, for_item.as_deref(), *all)?);
             Ok(())
         }
         Command::Retro {
@@ -8566,44 +8608,12 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             Ok(())
         }
         ScopeCmd::List { all, item } => {
-            let resp = client.get(&base)?;
-            let mut scopes: Vec<Value> = serde_json::from_str(&resp)?;
-            scopes.retain(|s| {
-                let state = s["state"].as_str().unwrap_or_default();
-                (*all || state == "issued" || state == "active")
-                    && item.as_deref().is_none_or(|i| s["item"] == i)
-            });
             if cli.json {
+                let scopes = scopes_listed(client, &p, *all, item.as_deref())?;
                 println!("{}", serde_json::to_string_pretty(&scopes)?);
                 return Ok(());
             }
-            if scopes.is_empty() {
-                println!("(no agent scopes{})", if *all { "" } else { " in force" });
-            }
-            for s in &scopes {
-                let f = |k: &str| s[k].as_str().unwrap_or_default().to_string();
-                let tail = match f("state").as_str() {
-                    "revoked" => format!("revoked: {}", f("revoked_reason")),
-                    "expired" => format!("expired {}", f("expires_at")),
-                    _ => format!("until {}", f("expires_at")),
-                };
-                println!(
-                    "{}  {:<6} {:<10} {:<8} {}{}  {tail}",
-                    f("id"),
-                    f("role"),
-                    f("item"),
-                    f("state"),
-                    if f("branch").is_empty() {
-                        "-".to_string()
-                    } else {
-                        f("branch")
-                    },
-                    s["worktree"]
-                        .as_str()
-                        .map(|w| format!(" in {w}"))
-                        .unwrap_or_default(),
-                );
-            }
+            print!("{}", scope_list_text(client, &p, *all, item.as_deref())?);
             Ok(())
         }
         ScopeCmd::Show { id } => {
@@ -8687,31 +8697,106 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             )
         }
         ScopeCmd::Drift { brief } => {
-            let Some(root) = scm::repo_root() else {
-                if *brief {
-                    return Ok(());
-                }
-                anyhow::bail!("not inside a git repository: run it from the project folder");
-            };
-            let drift =
-                match agentscope::drift(client.store(), &p, &root, &kanbanr_core::now_rfc3339()) {
-                    Ok(d) => d,
-                    Err(_) if *brief => return Ok(()),
-                    Err(e) => anyhow::bail!("{e}"),
-                };
             if cli.json {
+                let drift = scope_drift(client, &p, *brief)?;
                 println!("{}", serde_json::to_string_pretty(&drift)?);
                 return Ok(());
             }
-            if drift.is_empty() && !*brief {
-                println!("no agent work is ahead of the board");
-            }
-            for d in &drift {
-                println!("{}", d.line());
-            }
+            print!("{}", scope_drift_text(client, &p, *brief)?);
             Ok(())
         }
     }
+}
+
+/// The scopes `kanbanr scope list` shows: those in force, or every one with `all`.
+fn scopes_listed(
+    client: &Backend,
+    p: &str,
+    all: bool,
+    item: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    let resp = client.get(&format!("/projects/{p}/scopes"))?;
+    let mut scopes: Vec<Value> = serde_json::from_str(&resp)?;
+    scopes.retain(|s| {
+        let state = s["state"].as_str().unwrap_or_default();
+        (all || state == "issued" || state == "active") && item.is_none_or(|i| s["item"] == i)
+    });
+    Ok(scopes)
+}
+
+/// The text `kanbanr scope list` prints, also gathered by `kanbanr recover` (DEF-093).
+fn scope_list_text(
+    client: &Backend,
+    p: &str,
+    all: bool,
+    item: Option<&str>,
+) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    let scopes = scopes_listed(client, p, all, item)?;
+    let mut out = String::new();
+    if scopes.is_empty() {
+        let _ = writeln!(out, "(no agent scopes{})", if all { "" } else { " in force" });
+    }
+    for s in &scopes {
+        let f = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+        let tail = match f("state").as_str() {
+            "revoked" => format!("revoked: {}", f("revoked_reason")),
+            "expired" => format!("expired {}", f("expires_at")),
+            _ => format!("until {}", f("expires_at")),
+        };
+        let _ = writeln!(
+            out,
+            "{}  {:<6} {:<10} {:<8} {}{}  {tail}",
+            f("id"),
+            f("role"),
+            f("item"),
+            f("state"),
+            if f("branch").is_empty() {
+                "-".to_string()
+            } else {
+                f("branch")
+            },
+            s["worktree"]
+                .as_str()
+                .map(|w| format!(" in {w}"))
+                .unwrap_or_default(),
+        );
+    }
+    Ok(out)
+}
+
+/// The agent work ahead of the board (`kanbanr scope drift`); with `brief`, nothing rather than
+/// an error outside a repository or when the drift cannot be read.
+fn scope_drift(
+    client: &Backend,
+    p: &str,
+    brief: bool,
+) -> anyhow::Result<Vec<kanbanr_core::agentscope::Drift>> {
+    let Some(root) = scm::repo_root() else {
+        if brief {
+            return Ok(Vec::new());
+        }
+        anyhow::bail!("not inside a git repository: run it from the project folder");
+    };
+    match kanbanr_core::agentscope::drift(client.store(), p, &root, &kanbanr_core::now_rfc3339()) {
+        Ok(d) => Ok(d),
+        Err(_) if brief => Ok(Vec::new()),
+        Err(e) => anyhow::bail!("{e}"),
+    }
+}
+
+/// The text `kanbanr scope drift` prints, also gathered by `kanbanr recover` (DEF-093).
+fn scope_drift_text(client: &Backend, p: &str, brief: bool) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    let drift = scope_drift(client, p, brief)?;
+    let mut out = String::new();
+    if drift.is_empty() && !brief {
+        out.push_str("no agent work is ahead of the board\n");
+    }
+    for d in &drift {
+        let _ = writeln!(out, "{}", d.line());
+    }
+    Ok(out)
 }
 
 /// Search features with rich filters + full-text, in one project or across all. (FEAT-032)
@@ -12754,11 +12839,18 @@ fn board_json(project: &Project) -> Value {
 }
 
 fn print_board(project: &Project) {
-    println!("# {} board\n", project.id);
+    print!("{}", board_text(project));
+}
+
+/// The text `kanbanr board` prints, also gathered by `kanbanr recover` (DEF-093).
+fn board_text(project: &Project) -> String {
+    use std::fmt::Write as _;
+    let mut out = format!("# {} board\n\n", project.id);
     for (state, items) in board_columns(project) {
-        println!("## {} ({})", state, items.len());
+        let _ = writeln!(out, "## {} ({})", state, items.len());
         for f in items {
-            println!(
+            let _ = writeln!(
+                out,
                 "  - {} {} [{}/{}]",
                 f.code,
                 f.title,
@@ -12766,8 +12858,9 @@ fn print_board(project: &Project) {
                 f.task_count()
             );
         }
-        println!();
+        out.push('\n');
     }
+    out
 }
 
 #[cfg(test)]
