@@ -102,7 +102,7 @@ board.
 | `in_sprint` | planned into the active sprint, one that has started (asked only when sprints are on) |
 | `in_release` | planned into a release (projects with releases switched on) |
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
-| `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
+| `docs_updated` | every board doc the item declares in `affects_docs`, and every board doc linked under the Design's Affects docs (except lines marked unchanged), has changed since it entered its current stage |
 | `diagrams_valid` | every Mermaid diagram in the spec and in each doc it names in `affects_docs` passes the diagram lint |
 | `docs_cover` | the item is covered by every project coverage rule it falls under; `{docs_cover: [id]}` asks for only those rules |
 

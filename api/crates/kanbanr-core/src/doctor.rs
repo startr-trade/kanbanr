@@ -775,6 +775,8 @@ fn scan_declared_docs(
         if !crate::graph::is_live_work(&project.config, &f.status)
             || !def.affects_docs.is_empty()
             || !def.exempt.trim().is_empty()
+            // The gate reads the docs the Design links (DEF-047).
+            || !crate::docsbuilt::docs_to_change(&f.specification, &project.id).is_empty()
         {
             continue;
         }
@@ -1991,6 +1993,56 @@ mod tests {
             .collect();
         assert_eq!(warned.len(), 1, "{issues:?}");
         assert_eq!(warned[0].severity, Severity::Warning);
+    }
+
+    /// DEF-047 R-1: an item that names no `affects_docs` but links board docs under its Design's
+    /// `Affects docs` is not told it names none, since the gate reads those links; one with
+    /// neither still is (L-29).
+    #[test]
+    fn an_item_that_links_docs_is_not_told_it_names_none() {
+        let (store, _dir) = fixture();
+        let spec = "## Design\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md)\n";
+        let linked = store.add_feature("demo", "Cart", spec, "M", None).unwrap();
+        let bare = store
+            .add_feature("demo", "Checkout", "## Design\n\nNo docs.\n", "M", None)
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data")
+            .unwrap();
+        for code in [&linked.code, &bare.code] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.move_feature("demo", code, "Scheduled").unwrap();
+        }
+        let gate = crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::DocsUpdated,
+            )],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let issues = run_project(&store, "demo").unwrap().issues;
+        let told = |code: &str| {
+            issues
+                .iter()
+                .filter(|i| {
+                    i.code.as_deref() == Some(code) && i.message.contains("declares no docs")
+                })
+                .count()
+        };
+        assert_eq!(told(&linked.code), 0, "{issues:?}");
+        assert_eq!(told(&bare.code), 1, "{issues:?}");
     }
 
     /// FEAT-193 Q3: a project from before the method is asked once to choose, and choosing either

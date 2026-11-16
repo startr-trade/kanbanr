@@ -17,6 +17,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 - `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
   is no longer warned that it has no Design section (DEF-069).
+### Fixed
+
+- The `docs_updated` gate also requires the board docs a Design links under Affects docs to have
+  changed (DEF-047). A doc the Design only reads is marked `unchanged` on its line.
 
 ## [0.6.0] - 2026-11-14
 
