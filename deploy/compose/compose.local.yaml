@@ -1,0 +1,11 @@
+# Mode (b): local board folders, served read-only with no sync container; the
+# monitor already watches its folders live. KANBANR_BOARDS_PATH is one board
+# folder, or a folder whose subfolders KANBANR_LOCAL_BOARDS names. Set
+# KANBANR_UID and KANBANR_GID to the folders' owner's (id -u, id -g).
+services:
+  monitor:
+    volumes:
+      - type: bind
+        source: ${KANBANR_BOARDS_PATH:?set KANBANR_BOARDS_PATH in .env to a board folder, or a folder of board folders}
+        target: /boards
+        read_only: true

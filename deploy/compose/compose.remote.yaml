@@ -1,0 +1,59 @@
+# Mode (a): remote URLs. Each board line of boards.conf is cloned in full by
+# `clone`, then followed by fast-forward pulls in place by `sync`, on the
+# board's own interval; the monitor reads the checkouts through a read-only
+# mount. No credential in this mode: the boards are cloned anonymously.
+x-git: &git
+  image: ${KANBANR_SYNC_IMAGE:-docker.io/alpine/git@sha256:2306e2b05ee0ef99f5d25b0779f645b24ae9f91ba187107503592fcdfe78da3a}
+  user: "${KANBANR_UID:-10001}:${KANBANR_GID:-10001}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=64m"]
+  environment:
+    HOME: /tmp/home
+    GIT_TERMINAL_PROMPT: "0"
+    CREDENTIAL_KIND: none
+    MAX_BACKOFF: "600"
+    FETCH_TIMEOUT: "120"
+    CLONE_TIMEOUT: "900"
+  volumes:
+    - boards:/boards
+    - ../modules/kanbanr-site/files/sync.sh:/scripts/sync.sh:ro
+    - ./boards.conf:/config/boards.conf:ro
+
+services:
+  clone:
+    <<: *git
+    entrypoint: ["/bin/sh", "/scripts/sync.sh", "clone-all", "/config/boards.conf"]
+    restart: "no"
+
+  sync:
+    <<: *git
+    entrypoint: ["/bin/sh", "/scripts/sync.sh", "follow-all", "/config/boards.conf"]
+    restart: unless-stopped
+    depends_on:
+      clone:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/scripts/sync.sh", "alive-all", "/config/boards.conf"]
+      interval: 30s
+
+  monitor:
+    depends_on:
+      clone:
+        condition: service_completed_successfully
+    volumes:
+      - type: volume
+        source: boards
+        target: /boards
+        read_only: true
+      - ./boards.conf:/config/boards.conf:ro
+
+# A tmpfs that sets the owner, so the non-root clone can write; the checkouts
+# are rebuilt on each `up`, like an emptyDir.
+volumes:
+  boards:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=2g,uid=${KANBANR_UID:-10001},gid=${KANBANR_GID:-10001}"
