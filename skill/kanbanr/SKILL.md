@@ -635,7 +635,9 @@ met`. `--override "<reason>"` is for genuine emergencies, with the
 user's reason, and the item then needs ratifying. An override is yours to explain and the person's
 to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
 --reason … --source …`) and tell the person it waits on the Review page. The item does not ship
-until it is ratified. A write that prints `coverage:` lines has left a view behind:
+until it is ratified. Each override is ratified on its own, even when the item was ratified before
+at the same definition: after a second `--override`, prepare its ratification again and say it
+waits on the Review page. A write that prints `coverage:` lines has left a view behind:
 add the links each one names before you move the item on.
 
 ### The rules underneath

@@ -139,7 +139,8 @@ itself and ignores an `origin` in the request. When the same approval, ratificat
 repeats the latest one on text that has not changed, nothing is recorded, no activity entry, event
 or commit is made, and the answer is the item with an `already_recorded` object: `what`, `by`, `at`,
 `origin` and a `sentence` saying who recorded it first, when and from where. A sign-off repeated
-with a new note or doc is recorded. A decision, promotion or cut asked for a second time is
+with a new note or doc is recorded. A ratification repeated while an override Claude made waits
+for one is recorded, not answered as `already_recorded`. A decision, promotion or cut asked for a second time is
 refused as before, and the refusal now names who did it first.
 
 ## The OpenAPI document

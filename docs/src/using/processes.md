@@ -144,7 +144,8 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   where it was made, and waits on the Review page for you to ratify it even when the item was
   approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item
   does not ship: Promote to main and the cut carry it, saying why. Your own overrides, from your
-  terminal or the monitor, are your decision already and wait for nothing.
+  terminal or the monitor, are your decision already and wait for nothing. Ratifying records each
+  override on its own, even at a definition you already ratified.
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one

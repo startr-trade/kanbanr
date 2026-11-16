@@ -292,7 +292,11 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 An override Claude made past a gate waits on the **Review** page to be ratified, even on an item
 you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by Claude, past its
-gate: …" above **Ratify**. Until you ratify it, the item does not ship.
+gate: …" above **Ratify**. Until you ratify it, the item does not ship. Each override waits on
+its own: one Claude made after you ratified an earlier one, at the same definition, is listed
+again, and ratifying records a new ratification. When Approve or Ratify is disabled, the sentence
+under it says what is missing and who provides it (the diagram check running, a diagram to fix, or
+a page to reload).
 
 The **Review** page also lists a finished item whose approval lapsed or that gained text since
 you approved it, labelled with its status, after all the live decisions. The work is done, but the

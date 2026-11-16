@@ -135,6 +135,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 - The monitor shows the kanbanr version and commit it runs, and warns when the board was last
   written by a newer one (FTR-036).
+### Fixed
+
+- **Ratifying an override Claude made at a definition the person had already ratified now records
+  it (DEF-064).** The repeat rule treated a second ratification at the same revision as already
+  recorded, while the Review page kept asking for the open override; now a ratification is a
+  repeat only when no override waits, so the second one is recorded, closes the override, and the
+  page stops asking. A disabled Approve or Ratify button on the Review page now says beneath it
+  what is missing and who provides it, instead of only in a tooltip.
 
 ## [0.6.0] - 2026-11-14
 
