@@ -65,6 +65,16 @@ pub enum WalkthroughCmd {
         /// The run folder.
         run: PathBuf,
     },
+    /// Prepare one batch on this board from several runs of one build (DEF-089, for FTR-054):
+    /// their checks merged one per marker, every result at the runs' shared evidence revision.
+    Prepare {
+        /// The run folders (`walkthrough run --no-batch`), read from their `raw/` files only.
+        #[arg(required = true)]
+        runs: Vec<PathBuf>,
+        /// The batch's name on this board.
+        #[arg(long)]
+        batch: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,6 +136,10 @@ pub struct RunArgs {
     /// unknown build): every result the run puts on this board names it.
     #[arg(long)]
     pub rev: Option<String>,
+    /// Put nothing on this board: the run's checks wait in its folder for `kanbanr walkthrough
+    /// prepare`, which makes one batch of several runs of one build.
+    #[arg(long)]
+    pub no_batch: bool,
 }
 
 /// The most answers one step's say gives before it records a finding and goes on.
@@ -218,6 +232,23 @@ pub fn merge_checks(checks: &[CheckResult]) -> Vec<CheckResult> {
             }
         })
         .collect()
+}
+
+/// The checks of several runs as one result per marker (DEF-089 R-4, for FTR-054): each result's
+/// `step` is prefixed with its run's name (`togaf-v080-1:6.20a`), then [`merge_checks`] runs over
+/// the whole list, so a marker passed only if every step that measured it, in every run, passed;
+/// an unmeasured result beside a measured one is ignored, and failed reasons name their run's step.
+pub fn checks_across(runs: &[(String, Vec<CheckResult>)]) -> Vec<CheckResult> {
+    let all: Vec<CheckResult> = runs
+        .iter()
+        .flat_map(|(run, checks)| {
+            checks.iter().map(move |c| CheckResult {
+                step: format!("{run}:{}", c.step),
+                ..c.clone()
+            })
+        })
+        .collect();
+    merge_checks(&all)
 }
 
 /// Where runs are kept by default: outside every repository and outside the temporary directory.
@@ -326,6 +357,7 @@ pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
             );
             Ok(())
         }
+        WalkthroughCmd::Prepare { runs, batch } => prepare_runs(cli, runs, batch),
         WalkthroughCmd::Remotes(RemotesCmd::List { runs }) => {
             let dir = runs.clone().unwrap_or_else(default_runs_dir);
             let list = remotes::list(&dir);
@@ -421,6 +453,135 @@ fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
     }
     kanbanr_core::atomic::write(run.raw().join("checks.tsv"), text)?;
     Ok(())
+}
+
+/// Read `raw/checks.tsv` back: one result per marker, as the run wrote it.
+fn read_checks(run: &RunDirs) -> Result<Vec<CheckResult>> {
+    let path = run.raw().join("checks.tsv");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("no checks in {}", path.display()))?;
+    Ok(text
+        .lines()
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut cols = l.splitn(4, '\t');
+            let marker = cols.next().unwrap_or("").to_string();
+            let step = cols.next().unwrap_or("").to_string();
+            let passed = cols.next().unwrap_or("");
+            let why = cols.next().unwrap_or("").to_string();
+            CheckResult {
+                marker,
+                step,
+                passed: passed == "true",
+                why,
+                measured: passed != "not-measured",
+            }
+        })
+        .collect())
+}
+
+/// `kanbanr walkthrough prepare --batch <name> <run>…` (DEF-089 R-4, for FTR-054): one batch on
+/// this board from several runs of one build. Each run's setup must have completed, its manifest
+/// verify, and its `evidence_rev` be every other run's; a marker must mean the same check in
+/// every runbook. Reads only the runs' files, so the batch is derived and repeatable; a record
+/// already open in the batch is not prepared again.
+fn prepare_runs(cli: &crate::Cli, runs: &[PathBuf], batch: &str) -> Result<()> {
+    let mut rev: Option<(String, String)> = None;
+    let mut defs: BTreeMap<String, (runbook::CheckRef, String)> = BTreeMap::new();
+    let mut all: Vec<(String, Vec<CheckResult>)> = Vec::new();
+    for run in runs {
+        let dirs = RunDirs::new(run);
+        let shown = run.display().to_string();
+        let log = SetupLog::read(&dirs)
+            .with_context(|| format!("{shown}: no raw/setup.log, so it is not a run folder"))?;
+        if log.get("setup_failed").is_some() {
+            bail!("{shown}: the run's setup did not complete, so it says nothing about the guide");
+        }
+        let Some(r) = log.get("evidence_rev") else {
+            bail!(
+                "{shown}: raw/setup.log names no evidence_rev (a run from before DEF-089), so its \
+                 results could not say what they proved: run it again"
+            );
+        };
+        match &rev {
+            Some((a, at)) if a != r => {
+                bail!("two builds are not one release's evidence: {a} ({at}) and {r} ({shown})")
+            }
+            Some(_) => {}
+            None => rev = Some((r.to_string(), shown.clone())),
+        }
+        capture::verify(&dirs)
+            .with_context(|| format!("{shown}: raw/MANIFEST.sha256 does not verify"))?;
+        if let Some(s) = log.get("stopped") {
+            println!("note: {shown} stopped early ({s}); what it did not reach is not measured");
+        }
+        let copy = dirs.root.join(answer::RUNBOOK_FILE);
+        let (text, _) = read_runbook(cli, &copy.display().to_string())?;
+        let rb = Runbook::parse(&text).with_context(|| format!("{shown}: its runbook"))?;
+        for (marker, def) in &rb.checks {
+            match defs.get(marker) {
+                Some((prev, at)) if prev != def => bail!(
+                    "{marker} is defined differently in {at} ({} {} \"{}\") and {shown} ({} {} \"{}\")",
+                    prev.item,
+                    prev.requirement,
+                    prev.test,
+                    def.item,
+                    def.requirement,
+                    def.test
+                ),
+                Some(_) => {}
+                None => {
+                    defs.insert(marker.clone(), (def.clone(), shown.clone()));
+                }
+            }
+        }
+        let name = log.get("run_name").map(str::to_string).unwrap_or_else(|| {
+            run.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| shown.clone())
+        });
+        all.push((name, read_checks(&dirs)?));
+    }
+    let Some((rev, _)) = rev else {
+        bail!("no run folder given");
+    };
+    let merged = checks_across(&all);
+    let defs: BTreeMap<String, runbook::CheckRef> =
+        defs.into_iter().map(|(m, (d, _))| (m, d)).collect();
+    let target_board = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
+    let target_project = kanbanr_core::project::resolve_project(cli.project.as_deref());
+    let o = prepare_batch(cli, &merged, &defs, batch, &target_board, &rev)?;
+    println!(
+        "{} run(s), {} check(s) ({} passed), evidence at {rev}",
+        all.len(),
+        merged.len(),
+        merged.iter().filter(|c| c.passed).count()
+    );
+    print_batch(&o, batch, target_project.as_deref());
+    Ok(())
+}
+
+/// The lines that say what a batch put on the target board.
+fn print_batch(o: &BatchOutcome, batch: &str, target_project: Option<&str>) {
+    if !o.prepared.is_empty() {
+        println!(
+            "prepared {} result(s) as batch {batch} on {}: confirm them at {}/p/{}/review",
+            o.prepared.len(),
+            target_project.unwrap_or("the board"),
+            crate::monitor_url(),
+            target_project.unwrap_or("<project>")
+        );
+    }
+    for r in &o.recorded {
+        println!("recorded walkthrough test: {r}");
+    }
+    for k in &o.skipped {
+        println!("not put on the board: {k}");
+    }
+    if o.prepared.is_empty() && o.recorded.is_empty() {
+        println!("no check to prepare on the target board");
+    }
 }
 
 /// The run project's Claude Code configuration: a copy of the person's rules file and its imports,
@@ -1727,6 +1888,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     if let Some(s) = &running.stopped {
         log.push("stopped", s.clone());
     }
+    // `walkthrough prepare` refuses a run whose setup failed (DEF-089).
+    if running.setup_failed {
+        log.push("setup_failed", "true");
+    }
     log.write(&dirs)?;
     if let Some(m) = running.monitor.take() {
         m.stop();
@@ -1737,13 +1902,13 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     // The batch on the target board.
     // A run whose setup never made its board prepares nothing: its checks say nothing about the
     // guide, only that the run could not follow it.
-    let batch = if running.setup_failed {
+    let batch = if running.setup_failed || args.no_batch {
         Ok(BatchOutcome::default())
     } else {
         prepare_batch(
             cli,
             &running.checks,
-            &running.runbook,
+            &running.runbook.checks,
             &name,
             &target_board,
             &rev,
@@ -1768,26 +1933,12 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
                 "no batch prepared: setup did not complete, so the run says nothing about the guide"
             )
         }
-        Ok(o) => {
-            if !o.prepared.is_empty() {
-                println!(
-                    "prepared {} result(s) as batch {name} on {}: confirm them at {}/p/{}/review",
-                    o.prepared.len(),
-                    target_project.as_deref().unwrap_or("the board"),
-                    crate::monitor_url(),
-                    target_project.as_deref().unwrap_or("<project>")
-                );
-            }
-            for r in &o.recorded {
-                println!("recorded walkthrough test: {r}");
-            }
-            for k in &o.skipped {
-                println!("not put on the board: {k}");
-            }
-            if o.prepared.is_empty() && o.recorded.is_empty() {
-                println!("no check to prepare on the target board");
-            }
+        Ok(_) if args.no_batch => {
+            println!(
+                "no batch prepared (--no-batch): prepare it with `kanbanr walkthrough prepare`"
+            )
         }
+        Ok(o) => print_batch(&o, &name, target_project.as_deref()),
         Err(e) => println!("the batch could not be prepared on the target board: {e}"),
     }
     println!("run folder: {}", dirs.root.display());
@@ -1848,27 +1999,17 @@ pub fn evidence_rev(
     )
 }
 
-/// The commit a `kanbanr --version` line names: `kanbanr 0.7.0 (<sha>, built …)`.
-// Kept for reading a setup log's `kanbanr` line (DEF-089's Design); the run itself now takes its
-// revision from `evidence_rev`.
-#[cfg_attr(not(test), allow(dead_code))]
-fn version_commit(line: &str) -> Option<String> {
-    let inner = line.split_once('(')?.1;
-    let sha = inner.split([',', ')']).next()?.trim();
-    (sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_string())
-}
-
 /// Put every measured check of the run on the target board, one per marker. A `walkthrough:`
 /// test is the run's own automated evidence: recorded with the tests route as `kanbanr test`
 /// records any automated result, at `rev` (the commit of the build under test, DEF-089) — no
 /// person's verdict is involved, so none is asked for. A `manual:` test is a person's check:
 /// prepared as a `manual-test` record in one batch named for the run, for the person to confirm
 /// (ADR-0018), carrying `rev` and its check id. A check whose steps checked nothing is not put
-/// anywhere.
+/// anywhere. `defs` are the check definitions: one runbook's, or several runs' merged.
 fn prepare_batch(
     cli: &crate::Cli,
     checks: &[CheckResult],
-    runbook: &Runbook,
+    defs: &BTreeMap<String, runbook::CheckRef>,
     batch: &str,
     target_board: &Path,
     rev: &str,
@@ -1895,8 +2036,16 @@ fn prepare_batch(
             .map(|t| t.kind.trim().to_lowercase())
     };
     let repo = crate::scm::repo_root();
+    // What this batch already holds: a record open for the same subject is not prepared twice.
+    let open = kanbanr_core::prepared::open_in_batch(
+        &kanbanr_core::Store::new(target_board),
+        &project,
+        batch,
+        repo.as_deref(),
+    )
+    .unwrap_or_default();
     for c in &checks {
-        let Some(def) = runbook.checks.get(&c.marker) else {
+        let Some(def) = defs.get(&c.marker) else {
             out.skipped
                 .push(format!("{}: not defined under checks", c.marker));
             continue;
@@ -1938,6 +2087,18 @@ fn prepare_batch(
                     .skipped
                     .push(format!("{}: could not record: {e}", c.marker)),
             }
+            continue;
+        }
+        if let Some(v) = open.iter().find(|v| {
+            v.record.kind == "manual-test"
+                && v.record.subject.item == def.item
+                && v.record.subject.requirement == def.requirement
+                && v.record.subject.test == def.test
+        }) {
+            out.skipped.push(format!(
+                "{}: already prepared in batch {batch} ({})",
+                c.marker, v.record.id
+            ));
             continue;
         }
         let body = serde_json::json!({
@@ -2043,18 +2204,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_binary_commit_is_read_from_its_version_line() {
-        assert_eq!(
-            version_commit(
-                "kanbanr 0.6.0 (6a973c690bb2a0909aae0b8e1f5a75e867cec7f1, built 2026-11-14)"
-            )
-            .as_deref(),
-            Some("6a973c690bb2a0909aae0b8e1f5a75e867cec7f1")
-        );
-        assert_eq!(version_commit("kanbanr 0.6.0"), None);
-    }
-
     /// A check on a step that checked nothing is "not measured", never passed: alone it stays so,
     /// and beside a measured step it is ignored (the vacuous MT-5 pass of the second real run).
     #[test]
@@ -2117,5 +2266,57 @@ mod tests {
         assert_eq!(both.len(), 1);
         assert!(both[0].passed);
         assert_eq!(both[0].step, "1.3+4.1");
+    }
+
+    /// DEF-089 R-4 (FTR-054): the checks of two runs are one result per marker. A marker failed in
+    /// one run fails, naming that run's step; passed in both passes; measured in one run only (or
+    /// unmeasured in the other) takes the measured verdict.
+    #[test]
+    fn checks_from_two_runs_merge_into_one_result_per_marker() {
+        let unmeasured = |marker: &str, step: &str| CheckResult {
+            measured: false,
+            passed: false,
+            why: NOT_MEASURED.into(),
+            ..check(marker, step, false, "")
+        };
+        let togaf = vec![
+            check("MT-1", "2.1", true, "ok"),
+            check("MT-10", "6.20a", true, "ok"),
+            unmeasured("MT-3", "3.1"),
+        ];
+        let agile = vec![
+            check("MT-1", "2.4", false, "the offer was missing"),
+            check("MT-10", "5.2", true, "ok"),
+            check("MT-6", "4.1", false, "a board claim failed"),
+            check("MT-3", "3.2", true, "ok"),
+        ];
+        let merged = checks_across(&[
+            ("togaf-v080-1".to_string(), togaf),
+            ("agile-v080-1".to_string(), agile),
+        ]);
+        let by = |m: &str| {
+            merged
+                .iter()
+                .find(|c| c.marker == m)
+                .unwrap_or_else(|| panic!("no {m} in {merged:?}"))
+        };
+        assert_eq!(merged.len(), 4, "one result per marker: {merged:?}");
+        let mt1 = by("MT-1");
+        assert!(mt1.measured && !mt1.passed, "{mt1:?}");
+        assert_eq!(mt1.step, "togaf-v080-1:2.1+agile-v080-1:2.4");
+        assert_eq!(mt1.why, "agile-v080-1:2.4: the offer was missing");
+        let mt10 = by("MT-10");
+        assert!(mt10.measured && mt10.passed, "{mt10:?}");
+        assert_eq!(mt10.step, "togaf-v080-1:6.20a+agile-v080-1:5.2");
+        let mt6 = by("MT-6");
+        assert!(mt6.measured && !mt6.passed, "{mt6:?}");
+        assert_eq!(mt6.step, "agile-v080-1:4.1");
+        assert_eq!(mt6.why, "agile-v080-1:4.1: a board claim failed");
+        let mt3 = by("MT-3");
+        assert!(mt3.measured && mt3.passed, "{mt3:?}");
+        assert_eq!(mt3.step, "togaf-v080-1:3.1+agile-v080-1:3.2");
+        // Markers keep the order they were first named in, across the runs.
+        let order: Vec<&str> = merged.iter().map(|c| c.marker.as_str()).collect();
+        assert_eq!(order, ["MT-1", "MT-10", "MT-3", "MT-6"]);
     }
 }

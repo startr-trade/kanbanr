@@ -2234,6 +2234,8 @@ fn command_access(cmd: &Command) -> Access {
             | walkthrough::WalkthroughCmd::Verify { .. }
             | walkthrough::WalkthroughCmd::Derive { .. }
             | walkthrough::WalkthroughCmd::Remotes(walkthrough::RemotesCmd::List { .. }) => Read,
+            // Puts the runs' batch on the board through the prepared and tests routes (DEF-089).
+            walkthrough::WalkthroughCmd::Prepare { .. } => Core,
             walkthrough::WalkthroughCmd::Run(_) => Outside(
                 "`kanbanr walkthrough run` drives a session and a monitor outside the board's write path",
             ),
