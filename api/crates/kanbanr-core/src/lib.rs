@@ -5856,7 +5856,7 @@ requirements:
     text: "WHEN a cart is abandoned, THE SYSTEM SHALL retain it."
   - kind: nfr
     text: "THE SYSTEM SHALL respond quickly."
-    iso25010: [Speediness]
+    iso25010: [Reliability]
     scenario: {stimulus: s, environment: e, response: r, measure: "under 200 ms"}
     tests: [{name: bench::latency, state: planned}]
 "#,
@@ -5865,6 +5865,11 @@ requirements:
         store
             .set_feature_definition("demo", &f.code, Some(def))
             .unwrap();
+        // `feature define` refuses an unknown tag now (MNT-009); one stored before that is still
+        // reported, so the board file says it here.
+        let path = store.feature_path("demo", &f.status, &f.code);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, text.replace("- Reliability", "- Speediness")).unwrap();
         let messages: Vec<String> = crate::doctor::run_project(&store, "demo")
             .unwrap()
             .issues
