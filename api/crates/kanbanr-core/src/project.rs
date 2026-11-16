@@ -685,6 +685,13 @@ mod tests {
         assert_eq!(without_verbatim_prefix(p.clone()), p);
     }
 
+    /// MNT-010 R-7: every test process, under cargo-nextest (one process per test) and cargo
+    /// test alike, gets the board fence from `api/.cargo/config.toml`'s `[env]`.
+    #[test]
+    fn every_test_process_runs_inside_the_board_fence() {
+        assert_eq!(std::env::var(FENCE_VAR).as_deref(), Ok("temp"));
+    }
+
     #[test]
     fn fence_unset_or_blank_is_none() {
         assert_eq!(fence_from(None), None);
