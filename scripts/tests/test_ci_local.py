@@ -341,5 +341,102 @@ class WorkflowsAreClassified(unittest.TestCase):
         self.assertEqual(missing, [], "vars.* with no local stand-in in ci_local.LOCAL_VARS")
 
 
+STUB_CARGO = """#!/bin/sh
+printf '%s\\n' "$*" >> "$STUB_LOG"
+case "${1:-} ${2:-}" in
+    "nextest --version") exit "${STUB_NEXTEST_VERSION:-0}" ;;
+    "nextest run") exit "${STUB_NEXTEST_RUN:-0}" ;;
+esac
+exit 0
+"""
+
+
+@unittest.skipIf(os.name == "nt", "scripts/test.sh is POSIX sh; the Windows runner runs it through Git Bash in CI")
+class TestScript(unittest.TestCase):
+    """MNT-010 R-1 to R-3: scripts/test.sh picks nextest or cargo test, and doctests follow nextest."""
+
+    SCRIPT = ci_local.ROOT / "scripts" / "test.sh"
+    VERSION = "nextest --version"
+    NEXTEST = "nextest run --locked --workspace --no-fail-fast"
+    DOCTESTS = "test --locked --workspace --doc"
+    CARGO = "test --locked --workspace --no-fail-fast"
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.bin = Path(tmp.name) / "bin"
+        self.bin.mkdir()
+        stub = self.bin / "cargo"
+        stub.write_text(STUB_CARGO)
+        stub.chmod(0o755)
+        self.log = Path(tmp.name) / "cargo.log"
+
+    def run_script(self, *args: str, nextest: bool = True, run: int = 0, **env: str) -> subprocess.CompletedProcess[str]:
+        self.log.write_text("")
+        environ = {
+            "PATH": f"{self.bin}:/usr/bin:/bin",
+            "STUB_LOG": str(self.log),
+            "STUB_NEXTEST_VERSION": "0" if nextest else "1",
+            "STUB_NEXTEST_RUN": str(run),
+            **env,
+        }
+        return subprocess.run(
+            ["sh", str(self.SCRIPT), *args], capture_output=True, text=True, env=environ, timeout=30
+        )
+
+    def logged(self) -> list[str]:
+        return self.log.read_text().splitlines()
+
+    def test_nextest_runs_when_it_answers_and_doctests_follow(self) -> None:
+        r = self.run_script()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.logged(), [self.VERSION, self.NEXTEST, self.DOCTESTS])
+        self.assertIn("test.sh: cargo-nextest", r.stdout)
+        r = self.run_script("-p", "kanbanr-core", CARGO_BUILD_JOBS="3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            self.logged(),
+            [self.VERSION, f"{self.NEXTEST} --build-jobs 3 -p kanbanr-core", f"{self.DOCTESTS} --jobs 3"],
+        )
+
+    def test_cargo_test_runs_when_nextest_is_absent(self) -> None:
+        r = self.run_script(nextest=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.logged(), [self.VERSION, self.CARGO])
+        self.assertIn("test.sh: cargo test (cargo-nextest not installed)", r.stdout)
+        r = self.run_script(nextest=False, CARGO_BUILD_JOBS="3")
+        self.assertEqual(self.logged(), [self.VERSION, f"{self.CARGO} --jobs 3"])
+
+    def test_doctests_run_after_a_failed_nextest_run_and_the_script_fails(self) -> None:
+        r = self.run_script(run=100)
+        self.assertEqual(r.returncode, 100)
+        self.assertEqual(self.logged(), [self.VERSION, self.NEXTEST, self.DOCTESTS])
+
+    def test_the_runner_can_be_chosen(self) -> None:
+        r = self.run_script(KANBANR_TEST_RUNNER="cargo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.logged(), [self.CARGO])
+        r = self.run_script(nextest=False, KANBANR_TEST_RUNNER="nextest")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("cargo-nextest is not installed: cargo install cargo-nextest --locked", r.stderr)
+        self.assertNotIn(self.NEXTEST, self.logged())
+        r = self.run_script(KANBANR_TEST_RUNNER="other")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("KANBANR_TEST_RUNNER is nextest or cargo", r.stderr)
+        self.assertEqual(self.logged(), [])
+
+    def test_the_ignored_suite_runs_through_the_script_both_ways(self) -> None:
+        args = ("--ignored", "-p", "kanbanr-cli", "--test", "build_stamp")
+        r = self.run_script(*args)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            self.logged(),
+            [self.VERSION, "nextest run --locked --no-fail-fast --run-ignored only -p kanbanr-cli --test build_stamp"],
+        )
+        r = self.run_script(*args, nextest=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.logged(), [self.VERSION, "test --locked -p kanbanr-cli --test build_stamp -- --ignored"])
+
+
 if __name__ == "__main__":
     unittest.main()
