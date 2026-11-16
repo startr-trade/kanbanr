@@ -550,6 +550,33 @@ impl Cadence {
             .or_else(|| self.commit_gates.first().cloned())
     }
 
+    /// The release stages that ask for gate `name` (DEF-095), in stage order: each stage whose
+    /// `requires` holds `GatePassed` when `name` is in `commit_gates`; each whose `requires` holds
+    /// `TagPassed`, and the cut stage when `tag_waits()`, when `name` is `tag_gate_name()`; and each
+    /// stage whose `ReleaseGate.gates` (FTR-033's baseline stage gates) holds a `StageGate` with
+    /// `gate == name` (conflicts.md X17). Each stage once. Empty when none does, or releases are off.
+    pub fn stages_asking_gate(&self, name: &str) -> Vec<String> {
+        if !self.releases {
+            return vec![];
+        }
+        let commit_gate = self.commit_gates.iter().any(|g| g == name);
+        let tag_gate = self.tag_gate_name().is_some_and(|g| g == name);
+        let cut = self.cut_index();
+        let tag_waits = self.tag_waits();
+        self.effective_release_gates()
+            .into_iter()
+            .enumerate()
+            .filter(|(i, (_, g))| {
+                (commit_gate && g.requires.contains(&ReleaseCheck::GatePassed))
+                    || (tag_gate
+                        && (g.requires.contains(&ReleaseCheck::TagPassed)
+                            || (tag_waits && *i == cut)))
+                    || g.gates.iter().any(|s| s.gate == name)
+            })
+            .map(|(_, (stage, _))| stage)
+            .collect()
+    }
+
     /// Every release stage with the gate in force: its declared one, or the default that reproduces
     /// what stages did before they could act (FEAT-183):
     ///
@@ -1275,5 +1302,105 @@ mod tests {
                 .iter()
                 .all(|v| v.implied.is_empty())
         );
+    }
+
+    /// DEF-095 R-1: the stages that ask for a gate follow `gate_passed` (every commit gate) and
+    /// `tag_passed` (the tag gate, and the cut when the release waits at the tag).
+    #[test]
+    fn stages_asking_a_gate_follow_gate_passed_and_tag_passed() {
+        let none: Vec<String> = vec![];
+        // This board's shape: no commit gate, so no stage asks for `ci` or `local`.
+        let board = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release, pushed], on_enter: [tag] }\n\
+             commit_gates: []\n",
+        )
+        .unwrap();
+        assert_eq!(board.stages_asking_gate("ci"), none);
+        assert_eq!(board.stages_asking_gate("local"), none);
+
+        // `ci` a commit gate and production requiring `gate_passed`: production, once.
+        let ci = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release, pushed, gate_passed], on_enter: [tag] }\n\
+             commit_gates: [ci]\n",
+        )
+        .unwrap();
+        assert_eq!(ci.validate_release_gates(), Ok(()));
+        assert_eq!(ci.stages_asking_gate("ci"), ["production"]);
+        assert_eq!(ci.stages_asking_gate("local"), none);
+        // Releases off: no stage asks for anything.
+        let off = Cadence {
+            releases: false,
+            ..ci.clone()
+        };
+        assert_eq!(off.stages_asking_gate("ci"), none);
+
+        // `tag_gate: ci` with a stage after the cut requiring `tag_passed`: that stage. `local`,
+        // a commit gate no stage's `gate_passed` asks for, is asked by none.
+        let tag = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production, confirmed]\n\
+             release_gates:\n  candidate: { on_enter: [branch, prepare] }\n  \
+             main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release], on_enter: [tag] }\n  \
+             confirmed: { requires: [tag_passed] }\n\
+             commit_gates: [local, ci]\ntag_gate: ci\n",
+        )
+        .unwrap();
+        assert_eq!(tag.validate_release_gates(), Ok(()));
+        assert!(!tag.tag_waits());
+        assert_eq!(tag.stages_asking_gate("ci"), ["confirmed"]);
+        assert_eq!(tag.stages_asking_gate("local"), none);
+
+        // The recommended stages with CI: the cut stage asks for `ci`.
+        let (stages, gates, commit_gates) = Cadence::recommended(true);
+        let rec = Cadence {
+            releases: true,
+            has_ci: true,
+            release_stages: stages,
+            release_gates: gates,
+            commit_gates,
+            ..Cadence::default()
+        };
+        assert_eq!(rec.stages_asking_gate("ci"), ["tag"]);
+        assert_eq!(rec.stages_asking_gate("local"), none);
+    }
+
+    /// DEF-095 R-1 (conflicts.md X17): a gate a stage requires through the engineering baseline
+    /// (FTR-033's `ReleaseGate.gates`) counts as asked for, and a stage asking both ways is named
+    /// once.
+    #[test]
+    fn a_stage_gate_from_the_baseline_counts_as_asking_for_the_gate() {
+        let baseline = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production:\n    requires: [main_at_release, pushed]\n    on_enter: [tag]\n    \
+             gates:\n    - { gate: sast, from: B-007 }\n",
+        )
+        .unwrap();
+        assert!(baseline.commit_gates.is_empty());
+        assert_eq!(
+            baseline.release_gates["production"].gates,
+            vec![StageGate {
+                gate: "sast".into(),
+                from: "B-007".into(),
+                extra: Extra::default(),
+            }]
+        );
+        assert_eq!(baseline.stages_asking_gate("sast"), ["production"]);
+        assert_eq!(baseline.stages_asking_gate("ci"), Vec::<String>::new());
+
+        // `sast` a commit gate that production also asks through `gate_passed`: named once.
+        let both = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production:\n    requires: [main_at_release, pushed, gate_passed]\n    \
+             on_enter: [tag]\n    gates:\n    - { gate: sast, from: B-007 }\n\
+             commit_gates: [sast]\n",
+        )
+        .unwrap();
+        assert_eq!(both.stages_asking_gate("sast"), ["production"]);
     }
 }
