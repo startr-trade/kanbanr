@@ -31,6 +31,8 @@ All notable changes to kanbanr are documented here. The format follows
   of printing every item (DEF-093).
 - A refusal on the default branch no longer calls setup's commit the one exception when it also
   names the block refresh (DEF-085).
+- `kanbanr doctor` no longer warns that an item names no docs when its kind's path leaves docs
+  out (DEF-070).
 
 ## [0.7.0] - 2026-11-16
 
