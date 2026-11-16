@@ -2330,6 +2330,8 @@ mod tests {
             merging: false,
             has_commits: true,
             message: msg.map(String::from),
+            setup_pending: false,
+            staged: None,
         };
         let on = "feat/FEAT-214-agent-scopes";
         assert!(commit_verdict(&p, &facts(on, None), NOW).is_allowed());

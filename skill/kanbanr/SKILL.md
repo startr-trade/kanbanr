@@ -157,6 +157,12 @@ project"** (or anything equivalent):
      message. The `.gitignore` lists `.claude/settings.json` and `.claude/settings.local.json`.
      `kanbanr hooks install` generates the settings file on each machine with that machine's
      absolute paths, so it's never committed.
+   - *A git repository with commits already?* Plan one setup commit on the default branch, after
+     `kanbanr claude sync` and the `.gitignore` line:
+     `git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial setup"`. The hooks
+     and the guard take exactly this commit (only those three files, `[no-ref]` in the message)
+     while the marker is not yet committed, so build agents' worktrees, cut from that branch, find
+     the board. Never put it on another branch: a branch that names no item is refused.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
@@ -179,6 +185,7 @@ project"** (or anything equivalent):
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
                                                    # with -c user.name=… -c user.email=… if they said No
                                                    # these two only if the folder was not a git repo
+   git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial setup"   # only if the folder was a git repo with commits
    kanbanr git install-hooks                       # if chosen
    kanbanr config cadence --sprints on|off --releases on|off   # every process: the answer given
    kanbanr config cadence --has-ci on|off          # only when releases are on: the CI answer

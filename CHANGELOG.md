@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-16
+
+### Fixed
+
+- Setup can commit its `.kanbanr` marker, `CLAUDE.md` and `.gitignore` on the default branch of a
+  repository that already has commits: the guard and the git hooks take that one `[no-ref]`
+  commit, with the git model on or off, until the marker is committed (DEF-067).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
@@ -1594,7 +1602,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/startr-trade/kanbanr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0

@@ -2557,6 +2557,167 @@ fn cli_the_first_commit_of_a_new_repo_is_allowed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-067 R-1, R-2, R-3: the walkthrough's case end to end. Setup in a repository that already
+/// has a commit, with the git model on: the guard, pre-commit and commit-msg all take setup's one
+/// `[no-ref]` commit of the marker, CLAUDE.md and .gitignore on the default branch; anything else
+/// staged is refused with the hint; once the marker is in HEAD, main is refused as before.
+#[test]
+fn setup_commits_its_marker_in_a_repository_with_history() {
+    let base = std::env::temp_dir().join(format!("kanbanr-setup-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("app");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    // The Claude Code guard, as the coordinator: the payload's cwd and the process's are the repo.
+    let guard = |command: &str| -> String {
+        let mut c = Command::new(cli());
+        c.args(["git", "guard"])
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                serde_json::json!({"tool_input": {"command": command}, "cwd": work})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    let msg = base.join("msg.txt");
+    let check_msg = |text: &str| -> Output {
+        std::fs::write(&msg, text).unwrap();
+        exec(&["git", "check-msg", msg.to_str().unwrap()])
+    };
+
+    // A project with history before kanbanr came.
+    assert!(
+        git(&["init", "-q", "--initial-branch=main"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "--allow-empty", "-m", "the project"])
+            .status
+            .success()
+    );
+    run(&[
+        "init",
+        "app",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // L-41: the board is this test's own, beside the scratch repository, before any write to it.
+    let board = kanbanr_core::project::normalize(&base.join("code").join("app.kanbanr"));
+    assert_eq!(run(&["where"]).trim(), board.display().to_string());
+    run(&["config", "workflow", "--preset", "togaf"]);
+    run(&["config", "cadence", "--sprints", "on", "--releases", "on"]);
+    let model = run(&["git", "model"]);
+    assert!(model.contains("automation: on"), "{model}");
+    std::fs::write(work.join("CLAUDE.md"), "# app\n").unwrap();
+    std::fs::write(work.join(".gitignore"), ".claude/settings.local.json\n").unwrap();
+
+    // R-1: the guard lets setup's commit through.
+    let setup =
+        "git add .kanbanr CLAUDE.md .gitignore && git commit -q -m \"[no-ref] initial setup\"";
+    let said = guard(setup);
+    assert!(!said.contains("deny"), "{said}");
+
+    // R-2: with anything else staged, pre-commit refuses and says what setup's commit takes.
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("src/x.txt"), "x\n").unwrap();
+    assert!(
+        git(&["add", ".kanbanr", "CLAUDE.md", ".gitignore", "src/x.txt"])
+            .status
+            .success()
+    );
+    let extra = exec(&["git", "check-branch"]);
+    assert!(!extra.status.success());
+    let why = String::from_utf8_lossy(&extra.stderr);
+    assert!(why.contains("Setup's own first commit"), "{why}");
+    assert!(git(&["reset", "-q", "--", "src/x.txt"]).status.success());
+
+    // R-1: the three files alone pass pre-commit and commit-msg, and the commit lands on main.
+    let started = std::time::Instant::now();
+    let branch = exec(&["git", "check-branch"]);
+    eprintln!("check-branch took {:?}", started.elapsed());
+    assert!(
+        branch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&branch.stderr)
+    );
+    let noted = check_msg("[no-ref] initial setup\n");
+    assert!(
+        noted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&noted.stderr)
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] initial setup"])
+            .status
+            .success()
+    );
+    assert!(git(&["cat-file", "-e", "HEAD:.kanbanr"]).status.success());
+
+    // R-3: the marker is in HEAD, so main takes no other `[no-ref]` commit.
+    std::fs::write(work.join("CLAUDE.md"), "# app, again\n").unwrap();
+    assert!(git(&["add", "CLAUDE.md"]).status.success());
+    let again = exec(&["git", "check-branch"]);
+    assert!(!again.status.success());
+    let why = String::from_utf8_lossy(&again.stderr);
+    assert!(!why.contains("Setup's own first commit"), "{why}");
+    let said = guard("git commit -q -m \"[no-ref] more setup\"");
+    assert!(said.contains("deny"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-103: in a folder nothing has set up, looking must not create a board. Every read used to
 /// leave `./data/projects` behind — one did so in a project during its read-only setup interview.
 /// Hook commands stay silent there, and an existing legacy `./data` board keeps working.

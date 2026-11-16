@@ -339,6 +339,67 @@ pub struct RepoFacts {
     /// The commit message, where it is known: the commit-msg hook reads the real one, the guard
     /// only an inline `-m`; `None` where there is none to read.
     pub message: Option<String>,
+    /// The repository has commits, its HEAD holds no top-level `.kanbanr`, and the working tree
+    /// does: setup's marker has not been committed yet (DEF-067).
+    pub setup_pending: bool,
+    /// The paths staged for this commit, repository-relative with `/` separators, where the caller
+    /// read them (the pre-commit hook); `None` where they are not known (the guard, commit-msg).
+    pub staged: Option<Vec<String>>,
+}
+
+/// What setup's own first commit holds (DEF-067): the marker, the CLAUDE.md block, the .gitignore.
+pub const SETUP_FILES: [&str; 3] = [".kanbanr", "CLAUDE.md", ".gitignore"];
+
+/// Is this setup's own first commit in a repository that already has history (DEF-067)? True
+/// when all of these hold: `has_commits`, `setup_pending`, `!merging`, `branch == Some(default_branch)`;
+/// the message, where known, has no reference and has `[no-ref] <why>`; the staged paths, where
+/// known, are non-empty, all in SETUP_FILES and include `.kanbanr`. Pure.
+///
+/// The root commit has its own exception (FEAT-105); this is its sibling for a repository that
+/// had history before kanbanr came: `kanbanr init` writes the marker and registers the guard in
+/// one step, so without it the marker could never reach the default branch, and worktrees cut
+/// from that branch would find no board.
+pub fn setup_commit(facts: &RepoFacts) -> bool {
+    if !facts.has_commits
+        || !facts.setup_pending
+        || facts.merging
+        || facts.branch.as_deref() != Some(facts.default_branch.as_str())
+    {
+        return false;
+    }
+    if let Some(message) = facts.message.as_deref()
+        && !(parse_refs(message).is_empty() && escape_reason(message).is_some())
+    {
+        return false;
+    }
+    if let Some(staged) = &facts.staged
+        && (staged.is_empty()
+            || !staged.iter().all(|p| SETUP_FILES.contains(&p.as_str()))
+            || !staged.iter().any(|p| p == crate::project::MARKER_FILE))
+    {
+        return false;
+    }
+    true
+}
+
+/// The sentence added to a default-branch or line refusal while `setup_pending` holds on the
+/// default branch; `None` otherwise.
+pub fn setup_hint(facts: &RepoFacts) -> Option<&'static str> {
+    (facts.setup_pending
+        && !facts.merging
+        && facts.branch.as_deref() == Some(facts.default_branch.as_str()))
+    .then_some(
+        "Setup's own first commit is the one exception: stage only .kanbanr, CLAUDE.md and \
+         .gitignore, and commit them with `[no-ref] initial setup`.",
+    )
+}
+
+/// A refusal with the setup hint after it, where the hint applies (DEF-067).
+fn refuse_with_hint(facts: &RepoFacts, why: String) -> Verdict {
+    match setup_hint(facts) {
+        Some(hint) => Verdict::refuse(format!("{why}\n\n{hint}")),
+        None => Verdict::refuse(why),
+    }
 }
 
 /// What a commit rule says: whether the commit may happen, and what the person should hear
@@ -419,6 +480,11 @@ pub fn line_model(config: &ProjectConfig, default_branch: &str) -> Option<GitMod
 /// `facts.message` is the inline `-m` the front end could read, or `None` for a commit that opens
 /// an editor — that one is left to the commit-msg hook, which reads the real message.
 pub fn commit_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
+    // Setup's own first commit (DEF-067). The guard never sees the staged set, so it asks for an
+    // inline message: a commit that opens an editor gets no exception here.
+    if facts.message.is_some() && setup_commit(facts) {
+        return Verdict::allow();
+    }
     // A line of integration takes merges only (FEAT-189).
     if let Some(branch) = &facts.branch
         && let Some(model) = line_model(&project.config, &facts.default_branch)
@@ -426,7 +492,7 @@ pub fn commit_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
         && facts.has_commits
         && let LineVerdict::Refused(why) = line_commit_verdict(&model, branch, false, None)
     {
-        return Verdict::refuse(why);
+        return refuse_with_hint(facts, why);
     }
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
     // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
@@ -435,10 +501,13 @@ pub fn commit_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
         && !facts.merging
         && facts.has_commits
     {
-        return Verdict::refuse(format!(
-            "This would commit straight to {branch}. Work belongs on a branch for its item: run \
-             `kanbanr start <CODE>` first."
-        ));
+        return refuse_with_hint(
+            facts,
+            format!(
+                "This would commit straight to {branch}. Work belongs on a branch for its item: \
+                 run `kanbanr start <CODE>` first."
+            ),
+        );
     }
     let Some(message) = facts.message.as_deref() else {
         return Verdict::allow();
@@ -478,7 +547,10 @@ pub fn message_verdict(facts: &RepoFacts, project: &Project, board: Option<&Boar
     let message = facts.message.as_deref().unwrap_or_default();
     // A merge into a line of integration says which items it brings, generated message or not
     // (FEAT-189): a line is where "which items reached it" is read from.
-    if let Some(model) = line_model(&project.config, &facts.default_branch)
+    // Setup's own first commit is not refused as a line commit (DEF-067): its `[no-ref]` is read
+    // and noted below like any other escape.
+    if !setup_commit(facts)
+        && let Some(model) = line_model(&project.config, &facts.default_branch)
         && let Some(branch) = facts.branch.as_deref()
         && let LineVerdict::Refused(why) =
             line_commit_verdict(&model, branch, facts.merging, Some(message))
@@ -593,20 +665,28 @@ pub fn branch_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
     if !facts.has_commits && branch == facts.default_branch {
         return Verdict::allow();
     }
+    // Setup's own first commit in a repository with history (DEF-067), judged by what is staged.
+    // An unknown staged set gives no exception (ADR-0004): the old rule stands.
+    if facts.staged.is_some() && setup_commit(facts) {
+        return Verdict::allow();
+    }
     // A line of integration takes merges only (FEAT-189).
     if let Some(model) = line_model(&project.config, &facts.default_branch) {
         match line_commit_verdict(&model, branch, false, None) {
-            LineVerdict::Refused(why) => return Verdict::refuse(why),
+            LineVerdict::Refused(why) => return refuse_with_hint(facts, why),
             LineVerdict::Allowed => return Verdict::allow(),
             LineVerdict::NotALine => {}
         }
     }
     if branch == facts.default_branch {
-        return Verdict::refuse(format!(
-            "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
-             kanbanr start <CODE>\n\n\
-             (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
-        ));
+        return refuse_with_hint(
+            facts,
+            format!(
+                "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
+                 kanbanr start <CODE>\n\n\
+                 (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
+            ),
+        );
     }
     if branch_item(project, Some(branch)).is_none() {
         return Verdict::refuse(format!(
@@ -770,6 +850,8 @@ mod tests {
             merging: false,
             has_commits: true,
             message: message.map(String::from),
+            setup_pending: false,
+            staged: None,
         }
     }
 
@@ -925,6 +1007,144 @@ mod tests {
                 Some(&refs)
             ),
             TrailerReport::default()
+        );
+    }
+
+    // ---- setup's own first commit (DEF-067) ----------------------------------------------
+
+    const HINT: &str = "Setup's own first commit is the one exception";
+
+    /// Setup's facts: on main of a repository with history, the marker on disk and not in HEAD.
+    fn setup(message: Option<&str>, staged: Option<&[&str]>) -> RepoFacts {
+        let mut facts = on(Some("main"), message);
+        facts.setup_pending = true;
+        facts.staged = staged.map(|s| s.iter().map(|p| p.to_string()).collect());
+        facts
+    }
+
+    /// DEF-067 R-1, R-3: setup's commit passes the guard, pre-commit and commit-msg, with the git
+    /// model off and on; once the marker is in HEAD the same commit is refused as before.
+    #[test]
+    fn the_setup_commit_lands_on_the_default_branch_once() {
+        let msg = "[no-ref] initial setup";
+        let all: &[&str] = &[".kanbanr", "CLAUDE.md", ".gitignore"];
+        for git_model in [false, true] {
+            let p = board(git_model);
+            assert!(
+                commit_verdict(&setup(Some(msg), None), &p).is_allowed(),
+                "guard, git model {git_model}"
+            );
+            assert!(
+                branch_verdict(&setup(None, Some(all)), &p).is_allowed(),
+                "pre-commit, git model {git_model}"
+            );
+            let noted = message_verdict(&setup(Some(msg), None), &p, None);
+            assert!(noted.is_allowed(), "commit-msg, git model {git_model}");
+            assert_eq!(
+                noted.notes,
+                vec!["committing with no reference — recorded reason: initial setup"]
+            );
+            assert!(
+                branch_verdict(&setup(None, Some(&[".kanbanr"])), &p).is_allowed(),
+                "the marker alone, git model {git_model}"
+            );
+            // R-3: the marker is in HEAD, so the window has closed.
+            let mut done = setup(Some(msg), None);
+            done.setup_pending = false;
+            assert!(!commit_verdict(&done, &p).is_allowed());
+            let mut done = setup(None, Some(all));
+            done.setup_pending = false;
+            assert!(!branch_verdict(&done, &p).is_allowed());
+            if git_model {
+                let mut done = setup(Some(msg), None);
+                done.setup_pending = false;
+                assert!(!message_verdict(&done, &p, None).is_allowed());
+            }
+        }
+    }
+
+    /// DEF-067 R-2: anything but exactly setup's commit is refused as before, with the hint saying
+    /// what setup's commit takes; outside the window the refusals are today's, word for word.
+    #[test]
+    fn the_setup_window_takes_only_the_setup_files() {
+        let msg = "[no-ref] initial setup";
+        for git_model in [false, true] {
+            let p = board(git_model);
+            // pre-commit: another path, or no marker.
+            for staged in [
+                &[".kanbanr", "CLAUDE.md", "src/x.txt"][..],
+                &["CLAUDE.md"][..],
+                &["sub/.kanbanr"][..],
+                &[][..],
+            ] {
+                let facts = setup(None, Some(staged));
+                assert!(!setup_commit(&facts), "{staged:?}");
+                let why = refusal(branch_verdict(&facts, &p));
+                assert!(
+                    why.contains(HINT),
+                    "{staged:?}, git model {git_model}: {why}"
+                );
+            }
+            // An unknown staged set gives no exception at pre-commit.
+            assert!(refusal(branch_verdict(&setup(None, None), &p)).contains(HINT));
+            // guard and commit-msg: no escape, or a reference.
+            for message in [
+                "wip",
+                "x
+
+Refs: kanbanr:FEAT-001",
+            ] {
+                let facts = setup(Some(message), None);
+                assert!(!setup_commit(&facts), "{message}");
+                let why = refusal(commit_verdict(&facts, &p));
+                assert!(
+                    why.contains(HINT),
+                    "{message}, git model {git_model}: {why}"
+                );
+                if git_model {
+                    // commit-msg refuses it as a line commit, as before.
+                    assert!(
+                        refusal(message_verdict(&facts, &p, None)).contains("line of integration")
+                    );
+                }
+            }
+            // A merge in progress is not setup.
+            let mut merging = setup(Some(msg), Some(&[".kanbanr"]));
+            merging.merging = true;
+            assert!(!setup_commit(&merging));
+            assert_eq!(setup_hint(&merging), None);
+            // On an item's branch nothing changes.
+            let mut feat = setup(Some("wip"), Some(&[".kanbanr"]));
+            feat.branch = Some("feat/FEAT-001-t".into());
+            assert!(!setup_commit(&feat));
+            assert_eq!(setup_hint(&feat), None);
+            assert!(branch_verdict(&feat, &p).is_allowed());
+            assert!(refusal(commit_verdict(&feat, &p)).contains("Refs: kanbanr:FEAT-001"));
+            // Outside the window: today's refusals, word for word, with no hint.
+            let mut closed = setup(Some(msg), Some(&[".kanbanr"]));
+            closed.setup_pending = false;
+            let mut today = closed.clone();
+            today.staged = None;
+            assert_eq!(setup_hint(&closed), None);
+            assert_eq!(
+                commit_verdict(&closed, &p),
+                commit_verdict(&on(Some("main"), Some(msg)), &p)
+            );
+            assert_eq!(
+                branch_verdict(&closed, &p),
+                branch_verdict(&on(Some("main"), None), &p)
+            );
+            assert!(!refusal(commit_verdict(&closed, &p)).contains(HINT));
+            assert!(!refusal(branch_verdict(&today, &p)).contains(HINT));
+        }
+        // The exact wording, git model off.
+        let p = board(false);
+        assert_eq!(
+            refusal(commit_verdict(&setup(Some("wip"), None), &p)),
+            "This would commit straight to main. Work belongs on a branch for its item: run \
+             `kanbanr start <CODE>` first.\n\nSetup's own first commit is the one exception: \
+             stage only .kanbanr, CLAUDE.md and .gitignore, and commit them with \
+             `[no-ref] initial setup`."
         );
     }
 }
