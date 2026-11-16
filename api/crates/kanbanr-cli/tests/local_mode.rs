@@ -14484,3 +14484,297 @@ fn release_list_prints_newest_first() {
     assert_eq!(listed, want, "{json}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-059 R-3: in the DEF-083 shape, on main with the git model on, `kanbanr git guard` judges
+/// `rtk git commit -m wip` (a command-rewriting hook's wrapper) exactly as it judges the bare
+/// `git commit -m wip`: denied, with the same reason.
+#[test]
+fn a_wrapped_commit_is_judged_by_the_guard_like_a_bare_one() {
+    let base = std::env::temp_dir().join(format!("kanbanr-wrapped-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("app");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let guard = |command: &str| -> String {
+        let mut c = Command::new(cli());
+        c.args(["git", "guard"])
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                serde_json::json!({"tool_input": {"command": command}, "cwd": work})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+
+    assert!(
+        git(&["init", "-q", "--initial-branch=main"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "--allow-empty", "-m", "the project"])
+            .status
+            .success()
+    );
+    run(&[
+        "init",
+        "app",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // L-41: the board is this test's own, beside the scratch repository, before any write to it.
+    let board = kanbanr_core::project::normalize(&base.join("code").join("app.kanbanr"));
+    assert_eq!(run(&["where"]).trim(), board.display().to_string());
+    run(&["config", "workflow", "--preset", "togaf"]);
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+    std::fs::write(work.join("CLAUDE.md"), "# app\n").unwrap();
+    run(&["claude", "sync"]);
+    std::fs::write(work.join(".gitignore"), ".claude/settings.local.json\n").unwrap();
+    assert!(
+        git(&["add", ".kanbanr", "CLAUDE.md", ".gitignore"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] initial setup"])
+            .status
+            .success()
+    );
+    run(&["config", "cadence", "--sprints", "on", "--releases", "on"]);
+    let model = run(&["git", "model"]);
+    assert!(model.contains("automation: on"), "{model}");
+
+    // Work on main, staged.
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("src/x.txt"), "x\n").unwrap();
+    assert!(git(&["add", "src/x.txt"]).status.success());
+
+    let reason = |said: &str| -> String {
+        let answer: serde_json::Value = serde_json::from_str(said)
+            .unwrap_or_else(|e| panic!("{e}: the guard's answer: {said}"));
+        assert_eq!(
+            answer["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{said}"
+        );
+        answer["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let bare = reason(&guard("git commit -m wip"));
+    assert!(!bare.is_empty());
+    let wrapped = reason(&guard("rtk git commit -m wip"));
+    assert_eq!(
+        wrapped, bare,
+        "the wrapped commit is judged as the bare one"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-059 R-10: a test run through a wrapper that condenses its output (`rtk`) is named to
+/// Claude in the capture hook's answer, both when nothing could be read and when only some
+/// results were read; the same run through `rtk proxy`, which leaves the output alone, is read
+/// and recorded with no notice.
+#[test]
+fn capture_says_when_a_wrapper_condensed_a_test_run() {
+    let base = std::env::temp_dir().join(format!("kanbanr-condensed-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let exec = |args: &[&str], stdin: Option<&str>| -> Output {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT");
+        match stdin {
+            None => {
+                cmd.stdin(std::process::Stdio::null());
+                cmd.output().expect("run kanbanr CLI")
+            }
+            Some(text) => {
+                use std::io::Write;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().expect("spawn kanbanr CLI");
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                child.wait_with_output().expect("run kanbanr CLI")
+            }
+        }
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args, None);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // The board is this test's own, never the repository's (L-41).
+    let board = PathBuf::from(run(&["where"]).trim());
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{board:?}"
+    );
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Basket",
+        "--milestone",
+        "MS-001",
+    ]);
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a basket's items\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN an item is added, THE SYSTEM SHALL keep it.\"\n\
+         \x20   tests:\n      - name: a::b\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    let capture = |command: &str, stdout: &str| -> Output {
+        let payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": stdout, "stderr": ""},
+        })
+        .to_string();
+        let o = exec(&["capture"], Some(&payload));
+        assert!(
+            o.status.success(),
+            "capture failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        o
+    };
+    let context = |o: &Output| -> String {
+        let answer: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|e| {
+            panic!("{e}: {}", String::from_utf8_lossy(&o.stdout));
+        });
+        assert_eq!(answer["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // Condensed to a summary: nothing read, and the notice names the wrapper.
+    let summary = capture("rtk cargo test", "test result: ok. 12 passed\n");
+    let said = context(&summary);
+    assert!(said.contains("read no test result"), "{said}");
+    assert!(
+        said.contains("`rtk`") && said.contains("`rtk proxy"),
+        "{said}"
+    );
+    assert!(run(&["feature", "show", "FEAT-001"]).contains("- [ ] `a::b`"));
+
+    // Condensed to the failures: the one kept is recorded red, and the notice says how many.
+    let failures = capture("rtk cargo test", "test a::b ... FAILED\n");
+    let said = context(&failures);
+    assert!(said.contains("`rtk`"), "{said}");
+    assert!(said.contains("only 1 result(s)"), "{said}");
+    assert!(!said.contains("read no test result"), "{said}");
+    assert!(run(&["feature", "show", "FEAT-001"]).contains("- [~] `a::b`"));
+
+    // Through `rtk proxy` the output is cargo's own: recorded green, and nothing to say.
+    let proxied = capture(
+        "rtk proxy cargo test",
+        "running 1 test\ntest a::b ... ok\n\ntest result: ok. 1 passed; 0 failed\n",
+    );
+    assert!(
+        proxied.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&proxied.stdout)
+    );
+    assert!(run(&["feature", "show", "FEAT-001"]).contains("- [x] `a::b`"));
+    let _ = std::fs::remove_dir_all(&base);
+}
