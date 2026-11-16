@@ -3144,7 +3144,7 @@ mod tests {
             serde_json::json!({
                 "version_files": [{"path": "api/Cargo.toml"}, {"path": "api/Cargo.lock", "match": "name = \"x\"\nversion = \"{version}\""}],
                 "changelog": "CHANGELOG.md",
-                "notes": "docs/src/releases/{version}.md",
+                "notes": "docs/guide/releases/{version}.md",
             }),
         )
         .unwrap();
@@ -3159,7 +3159,7 @@ mod tests {
         )
         .unwrap();
         assert!(prep.get("changelog").is_none(), "{prep}");
-        assert_eq!(prep["notes"], "docs/src/releases/{version}.md");
+        assert_eq!(prep["notes"], "docs/guide/releases/{version}.md");
         assert!(
             call(
                 "PUT",

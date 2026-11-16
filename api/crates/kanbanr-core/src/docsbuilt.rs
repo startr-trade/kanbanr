@@ -465,7 +465,7 @@ fn repository_unbuilt(
 mod tests {
     use super::*;
 
-    const SPEC: &str = "## Design\n\nChanges `api/src/x.rs` and `docs/src/not-here.md`.\n\n### Affects docs\nBoard docs: [design/data-flow.md](/p/k/docs/file/design/data-flow.md), `design/data-flow.md`.\nRepository docs: `docs/src/using/living-docs.md`, `SECURITY.md`, `CHANGELOG.md`, `docs/src/a/*.md`.\nRelated: [FEAT-1](/p/k/feature/FEAT-1), [guide](docs/src/guides/g.md), `some words.md`, `https://x/y.md`.\n\n### After\nSee `docs/src/after.md`.\n";
+    const SPEC: &str = "## Design\n\nChanges `api/src/x.rs` and `docs/guide/not-here.md`.\n\n### Affects docs\nBoard docs: [design/data-flow.md](/p/k/docs/file/design/data-flow.md), `design/data-flow.md`.\nRepository docs: `docs/guide/using/living-docs.md`, `SECURITY.md`, `CHANGELOG.md`, `docs/guide/a/*.md`.\nRelated: [FEAT-1](/p/k/feature/FEAT-1), [guide](docs/guide/guides/g.md), `some words.md`, `https://x/y.md`.\n\n### After\nSee `docs/guide/after.md`.\n";
 
     #[test]
     fn repository_docs_are_read_from_the_affects_docs_section_only() {
@@ -476,12 +476,12 @@ mod tests {
             vec![
                 "CHANGELOG.md",
                 "SECURITY.md",
-                "docs/src/guides/g.md",
-                "docs/src/using/living-docs.md"
+                "docs/guide/guides/g.md",
+                "docs/guide/using/living-docs.md"
             ]
         );
         // No heading, no documents.
-        assert!(repository_docs("## Design\n`docs/src/x.md`\n", &board).is_empty());
+        assert!(repository_docs("## Design\n`docs/guide/x.md`\n", &board).is_empty());
     }
 
     /// DEF-046 R-1: board docs linked under `Affects docs` are read as this project's doc keys.
@@ -494,7 +494,7 @@ mod tests {
             - [ADR](/p/demo/docs/file/decisions/0015-pin.md?v=2).\n\
             - [other](/p/elsewhere/docs/file/design/theirs.md).\n\
             - [FEAT-1](/p/demo/feature/FEAT-1), [MS-1](/p/demo/milestone/MS-1).\n\
-            - Repository docs: `docs/src/x.md`.\n\n\
+            - Repository docs: `docs/guide/x.md`.\n\n\
             ### After\n[later](/p/demo/docs/file/design/after.md)\n";
         assert_eq!(
             linked_board_docs(spec, "demo"),
@@ -532,7 +532,7 @@ mod tests {
             "Update skill/kanbanr/SKILL.md for the rule",
             &listed
         ));
-        assert!(is_docs_task("Write docs/src/using/x.md", &[]));
+        assert!(is_docs_task("Write docs/guide/using/x.md", &[]));
         assert!(is_docs_task("Changelog entry in CHANGELOG.md", &[]));
         assert!(is_docs_task("Mention it in README.md.", &[]));
         assert!(!is_docs_task("Refactor the parser", &listed));
@@ -611,7 +611,7 @@ mod tests {
         let b = item(
             &store,
             "B",
-            "## Design\n\n### Affects docs\nRepository docs: `docs/src/b.md`.\n",
+            "## Design\n\n### Affects docs\nRepository docs: `docs/guide/b.md`.\n",
             &[],
         );
         task(&store, &b, "Build it", TaskState::Completed);
@@ -621,17 +621,17 @@ mod tests {
         let got = judge(&store, &b, Some(&repo));
         assert_eq!(got.unbuilt.len(), 1, "{got:?}");
         assert_eq!(got.unbuilt[0].kind, DocKind::Repository);
-        assert!(got.unbuilt[0].why.contains("docs/src/b.md has not changed"));
+        assert!(got.unbuilt[0].why.contains("docs/guide/b.md has not changed"));
         // Once the branch changes it, the item is built.
-        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
-        crate::coderepo::tests::commit_file(&repo, "docs/src/b.md", "b\n", "docs");
+        std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "docs/guide/b.md", "b\n", "docs");
         let got = judge(&store, &b, Some(&repo));
         assert!(got.is_built(), "{got:?}");
         crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
 
         // A task that writes docs and is not complete: only the task rule fails.
         let c = item(&store, "C", "", &[]);
-        task(&store, &c, "Write docs/src/c.md", TaskState::InProgress);
+        task(&store, &c, "Write docs/guide/c.md", TaskState::InProgress);
         let got = judge(&store, &c, Some(&repo));
         assert_eq!(got.unbuilt.len(), 1, "{got:?}");
         assert_eq!(got.unbuilt[0].kind, DocKind::Task);
@@ -651,14 +651,14 @@ mod tests {
         let code = item(
             &store,
             "Open",
-            "## Design\n\n### Affects docs\nRepository docs: `docs/src/o.md`.\n",
+            "## Design\n\n### Affects docs\nRepository docs: `docs/guide/o.md`.\n",
             &[],
         );
         task(&store, &code, "Build the parser", TaskState::InProgress);
         let branch = branch_for(&store, &code);
         crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
-        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
-        crate::coderepo::tests::commit_file(&repo, "docs/src/o.md", "o\n", "docs");
+        std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "docs/guide/o.md", "o\n", "docs");
         let got = judge(&store, &code, Some(&repo));
         assert!(!got.changes_no_documents);
         assert_eq!(
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn unreadable_repository_docs_hold_the_signoff_and_say_why() {
         let (store, dir, repo) = fixture("unreadable");
-        let code = item(&store, "R", "### Affects docs\n`docs/src/r.md`\n", &[]);
+        let code = item(&store, "R", "### Affects docs\n`docs/guide/r.md`\n", &[]);
         task(&store, &code, "Build it", TaskState::Completed);
         let got = judge(&store, &code, None);
         assert!(!got.is_built());

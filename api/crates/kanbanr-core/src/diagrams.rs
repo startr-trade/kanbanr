@@ -184,7 +184,7 @@ mod tests {
     fn the_books_diagrams_pass_the_lint() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let mut files = vec![root.join("README.md"), root.join("skill/kanbanr/SKILL.md")];
-        let mut dirs = vec![root.join("docs/src")];
+        let mut dirs = vec![root.join("docs/guide"), root.join("docs/system")];
         while let Some(d) = dirs.pop() {
             for e in std::fs::read_dir(&d).unwrap().flatten() {
                 let p = e.path();

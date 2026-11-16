@@ -196,7 +196,7 @@ pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path)
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
     // A linked worktree's file seen from the main checkout (DEF-065): judge it by its path inside
-    // the worktree, or `docs/src/x.md` there counts as a loose note in the main checkout.
+    // the worktree, or `docs/guide/x.md` there counts as a loose note in the main checkout.
     let relative = match relative.as_slice() {
         [claude, worktrees, _name, rest @ ..]
             if claude == ".claude" && worktrees == "worktrees" =>
@@ -244,7 +244,7 @@ fn resolve_lexically(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
 /// level of the folder the file is in rather than the session's checkout.
 ///
 /// The file's own repository decides: in a linked worktree that is the worktree, so its
-/// `docs/src/x.md` is the book, not a stray note in the main checkout. The file, and often its
+/// `docs/guide/x.md` is the book, not a stray note in the main checkout. The file, and often its
 /// folder, does not exist yet, so git is asked from the nearest existing ancestor. That top level is
 /// taken only when it shares `fallback_root`'s git common directory, so it is the session
 /// repository or one of its worktrees. Otherwise, or when git gives no answer, `fallback_root` is
@@ -918,7 +918,7 @@ mod tests {
         let worktree = main.join(".claude/worktrees/ftr");
         for root in [main, worktree.as_path()] {
             for path in [
-                "/work/shop/.claude/worktrees/ftr/docs/src/x.md",
+                "/work/shop/.claude/worktrees/ftr/docs/guide/x.md",
                 "/work/shop/.claude/worktrees/ftr/CHANGELOG.md",
                 "/work/shop/.claude/worktrees/ftr/skill/kanbanr/SKILL.md",
                 "/work/shop/.claude/worktrees/ftr/crates/a/tests/fixtures/b.md",

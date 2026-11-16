@@ -258,7 +258,7 @@ pub struct ReleasePrepare {
     pub changelog: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changelog_copies: Vec<String>,
-    /// A path template naming `{version}` or `{number}`, e.g. `docs/src/releases/{version}.md`.
+    /// A path template naming `{version}` or `{number}`, e.g. `docs/guide/releases/{version}.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -786,7 +786,7 @@ mod tests {
              production: { requires: [main_at_release, pushed], on_enter: [tag] }\n\
              release_prepare:\n  version_files:\n    - path: api/Cargo.toml\n    \
              - { path: api/Cargo.lock, match: \"name = \\\"x\\\"\\nversion = \\\"{version}\\\"\" }\n  \
-             changelog: CHANGELOG.md\n  notes: docs/src/releases/{version}.md\n",
+             changelog: CHANGELOG.md\n  notes: docs/guide/releases/{version}.md\n",
         )
         .unwrap();
         assert_eq!(c.release_stages, ["candidate", "main", "production"]);

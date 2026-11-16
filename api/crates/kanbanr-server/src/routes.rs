@@ -24,7 +24,7 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
 /// The published description of the public read API (FEAT-177), as committed: generated from the
 /// response types by `cargo run -p kanbanr-core --features schema --example openapi`, and checked
 /// against them by the contract test, so these bytes are what the code describes.
-pub const OPENAPI_JSON: &str = include_str!("../../../../docs/src/reference/openapi.json");
+pub const OPENAPI_JSON: &str = include_str!("../../../../docs/guide/reference/openapi.json");
 
 /// `GET /api/openapi.json`.
 pub async fn openapi() -> impl IntoResponse {

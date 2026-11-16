@@ -388,7 +388,7 @@ mod tests {
         ] {
             assert!(section.contains(w), "missing {w}");
         }
-        assert!(!flat.contains("`docs/src/guides/delivery-pipeline.md` says"));
+        assert!(!flat.contains("`docs/guide/guides/delivery-pipeline.md` says"));
         for w in ["manual trigger", "scan", "publish"] {
             assert!(flat.contains(w), "missing {w}");
         }

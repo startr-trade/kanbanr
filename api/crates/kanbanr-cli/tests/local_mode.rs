@@ -3444,7 +3444,7 @@ fn check_names_the_documents_still_unbuilt() {
             "FEAT-001",
             "TL-001",
             "--text",
-            "Write docs/src/cart.md",
+            "Write docs/guide/cart.md",
         ],
     ));
     ok(run_in(
@@ -9579,7 +9579,7 @@ fn release_notes_survive_a_notes_path_change() {
             "config",
             "release-prepare",
             "--notes",
-            "docs/src/releases/{version}.md",
+            "docs/guide/releases/{version}.md",
         ],
     ));
     let shown = ok(run_in(&base, &work, &["release", "notes", "v1.0.0"]));
@@ -12560,7 +12560,7 @@ gates:
 }
 
 /// DEF-055: a code repository with the git model on and FEAT-001 started, its spec linking
-/// `docs/src/cart.md` under `Affects docs`, one task complete, and that doc changed on its branch.
+/// `docs/guide/cart.md` under `Affects docs`, one task complete, and that doc changed on its branch.
 /// The `docs-folded` sign-off is offered at the Completed stage.
 fn docs_folded_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let (base, work) = togaf_scratch(tag);
@@ -12574,7 +12574,7 @@ fn docs_folded_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         "edit",
         "FEAT-001",
         "--spec",
-        "## Design\n\nChanges the cart.\n\n### Affects docs\n- `docs/src/cart.md`\n",
+        "## Design\n\nChanges the cart.\n\n### Affects docs\n- `docs/guide/cart.md`\n",
     ]);
     run(&["todo", "add", "FEAT-001", "--description", "work"]);
     run(&[
@@ -12586,11 +12586,11 @@ fn docs_folded_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         "Write the cart code",
     ]);
     run(&["start", "FEAT-001"]);
-    std::fs::create_dir_all(work.join("docs/src")).unwrap();
+    std::fs::create_dir_all(work.join("docs/guide")).unwrap();
     commit_file_in(
         &base,
         &work,
-        "docs/src/cart.md",
+        "docs/guide/cart.md",
         "# Cart\n",
         "docs: the cart\n\nRefs: kanbanr:FEAT-001",
     );

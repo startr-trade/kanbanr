@@ -16,13 +16,13 @@ const shipped = { ...draft, state: "shipped", stage: "production" };
 const notes = {
   version: "v0.3.0",
   branch: "release/v0.3.0",
-  path: "docs/src/releases/v0.3.0.md",
+  path: "docs/guide/releases/v0.3.0.md",
   text: "# v0.3.0\n",
   at: "8f995e1",
   editable: true,
 };
 const shippedNotes = { ...notes, editable: false, why_not: "v0.3.0 has shipped: its notes are as they shipped" };
-const path = "docs/src/releases/{version}.md";
+const path = "docs/guide/releases/{version}.md";
 
 const problems = [];
 const expect = (name, cond, got) => {

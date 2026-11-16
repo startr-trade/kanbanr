@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// The fields of a board file this version of kanbanr does not know (FEAT-151). See
-/// `docs/src/project/stability.md`: reading a newer board is safe, and so is rewriting it.
+/// `docs/guide/project/stability.md`: reading a newer board is safe, and so is rewriting it.
 pub type Extra = std::collections::BTreeMap<String, serde_json::Value>;
 
 /// How [`Extra`] is described in the published API (FEAT-177): keys a newer kanbanr wrote, of any

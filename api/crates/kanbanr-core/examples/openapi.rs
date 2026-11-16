@@ -1,5 +1,5 @@
-//! Write the read API's OpenAPI description to `docs/src/reference/openapi.json`, and its route
-//! table into `docs/src/reference/http-api.md` (FEAT-177).
+//! Write the read API's OpenAPI description to `docs/guide/reference/openapi.json`, and its route
+//! table into `docs/guide/reference/http-api.md` (FEAT-177).
 //!
 //! `cargo run -p kanbanr-core --features schema --example openapi` — or with `--check`, change
 //! nothing and fail when a committed copy differs from what the code describes.
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../docs/src/reference");
+    let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../docs/guide/reference");
     let json = reference.join("openapi.json");
     let page = reference.join("http-api.md");
     let check = std::env::args().any(|a| a == "--check");

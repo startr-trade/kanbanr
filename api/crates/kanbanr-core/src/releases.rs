@@ -6547,7 +6547,7 @@ pub(crate) mod tests {
         let (store, dir, repo) = notes_fixture("notes-moved");
         let before = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert_eq!(before.path, "docs/releases/v0.2.0.md");
-        set_notes_template(&store, &dir, "docs/src/releases/{version}.md");
+        set_notes_template(&store, &dir, "docs/guide/releases/{version}.md");
         let after = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert_eq!(after.path, "docs/releases/v0.2.0.md");
         assert_eq!(after.text, before.text);
@@ -6567,7 +6567,7 @@ pub(crate) mod tests {
         assert_eq!(saved.notes.path, "docs/releases/v0.2.0.md");
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         assert!(
-            coderepo::read_blob(&repo, &tip, "docs/src/releases/v0.2.0.md")
+            coderepo::read_blob(&repo, &tip, "docs/guide/releases/v0.2.0.md")
                 .unwrap()
                 .is_none()
         );
@@ -6601,7 +6601,7 @@ pub(crate) mod tests {
         let (store, dir, repo) = shipped_fixture("notes-shipped");
         assert_eq!(v2(&store).state, super::ReleaseState::Shipped);
         coderepo::git(&repo, &["branch", "-q", "-D", "release/v0.2.0"]).unwrap();
-        set_notes_template(&store, &dir, "docs/src/releases/{version}.md");
+        set_notes_template(&store, &dir, "docs/guide/releases/{version}.md");
         let tag = coderepo::rev_parse(&repo, "refs/tags/v0.2.0").unwrap();
         let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert_eq!(read.path, "docs/releases/v0.2.0.md");
@@ -6610,13 +6610,13 @@ pub(crate) mod tests {
 
         // The tag lacks the recorded file; main has the notes at today's path.
         set_recorded(&store, "docs/gone/v0.2.0.md");
-        std::fs::create_dir_all(repo.join("docs/src/releases")).unwrap();
-        std::fs::write(repo.join("docs/src/releases/v0.2.0.md"), "# moved\n").unwrap();
+        std::fs::create_dir_all(repo.join("docs/guide/releases")).unwrap();
+        std::fs::write(repo.join("docs/guide/releases/v0.2.0.md"), "# moved\n").unwrap();
         coderepo::git(&repo, &["add", "-A"]).unwrap();
         coderepo::git(&repo, &["commit", "-q", "-m", "moved"]).unwrap();
         let main = coderepo::rev_parse(&repo, "main").unwrap();
         let moved = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
-        assert_eq!(moved.path, "docs/src/releases/v0.2.0.md");
+        assert_eq!(moved.path, "docs/guide/releases/v0.2.0.md");
         assert_eq!(moved.text, "# moved\n");
         assert_eq!(moved.at, main[..7]);
         let _ = std::fs::remove_dir_all(&dir);
@@ -6630,7 +6630,7 @@ pub(crate) mod tests {
         board_history(&dir);
         set_recorded(&store, "");
         set_notes_template(&store, &dir, "docs/book/{version}.md");
-        set_notes_template(&store, &dir, "docs/src/releases/{version}.md");
+        set_notes_template(&store, &dir, "docs/guide/releases/{version}.md");
         let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert_eq!(read.path, "docs/releases/v0.2.0.md");
         assert!(read.text.starts_with("# v0.2.0"));

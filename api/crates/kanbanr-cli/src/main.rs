@@ -1225,7 +1225,7 @@ enum ConfigCmd {
         /// none).
         #[arg(long = "changelog-copy")]
         changelog_copies: Vec<String>,
-        /// Where the notes draft goes, e.g. `docs/src/releases/{version}.md` ("" for none).
+        /// Where the notes draft goes, e.g. `docs/guide/releases/{version}.md` ("" for none).
         #[arg(long)]
         notes: Option<String>,
         /// Where the notes are listed: `PATH::AFTER::ENTRY` puts ENTRY below the line AFTER in
@@ -11643,7 +11643,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
 }
 
 /// Where a release's notes are, as `release notes` heads them: `release/v0.3.0 @ 8f995e1:
-/// docs/src/releases/v0.3.0.md`.
+/// docs/guide/releases/v0.3.0.md`.
 fn notes_where(notes: &Value) -> String {
     format!(
         "{} @ {}: {}",
@@ -12805,9 +12805,9 @@ mod tests {
             "function RecordResult(",
             Some("function ReleaseNotesSection"),
         );
-        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let guide = include_str!("../../../../docs/guide/using/processes.md");
         let guide = between(guide, "### Gate results", Some("\n## "));
-        let cli_ref = include_str!("../../../../docs/src/reference/cli.md");
+        let cli_ref = include_str!("../../../../docs/guide/reference/cli.md");
         let named = [
             "github",
             "gitlab",

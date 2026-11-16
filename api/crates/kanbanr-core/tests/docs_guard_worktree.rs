@@ -67,7 +67,7 @@ fn a_linked_worktree_is_judged_by_its_own_root() {
 
     for worktree in [&under, &beside] {
         for file in [
-            "docs/src/book.md",
+            "docs/guide/book.md",
             "CHANGELOG.md",
             "skill/kanbanr/SKILL.md",
             "api/tests/fixtures/board.md",

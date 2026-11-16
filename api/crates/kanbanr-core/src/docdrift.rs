@@ -78,7 +78,7 @@ pub const COMMON_FILES: &[&str] = &[
 ];
 
 /// The published API description, read for routes only: it is where a route change surfaces.
-const OPENAPI: &str = "docs/src/reference/openapi.json";
+const OPENAPI: &str = "docs/guide/reference/openapi.json";
 
 /// Is this repository path documentation (so it contributes no names)? Anything under `docs/`,
 /// Markdown, a changelog, an image, a lockfile.
@@ -1785,11 +1785,11 @@ mod tests {
     fn documentation_files_contribute_no_names() {
         let patch = format!(
             "{}{}{}{}",
-            file_patch("docs/src/a.md", &["+Use --allow-writes and KANBANR_BIND."]),
+            file_patch("docs/guide/a.md", &["+Use --allow-writes and KANBANR_BIND."]),
             file_patch("CHANGELOG.md", &["+- `--since` added"]),
             file_patch("Cargo.lock", &["+name = \"--oddly-named\""]),
             file_patch(
-                "docs/src/reference/openapi.json",
+                "docs/guide/reference/openapi.json",
                 &[
                     "+    \"/projects/{project}/drift\": {",
                     "+      \"description\": \"--not-a-route KANBANR_X\",",
