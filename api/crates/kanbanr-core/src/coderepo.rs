@@ -678,6 +678,32 @@ pub fn changed_files(
         .collect())
 }
 
+/// The files changed from `from` to `to` (`git diff --name-only --no-renames -z from to --`), or
+/// None when `from` is not an ancestor of `to` (the branch was rewritten) or git fails (DEF-072).
+pub fn changed_between(
+    root: &Path,
+    from: &str,
+    to: &str,
+) -> Option<std::collections::BTreeSet<String>> {
+    if from.is_empty() || to.is_empty() || from.starts_with('-') || to.starts_with('-') {
+        return None;
+    }
+    if !is_ancestor(root, from, to) {
+        return None;
+    }
+    let out = git(
+        root,
+        &["diff", "--name-only", "--no-renames", "-z", from, to, "--"],
+    )
+    .ok()?;
+    Some(
+        out.split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 /// The files `branch` changed since it left `line` (DEF-091). For a branch `line` does not contain,
 /// `changed_files(root, line, branch)`. For one it contains, the diff from the merge base of
 /// `branch` and the line as it stood just before the merge commit that brought `branch` in (the
