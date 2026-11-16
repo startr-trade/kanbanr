@@ -1860,12 +1860,21 @@ impl Store {
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
         // A person's own move to an end status of an item that waits for its release's cut needs
-        // a reason, as a gate override does (DEF-019). The cut itself is exempt.
+        // a reason, as a gate override does (DEF-019). The cut itself is exempt, and so is
+        // integrating the item into its own open release's branch: that is the step that makes the
+        // release ready, not finishing the item ahead of the cut (DEF-077).
         let cut_wait = if !cut && crate::graph::is_finished_work(&project.config, to) {
-            crate::graph::waits_for_cut(
-                &project.config,
-                &ctx.unshipped_releases,
-                project.feature(code)?,
+            let feature = project.feature(code)?;
+            crate::graph::waits_for_cut(&project.config, &ctx.unshipped_releases, feature).filter(
+                |_| {
+                    !crate::gitmodel::integrates_into_release(
+                        &project.config,
+                        &ctx.releases,
+                        ctx.branch_facts(),
+                        feature,
+                        to,
+                    )
+                },
             )
         } else {
             None
