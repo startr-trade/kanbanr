@@ -141,4 +141,21 @@ pub(crate) mod tests {
         assert!(text.contains("text: |-\n  one\n  two\n"), "{text}");
         assert!(text.contains(&format!("long: {}\n", long.trim())), "{text}");
     }
+
+    /// MNT-007 R-8: a Windows path, backslashes and all, is written so that it reads back
+    /// unchanged (serde-saphyr quotes it on its own; this pins that).
+    #[test]
+    fn a_path_with_backslashes_round_trips() {
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct Board {
+            path: String,
+            paths: Vec<String>,
+        }
+        let board = Board {
+            path: r"C:\Users\x\board".to_string(),
+            paths: vec![r"\\?\C:\Users\x\board".to_string(), r"a\b.rs".to_string()],
+        };
+        let text = to_string(&board).unwrap();
+        assert_eq!(from_str::<Board>(&text).unwrap(), board, "{text}");
+    }
 }

@@ -260,10 +260,13 @@ pub fn verify(what: &str, bytes: &[u8], expected: &str) -> Result<()> {
 }
 
 /// Where the running executable lives, resolved through any symlink so a rename replaces the real
-/// file rather than the link pointing at it.
+/// file rather than the link pointing at it. Without Windows' verbatim prefix, so the path the
+/// update shows and the backup beside it read as ordinary paths (MNT-007).
 pub fn running_binary() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("could not find this executable's own path")?;
-    Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
+    Ok(std::fs::canonicalize(&exe)
+        .map(kanbanr_core::project::without_verbatim_prefix)
+        .unwrap_or(exe))
 }
 
 /// How many redirects the updater will follow before giving up.

@@ -120,6 +120,18 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Every scanner suppression has a reason and an expiry": LOCAL,
             "actionlint": LOCAL,
         },
+        "installers": {
+            "Install shellcheck": "installs a system package on the runner",
+            "shellcheck the installer and its verifier": LOCAL,
+            "The PowerShell installer and its verifier parse": LOCAL,
+            "The installers pin https on request and redirect": LOCAL,
+            "The installer's targets are the targets we publish": LOCAL,
+            "The installer's skill step does what it says": LOCAL,
+            "The installer's editor step does what it says": LOCAL,
+        },
+    },
+    # The dependency tier (MNT-007): what ci.yml's supply-chain job and TLS step ran, and the MSRV build.
+    "deps.yml": {
         "supply-chain": {
             "cargo deny (licences, bans, sources, advisories)": LOCAL,
             "cargo audit (RustSec advisories, yanked crates)": LOCAL,
@@ -128,15 +140,12 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Builds are locked and installs are clean": LOCAL,
             "The SBOMs build and are valid CycloneDX": LOCAL,
         },
-        "installers": {
+        "tls-backend": {
             "The CLI links a TLS backend": LOCAL,
-            "Install shellcheck": "installs a system package on the runner",
-            "shellcheck the installer and its verifier": LOCAL,
-            "The PowerShell installer and its verifier parse": LOCAL,
-            "The installers pin https on request and redirect": LOCAL,
-            "The installer's targets are the targets we publish": LOCAL,
-            "The installer's skill step does what it says": LOCAL,
-            "The installer's editor step does what it says": LOCAL,
+        },
+        "msrv": {
+            "Install build deps (Linux)": "installs system packages on the runner; the local toolchain builds the same code",
+            "The workspace builds on its declared rust-version": LOCAL,
         },
     },
     "codeql.yml": {
