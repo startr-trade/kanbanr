@@ -2876,7 +2876,10 @@ fn the_charter_agreed_after_setup_commits_its_block_on_main() {
     let extra = exec(&["git", "check-branch"]);
     assert!(!extra.status.success());
     let why = String::from_utf8_lossy(&extra.stderr);
-    assert!(why.contains("A refresh of CLAUDE.md's generated block"), "{why}");
+    assert!(
+        why.contains("A refresh of CLAUDE.md's generated block"),
+        "{why}"
+    );
     assert!(git(&["reset", "-q", "--", "src/x.txt"]).status.success());
 
     // R-1: CLAUDE.md alone passes pre-commit and commit-msg, and the checkout ends clean.

@@ -386,7 +386,10 @@ mod tests {
         let open = format!("# app\n\n{BEGIN}\n\nA\n");
         assert!(!block_only_change(&open, &open.replace("A\n", "B\n")));
         let backwards = format!("{END}\n# app\n{BEGIN}\nA\n");
-        assert!(!block_only_change(&backwards, &backwards.replace("A\n", "B\n")));
+        assert!(!block_only_change(
+            &backwards,
+            &backwards.replace("A\n", "B\n")
+        ));
         // HEAD with no CLAUDE.md reads as empty: a block-only file is a refresh.
         assert!(block_only_change("", &block_a));
     }

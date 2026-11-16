@@ -1007,7 +1007,11 @@ pub(crate) mod tests {
         // Committed: the window closes.
         std::fs::write(repo.join("CLAUDE.md"), &block_b).unwrap();
         git(&repo, &["add", "CLAUDE.md"]).unwrap();
-        git(&repo, &["commit", "-q", "-m", "[no-ref] refresh the kanbanr block"]).unwrap();
+        git(
+            &repo,
+            &["commit", "-q", "-m", "[no-ref] refresh the kanbanr block"],
+        )
+        .unwrap();
         assert!(!claude_block_refresh(&repo, true));
         assert!(!claude_block_refresh(&repo, false));
         let _ = std::fs::remove_dir_all(&repo);
