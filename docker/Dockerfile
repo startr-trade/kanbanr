@@ -27,7 +27,7 @@ RUN npm run build      # -> /web/dist
 # rules that out, and the bare `rust:1.98-slim` tag would float to whatever Debian is newest.
 # (The release ARCHIVES are a different build — Ubuntu 22.04 runners — so they still run on
 # bookworm and newer; this pin only decides the image.)
-FROM rust:1.98-slim-trixie AS chef
+FROM rust:1.98.1-slim-trixie AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /api
 
