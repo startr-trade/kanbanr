@@ -2498,6 +2498,12 @@ fn dispatch_routes(
             )?)
         }
 
+        // ---- items, filtered (FTR-048) ----
+        ("GET", ["projects", p, "items"]) => {
+            let filter = crate::items::parse_filter(query)?;
+            ser(&crate::items::list(store, p, &filter)?)
+        }
+
         // ---- project charter (FEAT-046) ----
         ("GET", ["projects", p, "charter"]) => {
             store.load_meta(p)?; // the project must exist; an absent charter is a valid default

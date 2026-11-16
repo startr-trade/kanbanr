@@ -1650,6 +1650,10 @@
             },
             "type": "array"
           },
+          "affects_no_docs": {
+            "description": "Why this item changes no doc, in the person's words (DEF-075), recorded when they confirm\nit does: it silences the 'declares no docs' warning that a `docs_updated` gate gives an item\nnaming none. Like `affects_docs` it is design, outside the agreed content, and declared\nafter it, so an older binary keeps it in `extra` and writes it back in the same place.",
+            "type": "string"
+          },
           "approval": {
             "$ref": "#/components/schemas/Approval",
             "description": "Who agreed to this definition, when, and what exactly they agreed to (FEAT-048)."
@@ -2477,6 +2481,67 @@
         ],
         "type": "object"
       },
+      "ItemRow": {
+        "description": "One item in the list.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "milestone": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "req_proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sprint": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tests_planned": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests_red": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "milestone",
+          "req_total",
+          "req_proven",
+          "tests_red",
+          "tests_planned",
+          "stale"
+        ],
+        "type": "object"
+      },
       "Judgement": {
         "properties": {
           "at": {
@@ -2827,6 +2892,10 @@
               }
             ],
             "description": "The newest kept result for this test, so a failed check shows who failed it."
+          },
+          "opens_at": {
+            "description": "The build stage the check opens at (DEF-076); empty when the check is due.",
+            "type": "string"
           },
           "requirement": {
             "type": "string"
@@ -5172,6 +5241,10 @@
           },
           "stage": {
             "type": "string"
+          },
+          "undoes": {
+            "description": "The stage this change undid (`kanbanr release undo`, DEF-034); empty on every other change.\nAn older binary keeps it in `extra` and reads the change as a move back to `stage`.",
+            "type": "string"
           }
         },
         "required": [
@@ -6592,6 +6665,121 @@
           }
         },
         "summary": "The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included"
+      }
+    },
+    "/api/projects/{project}/items": {
+      "get": {
+        "operationId": "getProjectsItems",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items of this kind, compared lower-cased and trimmed; `none` for items with no kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items in this status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items in this milestone.",
+            "in": "query",
+            "name": "milestone",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items whose definition serves this charter goal.",
+            "in": "query",
+            "name": "goal",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items planned into this sprint.",
+            "in": "query",
+            "name": "sprint",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items assigned to this release.",
+            "in": "query",
+            "name": "release",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items whose evidence shows this: a red test, a planned test, stale evidence, a requirement unproven, every requirement proven, or a requirement with no test.",
+            "in": "query",
+            "name": "evidence",
+            "required": false,
+            "schema": {
+              "enum": [
+                "red",
+                "planned",
+                "stale",
+                "unproven",
+                "proven",
+                "untested"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ItemRow"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Items, filtered"
       }
     },
     "/api/projects/{project}/lessons": {
