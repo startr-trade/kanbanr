@@ -1261,6 +1261,656 @@ pub fn drift(
     }
 }
 
+// ---- detection ------------------------------------------------------------------------------
+
+/// How deep the folder walk of [`detect`] goes.
+const WALK_DEPTH: usize = 4;
+/// The most entries the walk visits before it stops.
+const WALK_LIMIT: usize = 20_000;
+/// Folders the walk never enters.
+const WALK_SKIP: [&str; 7] = [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    ".venv",
+];
+/// The most of a file a [`Detect::Text`] rule reads.
+const TEXT_LIMIT: u64 = 256 * 1024;
+
+/// An option the project's folder or facts record implies, and what implied it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Detected {
+    pub option: String,
+    /// The matching path, `file: contains`, or `facts: <fact>=<value>`.
+    pub evidence: String,
+}
+
+/// The entries of a project folder, walked once: relative paths with `/` separators.
+struct Walk {
+    root: PathBuf,
+    files: Vec<String>,
+    dirs: Vec<String>,
+}
+
+impl Walk {
+    /// Walks `root` to [`WALK_DEPTH`], skipping [`WALK_SKIP`] and never following a link, and
+    /// stops after [`WALK_LIMIT`] entries. Sorted, so detection is the same on every machine.
+    fn of(root: &Path) -> Walk {
+        let mut w = Walk {
+            root: root.to_path_buf(),
+            files: Vec::new(),
+            dirs: Vec::new(),
+        };
+        let mut seen = 0usize;
+        let mut queue: Vec<(PathBuf, String, usize)> = vec![(root.to_path_buf(), String::new(), 1)];
+        while let Some((dir, rel, depth)) = queue.pop() {
+            let Ok(read) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut entries: Vec<_> = read.flatten().collect();
+            entries.sort_by_key(|e| e.file_name());
+            for e in entries {
+                if seen >= WALK_LIMIT {
+                    break;
+                }
+                seen += 1;
+                let Some(name) = e.file_name().to_str().map(str::to_string) else {
+                    continue;
+                };
+                let path = if rel.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{rel}/{name}")
+                };
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    if WALK_SKIP.contains(&name.as_str()) {
+                        continue;
+                    }
+                    w.dirs.push(path.clone());
+                    if depth < WALK_DEPTH {
+                        queue.push((e.path(), path, depth + 1));
+                    }
+                } else if ft.is_file() {
+                    w.files.push(path);
+                }
+            }
+        }
+        w.files.sort();
+        w.dirs.sort();
+        w
+    }
+
+    /// The first entry a [`Detect::Path`] pattern names: `*.ext` any file with that ending, `x/`
+    /// a folder, else a file; an exact path matches at the root or under any walked folder.
+    fn find(&self, pattern: &str) -> Option<String> {
+        if !safe_relative(pattern) {
+            return None;
+        }
+        let ends = |entry: &str, p: &str| entry == p || entry.ends_with(&format!("/{p}"));
+        if let Some(ext) = pattern.strip_prefix('*') {
+            let ext = ext.to_string();
+            return self
+                .files
+                .iter()
+                .find(|f| {
+                    let base = f.rsplit('/').next().unwrap_or(f);
+                    base.len() > ext.len() && base.ends_with(&ext)
+                })
+                .cloned();
+        }
+        if let Some(folder) = pattern.strip_suffix('/') {
+            let folder = folder.trim_end_matches('/');
+            return self
+                .dirs
+                .iter()
+                .find(|d| ends(d, folder))
+                .map(|d| format!("{d}/"));
+        }
+        self.files.iter().find(|f| ends(f, pattern)).cloned()
+    }
+
+    /// Whether `file` (an exact relative path) exists and holds `contains`, reading at most
+    /// [`TEXT_LIMIT`] of it.
+    fn holds(&self, file: &str, contains: &str) -> bool {
+        use std::io::Read;
+        if !safe_relative(file) || contains.is_empty() {
+            return false;
+        }
+        let Ok(f) = std::fs::File::open(self.root.join(file)) else {
+            return false;
+        };
+        let mut buf = Vec::new();
+        if f.take(TEXT_LIMIT).read_to_end(&mut buf).is_err() {
+            return false;
+        }
+        String::from_utf8_lossy(&buf).contains(contains)
+    }
+}
+
+/// What `d` finds, as evidence, or `None`.
+fn detect_one(
+    d: &Detect,
+    walk: Option<&Walk>,
+    facts: Option<&crate::facts::Facts>,
+) -> Option<String> {
+    match d {
+        Detect::Path(p) => walk.and_then(|w| w.find(p)),
+        Detect::Text { file, contains } => walk
+            .filter(|w| w.holds(file, contains))
+            .map(|_| format!("{file}: {contains}")),
+        Detect::Fact { fact, any } => facts.and_then(|f| {
+            any.iter()
+                .find(|v| f.has(fact, v))
+                .map(|v| format!("facts: {fact}={}", v.trim().to_lowercase()))
+        }),
+    }
+}
+
+fn detect_with(
+    area: &Area,
+    walk: Option<&Walk>,
+    facts: Option<&crate::facts::Facts>,
+) -> Vec<Detected> {
+    let mut out = Vec::new();
+    for opt in &area.options {
+        if let Some(evidence) = opt.detect.iter().find_map(|d| detect_one(d, walk, facts)) {
+            out.push(Detected {
+                option: opt.id.clone(),
+                evidence,
+            });
+            if area.select == Select::One {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The options of `area` the project's folder (`root`) or facts record implies, in pack order:
+/// every match for a `many` area, the first for a `one` area. Pure over the file system and the
+/// record; never writes.
+pub fn detect(root: &Path, area: &Area, facts: Option<&crate::facts::Facts>) -> Vec<Detected> {
+    let walk = Walk::of(root);
+    detect_with(area, Some(&walk), facts)
+}
+
+// ---- touches --------------------------------------------------------------------------------
+
+/// A character a path holds: the rule of `docdrift`'s file names.
+fn path_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-')
+}
+
+/// Whether one line holds a file token: `*.ext` as the end of a path word, a folder (`x/`) as a
+/// path's leading part, else the whole token; each bounded by the path-character rule.
+fn file_token_on_line(token: &str, line: &str) -> bool {
+    if let Some(ext) = token.strip_prefix('*') {
+        // `*.tsx`: a path word ending in `.tsx`, so `src/App.tsx`, never `App.tsx.bak`.
+        return line.match_indices(ext).any(|(at, _)| {
+            let before = line[..at].chars().next_back();
+            let after = line[at + ext.len()..].chars().next();
+            before.is_some_and(|c| path_char(c) && c != '/' && c != '.')
+                && !after.is_some_and(path_char)
+        });
+    }
+    if token.ends_with('/') {
+        // A folder: bounded before by the path rule; the slash itself ends the folder's name, so
+        // `migrations/0003_users.sql` names `migrations/` and `premigrations/` does not.
+        return line.match_indices(token).any(|(at, _)| {
+            let before = line[..at].chars().next_back();
+            !before.is_some_and(|c| path_char(c) && c != '/')
+        });
+    }
+    let name = crate::docdrift::Name {
+        kind: crate::docdrift::NameKind::File,
+        text: token.to_string(),
+    };
+    crate::docdrift::name_on_line(&name, line, &[], "")
+}
+
+/// Whether `text` holds `word`, case-insensitive, with no ASCII letter or digit on either side.
+fn word_in(text: &str, word: &str) -> bool {
+    let hay = text.to_ascii_lowercase();
+    let needle = word.to_ascii_lowercase();
+    if needle.trim().is_empty() {
+        return false;
+    }
+    hay.match_indices(&needle).any(|(at, _)| {
+        let before = hay[..at].chars().next_back();
+        let after = hay[at + needle.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric())
+            && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// Whether `token` is a file token (it holds `.`, `/` or `*`) rather than a word.
+fn is_file_token(token: &str) -> bool {
+    token.contains(['.', '/', '*'])
+}
+
+/// The tokens of `tokens` the text holds (L-23: boundaries stated here, never a substring).
+pub(crate) fn tokens_in(tokens: &[String], text: &str) -> Vec<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for t in tokens {
+        let t = t.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let hit = if is_file_token(t) {
+            text.lines().any(|line| file_token_on_line(t, line))
+        } else {
+            word_in(text, t)
+        };
+        if hit {
+            out.insert(t.to_string());
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The tokens of `area.touches` a design holds, sorted. A token with `.`, `/` or `*` is a file
+/// token: `*.ext` matches a path word ending in `.ext`, a folder (`x/`) a path that starts with
+/// it, any other the whole token, each bounded by `docdrift`'s path-character rule; any other
+/// token is a word, matched case-insensitively with ASCII-alphanumeric boundaries. Fenced blocks
+/// and code spans are scanned like prose. Pure.
+pub fn touches(area: &Area, design: &str) -> Vec<String> {
+    tokens_in(&area.touches, design)
+}
+
+// ---- ask and explain ------------------------------------------------------------------------
+
+/// Where an answer goes, as the dialog tells the person.
+pub const RECORDS_TO: &str = "the baseline (`projects/<id>/baseline.yaml`), as a proposed \
+                              revision for you to accept on the Baseline page";
+
+/// One option as the dialog offers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AskedOption {
+    pub id: String,
+    pub label: String,
+    pub recommended: bool,
+    pub detected: bool,
+    pub why: String,
+    pub fits_when: String,
+    pub costs: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub asks_value: String,
+    /// What choosing it records: "constraint, with an ADR: PostgreSQL is the database".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<String>,
+}
+
+/// One area the dialog asks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AskedArea {
+    pub id: String,
+    pub pack: String,
+    pub title: String,
+    pub question: String,
+    /// Which dialog of at most [`DIALOG_SIZE`] questions it falls in, from 1.
+    pub dialog: usize,
+    /// A `select: many` area: asked as a multi-select.
+    pub multi: bool,
+    /// Detected first, then the recommended one, then the rest in pack order.
+    pub options: Vec<AskedOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detected: Vec<Detected>,
+    /// Deferred before ("decide later"); the skill always offers deferring again.
+    pub deferred: bool,
+    /// The design's tokens that touch it (at first need).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touched: Vec<String>,
+    pub records_to: String,
+}
+
+/// What to ask now, and where the rest stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Ask {
+    pub packs: Vec<ProfileSource>,
+    pub at: Asks,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub item: String,
+    pub ask: Vec<AskedArea>,
+    /// Areas of this moment already answered, or answered by a proposed revision or `given`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answered: Vec<String>,
+    /// Areas of this moment that do not apply: (area, reason).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applicable: Vec<(String, String)>,
+    /// Areas of this moment deferred before; they are asked again, marked `deferred`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred: Vec<String>,
+    /// At setup: built-in packs the facts fit and the project does not follow, each a yes/no.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub propose_packs: Vec<String>,
+}
+
+/// One option with its reasoning, for "Explain the options".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExplainedOption {
+    pub id: String,
+    pub label: String,
+    pub why: String,
+    pub fits_when: String,
+    pub costs: String,
+}
+
+/// An area explained: every option's three texts and what in the project bears on it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Explained {
+    pub area: String,
+    pub title: String,
+    pub options: Vec<ExplainedOption>,
+    /// The detected facts and files, each `<option>: <evidence>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bearing: Vec<String>,
+}
+
+/// How one `records` row reads in the dialog.
+fn record_line(r: &Records, label: &str) -> String {
+    let kind = match r.kind {
+        Kind::Constraint => "constraint, with an ADR",
+        Kind::Nfr => "nfr",
+        Kind::NonGoal => "non-goal",
+        Kind::Practice => "practice",
+    };
+    format!("{kind}: {}", r.text.replace("{label}", label))
+}
+
+/// The packs to ask from: those in the baseline in its order, a removed pack skipped, then any
+/// the baseline does not list yet (setup, before the packs are recorded) in the order given.
+fn followed<'a>(
+    packs: &'a [(ProfileSource, ProfileFile)],
+    baseline: &crate::baseline::Baseline,
+) -> Vec<&'a (ProfileSource, ProfileFile)> {
+    let mut out: Vec<&(ProfileSource, ProfileFile)> = Vec::new();
+    for rec in &baseline.packs {
+        if rec.removed.is_some() {
+            continue;
+        }
+        if let Some(p) = packs.iter().find(|(s, _)| s.name == rec.source.name)
+            && !out.iter().any(|(s, _)| s.name == p.0.name)
+        {
+            out.push(p);
+        }
+    }
+    for p in packs {
+        let listed = baseline.packs.iter().any(|r| r.source.name == p.0.name);
+        if !listed && !out.iter().any(|(s, _)| s.name == p.0.name) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Every area's chosen options across the baseline's standing answers, its proposed revisions
+/// and the answers given so far.
+fn answer_set(
+    baseline: &crate::baseline::Baseline,
+    given: &[crate::baseline::Answer],
+) -> BTreeMap<String, BTreeSet<String>> {
+    use crate::baseline::{AreaState, RevisionState};
+    let mut set: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut latest: BTreeMap<&str, &crate::baseline::AreaRecord> = BTreeMap::new();
+    for rec in &baseline.areas {
+        latest.insert(rec.id.as_str(), rec);
+    }
+    for rec in latest.values() {
+        if rec.state == AreaState::Answered {
+            set.entry(rec.id.clone())
+                .or_default()
+                .extend(rec.options.iter().map(|c| c.option.clone()));
+        }
+    }
+    let proposed = baseline
+        .revisions
+        .iter()
+        .filter(|r| r.state() == RevisionState::Proposed)
+        .flat_map(|r| r.answers.iter());
+    for a in proposed.chain(given.iter()) {
+        if !a.options.is_empty() {
+            set.entry(a.area.clone())
+                .or_default()
+                .extend(a.options.iter().map(|c| c.option.clone()));
+        }
+    }
+    set
+}
+
+/// Whether an area's `when` holds against the answer set; an unanswered gating area never does.
+fn when_holds(area: &Area, set: &BTreeMap<String, BTreeSet<String>>) -> bool {
+    match &area.when {
+        None => true,
+        Some(w) => set
+            .get(&w.area)
+            .is_some_and(|chosen| w.options.iter().any(|o| chosen.contains(o))),
+    }
+}
+
+/// The built-in packs the facts (and a detected CI service) fit that the project does not
+/// follow: `parts` web-ui → web, api → api; `data` other than none → data; `production`
+/// container → containers, kubernetes → kubernetes; a CI service detected → pipeline.
+fn packs_to_propose(
+    followed: &[&(ProfileSource, ProfileFile)],
+    facts: Option<&crate::facts::Facts>,
+    walk: Option<&Walk>,
+) -> Vec<String> {
+    let mut want: Vec<&str> = Vec::new();
+    if let Some(f) = facts {
+        if f.has("parts", "web-ui") {
+            want.push("web");
+        }
+        if f.has("parts", "api") {
+            want.push("api");
+        }
+        if f.list("data")
+            .iter()
+            .any(|v| v.trim().to_lowercase() != "none")
+        {
+            want.push("data");
+        }
+        if f.has("production", "container") {
+            want.push("containers");
+        }
+        if f.has("production", "kubernetes") {
+            want.push("kubernetes");
+        }
+    }
+    // A CI service: an option of the `delivery` area, from a followed pack or else core's.
+    let delivery = followed
+        .iter()
+        .find_map(|(_, f)| f.area("delivery").cloned())
+        .or_else(|| builtin("core").and_then(|c| c.area("delivery").cloned()));
+    if let Some(area) = delivery
+        && detect_with(&area, walk, facts)
+            .iter()
+            .any(|d| d.option != "none-yet")
+    {
+        want.push("pipeline");
+    }
+    let mut out = Vec::new();
+    for name in BUILTIN {
+        if want.contains(&name) && !followed.iter().any(|(s, _)| s.name == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// What to ask the person now (R-1, R-2). `packs` are the packs the project follows; they are
+/// taken in the baseline's order with a removed pack skipped, then area order. An area is listed
+/// when its state (with `given` counted as answers) is open or deferred, its `when` holds against
+/// every answer so far, and either `at` is setup and the area is asked at setup, or `at` is first
+/// need and `design` touches it (a setup area still open included). Options are ordered detected
+/// first, then the recommended one, then the rest; areas fall in dialogs of [`DIALOG_SIZE`].
+/// With `root` None nothing is detected from the folder; with `facts` None nothing from the
+/// facts record. Changes nothing.
+#[allow(clippy::too_many_arguments)]
+pub fn ask(
+    packs: &[(ProfileSource, ProfileFile)],
+    baseline: &crate::baseline::Baseline,
+    given: &[crate::baseline::Answer],
+    at: Asks,
+    root: Option<&Path>,
+    facts: Option<&crate::facts::Facts>,
+    design: Option<&str>,
+    item: &str,
+) -> Ask {
+    use crate::baseline::{AreaStatus, area_status};
+    let followed = followed(packs, baseline);
+    let walk = root.map(Walk::of);
+    let set = answer_set(baseline, given);
+    let mut out = Ask {
+        packs: followed.iter().map(|(s, _)| s.clone()).collect(),
+        at,
+        item: item.to_string(),
+        ask: Vec::new(),
+        answered: Vec::new(),
+        not_applicable: Vec::new(),
+        deferred: Vec::new(),
+        propose_packs: Vec::new(),
+    };
+    for (source, file) in &followed {
+        for area in &file.areas {
+            let touched = match (at, design) {
+                (Asks::FirstNeed, Some(d)) => touches(area, d),
+                _ => Vec::new(),
+            };
+            let in_scope = match at {
+                Asks::Setup => area.asks == Asks::Setup,
+                Asks::FirstNeed => !touched.is_empty(),
+            };
+            if !in_scope || !when_holds(area, &set) {
+                continue;
+            }
+            if let Some(g) = given.iter().find(|g| g.area == area.id) {
+                if let Some(reason) = &g.not_applicable {
+                    out.not_applicable.push((area.id.clone(), reason.clone()));
+                } else if g.later && g.options.is_empty() {
+                    out.deferred.push(area.id.clone());
+                } else {
+                    out.answered.push(area.id.clone());
+                }
+                continue;
+            }
+            let deferred = match area_status(baseline, &area.id) {
+                AreaStatus::Open => false,
+                AreaStatus::Later => true,
+                AreaStatus::Proposed(_) | AreaStatus::Answered(_) => {
+                    out.answered.push(area.id.clone());
+                    continue;
+                }
+                AreaStatus::NotApplicable(reason) => {
+                    out.not_applicable.push((area.id.clone(), reason));
+                    continue;
+                }
+            };
+            if deferred {
+                out.deferred.push(area.id.clone());
+            }
+            let detected = detect_with(area, walk.as_ref(), facts);
+            let recommended = area.recommended().map(|o| o.id.clone());
+            let is_detected = |id: &str| detected.iter().any(|d| d.option == id);
+            let mut order: Vec<&AreaOption> = Vec::new();
+            for d in &detected {
+                if let Some(o) = area.option(&d.option) {
+                    order.push(o);
+                }
+            }
+            if let Some(r) = &recommended
+                && !is_detected(r)
+                && let Some(o) = area.option(r)
+            {
+                order.push(o);
+            }
+            for o in &area.options {
+                if !order.iter().any(|x| x.id == o.id) {
+                    order.push(o);
+                }
+            }
+            let options = order
+                .into_iter()
+                .map(|o| AskedOption {
+                    id: o.id.clone(),
+                    label: o.label.clone(),
+                    recommended: recommended.as_deref() == Some(o.id.as_str()),
+                    detected: is_detected(&o.id),
+                    why: o.why.clone(),
+                    fits_when: o.fits_when.clone(),
+                    costs: o.costs.clone(),
+                    asks_value: o.asks_value.clone(),
+                    records: o.records.iter().map(|r| record_line(r, &o.label)).collect(),
+                })
+                .collect();
+            let index = out.ask.len();
+            out.ask.push(AskedArea {
+                id: area.id.clone(),
+                pack: source.name.clone(),
+                title: area.title.clone(),
+                question: area.question.clone(),
+                dialog: index / DIALOG_SIZE + 1,
+                multi: area.select == Select::Many,
+                options,
+                detected,
+                deferred,
+                touched,
+                records_to: RECORDS_TO.to_string(),
+            });
+        }
+    }
+    if at == Asks::Setup {
+        out.propose_packs = packs_to_propose(&followed, facts, walk.as_ref());
+    }
+    out
+}
+
+/// Every option of `area` with its `why`, `fits_when` and `costs`, and what in the folder or the
+/// facts record bears on it. Changes nothing.
+pub fn explain(
+    packs: &[(ProfileSource, ProfileFile)],
+    area: &str,
+    facts: Option<&crate::facts::Facts>,
+    root: Option<&Path>,
+) -> Result<Explained> {
+    let Some(a) = packs.iter().find_map(|(_, f)| f.area(area)) else {
+        return Err(problem(format!(
+            "area '{area}' is in none of the packs this project follows: `kanbanr profile ask` \
+             lists the areas"
+        )));
+    };
+    let walk = root.map(Walk::of);
+    let bearing = detect_with(a, walk.as_ref(), facts)
+        .into_iter()
+        .map(|d| format!("{}: {}", d.option, d.evidence))
+        .collect();
+    Ok(Explained {
+        area: a.id.clone(),
+        title: a.title.clone(),
+        options: a
+            .options
+            .iter()
+            .map(|o| ExplainedOption {
+                id: o.id.clone(),
+                label: o.label.clone(),
+                why: o.why.clone(),
+                fits_when: o.fits_when.clone(),
+                costs: o.costs.clone(),
+            })
+            .collect(),
+        bearing,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1600,5 +2250,318 @@ areas:
                 );
             }
         }
+    }
+
+    /// A project folder of this test's own under the system temp folder (L-41), holding `files`
+    /// (a trailing `/` makes a folder).
+    fn temp_folder(files: &[&str]) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-profile-folder-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        for f in files {
+            let path = dir.join(f);
+            if f.ends_with('/') {
+                std::fs::create_dir_all(&path).unwrap();
+            } else {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, "x\n").unwrap();
+            }
+        }
+        dir
+    }
+
+    fn core_packs() -> Vec<(ProfileSource, ProfileFile)> {
+        let core = builtin("core").unwrap();
+        vec![(core.source("core", Library::Builtin), core)]
+    }
+
+    fn ids(ask: &Ask) -> Vec<&str> {
+        ask.ask.iter().map(|a| a.id.as_str()).collect()
+    }
+
+    fn listed<'a>(ask: &'a Ask, id: &str) -> &'a AskedArea {
+        ask.ask.iter().find(|a| a.id == id).unwrap()
+    }
+
+    /// R-1: at setup over `core`, a folder with `Cargo.toml` and a `Dockerfile` lists the setup
+    /// areas whose `when` holds, `stack` detected as rust and `runs-where` as containers, each
+    /// detected option first and marked, the recommended one first otherwise, in dialogs of four;
+    /// answers given so far open the gated areas and drop the answered ones; `root: None` detects
+    /// nothing.
+    #[test]
+    fn ask_lists_the_setup_areas_the_folder_does_not_answer_recommended_first_in_dialogs_of_four() {
+        use crate::baseline::{Answer, AreaRecord, AreaState, Baseline, Chosen};
+        let root = temp_folder(&["Cargo.toml", "Dockerfile"]);
+        let packs = core_packs();
+        let none = Baseline::default();
+
+        let a = ask(&packs, &none, &[], Asks::Setup, Some(&root), None, None, "");
+        assert_eq!(a.at, Asks::Setup);
+        assert_eq!(a.packs.len(), 1);
+        assert_eq!(a.packs[0].name, "core");
+        // `iac` waits for `runs-where`, which nothing has answered yet.
+        assert_eq!(
+            ids(&a),
+            [
+                "project-kind",
+                "stack",
+                "runs-where",
+                "delivery",
+                "practice-baseline"
+            ]
+        );
+        let dialogs: Vec<usize> = a.ask.iter().map(|x| x.dialog).collect();
+        assert_eq!(dialogs, [1, 1, 1, 1, 2]);
+        for area in &a.ask {
+            assert!(area.records_to.contains("baseline"), "{}", area.records_to);
+            assert_eq!(area.pack, "core");
+            assert!(!area.deferred);
+        }
+
+        let stack = listed(&a, "stack");
+        assert!(!stack.multi);
+        assert_eq!(stack.detected.len(), 1);
+        assert_eq!(stack.detected[0].option, "rust");
+        assert_eq!(stack.detected[0].evidence, "Cargo.toml");
+        assert_eq!(stack.options[0].id, "rust");
+        assert!(stack.options[0].detected);
+        assert!(stack.options[1..].iter().all(|o| !o.detected));
+        assert!(
+            stack.options[0]
+                .records
+                .iter()
+                .any(|r| r
+                    == "constraint, with an ADR: Rust is the implementation language and runtime"),
+            "{:?}",
+            stack.options[0].records
+        );
+
+        let runs = listed(&a, "runs-where");
+        assert!(runs.multi, "a many area is asked as a multi-select");
+        assert_eq!(runs.options[0].id, "containers");
+        assert!(runs.options[0].detected);
+        assert_eq!(runs.detected[0].evidence, "Dockerfile");
+
+        // Nothing detected: the recommended option comes first, marked.
+        let kind = listed(&a, "project-kind");
+        assert!(kind.detected.is_empty());
+        let core = builtin("core").unwrap();
+        let rec = core.area("project-kind").unwrap().recommended().unwrap();
+        assert_eq!(kind.options[0].id, rec.id);
+        assert!(kind.options[0].recommended);
+        assert_eq!(kind.options.iter().filter(|o| o.recommended).count(), 1);
+        assert_eq!(
+            kind.options.len(),
+            core.area("project-kind").unwrap().options.len()
+        );
+
+        // Answers given so far: the answered areas drop out and the gated `iac` appears.
+        let given = vec![
+            Answer {
+                area: "project-kind".into(),
+                options: vec![Chosen::new("service", "")],
+                ..Answer::default()
+            },
+            Answer {
+                area: "runs-where".into(),
+                options: vec![Chosen::new("containers", "")],
+                ..Answer::default()
+            },
+        ];
+        let b = ask(
+            &packs,
+            &none,
+            &given,
+            Asks::Setup,
+            Some(&root),
+            None,
+            None,
+            "",
+        );
+        assert_eq!(ids(&b), ["stack", "iac", "delivery", "practice-baseline"]);
+        assert_eq!(b.answered, ["project-kind", "runs-where"]);
+        assert!(b.ask.iter().all(|x| x.dialog == 1));
+
+        // An area the baseline has answered is not asked; one deferred is asked again, marked.
+        let mut answered = Baseline::default();
+        for (id, state) in [
+            ("stack", AreaState::Answered),
+            ("delivery", AreaState::Later),
+        ] {
+            answered.areas.push(AreaRecord {
+                id: id.into(),
+                state,
+                options: if state == AreaState::Answered {
+                    vec![Chosen::new("rust", "")]
+                } else {
+                    vec![]
+                },
+                value: String::new(),
+                reason: String::new(),
+                item: String::new(),
+                revision: "REV-001".into(),
+                extra: Extra::default(),
+            });
+        }
+        let c = ask(
+            &packs,
+            &answered,
+            &[],
+            Asks::Setup,
+            Some(&root),
+            None,
+            None,
+            "",
+        );
+        assert!(!ids(&c).contains(&"stack"));
+        assert!(c.answered.contains(&"stack".to_string()));
+        assert!(listed(&c, "delivery").deferred);
+        assert_eq!(c.deferred, ["delivery"]);
+
+        // No folder: nothing is detected, and the recommended option leads.
+        let d = ask(&packs, &none, &[], Asks::Setup, None, None, None, "");
+        assert!(d.ask.iter().all(|x| x.detected.is_empty()));
+        assert!(d.ask.iter().all(|x| x.options.iter().all(|o| !o.detected)));
+        assert!(listed(&d, "stack").options[0].recommended);
+
+        // At first need with no design, nothing is asked.
+        let e = ask(
+            &packs,
+            &none,
+            &[],
+            Asks::FirstNeed,
+            Some(&root),
+            None,
+            None,
+            "FTR-1",
+        );
+        assert!(e.ask.is_empty());
+        assert_eq!(e.item, "FTR-1");
+
+        // At setup, the packs the facts fit are proposed; a detected CI service proposes the
+        // pipeline pack.
+        let ci = temp_folder(&["Cargo.toml", ".github/workflows/"]);
+        let facts = crate::facts::Facts {
+            parts: vec!["web-ui".into(), "api".into()],
+            data: vec!["none".into()],
+            production: vec!["container".into()],
+            ..crate::facts::Facts::default()
+        };
+        let f = ask(
+            &packs,
+            &none,
+            &[],
+            Asks::Setup,
+            Some(&ci),
+            Some(&facts),
+            None,
+            "",
+        );
+        assert_eq!(f.propose_packs, ["pipeline", "web", "api", "containers"]);
+        assert_eq!(
+            listed(&f, "delivery").detected[0].evidence,
+            ".github/workflows/"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&ci);
+    }
+
+    /// R-1: `explain` gives every option's three texts and the facts and files that bear on the
+    /// area, and changes nothing.
+    #[test]
+    fn ask_explains_an_area_with_why_fits_when_and_costs() {
+        let root = temp_folder(&["Cargo.toml"]);
+        let before: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        let packs = core_packs();
+        let facts = crate::facts::Facts {
+            languages: vec!["rust".into()],
+            ..crate::facts::Facts::default()
+        };
+        let e = explain(&packs, "stack", Some(&facts), Some(&root)).unwrap();
+        assert_eq!(e.area, "stack");
+        assert_eq!(e.title, "The stack");
+        let area = packs[0].1.area("stack").unwrap();
+        assert_eq!(e.options.len(), area.options.len());
+        for (x, o) in e.options.iter().zip(&area.options) {
+            assert_eq!(x.id, o.id);
+            assert_eq!(x.label, o.label);
+            assert_eq!(x.why, o.why);
+            assert_eq!(x.fits_when, o.fits_when);
+            assert_eq!(x.costs, o.costs);
+            assert!(!x.why.is_empty() && !x.fits_when.is_empty() && !x.costs.is_empty());
+        }
+        // The facts row is first in `detect`, so the facts are the evidence.
+        assert_eq!(e.bearing, ["rust: facts: languages=rust"]);
+        let files_only = explain(&packs, "stack", None, Some(&root)).unwrap();
+        assert_eq!(files_only.bearing, ["rust: Cargo.toml"]);
+        assert!(
+            explain(&packs, "stack", None, None)
+                .unwrap()
+                .bearing
+                .is_empty()
+        );
+        assert!(explain(&packs, "no-such-area", None, None).is_err());
+        let after: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(before, after, "explain changes nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// R-4: file tokens match by the path-character boundary, words whole and case-insensitive.
+    #[test]
+    fn touches_matches_file_tokens_by_path_boundary_and_words_whole() {
+        let file = pack(
+            r#"
+areas:
+  - id: database
+    title: The database
+    asks: first_need
+    touches: ["*.tsx", migrations/, SQL, Postgres, docker-compose.yaml, load test]
+    question: Which?
+    options:
+      - {id: a, label: A, why: w, fits_when: f, costs: c}
+"#,
+        );
+        let area = file.area("database").unwrap();
+        let t = |text: &str| touches(area, text);
+        assert_eq!(t("The page is `src/App.tsx`."), ["*.tsx"]);
+        assert!(t("Keep App.tsx.bak for now").is_empty());
+        assert!(t("tsx files").is_empty());
+        assert_eq!(t("Adds `migrations/0003_users/up.rs`"), ["migrations/"]);
+        assert_eq!(t("under db/migrations/ as usual"), ["migrations/"]);
+        assert_eq!(t("the migrations/ folder"), ["migrations/"]);
+        assert!(t("premigrations/ is someone else's").is_empty());
+        assert_eq!(t("one SQL query"), ["SQL"]);
+        assert_eq!(t("plain sql, lower case"), ["SQL"]);
+        assert!(
+            t("PostgreSQL only").is_empty(),
+            "SQL inside PostgreSQL is no match"
+        );
+        assert_eq!(t("POSTGRES 16"), ["Postgres"]);
+        assert!(t("postgresql").is_empty());
+        assert_eq!(
+            t("```\nservices in docker-compose.yaml\n```"),
+            ["docker-compose.yaml"]
+        );
+        assert!(t("my-docker-compose.yaml.orig").is_empty());
+        assert_eq!(t("a Load Test before release"), ["load test"]);
+        assert_eq!(
+            t("SQL in `migrations/1.sql` and `src/Db.tsx`"),
+            ["*.tsx", "SQL", "migrations/"]
+        );
+        assert!(t("").is_empty());
     }
 }

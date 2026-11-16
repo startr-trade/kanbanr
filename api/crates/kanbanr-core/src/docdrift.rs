@@ -575,7 +575,7 @@ fn code_spans(line: &str) -> Vec<&str> {
         .collect()
 }
 
-fn name_on_line(name: &Name, line: &str, spans: &[&str], route_line: &str) -> bool {
+pub(crate) fn name_on_line(name: &Name, line: &str, spans: &[&str], route_line: &str) -> bool {
     match name.kind {
         NameKind::Flag => bounded(
             line,
