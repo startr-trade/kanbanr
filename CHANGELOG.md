@@ -55,6 +55,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The fence check accepts a Windows folder in its verbatim form, so a walkthrough run is not refused
+  on Windows; a test that needs a non-UTF-8 file name runs on Linux only (DEF-094).
 - The skill asks the styling approach even when the person has already described the look, and
   records only what they said as theirs. It has build agents run the project's formatter and linter
   before each commit. It reads the queue and `kanbanr check` before saying what waits, gives page

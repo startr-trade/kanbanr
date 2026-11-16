@@ -13143,8 +13143,9 @@ fn cli_view_refuses_a_bad_at_text_with_exit_2() {
 
 /// R-9: a not-exact answer's warning is a `warning:` line on stderr, and in `warnings` in JSON. An
 /// uncommitted doc whose name is not UTF-8 cannot be read back at the position (SPK-001), which
-/// makes the answer not exact on both reads.
-#[cfg(unix)]
+/// makes the answer not exact on both reads. Linux only (DEF-094): macOS's APFS, like Windows,
+/// refuses a file name that is not UTF-8 ("Illegal byte sequence"), so the case cannot arise there.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn cli_view_prints_warnings_on_stderr_and_in_json() {
     use std::os::unix::ffi::OsStrExt;
