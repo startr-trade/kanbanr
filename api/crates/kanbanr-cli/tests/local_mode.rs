@@ -13721,12 +13721,26 @@ fn recover_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     ok(git_in(
         &base,
         &work,
-        &["commit", "-q", "--allow-empty", "-m", "[no-ref] initial commit"],
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
     ));
     ok(run_in(
         &base,
         &work,
-        &["init", "shop", "--author", "A", "--email", "a@x", "--no-hooks"],
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
     ));
     let board = std::fs::canonicalize(work.join("..").join("shop.kanbanr")).unwrap();
     assert!(board.starts_with(base.canonicalize().unwrap()), "{board:?}");
@@ -13758,7 +13772,12 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
     ok(run_in(
         &base,
         &work,
-        &["config", "workflow", "--from-file", process.to_str().unwrap()],
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
     ));
     // FEAT-001..300 Completed, FEAT-301..310 In Progress, FEAT-311..395 Planned, and
     // FEAT-396..400 Planned with a definition nobody has approved yet.
@@ -13776,10 +13795,14 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
         ops.push(op);
     }
     for n in 0..310 {
-        ops.push(serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "In Progress"}));
+        ops.push(
+            serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "In Progress"}),
+        );
     }
     for n in 0..300 {
-        ops.push(serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "Completed"}));
+        ops.push(
+            serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "Completed"}),
+        );
     }
     let bundle = base.join("bundle.json");
     std::fs::write(
@@ -13793,7 +13816,10 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
         &["batch", "--file", bundle.to_str().unwrap()],
     ));
     let board = ok(run_in(&base, &work, &["board"]));
-    assert!(board.stdout.len() > 20_000, "the whole board is too big to print");
+    assert!(
+        board.stdout.len() > 20_000,
+        "the whole board is too big to print"
+    );
 
     let started = std::time::Instant::now();
     let out = ok(run_in(&base, &work, &["recover"]));
@@ -13802,10 +13828,16 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
     assert!(text.len() <= 8000, "{} bytes:\n{text}", text.len());
     assert!(took < std::time::Duration::from_secs(2), "took {took:?}");
     for n in 301..=310 {
-        assert!(text.contains(&format!("FEAT-{n:03}")), "FEAT-{n} missing:\n{text}");
+        assert!(
+            text.contains(&format!("FEAT-{n:03}")),
+            "FEAT-{n} missing:\n{text}"
+        );
     }
     for n in 311..=395 {
-        assert!(!text.contains(&format!("FEAT-{n:03}")), "FEAT-{n} listed:\n{text}");
+        assert!(
+            !text.contains(&format!("FEAT-{n:03}")),
+            "FEAT-{n} listed:\n{text}"
+        );
     }
     assert!(text.contains("`kanbanr board`") && text.contains("`kanbanr ready`"));
     assert!(text.contains("### In progress (10)"), "{text}");
@@ -13829,17 +13861,24 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
 fn an_empty_boards_session_summary_keeps_its_full_form() {
     let (base, work) = recover_scratch("def093-empty");
     let out = run_in(&base, &work, &["recover"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         text.starts_with("## kanbanr — recovered project state (SessionStart)\n\n"),
         "{text}"
     );
     let board = text.find("### Board\n").expect("### Board");
-    let activity = text.find("### Recent activity\n").expect("### Recent activity");
+    let activity = text
+        .find("### Recent activity\n")
+        .expect("### Recent activity");
     assert!(board < activity, "{text}");
     assert!(
-        text.trim_end().ends_with("asks for it in the project folder._"),
+        text.trim_end()
+            .ends_with("asks for it in the project folder._"),
         "{text}"
     );
     assert!(text.contains("Resume from the board above"), "{text}");

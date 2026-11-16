@@ -740,7 +740,12 @@ mod tests {
             let text = embedded_script(rel);
             let at = |needle: &str| {
                 let found: Vec<_> = text.match_indices(needle).map(|(i, _)| i).collect();
-                assert_eq!(found.len(), 1, "{rel}: `{needle}` once, found {}", found.len());
+                assert_eq!(
+                    found.len(),
+                    1,
+                    "{rel}: `{needle}` once, found {}",
+                    found.len()
+                );
                 found[0]
             };
             let (recover, board, cut) = (at(recover_call), at(board_call), at(cut));
@@ -768,7 +773,9 @@ mod tests {
         let bin = dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let board: String = (0..400)
-            .map(|n| format!("  - FTR-{n:03} [Planned] a planned item, long enough to add up [0/0]\n"))
+            .map(|n| {
+                format!("  - FTR-{n:03} [Planned] a planned item, long enough to add up [0/0]\n")
+            })
             .collect();
         assert!(board.len() > 20_000);
         std::fs::write(bin.join("board.txt"), &board).unwrap();
