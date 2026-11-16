@@ -79,6 +79,7 @@ pub mod trace;
 pub mod validate;
 pub mod views;
 pub mod write;
+pub mod writer;
 pub mod yaml;
 
 pub use charter::{Charter, Goal, Stakeholder};

@@ -2061,6 +2061,10 @@ fn main() -> ExitCode {
 }
 
 fn real_main() -> ExitCode {
+    kanbanr_core::writer::set_running(kanbanr_core::writer::Build {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commit: env!("KANBANR_GIT_SHA").to_string(),
+    });
     quiet_on_a_closed_pipe();
     let mut cli = Cli::parse();
     if is_identifying_hook(&cli.command) {

@@ -27,7 +27,8 @@
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",
     "check:diagram-review": "node scripts/check-diagram-review.mjs",
     "check:agent-scopes": "node scripts/check-agent-scopes.mjs",
-    "check:live-settle": "node scripts/check-live-settle.mjs"
+    "check:live-settle": "node scripts/check-live-settle.mjs",
+    "check:build-info": "node scripts/check-build-info.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

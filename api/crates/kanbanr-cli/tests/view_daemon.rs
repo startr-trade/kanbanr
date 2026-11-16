@@ -2002,3 +2002,81 @@ fn the_daemon_serves_the_position_and_the_docs_view() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-036: `/api/meta` carries the running build and says when the board was last written by a
+/// newer kanbanr than the daemon runs.
+#[test]
+fn the_meta_route_reports_a_newer_writer_than_the_running_monitor() {
+    let base = std::env::temp_dir().join(format!("kanbanr-meta-writer-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    // The board is this test's own, never the repository's (L-41).
+    assert!(
+        std::fs::canonicalize(&data)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+    );
+
+    let port = free_port();
+    let child = cli_cmd()
+        .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/meta")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let meta = || -> serde_json::Value {
+        serde_json::from_str(
+            &ureq::get(&format!("{url}/api/meta"))
+                .call()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+
+    // No record: the build is shown, nothing warns.
+    let m = meta();
+    assert_eq!(m["version"], env!("CARGO_PKG_VERSION"));
+    assert!(m["commit"].is_string(), "{m}");
+    assert!(m["board_writer"].is_null(), "{m}");
+    assert_eq!(m["writer_newer"], false);
+
+    // An older writer does not warn.
+    std::fs::write(
+        data.join("writer.yaml"),
+        "version: 0.0.1\ncommit: abc1234\nat: 2026-01-01T00:00:00Z\n",
+    )
+    .unwrap();
+    let m = meta();
+    assert_eq!(m["board_writer"]["version"], "0.0.1");
+    assert_eq!(m["writer_newer"], false);
+
+    // A newer one does.
+    std::fs::write(
+        data.join("writer.yaml"),
+        "version: 99.0.0\ncommit: def5678\nat: 2026-11-13T09:12:00Z\n",
+    )
+    .unwrap();
+    let m = meta();
+    assert_eq!(m["board_writer"]["version"], "99.0.0");
+    assert_eq!(m["board_writer"]["commit"], "def5678");
+    assert_eq!(m["writer_newer"], true);
+
+    let _ = std::fs::remove_dir_all(&base);
+}

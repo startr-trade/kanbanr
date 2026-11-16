@@ -240,6 +240,10 @@ jobs:
       # The Milestones page lists the newest milestone first (FTR-031).
       - name: Milestones are listed newest first
         run: npm run check:milestone-order
+      # The header shows the kanbanr version and commit the monitor runs, and warns when the board
+      # was last written by a newer one (FTR-036).
+      - name: The header shows the running kanbanr and warns when the board is ahead
+        run: npm run check:build-info
       # What Claude prepared for a decision shows filled in beside its button, with its sources as
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button

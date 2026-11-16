@@ -86,6 +86,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "An item says which release it shipped in": LOCAL,
             "The board can show the items in no sprint": LOCAL,
             "Milestones are listed newest first": LOCAL,
+            "The header shows the running kanbanr and warns when the board is ahead": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,

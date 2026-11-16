@@ -404,6 +404,14 @@ export type Meta = {
   writes: boolean;
   schema_version?: number;
   identity: { name: string; email: string } | null;
+  /** The kanbanr this daemon runs, and the commit it was built from (FTR-036). */
+  version?: string;
+  commit?: string;
+  /** This daemon was built from a modified tree. */
+  dirty?: boolean;
+  /** The newest kanbanr that wrote the board, and whether it is newer than this daemon. */
+  board_writer?: { version: string; commit: string; at: string; dirty?: boolean } | null;
+  writer_newer?: boolean;
 };
 
 /**

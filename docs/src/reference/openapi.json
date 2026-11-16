@@ -454,6 +454,31 @@
         ],
         "type": "object"
       },
+      "BoardWriter": {
+        "description": "The board's writer record, as the monitor shows it (FTR-036).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "dirty": {
+            "description": "The writer was built from a modified tree.",
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "commit",
+          "at",
+          "dirty"
+        ],
+        "type": "object"
+      },
       "BurndownDay": {
         "description": "One day of a burndown: what was still to do at the end of it.",
         "properties": {
@@ -2740,6 +2765,25 @@
       "Meta": {
         "description": "What this daemon can do: `GET /api/meta`. The monitor asks before offering an action.",
         "properties": {
+          "board_writer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardWriter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest kanbanr that wrote the board, from its `writer.yaml`; null when none is recorded."
+          },
+          "commit": {
+            "description": "The commit this daemon was built from, or `unknown`.",
+            "type": "string"
+          },
+          "dirty": {
+            "description": "Whether this daemon was built from a modified tree.",
+            "type": "boolean"
+          },
           "identity": {
             "anyOf": [
               {
@@ -2757,6 +2801,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "version": {
+            "description": "The kanbanr version this daemon runs (FTR-036).",
+            "type": "string"
+          },
+          "writer_newer": {
+            "description": "Whether that writer is newer than this daemon: the monitor then warns.",
+            "type": "boolean"
+          },
           "writes": {
             "description": "Whether the write routes are mounted (`serve --allow-writes`, FEAT-034).",
             "type": "boolean"
@@ -2765,7 +2817,12 @@
         "required": [
           "writes",
           "identity",
-          "schema_version"
+          "schema_version",
+          "version",
+          "commit",
+          "dirty",
+          "board_writer",
+          "writer_newer"
         ],
         "type": "object"
       },

@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { ThemeToggle } from "./components/bits";
 import { api } from "./api";
 import { useAsync } from "./live";
+import { behindWarning, buildLabel } from "./buildInfo";
 
 /** Persistent shell: a simple breadcrumb + within-project tab bar that keeps navigation
  * between projects, the dashboard, status, and documentation one click away. */
@@ -17,6 +18,11 @@ export default function App() {
     [project],
   );
   const usesReleases = config.data?.cadence?.releases === true;
+  // Which kanbanr this monitor is, and whether the board has moved on past it (FTR-036). A failed
+  // call shows nothing: the pages already say when the daemon is down.
+  const meta = useAsync(() => api.getMeta().catch(() => null), []);
+  const label = buildLabel(meta.data ?? null);
+  const behind = behindWarning(meta.data ?? null);
 
   return (
     <div className="app">
@@ -65,8 +71,18 @@ export default function App() {
           </nav>
         )}
         <span className="spacer" />
+        {label && (
+          <span className="build" title="The kanbanr this monitor runs">
+            {label}
+          </span>
+        )}
         <ThemeToggle />
       </header>
+      {behind && (
+        <div className="warn-box" role="alert">
+          <strong>Behind the board.</strong> {behind}
+        </div>
+      )}
       <main className="content">
         <Outlet />
       </main>

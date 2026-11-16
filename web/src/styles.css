@@ -135,6 +135,7 @@ input:focus-visible,
 .pad { padding: 10px 0; }
 .error { color: #ff7b72; }
 .spacer { flex: 1; }
+.build { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
 .livedot {
   width: 9px; height: 9px; border-radius: 50%;
@@ -521,6 +522,7 @@ input:focus-visible,
   .crumbs { font-size: 13px; }
   /* On a phone the spacer would push the toggle to its own row; keep it inline. */
   .topbar .spacer { display: none; }
+  .topbar .build { display: none; }
   .theme-toggle { margin-left: auto; }
 
   .content { padding: 14px; }

@@ -12950,3 +12950,87 @@ fn milestone_list_oldest_first_gives_the_old_order() {
         want
     );
 }
+
+/// FTR-036: a write stamps the board's writer record in the write's own commit, and only when the
+/// record moves.
+#[test]
+fn a_board_write_stamps_the_writer() {
+    let base = std::env::temp_dir().join(format!("kanbanr-writer-stamp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    // The board is this test's own, not the repository's (L-41).
+    assert!(
+        std::fs::canonicalize(&data)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+    );
+
+    let ok = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .env_remove("KANBANR_LOCAL")
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    let git = |args: &[&str]| -> String {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&data)
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    ok(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    ok(&[
+        "--project",
+        "demo",
+        "project",
+        "init",
+        "demo",
+        "--description",
+        "stamp",
+    ]);
+    let file = data.join("writer.yaml");
+    assert!(file.exists(), "the first write stamps the writer");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))),
+        "{text}"
+    );
+    let first = git(&["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        first.lines().any(|l| l == "writer.yaml"),
+        "in the write's own commit: {first}"
+    );
+
+    ok(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--description",
+        "second write",
+    ]);
+    let second = git(&["show", "--name-only", "--format=", "HEAD"]);
+    assert!(!second.is_empty(), "the second write committed");
+    assert!(
+        !second.lines().any(|l| l == "writer.yaml"),
+        "no churn when nothing moved: {second}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
