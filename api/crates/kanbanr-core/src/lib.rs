@@ -52,6 +52,7 @@ pub mod graph;
 pub mod guards;
 pub mod hash;
 pub mod items;
+pub mod judgement;
 pub mod lessons;
 pub mod library;
 pub mod manual;
