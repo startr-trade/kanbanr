@@ -583,6 +583,411 @@ pub fn set_row(store: &Store, id: &str, row_id: &str, applies: bool, why: &str) 
     save(store, id, &c)
 }
 
+// ---- the derived status (T3) ------------------------------------------------------------------
+
+/// A doc body (after its front matter) with fewer non-blank characters than this reads as a stub:
+/// a doc holding only front matter and a heading is one.
+pub const STUB_THRESHOLD: usize = 80;
+
+/// What a row's source holds right now, derived from the board, the config and the code
+/// repository the surface has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SourceState {
+    /// A written doc with a body.
+    Present,
+    /// A written doc whose body is under [`STUB_THRESHOLD`] non-blank characters.
+    Stub,
+    /// A written doc (or folder) that is not there.
+    Missing,
+    /// A written folder and the docs under it (0 counts as missing for the gaps).
+    Folder { docs: usize },
+    /// A generated kanbanr view: always derivable.
+    Available,
+    /// A `katalogr:` view: it needs katalogr (FTR-016 reports the capability).
+    NeedsKatalogr,
+    /// An enforced source, or an item-level written row with no path: the row declares it.
+    Declared,
+    /// A `repo:` source on a surface with no code repository: it cannot tell (not a gap).
+    NoRepository,
+}
+
+impl SourceState {
+    /// Whether the source fills the cells its row answers: a missing source, an empty folder and a
+    /// stub do not.
+    fn fills(&self) -> bool {
+        !matches!(
+            self,
+            SourceState::Missing | SourceState::Stub | SourceState::Folder { docs: 0 }
+        )
+    }
+}
+
+/// One protection of a row and whether the project has it in force.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProtectionStatus {
+    pub name: String,
+    pub in_force: bool,
+    /// What decides it, or what is missing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
+}
+
+/// One row, with its derived state.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RowStatus {
+    pub id: String,
+    pub title: String,
+    pub level: Level,
+    pub answers: Vec<String>,
+    #[serde(rename = "for")]
+    pub for_: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notation: String,
+    pub source: Source,
+    pub state: SourceState,
+    pub applies: Applicability,
+    pub protections: Vec<ProtectionStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+}
+
+/// A (question, perspective) pair.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Cell {
+    pub question: String,
+    pub perspective: String,
+}
+
+/// The catalog as it stands: every row's state, the cells no applying row fills, and what is
+/// wrong with the catalog file. Derived, never stored (ADR-0002).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CatalogStatus {
+    /// The facts record's content revision; empty with no facts record.
+    pub facts_rev: String,
+    /// The starter version the catalog began from; 0 with none.
+    pub starter: u32,
+    pub rows: Vec<RowStatus>,
+    pub gaps: Vec<Cell>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
+    /// How many source docs were read (each written source once).
+    pub docs_read: usize,
+}
+
+/// A board folder source as a docs-relative prefix ending `/`.
+fn folder_prefix(path: &str) -> String {
+    let p = path.trim().trim_start_matches("./").trim_start_matches('/');
+    let p = p.strip_prefix("docs/").unwrap_or(p);
+    let p = p.trim_end_matches('/');
+    format!("{p}/")
+}
+
+fn body_state(text: &str) -> SourceState {
+    let (_, body) = crate::docs::split_front_matter(text);
+    let chars = body.chars().filter(|c| !c.is_whitespace()).count();
+    if chars < STUB_THRESHOLD {
+        SourceState::Stub
+    } else {
+        SourceState::Present
+    }
+}
+
+/// Reads each source once, in the order rows ask for them.
+struct Reader<'a> {
+    store: &'a Store,
+    project: &'a str,
+    repo: Option<&'a std::path::Path>,
+    /// Board docs (by key) and repository docs (by `repo:<path>`) already judged.
+    seen: BTreeMap<String, SourceState>,
+    listing: Option<Vec<String>>,
+    reads: usize,
+}
+
+impl Reader<'_> {
+    fn state(&mut self, row: &Row) -> SourceState {
+        match row.source.kind {
+            SourceKind::Generated => {
+                if row.source.generator.trim().starts_with(KATALOGR_PREFIX) {
+                    SourceState::NeedsKatalogr
+                } else {
+                    SourceState::Available
+                }
+            }
+            SourceKind::Enforced => SourceState::Declared,
+            SourceKind::Written => {
+                let path = row.source.path.trim();
+                if path.is_empty() {
+                    // An item-level row's source is each item's spec (coordinator, 17 Nov 2026).
+                    return if row.level == Level::Item {
+                        SourceState::Declared
+                    } else {
+                        SourceState::Missing
+                    };
+                }
+                if let Some(rel) = path.strip_prefix(REPO_PREFIX) {
+                    return self.repo_doc(rel);
+                }
+                if path.ends_with('/') {
+                    let prefix = folder_prefix(path);
+                    let listing = self.listing.get_or_insert_with(|| {
+                        self.store.list_docs(self.project).unwrap_or_default()
+                    });
+                    let docs = listing.iter().filter(|d| d.starts_with(&prefix)).count();
+                    return SourceState::Folder { docs };
+                }
+                self.board_doc(path)
+            }
+        }
+    }
+
+    fn board_doc(&mut self, path: &str) -> SourceState {
+        if path_problem(path).is_some() {
+            return SourceState::Missing;
+        }
+        let key = crate::refs::doc_key(path);
+        if let Some(s) = self.seen.get(&key) {
+            return s.clone();
+        }
+        self.reads += 1;
+        let state = match self.store.read_doc(self.project, &key) {
+            Ok(text) => body_state(&text),
+            Err(_) => SourceState::Missing,
+        };
+        self.seen.insert(key, state.clone());
+        state
+    }
+
+    fn repo_doc(&mut self, rel: &str) -> SourceState {
+        let Some(root) = self.repo else {
+            return SourceState::NoRepository;
+        };
+        if path_problem(rel).is_some() {
+            return SourceState::Missing;
+        }
+        let key = format!("{REPO_PREFIX}{rel}");
+        if let Some(s) = self.seen.get(&key) {
+            return s.clone();
+        }
+        self.reads += 1;
+        let state = repo_file(root, rel)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|text| body_state(&text))
+            .unwrap_or(SourceState::Missing);
+        self.seen.insert(key, state.clone());
+        state
+    }
+}
+
+/// `rel` under `root`, only when it resolves inside it (a symlink out of the repository is refused).
+fn repo_file(root: &std::path::Path, rel: &str) -> Option<PathBuf> {
+    let root = root.canonicalize().ok()?;
+    let path = root.join(rel).canonicalize().ok()?;
+    (path.starts_with(&root) && path.is_file()).then_some(path)
+}
+
+fn protection_status(
+    name: &str,
+    row: &Row,
+    project: &crate::store::Project,
+    tracked: &BTreeSet<&str>,
+    repo: bool,
+) -> ProtectionStatus {
+    use crate::method::Part;
+    let config = &project.config;
+    let part = |p: Part, what: &str| {
+        if config.method.is_on(p) {
+            (true, String::new())
+        } else {
+            (
+                false,
+                format!("the method's {} part is off: {what}", p.as_str()),
+            )
+        }
+    };
+    let (in_force, why) = match name {
+        "docs_updated" => part(Part::Docs, "nothing checks the doc changed with the item"),
+        "spec_sections" => part(Part::Design, "no item spec needs a Design"),
+        "design-review" => part(Part::DesignReview, "no one signs off a design"),
+        "drift" => {
+            if repo {
+                (true, String::new())
+            } else {
+                (
+                    false,
+                    "no code repository here, so drift cannot be checked".to_string(),
+                )
+            }
+        }
+        "view-id" => (
+            false,
+            "not yet: no kanbanr view carries an ID for this source".to_string(),
+        ),
+        "none" => (true, "drift is accepted".to_string()),
+        other => {
+            if let Some(id) = other.strip_prefix("coverage:") {
+                if config.coverage.iter().any(|r| r.id == id) {
+                    (true, String::new())
+                } else {
+                    (false, format!("the config has no coverage rule \"{id}\""))
+                }
+            } else if let Some(test) = other.strip_prefix("test:") {
+                let declared =
+                    row.source.kind == SourceKind::Enforced && row.source.test.trim() == test;
+                if tracked.contains(test) || declared {
+                    (true, String::new())
+                } else {
+                    (false, format!("no item tracks a test named \"{test}\""))
+                }
+            } else {
+                (false, format!("\"{other}\" is not a protection"))
+            }
+        }
+    };
+    ProtectionStatus {
+        name: name.to_string(),
+        in_force,
+        why,
+    }
+}
+
+/// The catalog's status for `project`: each row's applicability, source state and protections, and
+/// the gaps. Reads the catalog and facts files and each written source once, in row order; writes
+/// nothing and holds no clock, host or absolute path, so the same board gives the same bytes. With
+/// no catalog it reads no doc and returns no rows. An invalid catalog comes back under `problems`
+/// with no rows. `repo` is the code repository the surface has, for `repo:` sources.
+pub fn status(
+    store: &Store,
+    project: &crate::store::Project,
+    repo: Option<&std::path::Path>,
+) -> Result<CatalogStatus> {
+    let id = project.id.as_str();
+    let mut out = CatalogStatus::default();
+    let facts = match crate::facts::load(store, id) {
+        Ok(f) => f,
+        Err(e) => {
+            out.problems
+                .push(format!("{}: {e}", crate::facts::FACTS_FILE));
+            None
+        }
+    };
+    out.facts_rev = facts.as_ref().map(|f| f.content_rev()).unwrap_or_default();
+    let catalog = match load(store, id) {
+        Ok(Some(c)) => c,
+        Ok(None) => return Ok(out),
+        Err(e) => {
+            out.problems.push(format!("{CATALOG_FILE}: {e}"));
+            return Ok(out);
+        }
+    };
+    out.starter = catalog.starter;
+    let found = problems(&catalog);
+    if !found.is_empty() {
+        out.problems.extend(found);
+        return Ok(out);
+    }
+    let tracked: BTreeSet<&str> = project
+        .features
+        .iter()
+        .filter_map(|f| f.definition.as_ref())
+        .flat_map(|d| d.requirements.iter())
+        .flat_map(|r| r.tests.iter())
+        .map(|t| t.name.as_str())
+        .collect();
+    let mut reader = Reader {
+        store,
+        project: id,
+        repo,
+        seen: BTreeMap::new(),
+        listing: None,
+        reads: 0,
+    };
+    let mut filled: BTreeSet<(String, String)> = BTreeSet::new();
+    for row in &catalog.rows {
+        let applies = row.applicability(facts.as_ref(), &project.config);
+        let state = reader.state(row);
+        if applies.applies && state.fills() {
+            filled.extend(row.cells());
+        }
+        let protections = row
+            .protection
+            .iter()
+            .map(|p| protection_status(p, row, project, &tracked, repo.is_some()))
+            .collect();
+        out.rows.push(RowStatus {
+            id: row.id.clone(),
+            title: row.title.clone(),
+            level: row.level,
+            answers: row.answers.clone(),
+            for_: row.for_.clone(),
+            notation: row.notation.clone(),
+            source: row.source.clone(),
+            state,
+            applies,
+            protections,
+            href: row.href(id),
+        });
+    }
+    out.docs_read = reader.reads;
+    for q in QUESTIONS {
+        for p in PERSPECTIVES {
+            if !filled.contains(&(q.to_string(), p.id.to_string())) {
+                out.gaps.push(Cell {
+                    question: q.to_string(),
+                    perspective: p.id.to_string(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The rows a change touches (FTR-006 reads this): written rows whose source is among `docs`
+/// (board doc keys; a folder row matches any doc under it; a `repo:` row matches its own
+/// `repo:<path>`), plus rows whose id is in `named`. Sorted, deduplicated. Pure.
+pub fn views_changed(catalog: &Catalog, docs: &[String], named: &[String]) -> Vec<String> {
+    let keys: BTreeSet<String> = docs
+        .iter()
+        .filter(|d| !d.trim().starts_with(REPO_PREFIX))
+        .map(|d| crate::refs::doc_key(d))
+        .collect();
+    let repo: BTreeSet<&str> = docs
+        .iter()
+        .map(|d| d.trim())
+        .filter(|d| d.starts_with(REPO_PREFIX))
+        .collect();
+    let mut out = BTreeSet::new();
+    for row in &catalog.rows {
+        if named.iter().any(|n| n.trim() == row.id) {
+            out.insert(row.id.clone());
+            continue;
+        }
+        if row.source.kind != SourceKind::Written {
+            continue;
+        }
+        let path = row.source.path.trim();
+        let hit = if path.is_empty() {
+            false
+        } else if path.starts_with(REPO_PREFIX) {
+            repo.contains(path)
+        } else if path.ends_with('/') {
+            let prefix = folder_prefix(path);
+            keys.iter().any(|k| k.starts_with(&prefix))
+        } else {
+            keys.contains(&crate::refs::doc_key(path))
+        };
+        if hit {
+            out.insert(row.id.clone());
+        }
+    }
+    out.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,5 +1447,463 @@ mod tests {
         );
         assert_eq!(init(&store, "demo", true).unwrap(), starter());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Every file under `dir`, with its bytes: a board compared before and after a read.
+    fn snapshot(dir: &std::path::Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn walk(d: &std::path::Path, out: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for e in std::fs::read_dir(d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else {
+                    out.insert(p.clone(), std::fs::read(&p).unwrap());
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(dir, &mut out);
+        out
+    }
+
+    fn long_body() -> String {
+        format!("# Context\n\n{}\n", "The system reads a board. ".repeat(8))
+    }
+
+    fn written_row(id: &str, path: &str, answers: &[&str], for_: &[&str]) -> Row {
+        Row {
+            id: id.into(),
+            title: id.into(),
+            answers: strings(answers),
+            for_: strings(for_),
+            source: Source {
+                kind: SourceKind::Written,
+                path: path.into(),
+                ..Source::default()
+            },
+            ..Row::default()
+        }
+    }
+
+    fn state_of<'a>(s: &'a CatalogStatus, id: &str) -> &'a RowStatus {
+        s.rows.iter().find(|r| r.id == id).unwrap()
+    }
+
+    /// R-7: every source state is derived from the board's files; protections follow the config;
+    /// the gaps are the cells no applying row with a source fills; nothing is written.
+    #[test]
+    fn status_is_derived_from_board_files_and_names_the_gaps() {
+        let (store, dir) = temp_store();
+        store
+            .write_doc("demo", "architecture/context.md", &long_body())
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/behaviour.md",
+                "---\ntitle: Behaviour\n---\n# Behaviour\n\nTo do.\n",
+            )
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/components/store.md", &long_body())
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/components/web.md", "# Web\n")
+            .unwrap();
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("docs/system")).unwrap();
+        std::fs::write(repo.join("docs/system/context.md"), long_body()).unwrap();
+
+        let mut rows = vec![
+            Row {
+                protection: strings(&["docs_updated", "coverage:catalog", "drift"]),
+                ..written_row(
+                    "context",
+                    "architecture/context.md",
+                    &["what"],
+                    &["sponsor"],
+                )
+            },
+            // Read through the same key: once.
+            written_row(
+                "context-again",
+                "docs/architecture/context.md",
+                &["what"],
+                &["user"],
+            ),
+            written_row(
+                "behaviour",
+                "architecture/behaviour.md",
+                &["how"],
+                &["user"],
+            ),
+            Row {
+                protection: strings(&["spec_sections", "design-review", "coverage:nope"]),
+                ..written_row("missing", "architecture/data.md", &["what"], &["architect"])
+            },
+            Row {
+                level: Level::Component,
+                ..written_row(
+                    "components",
+                    "architecture/components/",
+                    &["what"],
+                    &["builder"],
+                )
+            },
+            Row {
+                level: Level::Component,
+                ..written_row("empty-folder", "architecture/none/", &["who"], &["builder"])
+            },
+            written_row(
+                "repo-doc",
+                "repo:docs/system/context.md",
+                &["where"],
+                &["operator"],
+            ),
+            written_row(
+                "repo-missing",
+                "repo:docs/system/gone.md",
+                &["when"],
+                &["operator"],
+            ),
+            Row {
+                level: Level::Item,
+                protection: strings(&["view-id", "none"]),
+                ..written_row("item-design", "", &["how"], &["builder"])
+            },
+            Row {
+                source: Source {
+                    kind: SourceKind::Generated,
+                    generator: "kanbanr:charter".into(),
+                    ..Source::default()
+                },
+                ..written_row("purpose", "", &["why"], &["sponsor"])
+            },
+            Row {
+                source: Source {
+                    kind: SourceKind::Generated,
+                    generator: "katalogr:structure".into(),
+                    ..Source::default()
+                },
+                ..written_row("code", "", &["what"], &["builder"])
+            },
+            Row {
+                source: Source {
+                    kind: SourceKind::Enforced,
+                    test: "architecture::tests::thin".into(),
+                    ..Source::default()
+                },
+                protection: strings(&["test:architecture::tests::thin", "test:other::t"]),
+                ..written_row("thin", "", &["how"], &["architect"])
+            },
+            // Off: it fills nothing.
+            Row {
+                applies: Some(false),
+                why: "not ours".into(),
+                ..written_row("off", "architecture/context.md", &["why"], &["operator"])
+            },
+        ];
+        // A row with a `when` and no facts record does not apply.
+        let mut when = BTreeMap::new();
+        when.insert("parts".to_string(), strings(&["api"]));
+        rows.push(Row {
+            when,
+            ..written_row("interfaces", "architecture/context.md", &["why"], &["user"])
+        });
+        save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: SCHEMA,
+                starter: 1,
+                rows,
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        let mut project = store.load("demo").unwrap();
+        project.config.coverage.push(crate::coverage::CoverageRule {
+            id: "catalog".into(),
+            ..Default::default()
+        });
+        project.config.method.off = vec![crate::method::Part::DesignReview];
+
+        let before = snapshot(&dir);
+        let s = status(&store, &project, Some(&repo)).unwrap();
+        assert_eq!(snapshot(&dir), before, "reading the status writes nothing");
+
+        assert!(s.problems.is_empty(), "{:?}", s.problems);
+        assert_eq!(s.starter, 1);
+        assert_eq!(s.facts_rev, "");
+        let st = |id: &str| state_of(&s, id).state.clone();
+        assert_eq!(st("context"), SourceState::Present);
+        assert_eq!(st("context-again"), SourceState::Present);
+        assert_eq!(st("behaviour"), SourceState::Stub);
+        assert_eq!(st("missing"), SourceState::Missing);
+        assert_eq!(st("components"), SourceState::Folder { docs: 2 });
+        assert_eq!(st("empty-folder"), SourceState::Folder { docs: 0 });
+        assert_eq!(st("repo-doc"), SourceState::Present);
+        assert_eq!(st("repo-missing"), SourceState::Missing);
+        assert_eq!(st("item-design"), SourceState::Declared);
+        assert_eq!(st("purpose"), SourceState::Available);
+        assert_eq!(st("code"), SourceState::NeedsKatalogr);
+        assert_eq!(st("thin"), SourceState::Declared);
+        // context, behaviour, data.md, the repo doc and its missing sibling: each read once.
+        assert_eq!(s.docs_read, 5);
+        assert_eq!(
+            state_of(&s, "context").href.as_deref(),
+            Some("/p/demo/docs/file/architecture/context.md")
+        );
+        // Applicability rides along.
+        assert!(!state_of(&s, "off").applies.applies);
+        assert_eq!(state_of(&s, "interfaces").applies.why, NO_FACTS);
+
+        // Protections, per config.
+        let prot = |id: &str, name: &str| {
+            state_of(&s, id)
+                .protections
+                .iter()
+                .find(|p| p.name == name)
+                .unwrap()
+                .clone()
+        };
+        assert!(prot("context", "docs_updated").in_force);
+        assert!(prot("context", "coverage:catalog").in_force);
+        assert!(prot("context", "drift").in_force, "a repository is here");
+        assert!(prot("missing", "spec_sections").in_force);
+        let dr = prot("missing", "design-review");
+        assert!(!dr.in_force && dr.why.contains("design-review"), "{dr:?}");
+        assert!(!prot("missing", "coverage:nope").in_force);
+        assert!(!prot("item-design", "view-id").in_force);
+        assert!(prot("item-design", "none").in_force);
+        assert!(prot("thin", "test:architecture::tests::thin").in_force);
+        assert!(!prot("thin", "test:other::t").in_force);
+
+        // Gaps: cells with no applying row whose source fills them, in question then perspective
+        // order. Filled: what×sponsor, what×user (context), what×builder (components; and code),
+        // where×operator (repo doc), how×builder (item-design), why×sponsor (purpose),
+        // how×architect (thin).
+        let filled = [
+            ("what", "sponsor"),
+            ("what", "user"),
+            ("what", "builder"),
+            ("how", "architect"),
+            ("how", "builder"),
+            ("where", "operator"),
+            ("why", "sponsor"),
+        ];
+        let expected: Vec<Cell> = QUESTIONS
+            .iter()
+            .flat_map(|q| PERSPECTIVES.iter().map(move |p| (*q, p.id)))
+            .filter(|c| !filled.contains(c))
+            .map(|(q, p)| Cell {
+                question: q.into(),
+                perspective: p.into(),
+            })
+            .collect();
+        assert_eq!(s.gaps, expected);
+        assert_eq!(
+            s.gaps[0],
+            Cell {
+                question: "what".into(),
+                perspective: "architect".into()
+            },
+            "the missing doc fills no cell"
+        );
+
+        // With no repository, a repo source cannot tell and drift is not in force.
+        let s = status(&store, &project, None).unwrap();
+        assert_eq!(state_of(&s, "repo-doc").state, SourceState::NoRepository);
+        assert!(
+            !state_of(&s, "context")
+                .protections
+                .iter()
+                .find(|p| p.name == "drift")
+                .unwrap()
+                .in_force
+        );
+        assert!(
+            !s.gaps
+                .iter()
+                .any(|c| c.question == "where" && c.perspective == "operator"),
+            "a source the surface cannot read is not a gap"
+        );
+        assert_eq!(s.docs_read, 3);
+
+        // An invalid catalog comes back as problems with no rows.
+        let mut bad = load(&store, "demo").unwrap().unwrap();
+        bad.rows[0].answers = strings(&["which"]);
+        crate::atomic::write(
+            catalog_path(&store, "demo"),
+            crate::yaml::to_string(&bad).unwrap(),
+        )
+        .unwrap();
+        let s = status(&store, &project, None).unwrap();
+        assert!(s.rows.is_empty() && s.docs_read == 0);
+        assert!(
+            s.problems.iter().any(|p| p.contains("row \"context\"")),
+            "{:?}",
+            s.problems
+        );
+        std::fs::write(catalog_path(&store, "demo"), "rows: [unclosed").unwrap();
+        let s = status(&store, &project, None).unwrap();
+        assert!(s.rows.is_empty());
+        assert!(s.problems[0].starts_with(CATALOG_FILE), "{:?}", s.problems);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-7: two reads of the same board give byte-equal JSON.
+    #[test]
+    fn the_same_board_gives_the_same_status_bytes() {
+        let (store, dir) = temp_store();
+        init(&store, "demo", false).unwrap();
+        store
+            .write_doc("demo", "architecture/context.md", &long_body())
+            .unwrap();
+        crate::facts::save(
+            &store,
+            "demo",
+            &Facts {
+                production: vec!["server".into()],
+                parts: vec!["api".into(), "cli".into()],
+                ..Facts::default()
+            },
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let a = serde_json::to_vec(&status(&store, &project, None).unwrap()).unwrap();
+        let b = serde_json::to_vec(&status(&store, &project, None).unwrap()).unwrap();
+        assert_eq!(a, b);
+        let s = status(&store, &project, None).unwrap();
+        assert_eq!(s.rows.len(), 21);
+        assert_eq!(
+            s.facts_rev,
+            crate::facts::load(&store, "demo")
+                .unwrap()
+                .unwrap()
+                .content_rev()
+        );
+        let text = String::from_utf8(a).unwrap();
+        assert!(!text.contains(&*dir.to_string_lossy()), "no absolute path");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-8: with no files, the status reads no docs and has no rows.
+    #[test]
+    fn no_catalog_no_effect() {
+        let (store, dir) = temp_store();
+        store
+            .write_doc("demo", "architecture/context.md", &long_body())
+            .unwrap();
+        assert_eq!(load(&store, "demo").unwrap(), None);
+        assert_eq!(crate::facts::load(&store, "demo").unwrap(), None);
+        let project = store.load("demo").unwrap();
+        let before = snapshot(&dir);
+        let s = status(&store, &project, Some(&dir)).unwrap();
+        assert_eq!(snapshot(&dir), before);
+        assert_eq!(s.docs_read, 0);
+        assert!(s.rows.is_empty() && s.gaps.is_empty() && s.problems.is_empty());
+        assert_eq!(s, CatalogStatus::default());
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            serde_json::json!({"facts_rev": "", "starter": 0, "rows": [], "gaps": [], "docs_read": 0})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-12: 40 rows over 40 docs of 20 KB and 2,000 items, each source read once, under 200 ms.
+    #[test]
+    fn status_reads_each_source_once_within_budget() {
+        let (store, dir) = temp_store();
+        let body = format!("# Doc\n\n{}\n", "x".repeat(20 * 1024));
+        let mut rows = Vec::new();
+        for i in 0..40 {
+            let path = format!("architecture/doc-{i:02}.md");
+            store.write_doc("demo", &path, &body).unwrap();
+            rows.push(Row {
+                protection: strings(&["docs_updated", &format!("test:t{i}")]),
+                ..written_row(&format!("row-{i:02}"), &path, &["what"], &["builder"])
+            });
+        }
+        save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: SCHEMA,
+                rows,
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let seed = store
+            .add_feature("demo", "seed", "", "M", Some("FEAT-001".into()))
+            .unwrap();
+        let mut project = store.load("demo").unwrap();
+        project.features = (0..2000)
+            .map(|i| {
+                let mut f = seed.clone();
+                f.code = format!("FEAT-{i:04}");
+                f.definition = Some(crate::models::FeatureDefinition {
+                    requirements: vec![crate::models::Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![crate::models::TestRef {
+                            name: format!("t{i}"),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                f
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        let s = status(&store, &project, None).unwrap();
+        let took = started.elapsed();
+        assert_eq!(s.docs_read, 40);
+        assert_eq!(s.rows.len(), 40);
+        assert!(
+            s.rows
+                .iter()
+                .all(|r| r.state == SourceState::Present && r.protections[1].in_force)
+        );
+        assert!(
+            took < std::time::Duration::from_millis(200),
+            "status took {took:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `views_changed`: written rows by doc key or folder, repository rows by their own path, and
+    /// rows named outright; sorted and deduplicated.
+    #[test]
+    fn views_changed_names_rows_by_doc_and_by_id() {
+        let c = starter();
+        let changed = views_changed(
+            &c,
+            &strings(&[
+                "docs/architecture/context.md",
+                "architecture/components/store.md",
+                "architecture/unrelated.md",
+            ]),
+            &strings(&["decisions", "context"]),
+        );
+        assert_eq!(
+            changed,
+            strings(&["component-docs", "context", "decisions"])
+        );
+        let mut repo = c.clone();
+        repo.rows[3].source.path = "repo:docs/system/context.md".into();
+        assert_eq!(repo.rows[3].id, "context");
+        assert_eq!(
+            views_changed(&repo, &strings(&["repo:docs/system/context.md"]), &[]),
+            strings(&["context"])
+        );
+        assert!(views_changed(&repo, &strings(&["docs/system/context.md"]), &[]).is_empty());
+        assert!(views_changed(&c, &[], &[]).is_empty());
     }
 }
