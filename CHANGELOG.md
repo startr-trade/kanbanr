@@ -48,6 +48,8 @@ All notable changes to kanbanr are documented here. The format follows
 - Releases list newest first by version on the Releases page and in `kanbanr release list`; a
   release button names the release and the stage and asks before it acts; `kanbanr release undo
   <V> --reason …` steps a mistaken stage back while nothing is pushed or tagged (DEF-034).
+- A manual check opens only once its item reaches its build stage: before then the Review page
+  offers no Passed or Failed and kanbanr refuses the result (DEF-076).
 
 ## [0.7.0] - 2026-11-16
 

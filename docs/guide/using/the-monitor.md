@@ -452,7 +452,9 @@ optional note; nothing has to be typed. The click records the result as you, the
 `kanbanr test` makes in your own terminal. Claude is refused a manual result, since it says a
 person checked; if you tell Claude the result, it prepares the record filled in and you confirm it
 here. A failed check is recorded as failed and no defect is filed for you: ask Claude to file one.
-A read-only monitor shows the `kanbanr test` command instead.
+A read-only monitor shows the `kanbanr test` command instead. A check opens once its item reaches
+its build stage: before then nothing exists to check, so it is listed apart under **Not due yet**
+with no Passed or Failed, and kanbanr refuses a result for it from any page or terminal.
 
 ### Prepared by Claude
 
