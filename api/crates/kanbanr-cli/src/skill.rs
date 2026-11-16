@@ -644,7 +644,7 @@ mod tests {
         for want in [
             "If the charter is agreed, or changed, after that commit",
             "git add CLAUDE.md && git commit -m \"[no-ref] refresh the kanbanr block\"",
-            "on an item's branch it goes in that item's next commit",
+            "On an item's branch it goes in that item's next commit",
         ] {
             assert!(flat.contains(want), "the skill says {want:?}");
         }

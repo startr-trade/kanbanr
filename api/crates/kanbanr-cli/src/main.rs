@@ -1614,6 +1614,21 @@ enum ReleaseCmd {
         #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
         accept_untested: Vec<String>,
     },
+    /// Step a release's newest stage back, for a stage taken by mistake, while nothing is pushed
+    /// or tagged (DEF-034). Undoing the change that made `release/<VERSION>` deletes the branch,
+    /// only when every commit on it is kanbanr's and it is neither checked out nor on a remote.
+    /// A stage that moved main or tagged is never undone: start a patch release instead. Only the
+    /// newest change is undone; an earlier mistake is two undos. Your own verdict: Claude does not
+    /// run it. Run it from the project folder.
+    Undo {
+        version: String,
+        /// Why the stage is undone (required, and recorded).
+        #[arg(long)]
+        reason: String,
+        /// Who undid it (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Each release stage: what it requires, what entering it does, and whether that is the
     /// project's own gate or the default (FEAT-212).
     Stages,
@@ -1886,7 +1901,7 @@ enum AdrCmd {
         /// ISO/IEC 25010 characteristics at stake.
         #[arg(long, value_delimiter = ',')]
         quality: Vec<String>,
-        /// Zachman columns it answers.
+        /// Zachman columns it answers (What, How, Where, Who, When, Why).
         #[arg(long, value_delimiter = ',')]
         zachman: Vec<String>,
         /// conceptual | logical | physical.
@@ -4276,6 +4291,20 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
             let p = require_project(cli)?;
             let root =
                 scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            // A scope still in force for a finished item: name it so it can be revoked (DEF-096).
+            let held_note = |c: &Value| -> Option<String> {
+                let id = c["held_by"].as_str()?;
+                Some(match c["item"].as_str() {
+                    Some(item) => format!(
+                        "  (scope {id} is still in force for {item}, which is finished: revoke it \
+                         with kanbanr scope revoke {id} --reason \"{item} finished\")"
+                    ),
+                    None => format!(
+                        "  (scope {id} is still in force for a finished item: revoke it with \
+                         kanbanr scope revoke {id} --reason \"item finished\")"
+                    ),
+                })
+            };
             if !*yes {
                 let resp = client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))?;
                 if cli.json {
@@ -4299,6 +4328,9 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                             .get(..7)
                             .unwrap_or_default()
                     );
+                    if let Some(note) = held_note(c) {
+                        println!("{note}");
+                    }
                 }
                 println!(
                     "nothing deleted; run `kanbanr git tidy --yes` to delete these {}",
@@ -4306,6 +4338,20 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
+            // The outcome names no scope: read the listing first for the notes (DEF-096).
+            let notes: std::collections::BTreeMap<String, String> = if cli.json {
+                Default::default()
+            } else {
+                let listed: Value = serde_json::from_str(
+                    &client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))?,
+                )?;
+                listed["candidates"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c["branch"].as_str()?.to_string(), held_note(c)?)))
+                    .collect()
+            };
             let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/git/tidy"),
@@ -4317,15 +4363,19 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 println!("{}", pretty(&resp));
             } else {
                 for d in v["deleted"].as_array().into_iter().flatten() {
+                    let branch = d["branch"].as_str().unwrap_or_default();
                     println!(
                         "deleted {} (was {})",
-                        d["branch"].as_str().unwrap_or_default(),
+                        branch,
                         d["tip"]
                             .as_str()
                             .unwrap_or_default()
                             .get(..7)
                             .unwrap_or_default()
                     );
+                    if let Some(note) = notes.get(branch) {
+                        println!("{note}");
+                    }
                 }
                 for k in v["skipped"].as_array().into_iter().flatten() {
                     println!(
@@ -11639,6 +11689,11 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 );
             }
         }
+        ReleaseCmd::Undo {
+            version,
+            reason,
+            by,
+        } => undo_release(cli, client, &p, version, reason, by.as_ref())?,
         ReleaseCmd::Remove { version } => {
             let resp = client.write(
                 Method::Delete,
@@ -11919,6 +11974,64 @@ fn redate_release(
         said.push_str(&format!("\n{moved}"));
     }
     print_write(cli, &resp, said);
+    Ok(())
+}
+
+/// `release undo` (DEF-034): step the newest stage back through the same write path as a
+/// promotion, and say where the release is now and what branch went.
+fn undo_release(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    reason: &str,
+    by: Option<&String>,
+) -> anyhow::Result<()> {
+    let by = verdict_author(cli, by)?;
+    let repo = code_repo();
+    let resp = client.write_in(
+        Method::Post,
+        &format!("/projects/{p}/releases/{}/undo", urlencode_segment(version)),
+        Some(json!({ "by": by, "reason": reason })),
+        repo.as_deref(),
+    )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    let undone = &v["undone"];
+    let now_at = v["now_at"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("no stage");
+    let date = undone["at"].as_str().unwrap_or_default();
+    print_write(
+        cli,
+        &resp,
+        format!(
+            "{version}: undid {} (by {}, {}); now at {now_at}",
+            undone["undoes"].as_str().unwrap_or_default(),
+            undone["by"].as_str().unwrap_or_default(),
+            date.get(..10).unwrap_or(date),
+        ),
+    );
+    if cli.json {
+        return Ok(());
+    }
+    if let Some(branch) = v["branch_deleted"].as_str().filter(|b| !b.is_empty()) {
+        let subjects: Vec<&str> = v["commits_removed"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c["subject"].as_str())
+            .collect();
+        println!(
+            "deleted {branch} ({} commit(s) kanbanr wrote: {})",
+            subjects.len(),
+            if subjects.is_empty() {
+                "none".to_string()
+            } else {
+                subjects.join("; ")
+            }
+        );
+    }
     Ok(())
 }
 

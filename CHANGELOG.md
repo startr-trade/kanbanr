@@ -10,6 +10,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
   representation; published pages keep their URLs (MNT-002).
+- ISO 25010 tags, Zachman columns and layers have one spelling: `feature define` and `adr new`
+  store the canonical one and refuse an unknown one, ADRs are read in canonical form, and the
+  doctor counts a quality once whatever its case (MNT-009).
 
 ### Fixed
 
@@ -21,6 +24,8 @@ All notable changes to kanbanr are documented here. The format follows
   docs-folded can be given after the merge (DEF-091).
 - A commit on main that changes only another tool's generated block in CLAUDE.md, such as
   katalogr's, is let through like kanbanr's own block refresh (DEF-092).
+- `kanbanr git tidy` lists a finished item's merged branch even while an agent scope issued for
+  that item is still in force, and names the scope to revoke (DEF-096).
 
 ## [0.7.0] - 2026-11-16
 

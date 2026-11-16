@@ -327,19 +327,32 @@ pub struct TidyCandidate {
     pub into: String,
     pub tip: String,
     pub why: String,
+    /// A live scope still in force for this finished item: name it so it can be revoked (DEF-096).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held_by: Option<String>,
+}
+
+/// A live scope's claim on a branch, for tidy (DEF-096).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeHold {
+    pub scope: String,
+    pub item: String,
 }
 
 /// The merged branches that can go: a finished item's merged branch, and a merged
 /// `worktree-agent-*` branch no live scope holds. Never main, the integration branch, `sprint/*`,
 /// `release/*`, `spike/*`, a branch a worktree has checked out, an unmerged branch, or the branch of
-/// a parked or unfinished item. Sorted by branch name; pure over facts already read.
+/// a parked or unfinished item. `live_scopes` maps each branch a live scope holds to that scope: a
+/// held branch is skipped while the scope's item is unfinished or not on the board; when the item
+/// is finished the hold is ignored and a listed candidate carries `held_by` (DEF-096). Sorted by
+/// branch name; pure over facts already read.
 pub fn tidy_candidates(
     project: &Project,
     releases: &[Release],
     model: &GitModel,
     facts: &DriftFacts,
     checked_out: &dyn Fn(&str) -> bool,
-    live_scope_branches: &BTreeSet<String>,
+    live_scopes: &BTreeMap<String, ScopeHold>,
 ) -> Vec<TidyCandidate> {
     let config: &ProjectConfig = &project.config;
     let mut out = Vec::new();
@@ -350,10 +363,20 @@ pub fn tidy_candidates(
             || branch.starts_with(RELEASE_PREFIX)
             || branch.starts_with(SPIKE_PREFIX)
             || checked_out(branch)
-            || live_scope_branches.contains(branch)
         {
             continue;
         }
+        let hold = live_scopes.get(branch);
+        let hold_ignored = hold.is_some_and(|h| {
+            project
+                .features
+                .iter()
+                .any(|f| f.code == h.item && gitmodel::is_finished(config, &f.status))
+        });
+        if hold.is_some() && !hold_ignored {
+            continue;
+        }
+        let held_by = hold.filter(|_| hold_ignored).map(|h| h.scope.clone());
         let merged_main = facts.branches.merged_into_main.contains(branch);
         if branch.starts_with(gitmodel::AGENT_BRANCH_PREFIX) {
             if merged_main {
@@ -364,6 +387,7 @@ pub fn tidy_candidates(
                     into: model.main.clone(),
                     tip: tip.clone(),
                     why: format!("a finished agent's branch, merged into {}", model.main),
+                    held_by,
                 });
             }
             continue;
@@ -398,6 +422,7 @@ pub fn tidy_candidates(
             ),
             into,
             tip: tip.clone(),
+            held_by,
         });
     }
     out.sort_by(|a, b| a.branch.cmp(&b.branch));
@@ -411,7 +436,7 @@ pub fn tidy_scan(store: &Store, id: &str, root: &Path) -> Result<(Vec<TidyCandid
     let (model, _) = gitmodel::load(store, id, root)?;
     let facts = collect(root, &model, &releases)?;
     let now = crate::now_rfc3339();
-    let mut live = BTreeSet::new();
+    let mut live = BTreeMap::new();
     for s in crate::agentscope::load(store, id).unwrap_or_default() {
         if matches!(
             s.state(&now),
@@ -419,8 +444,13 @@ pub fn tidy_scan(store: &Store, id: &str, root: &Path) -> Result<(Vec<TidyCandid
         ) {
             continue;
         }
-        live.extend(s.agent_branch.clone());
-        live.extend(s.branch.clone());
+        let hold = ScopeHold {
+            scope: s.id.clone(),
+            item: s.item.clone(),
+        };
+        for b in [&s.agent_branch, &s.branch].into_iter().flatten() {
+            live.insert(b.clone(), hold.clone());
+        }
     }
     let current = crate::coderepo::current_branch(root);
     let checked_out =
@@ -572,7 +602,15 @@ mod tests {
             branches: f,
             ..Default::default()
         };
-        let live: BTreeSet<String> = ["worktree-agent-live".to_string()].into();
+        // Held for an unfinished item, so still excluded (DEF-096).
+        let live: BTreeMap<String, ScopeHold> = [(
+            "worktree-agent-live".to_string(),
+            ScopeHold {
+                scope: "SC-9".into(),
+                item: "FEAT-003".into(),
+            },
+        )]
+        .into();
         let occupied = |b: &str| b == "feat/FEAT-005-occupied" || b == "worktree-agent-occupied";
         let got = tidy_candidates(&p, &[], &model, &d, &occupied, &live);
         let names: Vec<_> = got.iter().map(|c| c.branch.as_str()).collect();
@@ -586,6 +624,128 @@ mod tests {
         assert_eq!(got[0].into, "main");
         assert_eq!(got[1].kind, "agent");
         assert_eq!(got[1].tip, "1".repeat(40));
+    }
+
+    fn hold(scope: &str, item: &str) -> ScopeHold {
+        ScopeHold {
+            scope: scope.into(),
+            item: item.into(),
+        }
+    }
+
+    /// DEF-096 R-1: a finished item's merged branch, and a merged agent branch, held only by a
+    /// scope issued for that finished item, are listed and name the scope.
+    #[test]
+    fn a_finished_items_branch_held_only_by_its_own_scope_is_listed() {
+        let p = project(&[("FEAT-001", "Completed")], false);
+        let all = ["main", "feat/FEAT-001-x", "worktree-agent-a"];
+        let f = facts(&all, &all);
+        let model = gitmodel::derive(&p.config, &[], &f);
+        let d = DriftFacts {
+            branches: f,
+            ..Default::default()
+        };
+        let live: BTreeMap<String, ScopeHold> = [
+            ("feat/FEAT-001-x".to_string(), hold("SC-1", "FEAT-001")),
+            ("worktree-agent-a".to_string(), hold("SC-2", "FEAT-001")),
+        ]
+        .into();
+        let got = tidy_candidates(&p, &[], &model, &d, &|_| false, &live);
+        let names: Vec<_> = got.iter().map(|c| c.branch.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["feat/FEAT-001-x", "worktree-agent-a"],
+            "{got:?}"
+        );
+        assert_eq!(got[0].held_by.as_deref(), Some("SC-1"));
+        assert_eq!(got[0].into, "main");
+        assert_eq!(got[1].kind, "agent");
+        assert_eq!(got[1].held_by.as_deref(), Some("SC-2"));
+    }
+
+    /// DEF-096 R-2: a live scope on unfinished work, or on an item not on the board, still holds
+    /// its branch; a checked-out branch is kept whatever its item's status.
+    #[test]
+    fn a_live_scope_on_unfinished_work_still_holds_its_branch() {
+        let p = project(
+            &[("FEAT-001", "Completed"), ("FEAT-003", "In Progress")],
+            false,
+        );
+        let all = [
+            "main",
+            "feat/FEAT-001-x",
+            "feat/FEAT-003-working",
+            "worktree-agent-ghost",
+        ];
+        let f = facts(&all, &all);
+        let model = gitmodel::derive(&p.config, &[], &f);
+        let d = DriftFacts {
+            branches: f,
+            ..Default::default()
+        };
+        let live: BTreeMap<String, ScopeHold> = [
+            (
+                "feat/FEAT-003-working".to_string(),
+                hold("SC-3", "FEAT-003"),
+            ),
+            ("worktree-agent-ghost".to_string(), hold("SC-4", "FEAT-404")),
+        ]
+        .into();
+        let got = tidy_candidates(&p, &[], &model, &d, &|_| false, &live);
+        let names: Vec<_> = got.iter().map(|c| c.branch.as_str()).collect();
+        assert_eq!(names, vec!["feat/FEAT-001-x"], "{got:?}");
+        assert_eq!(got[0].held_by, None);
+        let occupied = |b: &str| b == "feat/FEAT-001-x";
+        let got = tidy_candidates(&p, &[], &model, &d, &occupied, &live);
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// DEF-096 R-3: an item branch merged into a release branch that main then took is listed;
+    /// a finished item's branch in no merged set is not.
+    #[test]
+    fn an_item_branch_merged_through_a_release_is_listed() {
+        let mut p = project(
+            &[("FEAT-001", "Completed"), ("FEAT-002", "Completed")],
+            true,
+        );
+        p.features[0].release = Some("v1".into());
+        let releases = [Release {
+            version: "v1".into(),
+            branch: "release/v1".into(),
+            state: crate::releases::ReleaseState::Shipped,
+            ..Default::default()
+        }];
+        let sprints = [Sprint {
+            code: "SP-002".into(),
+            state: SprintState::Active,
+            ..Default::default()
+        }];
+        let all = [
+            "main",
+            "sprint/SP-002",
+            "release/v1",
+            "feat/FEAT-001-x",
+            "feat/FEAT-002-y",
+        ];
+        let f = facts(
+            &all,
+            &["main", "sprint/SP-002", "release/v1", "feat/FEAT-001-x"],
+        );
+        let model = gitmodel::derive(&p.config, &sprints, &f);
+        let line = model.line.clone().expect("a sprint line");
+        let mut d = DriftFacts {
+            branches: f,
+            ..Default::default()
+        };
+        d.merged_into
+            .insert("release/v1".into(), ["feat/FEAT-001-x".to_string()].into());
+        d.merged_into
+            .insert(line.clone(), ["feat/FEAT-001-x".to_string()].into());
+        let got = tidy_candidates(&p, &releases, &model, &d, &|_| false, &BTreeMap::new());
+        let names: Vec<_> = got.iter().map(|c| c.branch.as_str()).collect();
+        assert_eq!(names, vec!["feat/FEAT-001-x"], "{got:?}");
+        assert!(got[0].into == line || got[0].into == "main", "{got:?}");
+        assert_eq!(got[0].held_by, None);
     }
 
     #[test]

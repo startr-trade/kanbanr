@@ -217,6 +217,15 @@ pub struct ReviewEntry {
     /// Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overrides: Vec<OverrideView>,
+    /// The release the item is planned into (FTR-038); empty when none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release: String,
+    /// The sprint the item is in (FTR-038); empty when none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sprint: String,
+    /// When the item last changed: its `updated_at` (FTR-038).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changed_at: String,
 }
 
 /// One override Claude made, as the Review page shows it (DEF-043).
@@ -274,34 +283,107 @@ fn spec_brief(
 /// `repo` is the project's code repository when the caller has one: the repository docs an item
 /// lists are judged against it before `docs-folded` is offered (DEF-033).
 pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<ReviewEntry>> {
-    let project = store.load_for_gates(p)?;
-    let charter = crate::charter::load(store, p)?;
-    let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
-    // The planned releases, in file order: the choices of the which-release question
-    // (FEAT-185). Only loaded when the project works in releases.
-    let release_choices: Vec<String> = if project.config.cadence.releases {
-        crate::releases::load(store, p)?
-            .into_iter()
-            .filter(|r| r.state == crate::releases::ReleaseState::Planned)
-            .map(|r| r.version)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let gates = project.config.effective_gates();
+    let inputs = Inputs::load(store, p, repo)?;
     // Whether an approval is current or has lapsed depends on a hash of the definition's
     // content, so it is decided here rather than in each caller: the CLI, the monitor and
     // any future client all get the same answer to "is this agreed?".
-    let mut pending: Vec<ReviewEntry> = project
+    let mut pending: Vec<ReviewEntry> = inputs
+        .project
         .features
         .iter()
-        // Only where agreement can still change what happens (FEAT-078). Approving a
-        // Completed item that was never agreed to records a signature, pinned to a definition
-        // hash, for work already merged; a deliberately Deferred one is not going to start.
-        // The same gate the doctor applies, so the two surfaces cannot give different answers
-        // to one question. The exception is finished work whose approval lapsed (DEF-013): it
-        // was agreed once and the text has changed since, which nothing else on the board shows.
-        .filter_map(|f| {
+        .filter_map(|f| inputs.entry_for(store, p, f))
+        .collect();
+    // Work already built without agreement comes first (FEAT-109), then work being built
+    // without it, then work that has not started (FEAT-078 R-2). Finished work whose approval
+    // lapsed follows all live decisions (DEF-013). The release question comes after every
+    // approval and sign-off (FEAT-185).
+    pending.sort_by_key(|e| {
+        (
+            e.approval == ApprovalKind::Release,
+            e.approval != ApprovalKind::Unratified,
+            e.finished,
+            !e.in_progress,
+            e.code.clone(),
+        )
+    });
+    Ok(pending)
+}
+
+/// The review entry of one item (FTR-038), as [`pending`] would list it; `None` when the item asks
+/// nothing. A row's evidence reads this, never the whole queue.
+pub fn entry(
+    store: &Store,
+    p: &str,
+    code: &str,
+    repo: Option<&std::path::Path>,
+) -> Result<Option<ReviewEntry>> {
+    let inputs = Inputs::load(store, p, repo)?;
+    let f = inputs.project.feature(code)?;
+    Ok(inputs.entry_for(store, p, f))
+}
+
+/// How many flagged texts a docs-folded sign-off still waits on Claude to settle (FTR-038): the
+/// twin of the page's `docsFoldedOffer` (`textsToCheck.ts`). A skipped check counts none.
+pub fn docs_folded_left(entry: &ReviewEntry) -> usize {
+    entry.to_check.as_ref().map_or(0, Vec::len)
+}
+
+/// What every entry of one project is judged with, loaded once per request.
+struct Inputs {
+    project: crate::Project,
+    charter: crate::Charter,
+    ctx: crate::readiness::Context,
+    gates: std::collections::BTreeMap<String, crate::config::Gate>,
+    release_choices: Vec<String>,
+}
+
+impl Inputs {
+    fn load(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Inputs> {
+        let project = store.load_for_gates(p)?;
+        let charter = crate::charter::load(store, p)?;
+        let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
+        // The planned releases, in file order: the choices of the which-release question
+        // (FEAT-185). Only loaded when the project works in releases.
+        let release_choices: Vec<String> = if project.config.cadence.releases {
+            crate::releases::load(store, p)?
+                .into_iter()
+                .filter(|r| r.state == crate::releases::ReleaseState::Planned)
+                .map(|r| r.version)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let gates = project.config.effective_gates();
+        Ok(Inputs {
+            project,
+            charter,
+            ctx,
+            gates,
+            release_choices,
+        })
+    }
+
+    /// The entry for `f`, or `None` when it asks nothing.
+    // Only where agreement can still change what happens (FEAT-078). Approving a
+    // Completed item that was never agreed to records a signature, pinned to a definition
+    // hash, for work already merged; a deliberately Deferred one is not going to start.
+    // The same gate the doctor applies, so the two surfaces cannot give different answers
+    // to one question. The exception is finished work whose approval lapsed (DEF-013): it
+    // was agreed once and the text has changed since, which nothing else on the board shows.
+    fn entry_for(
+        &self,
+        store: &Store,
+        p: &str,
+        f: &crate::models::FeatureItem,
+    ) -> Option<ReviewEntry> {
+        let Inputs {
+            project,
+            charter,
+            ctx,
+            gates,
+            release_choices,
+        } = self;
+        {
             let definition = f.definition.as_ref()?;
             let live = crate::graph::is_live_work(&project.config, &f.status);
             // Work finished under a recorded bypass and never agreed to is still a
@@ -351,7 +433,7 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
             // stage's other requirements are met (FEAT-182): a sign-off offered before the
             // work exists records agreement to work that has not happened.
             let next = if live {
-                crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
+                crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
             } else {
                 None
             };
@@ -395,7 +477,7 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
                         .iter()
                         .any(|s| s == crate::method::DOCS_FOLDED)
                 })
-                .and_then(|_| crate::docsbuilt::moved_on(&project, f, &ctx));
+                .and_then(|_| crate::docsbuilt::moved_on(project, f, ctx));
             let signoffs_needed: Vec<String> = next.map(|n| n.signoffs_needed).unwrap_or_default();
             let approval = match definition.approval_state() {
                 _ if unratified => ApprovalKind::Unratified,
@@ -509,23 +591,12 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
                         origin: t.origin.clone(),
                     })
                     .collect(),
+                release: f.release.clone().unwrap_or_default(),
+                sprint: f.sprint.clone().unwrap_or_default(),
+                changed_at: f.updated_at.clone(),
             })
-        })
-        .collect();
-    // Work already built without agreement comes first (FEAT-109), then work being built
-    // without it, then work that has not started (FEAT-078 R-2). Finished work whose approval
-    // lapsed follows all live decisions (DEF-013). The release question comes after every
-    // approval and sign-off (FEAT-185).
-    pending.sort_by_key(|e| {
-        (
-            e.approval == ApprovalKind::Release,
-            e.approval != ApprovalKind::Unratified,
-            e.finished,
-            !e.in_progress,
-            e.code.clone(),
-        )
-    });
-    Ok(pending)
+        }
+    }
 }
 
 #[cfg(test)]

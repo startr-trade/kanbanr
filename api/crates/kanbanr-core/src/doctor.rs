@@ -173,6 +173,17 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     let ctx = crate::readiness::Context::load(store, id, &project.config);
     scan_definitions(&project, &charter, &ctx, &mut report);
     scan_decisions(store, &project, &mut report);
+    let adrs = crate::adr::list(store, id).unwrap_or_default();
+    report.issues.extend(
+        unknown_zachman_columns(&adrs)
+            .into_iter()
+            .map(|message| Issue {
+                severity: Severity::Warning,
+                project: project.id.clone(),
+                code: None,
+                message,
+            }),
+    );
     scan_stray_folders(store, &project, &mut report);
     scan_leftover_writes(store, id, &mut report);
     scan_process_drift(store, &project, &mut report);
@@ -424,6 +435,25 @@ fn next_stage_gaps(
     Some((next.status, gaps))
 }
 
+/// An ADR naming a Zachman column outside the six (MNT-009, Q4). `parse` keeps such a value as
+/// written so the board still loads; this is where somebody sees it. A warning, never a hold.
+fn unknown_zachman_columns(adrs: &[crate::adr::Adr]) -> Vec<String> {
+    adrs.iter()
+        .flat_map(|adr| {
+            adr.zachman
+                .iter()
+                .filter(|v| crate::vocab::zachman(v).is_none())
+                .map(move |v| {
+                    format!(
+                        "{} names '{v}', which is not a Zachman column (What, How, Where, Who, \
+                         When, Why)",
+                        adr.id
+                    )
+                })
+        })
+        .collect()
+}
+
 /// Architecture decisions in the graph (FEAT-057).
 ///
 /// The severities follow the existing rule: a **broken reference** is an error, because someone
@@ -473,13 +503,20 @@ fn scan_decisions(store: &Store, project: &Project, report: &mut Report) {
             .flat_map(|d| d.requirements.iter())
             .filter(|r| matches!(r.kind, crate::models::RequirementKind::Nfr))
         {
-            measured.extend(requirement.iso.iter().cloned());
+            // Counted by the canonical form, whatever the stored spelling (MNT-009).
+            measured.extend(requirement.iso.iter().map(|t| {
+                crate::vocab::iso(t).map_or_else(|| t.trim().to_string(), str::to_string)
+            }));
         }
     }
     let served: BTreeSet<String> = adrs
         .iter()
         .filter(|a| !a.is_superseded())
-        .flat_map(|a| a.quality.iter().cloned())
+        .flat_map(|a| {
+            a.quality
+                .iter()
+                .map(|t| crate::vocab::iso(t).map_or_else(|| t.trim().to_string(), str::to_string))
+        })
         .collect();
     for quality in measured.difference(&served) {
         warn(format!(
@@ -2822,6 +2859,118 @@ mod tests {
         assert!(
             found.iter().any(|i| i.message.contains("row \"context\"")),
             "{found:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    fn warnings_of(store: &Store) -> Vec<String> {
+        run_project(store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| i.severity == Severity::Warning)
+            .map(|i| i.message)
+            .collect()
+    }
+
+    /// MNT-009 R-5: an NFR whose stored tag is "Performance efficiency" is served by an ADR naming
+    /// "Performance Efficiency": one quality, so no "no decision claims to serve it".
+    #[test]
+    fn a_quality_spelled_two_ways_counts_as_one() {
+        let (store, dir) = fixture();
+        let code = store
+            .add_feature("demo", "Answer fast", "# Answer fast\n", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Fast answers, for the shopper, so that carts are kept".into(),
+                    goals: vec!["G-1".into()],
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        kind: crate::models::RequirementKind::Nfr,
+                        text: "THE SYSTEM SHALL answer in 100 ms".into(),
+                        iso: vec!["Performance Efficiency".into()],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // The spelling a board stored before MNT-009, kept as stored (Q1).
+        let status = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .status
+            .clone();
+        let path = store.feature_path("demo", &status, &code);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("Performance Efficiency"), "{text}");
+        std::fs::write(
+            &path,
+            text.replace("Performance Efficiency", "Performance efficiency"),
+        )
+        .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "decisions/0001-cache.md",
+                "---\nid: ADR-0001\nstatus: accepted\naffects: [FEAT-001]\n\
+                 quality: [Performance Efficiency]\n---\n# Cache\n\n## Decision\n\nd\n\n\
+                 ## Consequences\n\nq\n",
+            )
+            .unwrap();
+        let said = warnings_of(&store);
+        assert!(
+            !said
+                .iter()
+                .any(|m| m.contains("no decision claims to serve it")),
+            "{said:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-009 R-6: an ADR naming a column outside the six still loads, and the doctor names it.
+    #[test]
+    fn doctor_warns_of_an_adr_naming_an_unknown_zachman_column() {
+        let (store, dir) = fixture();
+        let adr = |id: &str, cols: &str| {
+            format!(
+                "---\nid: {id}\nstatus: proposed\nzachman: [{cols}]\n---\n# {id}\n\n\
+                 ## Decision\n\nd\n\n## Consequences\n\nq\n"
+            )
+        };
+        store
+            .write_doc(
+                "demo",
+                "decisions/0001-data.md",
+                &adr("ADR-0001", "Data, How"),
+            )
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "decisions/0002-known.md",
+                &adr("ADR-0002", "how, Where"),
+            )
+            .unwrap();
+        let listed = crate::adr::list(&store, "demo").unwrap();
+        assert_eq!(listed.len(), 2, "both load");
+        let said = warnings_of(&store);
+        assert!(
+            said.iter()
+                .any(|m| m.contains("ADR-0001 names 'Data', which is not a Zachman column")),
+            "{said:?}"
+        );
+        assert!(
+            !said
+                .iter()
+                .any(|m| m.contains("ADR-0002") && m.contains("not a Zachman column")),
+            "{said:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -9429,7 +9429,10 @@ fn promote_plan_changes_nothing() {
         &work,
         &["release", "promote", "v1.0.0", "--plan"],
     ));
-    assert!(said.contains("v1.0.0: Promote to candidate"), "{said}");
+    assert!(
+        said.contains("v1.0.0: Promote v1.0.0 to candidate"),
+        "{said}"
+    );
     assert!(said.contains("makes release/v1.0.0 from main"), "{said}");
     assert!(
         said.contains("ready: `kanbanr release promote v1.0.0 candidate`"),
@@ -9457,7 +9460,7 @@ fn promote_plan_changes_nothing() {
     let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
     assert!(done.contains("makes release/v1.0.0 from main"), "{done}");
     assert!(
-        done.contains("next: `kanbanr release promote v1.0.0` (Promote to test)"),
+        done.contains("next: `kanbanr release promote v1.0.0` (Promote v1.0.0 to test)"),
         "{done}"
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -13094,6 +13097,106 @@ fn git_tidy_deletes_merged_branches_after_one_confirmation_and_keeps_unmerged_on
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-096 R-1, R-4: a finished item's merged branch is listed and deleted even while a scope
+/// issued for it (never claimed, so no worktree) is in force; the listing and the deletion name the
+/// scope to revoke, and tidy itself leaves the scope in force.
+#[test]
+fn git_tidy_names_the_scope_left_on_a_finished_item() {
+    let (base, work) = togaf_scratch("def096-tidy");
+    git_model_board(&base, &work, false, false);
+    assert_board_is_scratch(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    // A scope needs the hooks that tell an agent from the coordinator (FEAT-214), as `ScopeFx`.
+    std::fs::create_dir_all(work.join(".claude")).unwrap();
+    let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
+    let settings = serde_json::json!({ "hooks": {
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PostToolUse": [hook("Bash", "kanbanr capture")],
+    }});
+    std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["todo", "add", "FEAT-001", "--description", "work"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "add", "FEAT-001", "TL-001", "--text", "one"],
+    ));
+    // The agent would switch to the branch in its own worktree: this checkout leaves it.
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let issued = ok(run_in(
+        &base,
+        &work,
+        &["scope", "issue", "build", "FEAT-001"],
+    ));
+    let id = issued.split_whitespace().nth(1).unwrap().to_string();
+    assert!(id.starts_with("SC-"), "{issued}");
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    ));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    let note = format!(
+        "  (scope {id} is still in force for FEAT-001, which is finished: revoke it with kanbanr \
+         scope revoke {id} --reason \"FEAT-001 finished\")"
+    );
+
+    let listed = ok(run_in(&base, &work, &["git", "tidy"]));
+    assert!(listed.contains("feat/FEAT-001-cart"), "{listed}");
+    assert!(listed.contains(&note), "{listed}");
+
+    let done = ok(run_in(&base, &work, &["git", "tidy", "--yes"]));
+    assert!(done.contains("deleted feat/FEAT-001-cart (was "), "{done}");
+    assert!(done.contains(&note), "{done}");
+    let left = ok(git_in(
+        &base,
+        &work,
+        &["branch", "--format=%(refname:short)"],
+    ));
+    assert!(
+        !left.lines().any(|b| b == "feat/FEAT-001-cart"),
+        "the branch survived: {left}"
+    );
+    // Tidy never revokes (R-4).
+    let scopes: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "scope", "list"]))).unwrap();
+    let s = scopes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id.as_str())
+        .unwrap_or_else(|| panic!("{id} not listed: {scopes}"));
+    assert_eq!(s["state"], "issued", "{s}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-051 R-1: closing a sprint says, in one line, that merged branches can go, and names the
 /// command; it deletes nothing itself.
 #[test]
@@ -13873,5 +13976,244 @@ fn a_manual_result_for_an_item_before_its_build_stage_is_refused() {
         &work,
         &["test", "FEAT-001", "R-1", test, "planned"],
     ));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-034 R-4: a candidate taken by mistake is stepped back from the CLI — `--reason` is
+/// required, the text says what was undone, by whom, where the release is now and which branch
+/// went with the commits kanbanr wrote on it — and the branch and the stage are gone.
+#[test]
+fn release_undo_steps_a_mistaken_candidate_back_from_the_cli() {
+    let (base, work) = release_scratch("release-undo");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The board is this test's own, under the temporary folder (L-41).
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let (board_c, base_c) = (board.canonicalize().unwrap(), base.canonicalize().unwrap());
+    assert!(
+        board_c.starts_with(&base_c),
+        "{board:?} is not under {base:?}"
+    );
+    let branch_there = || {
+        !ok(git_in(
+            &base,
+            &work,
+            &["branch", "--list", "release/v1.0.0"],
+        ))
+        .trim()
+        .is_empty()
+    };
+
+    let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(done.contains("v1.0.0 -> candidate"), "{done}");
+    assert!(branch_there());
+
+    // --reason is required.
+    let refused = run_in(&base, &work, &["release", "undo", "v1.0.0"]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("--reason"), "{err}");
+    assert!(branch_there(), "a refused undo changes nothing");
+
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "undo",
+            "v1.0.0",
+            "--reason",
+            "promoted the wrong release",
+        ],
+    ));
+    assert!(said.contains("v1.0.0: undid candidate (by A, "), "{said}");
+    assert!(said.contains("); now at no stage"), "{said}");
+    assert!(said.contains("deleted release/v1.0.0 ("), "{said}");
+    assert!(said.contains("commit(s) kanbanr wrote: "), "{said}");
+    assert!(!branch_there(), "the branch kanbanr made is gone");
+
+    let list = ok(run_in(&base, &work, &["--json", "release", "list"]));
+    let releases: serde_json::Value = serde_json::from_str(&list).unwrap();
+    let r = &releases[0];
+    assert_eq!(r["version"], "v1.0.0");
+    assert_eq!(r["stage"].as_str().unwrap_or(""), "", "no stage: {r}");
+    let last = r["stages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["undoes"], "candidate", "{last}");
+    assert_eq!(last["reason"], "promoted the wrong release", "{last}");
+
+    // The newest change is now the undo: it is not undone again.
+    let again = run_in(
+        &base,
+        &work,
+        &["release", "undo", "v1.0.0", "--reason", "again"],
+    );
+    assert!(!again.status.success());
+    let err = String::from_utf8_lossy(&again.stderr);
+    assert!(err.contains("already an undo"), "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---- one spelling for tags (MNT-009) ----
+
+/// The board file of `code`, wherever its status folder is.
+fn mnt009_feature_file(base: &std::path::Path, code: &str) -> std::path::PathBuf {
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(found) = find(&p, name) {
+                    return Some(found);
+                }
+            } else if p.file_name().is_some_and(|n| n == name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    find(&base.join("code"), &format!("{code}.yaml")).expect("the item's board file")
+}
+
+/// MNT-009 R-1: a tag added through `feature define` is stored in its canonical spelling; a tag
+/// carried unchanged from the stored definition is kept as stored, and the approval stays current.
+#[test]
+fn feature_define_stores_the_canonical_iso_spelling() {
+    let (base, work) = togaf_scratch("mnt009-iso");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert_board_is_scratch(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    for title in ["Fast cart", "Old cart"] {
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "add", "--title", title, "--milestone", "MS-001"],
+        ));
+    }
+    let definition = |tag: &str, other: &str| {
+        format!(
+            "statement: Answer quickly\n\
+             requirements:\n  - kind: nfr\n    text: \"THE SYSTEM SHALL answer in 100 ms.\"\n\
+             \x20   iso25010: [{tag}]\n\
+             \x20   tests:\n      - name: cart::answers_fast\n        kind: unit\n        state: planned\n\
+             \x20 - kind: functional\n    text: \"THE SYSTEM SHALL {other}.\"\n\
+             \x20   tests:\n      - name: cart::keeps\n        kind: unit\n        state: planned\n"
+        )
+    };
+    let file = base.join("def.yaml");
+    let define = |code: &str, text: String| {
+        std::fs::write(&file, text).unwrap();
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "define", code, "--file", file.to_str().unwrap()],
+        ))
+    };
+    let approval = |code: &str| -> String {
+        let out = ok(run_in(&base, &work, &["--json", "review", code]));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entry = if v.is_array() { v[0].clone() } else { v };
+        entry["approval"].as_str().unwrap_or_default().to_string()
+    };
+
+    // A new tag, in any spelling, is stored canonical.
+    define(
+        "FEAT-001",
+        definition("performance-efficiency", "keep a cart"),
+    );
+    let stored = std::fs::read_to_string(mnt009_feature_file(&base, "FEAT-001")).unwrap();
+    assert!(stored.contains("Performance Efficiency"), "{stored}");
+    assert!(!stored.contains("performance-efficiency"), "{stored}");
+    ok(run_in(&base, &work, &["approve", "FEAT-001"]));
+    // Redefined with an unrelated change on another requirement: the tag is unchanged.
+    define(
+        "FEAT-001",
+        definition("Performance Efficiency", "keep a cart for a week"),
+    );
+    let stored = std::fs::read_to_string(mnt009_feature_file(&base, "FEAT-001")).unwrap();
+    assert!(stored.contains("Performance Efficiency"), "{stored}");
+
+    // A tag stored in the other spelling before MNT-009 is kept when carried unchanged, and the
+    // item's approval does not lapse over it (Q1, ADR-0015).
+    define(
+        "FEAT-002",
+        definition("Performance Efficiency", "keep a cart"),
+    );
+    let path = mnt009_feature_file(&base, "FEAT-002");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replace("Performance Efficiency", "Performance efficiency"),
+    )
+    .unwrap();
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    assert_eq!(approval("FEAT-002"), "current");
+    define(
+        "FEAT-002",
+        definition("Performance efficiency", "keep a cart"),
+    );
+    let stored = std::fs::read_to_string(&path).unwrap();
+    assert!(stored.contains("Performance efficiency"), "{stored}");
+    assert!(!stored.contains("Performance Efficiency"), "{stored}");
+    assert_eq!(approval("FEAT-002"), "current");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// MNT-009 R-3: `adr new` refuses a column outside the Zachman six, naming them, and writes
+/// nothing.
+#[test]
+fn adr_new_refuses_an_unknown_zachman_column() {
+    let (base, work) = togaf_scratch("mnt009-adr");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert_board_is_scratch(&base, &work);
+    let refused = run_in(&base, &work, &["adr", "new", "X", "--zachman", "Data"]);
+    assert!(!refused.status.success(), "an unknown column is refused");
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("What, How, Where, Who, When, Why"), "{err}");
+    let listed = ok(run_in(&base, &work, &["adr", "list"]));
+    assert!(!listed.contains("ADR-0001"), "nothing written: {listed}");
+    // A known column in another case is accepted and stored canonical.
+    let made = ok(run_in(
+        &base,
+        &work,
+        &["adr", "new", "Y", "--zachman", "how"],
+    ));
+    assert!(made.contains("ADR-0001"), "{made}");
     let _ = std::fs::remove_dir_all(&base);
 }
