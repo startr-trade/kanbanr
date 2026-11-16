@@ -62,6 +62,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Clippy (ubuntu only)": LOCAL,
             "The published OpenAPI matches the code": LOCAL,
             "Test": LOCAL,
+            "Build stamp follows HEAD in a worktree": LOCAL,
         },
         "definition": {
             "Extract the definition from the PR body": "reads a pull request's body",

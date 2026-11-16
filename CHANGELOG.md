@@ -75,6 +75,14 @@ All notable changes to kanbanr are documented here. The format follows
 - The Releases page offers Promote to candidate again when a candidate's release-prepare
   configuration changed since it was prepared; `release promote --plan` says the same under
   `again:` (DEF-057).
+### Fixed
+
+- **A build in a linked git worktree is stamped with the commit it was built from (DEF-058).**
+  `build.rs` watched `.git/HEAD` and `.git/refs/heads`, which exist only in a plain clone; in a
+  worktree nothing was watched and `--version` kept the first build's commit. It now asks git where
+  HEAD, the refs and `packed-refs` live (`git rev-parse --git-path`), so a checkout, a commit or a
+  fast-forward in a worktree reruns it. A test checks the crate twice in a scratch worktree; the
+  release gate runs it.
 
 ## [0.6.0] - 2026-11-14
 
