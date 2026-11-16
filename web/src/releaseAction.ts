@@ -38,6 +38,18 @@ export interface ReleaseAction {
   accept?: string[];
   /** What the cut said of them, beside the list. */
   acceptDetail?: string;
+  /**
+   * Entering the stage the release is at again would redo something (DEF-057): the second,
+   * secondary button, present exactly when the plan carries `again`.
+   */
+  again?: {
+    stage: string;
+    label: string;
+    enabled: boolean;
+    does: string[];
+    missing: { text: string; fix: string }[];
+    command: string;
+  };
 }
 
 /** When the daemon was not started in the project folder, it cannot read the code repository. */
@@ -131,7 +143,20 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     plan.repo &&
     !plan.steps.some((s) => s.blocked) &&
     (untested.refs ?? []).length > 0;
+  const offer = plan.again;
   return {
+    ...(offer
+      ? {
+          again: {
+            stage: offer.stage,
+            label: offer.button,
+            enabled: writable && offer.ready && plan.repo,
+            does: offer.does,
+            missing: offer.ready ? [] : offer.missing.map((text) => ({ text, fix: "" })),
+            command: `kanbanr release promote ${plan.version} ${offer.stage}`,
+          },
+        }
+      : {}),
     ...(acceptOnly ? { accept: untested.refs ?? [], acceptDetail: untested.detail } : {}),
     gate,
     returned: plan.returned,

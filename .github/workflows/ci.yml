@@ -215,6 +215,10 @@ jobs:
       # and none when nothing is planned into it (FEAT-212).
       - name: Each release's button says what it does
         run: npm run check:release-action
+      # A candidate whose release-prepare configuration changed offers Promote to candidate again
+      # (DEF-057).
+      - name: A candidate whose preparation changed offers Promote to candidate again
+        run: npm run check:release-again
       # A release's notes show on the Releases page, editable only on a write-enabled monitor before
       # the cut (FEAT-216).
       - name: A release's notes show and are edited from the Releases page

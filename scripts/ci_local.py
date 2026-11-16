@@ -80,6 +80,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The standalone monitor is read-only": LOCAL,
             "Board cards say what is next in plain words": LOCAL,
             "Each release's button says what it does": LOCAL,
+            "A candidate whose preparation changed offers Promote to candidate again": LOCAL,
             "A release's notes show and are edited from the Releases page": LOCAL,
             "An item says which release it shipped in": LOCAL,
             "The board can show the items in no sprint": LOCAL,

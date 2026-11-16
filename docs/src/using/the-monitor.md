@@ -384,7 +384,10 @@ same whichever you use. A read-only monitor shows the command instead.
   for the last — until it ships. This is `kanbanr release promote <VERSION>`. Beside the button,
   the page says what the step will do ("fast-forwards main to release/v0.3.0", "tags abc1234
   …"); for the cut, it shows the commit it tags, what ships and what carries over, so one click
-  cuts. There is no second confirmation: the stage's conditions keep it safe. Until the plan is
+  cuts. A candidate whose release-prepare configuration changed since it was prepared also offers
+  **Promote to candidate again**, named for what it redoes (`kanbanr release promote <VERSION>
+  candidate`); it is shown only while entering candidate again would change something. There is no
+  second confirmation: the stage's conditions keep it safe. Until the plan is
   ready the button is disabled and the page lists what is missing with its fix ("push main
   (`git push origin main`), then wait for CI"), with **Check again** to read the plan once more.
   A release with nothing planned into it shows no button, only how to plan into it. The steps act

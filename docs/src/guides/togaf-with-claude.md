@@ -218,9 +218,10 @@ release or publish) is designed and built as an item with the first release, bef
 [Designing CI and the release workflow](delivery-pipeline.md).
 
 **If the release files change after Promote to candidate, prepare the release again.** The Releases
-page does not offer that yet (a later release adds it). Claude gives you one command to run in your
-own terminal: `kanbanr release promote <V> candidate`. Make sure your terminal runs the same
-kanbanr as the monitor: check `kanbanr --version` in both.
+page offers **Promote to candidate again** on that release, named for what it will redo, for as long
+as entering candidate again would change something; one click redoes the preparation on the release
+branch. (From a terminal it is `kanbanr release promote <V> candidate`; if you use it, check
+`kanbanr --version` there matches the monitor's.)
 
 Follow this order and you won't have to go back:
 

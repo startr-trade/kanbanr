@@ -72,6 +72,9 @@ All notable changes to kanbanr are documented here. The format follows
   names a private one without a link), and kanbanr is named as the tool below. `kanbanr doctor`
   names a project with no recorded repository on a shared board, and a README whose generated
   block is out of date; `kanbanr readme` and `kanbanr claude sync` refresh it.
+- The Releases page offers Promote to candidate again when a candidate's release-prepare
+  configuration changed since it was prepared; `release promote --plan` says the same under
+  `again:` (DEF-057).
 
 ## [0.6.0] - 2026-11-14
 

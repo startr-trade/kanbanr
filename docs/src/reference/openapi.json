@@ -198,6 +198,44 @@
         ],
         "type": "object"
       },
+      "AgainOffer": {
+        "description": "Entering the stage the release is at again, when that would redo something (DEF-057): what the\nsecond button says, what it would do, and whether it can go. Derived, never stored.",
+        "properties": {
+          "button": {
+            "description": "What the button says: the Again plan's `button`, \"Promote to candidate again\".",
+            "type": "string"
+          },
+          "does": {
+            "description": "What it would do, one sentence per step that runs: \"commits the version 0.1.1 to release/v0.1.1\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing": {
+            "description": "What stands in the way, each as what to do about it (the Again plan's `missing`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "stage": {
+            "description": "The stage entered again: `plan.from`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "button",
+          "does",
+          "ready",
+          "missing"
+        ],
+        "type": "object"
+      },
       "Answer": {
         "description": "What the person answered.",
         "enum": [
@@ -3839,6 +3877,10 @@
           "after": {
             "description": "What comes after this promotion, e.g. \"push main, wait for CI, then Cut v0.2.1\".",
             "type": "string"
+          },
+          "again": {
+            "$ref": "#/components/schemas/AgainOffer",
+            "description": "The stage it is at can be entered again and would redo something (DEF-057). Only on the\ndefault plan (no stage asked for), for a stage before the cut whose gate prepares."
           },
           "awaiting": {
             "description": "This plan is the release waiting at the last stage for its tag workflow's result: it\nships once that is recorded as passed (DEF-049).",
