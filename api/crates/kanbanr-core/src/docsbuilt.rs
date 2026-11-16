@@ -621,7 +621,11 @@ mod tests {
         let got = judge(&store, &b, Some(&repo));
         assert_eq!(got.unbuilt.len(), 1, "{got:?}");
         assert_eq!(got.unbuilt[0].kind, DocKind::Repository);
-        assert!(got.unbuilt[0].why.contains("docs/guide/b.md has not changed"));
+        assert!(
+            got.unbuilt[0]
+                .why
+                .contains("docs/guide/b.md has not changed")
+        );
         // Once the branch changes it, the item is built.
         std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
         crate::coderepo::tests::commit_file(&repo, "docs/guide/b.md", "b\n", "docs");

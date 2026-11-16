@@ -1785,7 +1785,10 @@ mod tests {
     fn documentation_files_contribute_no_names() {
         let patch = format!(
             "{}{}{}{}",
-            file_patch("docs/guide/a.md", &["+Use --allow-writes and KANBANR_BIND."]),
+            file_patch(
+                "docs/guide/a.md",
+                &["+Use --allow-writes and KANBANR_BIND."]
+            ),
             file_patch("CHANGELOG.md", &["+- `--since` added"]),
             file_patch("Cargo.lock", &["+name = \"--oddly-named\""]),
             file_patch(
