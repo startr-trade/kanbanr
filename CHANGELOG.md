@@ -95,6 +95,11 @@ All notable changes to kanbanr are documented here. The format follows
 ### Changed
 
 - The guides and the setup interview recommend agile for a new project, and every release guide says a patch release starts at candidate (DOC-009).
+### Fixed
+
+- Claude proposes the release files, a CHANGELOG chore and the pipeline item when the first release
+  is planned, before it names Promote to candidate; `release add` says what the first release still
+  needs; an override a gate did not need is no longer recorded (DEF-056).
 
 ## [0.6.0] - 2026-11-14
 

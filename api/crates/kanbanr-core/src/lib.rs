@@ -900,6 +900,9 @@ mod tests {
         use serde_json::{Value, json};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
+        // The start gate is enforced once a charter is adopted; an override only counts when
+        // a gate needed it (DEF-056).
+        adopt_charter(&store, "demo");
         let define = |code: &str| {
             store
                 .set_feature_definition(
@@ -1063,6 +1066,9 @@ mod tests {
         use serde_json::{Value, json};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
+        // The start gate is enforced once a charter is adopted; an override only counts when
+        // a gate needed it (DEF-056).
+        adopt_charter(&store, "demo");
 
         let define = |code: &str| {
             store
@@ -5526,6 +5532,65 @@ requirements:
                 .as_deref(),
             Some("customer demo tomorrow")
         );
+    }
+
+    /// DEF-056 R-2: an override the gate did not need is said, not recorded.
+    #[test]
+    fn an_override_the_gate_did_not_need_is_not_recorded() {
+        use crate::readiness::{Check, Condition};
+        // A blocking gate that is met: the reason is not recorded, and the move says so.
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Definition)],
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", Some("just in case"))
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert_eq!(moved.history.last().unwrap().override_reason, None);
+        assert!(
+            moved
+                .definition
+                .as_ref()
+                .is_none_or(|d| d.started_unapproved.is_empty())
+        );
+        assert!(warnings.iter().any(|g| g.label == "override not needed"));
+        // The same gate unmet still records both.
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Requirements)],
+            ..Default::default()
+        });
+        let (moved, _) = store
+            .move_feature_gated("demo", &code, "Scheduled", Some("demo tomorrow"))
+            .unwrap();
+        assert_eq!(
+            moved.history.last().unwrap().override_reason.as_deref(),
+            Some("demo tomorrow")
+        );
+        assert_eq!(
+            moved.definition.as_ref().unwrap().started_unapproved,
+            "demo tomorrow"
+        );
+        // A warn gate with failing checks and no reason records nothing.
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Requirements)],
+            enforce: crate::config::Enforce::Warn,
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.history.last().unwrap().override_reason, None);
+        assert!(
+            moved
+                .definition
+                .as_ref()
+                .unwrap()
+                .started_unapproved
+                .is_empty()
+        );
+        assert!(warnings.iter().any(|g| g.label == "no requirements"));
+        assert!(!warnings.iter().any(|g| g.label == "override not needed"));
     }
 
     /// FEAT-113 R-4: with no gates declared, the synthesised ones make exactly the decisions the old

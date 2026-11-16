@@ -1852,14 +1852,17 @@ impl Store {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
         // A person's own move to an end status of an item that waits for its release's cut needs
         // a reason, as a gate override does (DEF-019). The cut itself is exempt.
-        if !cut
-            && reason.is_none()
-            && crate::graph::is_finished_work(&project.config, to)
-            && let Some(v) = crate::graph::waits_for_cut(
+        let cut_wait = if !cut && crate::graph::is_finished_work(&project.config, to) {
+            crate::graph::waits_for_cut(
                 &project.config,
                 &ctx.unshipped_releases,
                 project.feature(code)?,
             )
+        } else {
+            None
+        };
+        if reason.is_none()
+            && let Some(v) = cut_wait.as_ref()
         {
             return Err(CoreError::Unsupported(format!(
                 "{code} is planned into {v}, which has not been cut: it reaches {to} when {v} \
@@ -1868,8 +1871,12 @@ impl Store {
         }
         let outcome = Self::check_gate(project, charter, ctx, code, to, reason)?;
         // A move made with a stated reason to override is a bypass, and stays one until someone
-        // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded whether or not a gate
-        // happened to need it, exactly as before gates were declarable.
+        // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded only when a blocking
+        // gate was overridden or the cut-wait needed the reason (DEF-056). An override a gate did
+        // not need is said, not recorded.
+        let reason_needed = outcome.overrode || cut_wait.is_some();
+        let unneeded = reason.filter(|_| !reason_needed);
+        let reason = reason.filter(|_| reason_needed);
         if let Some(reason) = reason
             && let Ok(feature) = project.feature_mut(code)
             && let Some(def) = feature.definition.as_mut()
@@ -1878,6 +1885,18 @@ impl Store {
         }
         let f = Self::move_feature_on(project, pending, code, to)?;
         let mut warnings = outcome.warnings;
+        if unneeded.is_some() {
+            warnings.push(crate::readiness::Gap {
+                check: crate::readiness::Check::Bypass,
+                requirement: None,
+                level: crate::readiness::Level::Warning,
+                label: "override not needed".into(),
+                message: format!(
+                    "the gate was met: {code} moved to {to} without an override, and nothing \
+                     waits to be ratified"
+                ),
+            });
+        }
         let defaults = Self::add_default_docs(project, code, to);
         let f = match (reason, defaults) {
             (None, None) => f,
@@ -2014,6 +2033,7 @@ impl Store {
             }
             let missing: Vec<&str> = failing.iter().map(|g| g.message.as_str()).collect();
             return Ok(GateOutcome {
+                overrode: false,
                 warnings: vec![crate::readiness::Gap {
                     check: crate::readiness::Check::Definition,
                     requirement: None,
@@ -2030,7 +2050,10 @@ impl Store {
         let mut warnings =
             crate::readiness::evaluate_entering(feature, known, &gate.warns, ctx, to);
         if failing.is_empty() {
-            return Ok(GateOutcome { warnings });
+            return Ok(GateOutcome {
+                warnings,
+                overrode: false,
+            });
         }
         let blocks = gate.enforce == crate::config::Enforce::Block;
         if blocks && reason.is_none() {
@@ -2042,7 +2065,12 @@ impl Store {
             )));
         }
         warnings.extend(failing);
-        Ok(GateOutcome { warnings })
+        // Only a blocking gate that was passed with a reason was overridden: a `warn` gate's
+        // failing checks are reported and override nothing.
+        Ok(GateOutcome {
+            warnings,
+            overrode: blocks && reason.is_some(),
+        })
     }
 
     pub fn move_feature(&self, id: &str, code: &str, to: &str) -> Result<FeatureItem> {
@@ -4211,6 +4239,8 @@ struct DocSnapshot {
 pub(crate) struct GateOutcome {
     /// Reported, not enforced: the gate's `warns`, a `warn` gate's gaps, or what an override passed.
     warnings: Vec<crate::readiness::Gap>,
+    /// A blocking gate was passed over with a stated reason (DEF-056).
+    overrode: bool,
 }
 
 /// A part of the cadence a project can switch on (FEAT-121).

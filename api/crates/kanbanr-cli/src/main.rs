@@ -11000,6 +11000,15 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 None => format!("added release {version}"),
             };
             print_write(cli, &resp, said);
+            // What the first release still needs (DEF-056): said once, for Claude to act on.
+            if patch_of.is_none()
+                && !cli.json
+                && let Ok(v) = serde_json::from_str::<Value>(&resp)
+            {
+                for line in v["next"].as_array().into_iter().flatten() {
+                    println!("next, for Claude: {}", line.as_str().unwrap_or_default());
+                }
+            }
         }
         ReleaseCmd::Promote {
             version,

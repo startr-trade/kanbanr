@@ -1428,13 +1428,28 @@ fn dispatch_routes(
                 repo,
                 &crate::origin::from_body(b),
             )?),
-            None => ser(&crate::releases::add(
-                store,
-                p,
-                &str_field(b, "version").unwrap_or_default(),
-                &str_field(b, "target").unwrap_or_default(),
-                &str_field(b, "name").unwrap_or_default(),
-            )?),
+            None => {
+                let release = crate::releases::add(
+                    store,
+                    p,
+                    &str_field(b, "version").unwrap_or_default(),
+                    &str_field(b, "target").unwrap_or_default(),
+                    &str_field(b, "name").unwrap_or_default(),
+                )?;
+                let mut out = serde_json::to_value(&release)
+                    .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+                // What the first release still needs (DEF-056): said, never enforced. A failure to
+                // read leaves `next` out and the add stands.
+                if let (Ok(meta), Ok(all)) = (store.load_meta(p), crate::releases::load(store, p)) {
+                    let next = crate::releases::first_release_hints(&meta.config, &all);
+                    if !next.is_empty()
+                        && let Some(o) = out.as_object_mut()
+                    {
+                        o.insert("next".into(), serde_json::json!(next));
+                    }
+                }
+                ser(&out)
+            }
         },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();

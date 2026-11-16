@@ -137,7 +137,9 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   fails as a `coverage:` warning ([Coverage rules](living-docs.md#coverage-rules-keeping-the-views-whole)).
 - **`--override "<reason>"`** gets past a blocking gate, and the reason is kept in the item's
   history. It also records the item as started without agreement, so it shows on the Review page
-  until someone ratifies it. `--unapproved` is the older name.
+  until someone ratifies it. `--unapproved` is the older name. An override a gate did not need is
+  not recorded: if the gap closed while you were asked, the move goes through plain and `gate:` says
+  so.
 - **An override Claude makes** (inside a Claude Code session, or by a delegated agent) records
   where it was made, and waits on the Review page for you to ratify it even when the item was
   approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item

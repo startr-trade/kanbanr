@@ -176,6 +176,8 @@ questions don't fit small maintenance work. Tell Claude it's a chore when you as
 
 Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
 it serves, and a requirement in the EARS form that says how it's verified. You still approve it before the build starts, and you still give the **release** sign-off at the end. A chore has no Design section and no **design-review**, because there is no design to review. If
+A chore Claude files itself asks the same once: one question with the statement, goal and requirement
+it drafted, which you confirm or change. If
 you change an item's kind to a chore while it's at a phase the chore path leaves out, it's off
 the path: it moves by the ordinary moves, or back to Vision.
 
@@ -210,11 +212,13 @@ into a release but into no sprint.
 **Before the first Promote to candidate, set up the release files.** The candidate drafts the
 version, changelog and notes only from the release's prepare configuration: the notes path, the
 changelog and the version files. Without it the candidate drafts nothing. When you plan the first
-release, ask Claude to set up the release files, or Claude proposes it. Wait until Claude says it is
-done before you click. If there is no `CHANGELOG.md`, Claude offers a chore to add one.
+release, Claude proposes the release files, in one question with the answers read from your
+repository, and offers a chore to add a `CHANGELOG.md` if there is none. Claude names Promote to
+candidate only once that configuration is done.
 
 **If the project has CI, build its workflows first.** The CI and release workflow (tests, scan,
-release or publish) is designed and built as an item with the first release, before the cut. See
+release or publish) is designed and built as an item with the first release, before the cut. Claude
+proposes that item when you plan the first release, if setup recorded CI. See
 [Designing CI and the release workflow](delivery-pipeline.md).
 
 **If the release files change after Promote to candidate, prepare the release again.** The Releases
