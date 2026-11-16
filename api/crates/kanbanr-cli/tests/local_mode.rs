@@ -13785,7 +13785,10 @@ fn feature_define_stores_the_canonical_iso_spelling() {
     };
 
     // A new tag, in any spelling, is stored canonical.
-    define("FEAT-001", definition("performance-efficiency", "keep a cart"));
+    define(
+        "FEAT-001",
+        definition("performance-efficiency", "keep a cart"),
+    );
     let stored = std::fs::read_to_string(mnt009_feature_file(&base, "FEAT-001")).unwrap();
     assert!(stored.contains("Performance Efficiency"), "{stored}");
     assert!(!stored.contains("performance-efficiency"), "{stored}");
@@ -13800,7 +13803,10 @@ fn feature_define_stores_the_canonical_iso_spelling() {
 
     // A tag stored in the other spelling before MNT-009 is kept when carried unchanged, and the
     // item's approval does not lapse over it (Q1, ADR-0015).
-    define("FEAT-002", definition("Performance Efficiency", "keep a cart"));
+    define(
+        "FEAT-002",
+        definition("Performance Efficiency", "keep a cart"),
+    );
     let path = mnt009_feature_file(&base, "FEAT-002");
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(
@@ -13810,10 +13816,52 @@ fn feature_define_stores_the_canonical_iso_spelling() {
     .unwrap();
     ok(run_in(&base, &work, &["approve", "FEAT-002"]));
     assert_eq!(approval("FEAT-002"), "current");
-    define("FEAT-002", definition("Performance efficiency", "keep a cart"));
+    define(
+        "FEAT-002",
+        definition("Performance efficiency", "keep a cart"),
+    );
     let stored = std::fs::read_to_string(&path).unwrap();
     assert!(stored.contains("Performance efficiency"), "{stored}");
     assert!(!stored.contains("Performance Efficiency"), "{stored}");
     assert_eq!(approval("FEAT-002"), "current");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// MNT-009 R-3: `adr new` refuses a column outside the Zachman six, naming them, and writes
+/// nothing.
+#[test]
+fn adr_new_refuses_an_unknown_zachman_column() {
+    let (base, work) = togaf_scratch("mnt009-adr");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert_board_is_scratch(&base, &work);
+    let refused = run_in(&base, &work, &["adr", "new", "X", "--zachman", "Data"]);
+    assert!(!refused.status.success(), "an unknown column is refused");
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("What, How, Where, Who, When, Why"), "{err}");
+    let listed = ok(run_in(&base, &work, &["adr", "list"]));
+    assert!(!listed.contains("ADR-0001"), "nothing written: {listed}");
+    // A known column in another case is accepted and stored canonical.
+    let made = ok(run_in(
+        &base,
+        &work,
+        &["adr", "new", "Y", "--zachman", "how"],
+    ));
+    assert!(made.contains("ADR-0001"), "{made}");
     let _ = std::fs::remove_dir_all(&base);
 }
