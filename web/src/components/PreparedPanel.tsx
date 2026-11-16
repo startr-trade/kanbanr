@@ -2,10 +2,11 @@
 // person reads it, and confirms it, changes a field first, or rejects it; their click makes the
 // verdict as them. Labels and fields are shown as text, never as markdown or HTML, and a source is
 // a link only when sourceHref says it is one.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { PreparedView } from "../types";
 import { EDITABLE, fieldLabel, preparedLine, sourceHref } from "../prepared";
+import { guardInFlight } from "../inFlight";
 
 type Mode = "show" | "edit" | "reject";
 
@@ -31,8 +32,9 @@ export function PreparedPanel({
   writable: boolean;
   busy: boolean;
   label: string;
-  onConfirm: (edits: Record<string, unknown>) => void;
-  onReject: (reason: string) => void;
+  // A promise returned here is awaited: both buttons stay disabled until it settles (DEF-090).
+  onConfirm: (edits: Record<string, unknown>) => unknown;
+  onReject: (reason: string) => unknown;
 }) {
   const kind = view.kind ?? "";
   const fields = view.fields ?? {};
@@ -44,6 +46,21 @@ export function PreparedPanel({
   const value = (k: string) => (k in edits ? edits[k] : fields[k]);
   const set = (k: string, v: unknown) => setEdits((e) => ({ ...e, [k]: v }));
   const open = view.state === "open";
+  // One call at a time from this panel (DEF-090): a press while the last one is in flight is
+  // dropped, so a second click never sends a second request.
+  const [inFlight, setInFlight] = useState(false);
+  const guard = useRef<{ run: (call: () => unknown) => Promise<void>; busy: () => boolean } | null>(null);
+  if (guard.current == null) {
+    guard.current = guardInFlight(async (call: () => unknown) => {
+      setInFlight(true);
+      try {
+        await call();
+      } finally {
+        setInFlight(false);
+      }
+    });
+  }
+  const once = (call: () => unknown) => void guard.current?.run(call);
 
   return (
     <div className="prepared-panel">
@@ -147,10 +164,10 @@ export function PreparedPanel({
           <p className="review-actions">
             <button
               className="btn btn-primary"
-              disabled={busy || mode === "reject"}
-              onClick={() => onConfirm(mode === "edit" ? edits : {})}
+              disabled={busy || inFlight || mode === "reject"}
+              onClick={() => once(() => onConfirm(mode === "edit" ? edits : {}))}
             >
-              {busy ? "recording…" : label}
+              {busy || inFlight ? "recording…" : label}
             </button>
             {mode === "show" ? (
               <>
@@ -181,7 +198,7 @@ export function PreparedPanel({
                 Why (optional){" "}
                 <input value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Why reject it" />
               </label>
-              <button className="btn" disabled={busy} onClick={() => onReject(reason.trim())}>
+              <button className="btn" disabled={busy || inFlight} onClick={() => once(() => onReject(reason.trim()))}>
                 Reject
               </button>
             </p>

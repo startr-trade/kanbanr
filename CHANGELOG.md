@@ -39,6 +39,8 @@ All notable changes to kanbanr are documented here. The format follows
   out (DEF-070).
 - A docs-folded sign-off, and an item's text flags, no longer lapse on a commit that changes only
   tests or docs the item does not name (DEF-072).
+- Rejecting a prepared result on the Review page shows that it was rejected and hides the form,
+  and a second press while the call is in flight sends nothing (DEF-090).
 
 ## [0.7.0] - 2026-11-16
 

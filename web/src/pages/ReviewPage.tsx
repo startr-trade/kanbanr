@@ -12,7 +12,7 @@ import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, blockedSentence, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { type Batch, batches, editedWhileFlagged, openFor } from "../prepared";
-import { lastResultLine, manualCommand, manualRows, type ManualRow } from "../manualTests";
+import { lastResultLine, manualCommand, manualRows, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
 import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
 
 /**
@@ -22,6 +22,38 @@ import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../ty
 function alreadyOr(answer: unknown, done: string): string {
   const said = alreadySaid(answer);
   return said ? `already ${said}` : done;
+}
+
+/** A call that failed, as the outcome shown where its form was (DEF-090). */
+function failure(e: unknown): Outcome {
+  return { ok: false, text: e instanceof Error ? e.message : String(e) };
+}
+
+/**
+ * Where the form was, once its call returned (DEF-090): the outcome, a rejection included, and for
+ * a failed call its error with "Try again", which brings the form back.
+ */
+function OutcomeChip({ outcome, onRetry }: { outcome: Outcome; onRetry: () => void }) {
+  return (
+    <>
+      <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcomeLine(outcome)}</span>
+      {outcome.ok ? null : (
+        <>
+          {" "}
+          <a
+            href="#try-again"
+            className="small"
+            onClick={(e) => {
+              e.preventDefault();
+              onRetry();
+            }}
+          >
+            Try again
+          </a>
+        </>
+      )}
+    </>
+  );
 }
 
 /**
@@ -47,7 +79,8 @@ function plannedText(version: string, code: string, planned: PlannedRelease): st
 export default function ReviewPage() {
   const { project = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project), 400);
-  const [done, setDone] = useState<Record<string, string>>({});
+  // What each decision came to once its call returned (DEF-090); any outcome hides its form.
+  const [done, setDone] = useState<Record<string, Outcome>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
   const pending = useAsync(() => api.getPendingReviews(project), [project, tick]);
@@ -87,13 +120,13 @@ export default function ReviewPage() {
         // Pinned to the definition this page showed (FEAT-159): if it changed meanwhile, the
         // daemon refuses rather than recording a yes to text nobody read.
         const answer = await api.ratify(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "ratified") }));
+        setDone((d) => ({ ...d, [code]: { ok: true, text: alreadyOr(answer, "ratified") } }));
       } else {
         const answer = await api.approve(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "approved") }));
+        setDone((d) => ({ ...d, [code]: { ok: true, text: alreadyOr(answer, "approved") } }));
       }
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -105,9 +138,9 @@ export default function ReviewPage() {
     setBusy(adr.id);
     try {
       await api.decideAdr(project, adr.id, verdict, who, reason);
-      setDone((d) => ({ ...d, [adr.id]: verdict === "accept" ? "accepted" : "rejected" }));
+      setDone((d) => ({ ...d, [adr.id]: { ok: true, text: verdict === "accept" ? "accepted" : "rejected" } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [adr.id]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [adr.id]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -120,9 +153,9 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
-      setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: alreadyOr(answer, `signed off ${name}`) } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -136,9 +169,9 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       const answer = await api.confirmPrepared(project, view, who, edits, { rev: item.rev ?? "", spec_rev: item.spec_rev ?? "" });
-      setDone((d) => ({ ...d, [code]: alreadyOr(answer, done) }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: alreadyOr(answer, done) } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -149,9 +182,9 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       await api.rejectPrepared(project, view.id ?? "", who, reason);
-      setDone((d) => ({ ...d, [code]: "rejected what Claude prepared; ask Claude to prepare it again" }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: "Rejected what Claude prepared; ask Claude to prepare it again" } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -165,9 +198,9 @@ export default function ReviewPage() {
     setBusy(key);
     try {
       await api.recordManual(project, m.row.code, m.row.requirement, m.row.test, passed, who, note);
-      setDone((d) => ({ ...d, [key]: passed ? "recorded as passed" : "recorded as failed" }));
+      setDone((d) => ({ ...d, [key]: { ok: true, text: passed ? "recorded as passed" : "recorded as failed" } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [key]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -178,9 +211,9 @@ export default function ReviewPage() {
     setBusy(key);
     try {
       await api.confirmPrepared(project, view, who, edits);
-      setDone((d) => ({ ...d, [key]: "recorded" }));
+      setDone((d) => ({ ...d, [key]: { ok: true, text: "recorded" } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [key]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -191,9 +224,9 @@ export default function ReviewPage() {
     setBusy(key);
     try {
       await api.rejectPrepared(project, view.id ?? "", who, reason);
-      setDone((d) => ({ ...d, [key]: "rejected what Claude prepared" }));
+      setDone((d) => ({ ...d, [key]: { ok: true, text: "Rejected" } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [key]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -212,15 +245,18 @@ export default function ReviewPage() {
       const failed = answer.results.filter((r) => r.error);
       setDone((d) => ({
         ...d,
-        [key]:
-          failed.length === 0
-            ? `${verdict === "confirm" ? "confirmed" : "rejected"} all ${answer.results.length}`
-            : `${answer.results.length - failed.length} of ${answer.results.length} ${verdict === "confirm" ? "confirmed" : "rejected"}; ${failed
-                .map((r) => `${r.id}: ${r.error}`)
-                .join("; ")}`,
+        [key]: {
+          ok: failed.length === 0,
+          text:
+            failed.length === 0
+              ? `${verdict === "confirm" ? "confirmed" : "rejected"} all ${answer.results.length}`
+              : `${answer.results.length - failed.length} of ${answer.results.length} ${verdict === "confirm" ? "confirmed" : "rejected"}; ${failed
+                  .map((r) => `${r.id}: ${r.error}`)
+                  .join("; ")}`,
+        },
       }));
     } catch (e) {
-      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [key]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -232,9 +268,9 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       const planned = await api.planIntoRelease(project, version, code);
-      setDone((d) => ({ ...d, [code]: plannedText(version, code, planned) }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: plannedText(version, code, planned) } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
@@ -247,13 +283,21 @@ export default function ReviewPage() {
     try {
       await api.addRelease(project, version, target);
       const planned = await api.planIntoRelease(project, version, code);
-      setDone((d) => ({ ...d, [code]: plannedText(version, code, planned) }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: plannedText(version, code, planned) } }));
     } catch (e) {
-      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+      setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
       setBusy(null);
     }
   };
+
+  // "Try again" after a failed call (DEF-090): the outcome is dropped, so the form comes back.
+  const retry = (key: string) =>
+    setDone((d) => {
+      const rest = { ...d };
+      delete rest[key];
+      return rest;
+    });
 
   return (
     <div className="review-page">
@@ -324,6 +368,7 @@ export default function ReviewPage() {
           writable={writable && !inConversation}
           busy={busy === item.code}
           outcome={done[item.code]}
+          onRetry={() => retry(item.code)}
           // The first is open so the page shows what a brief looks like; the rest are collapsed,
           // because a queue of twelve read as one unbroken column (FEAT-076).
           defaultOpen={i === 0}
@@ -343,7 +388,7 @@ export default function ReviewPage() {
           batch={batch}
           writable={writable}
           busy={busy === `batch:${batch.name}`}
-          outcome={done[`batch:${batch.name}`]}
+          outcome={done[`batch:${batch.name}`]?.text}
           onAnswer={(verdict) => answerBatch(batch, verdict)}
         />
       ))}
@@ -355,6 +400,7 @@ export default function ReviewPage() {
           writable={writable}
           busy={busy}
           done={done}
+          onRetry={retry}
           onRecord={recordManual}
           onConfirm={confirmManual}
           onReject={rejectManual}
@@ -377,6 +423,7 @@ export default function ReviewPage() {
               writable={writable}
               busy={busy === adr.id}
               outcome={done[adr.id]}
+              onRetry={() => retry(adr.id)}
               onDecide={(verdict, reason) => decide(adr, verdict, reason)}
             />
           ))}
@@ -715,6 +762,7 @@ function ManualChecks({
   writable,
   busy,
   done,
+  onRetry,
   onRecord,
   onConfirm,
   onReject,
@@ -723,10 +771,11 @@ function ManualChecks({
   rows: ManualRow[];
   writable: boolean;
   busy: string | null;
-  done: Record<string, string>;
+  done: Record<string, Outcome>;
+  onRetry: (key: string) => void;
   onRecord: (m: ManualRow, passed: boolean, note: string) => void;
-  onConfirm: (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => void;
-  onReject: (m: ManualRow, view: PreparedView, reason: string) => void;
+  onConfirm: (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => Promise<void>;
+  onReject: (m: ManualRow, view: PreparedView, reason: string) => Promise<void>;
 }) {
   return (
     <>
@@ -743,6 +792,7 @@ function ManualChecks({
           writable={writable}
           busy={busy === manualKey(m)}
           outcome={done[manualKey(m)]}
+          onRetry={() => onRetry(manualKey(m))}
           onRecord={(passed, note) => onRecord(m, passed, note)}
           onConfirm={(view, edits) => onConfirm(m, view, edits)}
           onReject={(view, reason) => onReject(m, view, reason)}
@@ -758,6 +808,7 @@ function ManualCheck({
   writable,
   busy,
   outcome,
+  onRetry,
   onRecord,
   onConfirm,
   onReject,
@@ -766,16 +817,18 @@ function ManualCheck({
   m: ManualRow;
   writable: boolean;
   busy: boolean;
-  outcome?: string;
+  outcome?: Outcome;
+  onRetry: () => void;
   onRecord: (passed: boolean, note: string) => void;
-  onConfirm: (view: PreparedView, edits: Record<string, unknown>) => void;
-  onReject: (view: PreparedView, reason: string) => void;
+  onConfirm: (view: PreparedView, edits: Record<string, unknown>) => Promise<void>;
+  onReject: (view: PreparedView, reason: string) => Promise<void>;
 }) {
   const { row, prepared } = m;
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
   const last = lastResultLine(row.last);
-  const recorded = outcome != null && outcome.startsWith("recorded");
+  // Any outcome, a rejection or an error included, replaces the form (DEF-090).
+  const finished = outcome != null;
   const failed = row.state === "red";
   return (
     <div className="review-item manual-check">
@@ -794,8 +847,8 @@ function ManualCheck({
       {failed ? (
         <p className="small muted">It is recorded as failed. To have a defect filed, ask Claude to file one.</p>
       ) : null}
-      {recorded ? (
-        <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
+      {finished ? (
+        <OutcomeChip outcome={outcome} onRetry={onRetry} />
       ) : prepared && writable ? (
         <PreparedPanel
           project={project}
@@ -842,7 +895,6 @@ function ManualCheck({
           To record it in your own terminal: <code>{manualCommand(row, true)}</code> (or <code>red</code>)
         </p>
       )}
-      {outcome && !recorded ? <p className="small warn">{outcome}</p> : null}
     </div>
   );
 }
@@ -854,17 +906,19 @@ function DecisionBrief({
   writable,
   busy,
   outcome,
+  onRetry,
   onDecide,
 }: {
   project: string;
   adr: Adr;
   writable: boolean;
   busy: boolean;
-  outcome?: string;
+  outcome?: Outcome;
+  onRetry: () => void;
   onDecide: (verdict: "accept" | "reject", reason?: string) => void;
 }) {
   const [reason, setReason] = useState("");
-  const decided = outcome === "accepted" || outcome === "rejected";
+  const decided = outcome != null;
   const missing = adr.missing ?? [];
   // The title is the summary's; the body below starts after it.
   const body = (adr.body ?? "").replace(/^#\s[^\n]*\n/, "");
@@ -877,7 +931,7 @@ function DecisionBrief({
         <span className={`chip ${missing.length > 0 ? "warn" : ""}`}>
           {missing.length > 0 ? `unanswered: ${missing.join(", ")}` : "proposed"}
         </span>
-        {decided ? <span className="chip done">{outcome}</span> : null}
+        {decided ? <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span> : null}
       </summary>
 
       <div className="review-body">
@@ -904,7 +958,7 @@ function DecisionBrief({
 
         <div className="review-actions">
           {decided ? (
-            <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
+            <OutcomeChip outcome={outcome} onRetry={onRetry} />
           ) : writable ? (
             <>
               <button
@@ -935,7 +989,6 @@ function DecisionBrief({
               kanbanr adr accept {adr.id} · kanbanr adr reject {adr.id} --reason "…"
             </code>
           )}
-          {outcome && !decided ? <span className="chip warn">{outcome}</span> : null}
         </div>
       </div>
     </details>
@@ -1063,6 +1116,7 @@ function Brief({
   writable,
   busy,
   outcome,
+  onRetry,
   defaultOpen,
   onApprove,
   onSignoff,
@@ -1077,15 +1131,16 @@ function Brief({
   tick: number;
   writable: boolean;
   busy: boolean;
-  outcome?: string;
+  outcome?: Outcome;
+  onRetry: () => void;
   defaultOpen: boolean;
   onApprove: () => void;
   onSignoff: (name: string) => void;
   onRelease: (version: string) => void;
   onNewRelease: (version: string, target: string) => void;
   prepared: PreparedView[];
-  onConfirmPrepared: (view: PreparedView, edits: Record<string, unknown>, done: string) => void;
-  onRejectPrepared: (view: PreparedView, reason: string) => void;
+  onConfirmPrepared: (view: PreparedView, edits: Record<string, unknown>, done: string) => Promise<void>;
+  onRejectPrepared: (view: PreparedView, reason: string) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
   const [version, setVersion] = useState("");
@@ -1101,12 +1156,9 @@ function Brief({
   const releaseChoices = item.release_choices;
   const whichRelease = item.approval === "release";
   const verb = ratify ? "Ratify" : "Approve";
-  const approved =
-    outcome === "approved" ||
-    outcome === "ratified" ||
-    (outcome ?? "").startsWith("already ") ||
-    (outcome ?? "").startsWith("signed off") ||
-    (outcome ?? "").startsWith("planned into");
+  // Any outcome, a rejected prepared record or an error included, replaces the form and the
+  // prepared panels (DEF-090).
+  const approved = outcome != null;
   const signoffs = item.signoffs_needed ?? [];
   // The texts that name what this item changed (FTR-013): Claude settles each before docs-folded
   // is offered (DEF-039). The person is shown what is left and what Claude checked, never a form.
@@ -1220,7 +1272,7 @@ function Brief({
                   : "approval lapsed"
                 : "never approved"}
         </span>
-        {approved ? <span className="chip done">{outcome}</span> : null}
+        {approved ? <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span> : null}
       </summary>
 
       <div className="review-body">
@@ -1365,7 +1417,7 @@ function Brief({
         : null}
       <div className="review-actions">
         {approved ? (
-          <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
+          <OutcomeChip outcome={outcome} onRetry={onRetry} />
         ) : writable ? (
           <>
             {waitingOnSignoff || specChanged || whichRelease || preparedRatify ? null : (
@@ -1457,7 +1509,6 @@ function Brief({
             ].join("  ·  ")}
           </code>
         )}
-        {outcome && !approved ? <span className="chip warn">{outcome}</span> : null}
       </div>
       </div>
     </details>

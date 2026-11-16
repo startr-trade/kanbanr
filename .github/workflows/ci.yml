@@ -310,6 +310,10 @@ jobs:
       # beside the single buttons (FTR-037).
       - name: The Review page offers one click for a batch
         run: npm run check:review-batch
+      # Rejecting or confirming a prepared answer shows its outcome and hides the form, and a
+      # second press while the call is in flight sends nothing (DEF-090).
+      - name: A prepared answer shows its outcome once
+        run: npm run check:review-outcome
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails
