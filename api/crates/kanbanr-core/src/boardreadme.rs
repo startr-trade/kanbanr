@@ -23,41 +23,96 @@ const INSTALL_CARGO: &str =
     "cargo install --locked --git https://github.com/startr-trade/kanbanr kanbanr-cli";
 const DOCS: &str = "https://startr-trade.github.io/kanbanr/";
 
+const KANBANR: &str = "https://github.com/startr-trade/kanbanr";
+
+/// One project as the README shows it.
+struct Entry {
+    id: String,
+    title: String,
+    description: String,
+    repository: Option<crate::config::CodeRepository>,
+}
+
+impl Entry {
+    /// The repository as a link, or its name alone when private; `None` with no repository.
+    fn code(&self) -> Option<String> {
+        let repo = self.repository.as_ref()?;
+        let name = repo.name();
+        Some(match repo.web() {
+            Some(web) => format!("[{name}]({})", web.split_whitespace().collect::<String>()),
+            None => name,
+        })
+    }
+}
+
 /// The generated block, markers included, for the board in `store`.
 pub fn render(store: &Store) -> Result<String> {
-    let mut projects: Vec<(String, String, String)> = Vec::new();
+    let mut projects: Vec<Entry> = Vec::new();
     for id in store.list_projects()? {
         if let Ok(p) = store.load_meta(&id) {
-            projects.push((id, p.config.name.clone(), p.config.description.clone()));
+            let name = p.config.name.trim();
+            let title = if name.is_empty() || name == id {
+                id.clone()
+            } else {
+                name.to_string()
+            };
+            projects.push(Entry {
+                id,
+                title,
+                description: p.config.description.trim().to_string(),
+                repository: p.config.repository.clone(),
+            });
         }
     }
     let first = projects
         .first()
-        .map(|(id, _, _)| id.clone())
+        .map(|e| e.id.clone())
         .unwrap_or_else(|| "<project>".to_string());
+    let board = store
+        .data_dir()
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "the board".into());
     let mut out = format!("{START}\n");
-    out.push_str("# A kanbanr board\n\n");
-    out.push_str(
-        "This repository is a [kanbanr](https://github.com/startr-trade/kanbanr) board: the plan, \
-         the reasoning and the evidence for the work below, kept as plain YAML and markdown. kanbanr \
-         reads it and shows it as a board; you can read the files too.\n\n",
-    );
+    let lead = if let [only] = projects.as_slice() {
+        out.push_str(&format!("# {}: plan and evidence\n\n", only.title));
+        let about = match (&only.repository, only.code()) {
+            (Some(repo), Some(link)) if repo.web().is_some() => link,
+            (Some(_), Some(name)) => format!("**{}** (`{name}`)", only.title),
+            _ => format!("**{}**", only.title),
+        };
+        format!(
+            "This repository is the board of {about}: its plan, its reasoning and the evidence for \
+             its work, kept as plain YAML and markdown."
+        )
+    } else {
+        out.push_str(&format!("# {board}: plan and evidence\n\n"));
+        "This repository is a board: the plan, the reasoning and the evidence for the projects \
+         below, kept as plain YAML and markdown."
+            .to_string()
+    };
+    out.push_str(&lead);
+    out.push_str(&format!(
+        "\n\nIt is kept with [kanbanr]({KANBANR}), which reads it and shows it as a board; you can \
+         read the files too.\n\n"
+    ));
     out.push_str("## Projects\n\n");
     if projects.is_empty() {
         out.push_str("No projects yet.\n\n");
     }
-    for (id, name, description) in &projects {
-        let title = if name.trim().is_empty() || name == id {
-            format!("`{id}`")
-        } else {
-            format!("`{id}` — {}", name.trim())
-        };
-        let about = description.trim();
-        if about.is_empty() {
-            out.push_str(&format!("- {title}\n"));
-        } else {
-            out.push_str(&format!("- {title}: {about}\n"));
+    for e in &projects {
+        let mut line = format!("- **{}**", e.title);
+        if e.title != e.id {
+            line.push_str(&format!(" (`{}`)", e.id));
         }
+        if let Some(code) = e.code() {
+            line.push_str(&format!(" — code: {code}"));
+        }
+        if !e.description.is_empty() {
+            line.push_str(&format!(": {}", e.description));
+        }
+        out.push_str(&line);
+        out.push('\n');
     }
     out.push_str(&format!(
         "\n## See it as a board\n\n\
@@ -121,6 +176,25 @@ pub fn write(store: &Store) -> Result<bool> {
     Ok(true)
 }
 
+/// Is the generated block out of date: the markers are there, and the text between them is not
+/// what [`render`] would write now? (doctor asks.)
+pub fn stale(store: &Store) -> bool {
+    let Ok(text) = std::fs::read_to_string(store.data_dir().join(FILE)) else {
+        return false;
+    };
+    let (Some(s), Some(e)) = (text.find(START), text.find(END)) else {
+        return false;
+    };
+    if e <= s {
+        return false;
+    }
+    let Ok(now) = render(store) else {
+        return false;
+    };
+    let have = &text[s..e + END.len()];
+    have.trim_end() != now.trim_end()
+}
+
 /// Does the board carry the generated README? (doctor asks.)
 pub fn present(store: &Store) -> bool {
     std::fs::read_to_string(store.data_dir().join(FILE)).is_ok_and(|t| t.contains(START))
@@ -150,8 +224,8 @@ mod tests {
             .unwrap();
         let text = std::fs::read_to_string(dir.join(FILE)).expect("written with the projects");
         for want in [
-            "`shop`: Carts that survive a closed tab",
-            "`ops`",
+            "**shop**: Carts that survive a closed tab",
+            "**ops**",
             INSTALL_UNIX,
             INSTALL_WINDOWS,
             INSTALL_CARGO,
@@ -165,7 +239,7 @@ mod tests {
         store.delete_project("ops").unwrap();
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(
-            !text.contains("`ops`"),
+            !text.contains("**ops**"),
             "a deleted project leaves the list:\n{text}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -188,5 +262,70 @@ mod tests {
         assert_eq!(once, format!("# Notes\n\nOurs.\n\n{block}"));
         assert_eq!(apply(Some(&once), &block), once);
         assert_eq!(apply(None, &block), block);
+    }
+
+    /// DEF-053 R-1: the README leads with the project and links its code repository; kanbanr is
+    /// named after it.
+    #[test]
+    fn readme_leads_with_the_project_and_links_its_repository() {
+        let (shop_store, dir) = store("lead");
+        let mut shop = crate::ProjectConfig::for_new_project("shop");
+        shop.name = "Shop".into();
+        shop.description = "Carts".into();
+        shop.repository = Some(crate::config::CodeRepository {
+            url: "git@git.example.invalid:acme/shop.git".into(),
+            ..Default::default()
+        });
+        shop_store.init_project("shop", shop).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(lines.next(), Some(START));
+        assert_eq!(lines.next(), Some("# Shop: plan and evidence"));
+        let link = "[acme/shop](https://git.example.invalid/acme/shop)";
+        let at = text.find(link).expect("the repository is linked");
+        assert!(
+            text.find("[kanbanr](").unwrap() > at,
+            "kanbanr is named after the project:\n{text}"
+        );
+
+        // Private: named, never linked.
+        let (priv_store, priv_dir) = store("lead-private");
+        let mut hidden = crate::ProjectConfig::for_new_project("shop");
+        hidden.repository = Some(crate::config::CodeRepository {
+            url: "git@git.example.invalid:acme/shop.git".into(),
+            private: true,
+            ..Default::default()
+        });
+        priv_store.init_project("shop", hidden).unwrap();
+        let text = std::fs::read_to_string(priv_dir.join(FILE)).unwrap();
+        assert!(text.contains("acme/shop"));
+        assert!(!text.contains("https://git.example.invalid/acme/shop"));
+        let _ = std::fs::remove_dir_all(&priv_dir);
+
+        // A second project with no repository: the board's folder names the heading.
+        shop_store
+            .init_project("ops", crate::ProjectConfig::for_new_project("ops"))
+            .unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        let folder = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            text.contains(&format!("# {folder}: plan and evidence")),
+            "{text}"
+        );
+        let ops = text.lines().find(|l| l.contains("**ops**")).unwrap();
+        assert!(!ops.contains("code:"));
+        assert!(
+            text.lines()
+                .any(|l| l.contains("**Shop**") && l.contains("code:"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // An empty board.
+        let (empty_store, dir) = store("lead-empty");
+        let text = render(&empty_store).unwrap();
+        let folder = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(text.contains(&format!("# {folder}: plan and evidence")));
+        assert!(text.contains("No projects yet."));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

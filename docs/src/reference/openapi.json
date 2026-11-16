@@ -770,6 +770,24 @@
         ],
         "type": "object"
       },
+      "CodeRepository": {
+        "additionalProperties": true,
+        "description": "The code repository a project tracks (DEF-053): named and linked from the board README.",
+        "properties": {
+          "private": {
+            "description": "The person said the repository is private: the README names it and never links it.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "The git remote URL as recorded: `git@host:o/r.git`, `https://host/o/r.git`, or a path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "CodesConfig": {
         "additionalProperties": true,
         "description": "Which prefix an item's code gets from its kind (FEAT-217). Absent: every item is `FEAT-`, as\nbefore, and absent stays absent on disk. Kinds sharing a prefix share its counter.",
@@ -1169,6 +1187,24 @@
           },
           "note": {
             "type": "string"
+          },
+          "permission_rules": {
+            "description": "The Claude Code allow rules this delegation's verdicts need to run in auto mode (DEF-060),\nwhatever its state.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "permission_rules_checked": {
+            "description": "The mode is delegated, the delegation is granted and the code repository is known, so\n`permission_rules_missing` says something.",
+            "type": "boolean"
+          },
+          "permission_rules_missing": {
+            "description": "The rules none of the project's or the user's Claude settings allows.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "proposed": {
             "$ref": "#/components/schemas/Stamp"
@@ -3467,6 +3503,10 @@
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
             "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
+          },
+          "repository": {
+            "$ref": "#/components/schemas/CodeRepository",
+            "description": "The code repository this project tracks (DEF-053). Absent unless recorded, and absent\nstays absent on disk."
           },
           "schema_version": {
             "default": 0,

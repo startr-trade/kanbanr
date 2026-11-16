@@ -144,6 +144,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_coverage(store, project, &mut report);
         scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
+        scan_repository(store, project, &mut report);
     }
     scan_leftover_writes(store, "board", &mut report);
     scan_identity(store, "board", &mut report);
@@ -185,6 +186,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_codes(&project, &mut report);
+    scan_repository(store, &project, &mut report);
     scan_identity(store, id, &mut report);
     scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
@@ -988,6 +990,26 @@ fn scan_method_choice(project: &Project, report: &mut Report) {
     });
 }
 
+/// A shared board whose project records no code repository (DEF-053): its README cannot link the
+/// code it tracks. Silent on a board nobody else sees.
+fn scan_repository(store: &Store, project: &Project, report: &mut Report) {
+    if project.config.repository.is_some() || crate::git::list_remotes(store.data_dir()).is_empty()
+    {
+        return;
+    }
+    let id = &project.id;
+    report.issues.push(Issue {
+        severity: Severity::Warning,
+        project: id.clone(),
+        code: None,
+        message: format!(
+            "{id} records no code repository, so the board README cannot link the code it tracks \
+             — `kanbanr project edit {id} --repository <URL>` records it (`--repository-private on` \
+             names it without a link)"
+        ),
+    });
+}
+
 /// A board without its generated README (FEAT-201): someone who clones it is not told how to see
 /// it. Said until `kanbanr readme` writes one.
 fn scan_readme(store: &Store, project: &str, report: &mut Report) {
@@ -998,6 +1020,17 @@ fn scan_readme(store: &Store, project: &str, report: &mut Report) {
             code: None,
             message: "this board has no README telling a reader how to view it — `kanbanr readme` \
                       writes one"
+                .to_string(),
+        });
+    } else if !crate::git::list_remotes(store.data_dir()).is_empty()
+        && crate::boardreadme::stale(store)
+    {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.to_string(),
+            code: None,
+            message: "the board README's generated block is out of date — `kanbanr readme` or \
+                      `kanbanr claude sync` refreshes it"
                 .to_string(),
         });
     }
@@ -2164,5 +2197,71 @@ mod tests {
         assert_eq!(strays.len(), 1, "{strays:?}");
         assert!(strays[0].starts_with("stray/ is a folder matching no status"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-053 R-3: a shared board names a project with no recorded repository.
+    #[test]
+    fn doctor_names_a_project_with_no_repository() {
+        let (store, dir) = fixture();
+        let hits = |store: &Store| {
+            run(store)
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("records no code repository"))
+                .collect::<Vec<_>>()
+        };
+        assert!(hits(&store).is_empty(), "no remote: nothing to say");
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::add_remote(&dir, "origin", "git@git.example.invalid:o/board.git").unwrap();
+        let found = hits(&store);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].project, "demo");
+        assert!(found[0].message.contains("project edit demo --repository"));
+        store
+            .set_project_meta(
+                "demo",
+                None,
+                None,
+                Some("https://git.example.invalid/o/code.git".into()),
+                None,
+            )
+            .unwrap();
+        assert!(hits(&store).is_empty());
+        store
+            .init_project("ops", ProjectConfig::default_for("ops"))
+            .unwrap();
+        let err = store
+            .set_project_meta("ops", None, None, None, Some(true))
+            .unwrap_err();
+        assert!(err.to_string().contains("no code repository is recorded"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-053 R-3: a README with the old block is reported on a shared board, and only there.
+    #[test]
+    fn a_readme_whose_generated_block_is_out_of_date_is_reported() {
+        let (store, dir) = fixture();
+        let stale_hits = |store: &Store| {
+            run(store)
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("out of date"))
+                .count()
+        };
+        let old = format!(
+            "{}\n# A kanbanr board\n{}\n",
+            crate::boardreadme::START,
+            crate::boardreadme::END
+        );
+        std::fs::write(dir.join(crate::boardreadme::FILE), &old).unwrap();
+        assert_eq!(stale_hits(&store), 0, "no remote: silent");
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::add_remote(&dir, "origin", "git@git.example.invalid:o/board.git").unwrap();
+        assert_eq!(stale_hits(&store), 1);
+        crate::boardreadme::write(&store).unwrap();
+        assert_eq!(stale_hits(&store), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

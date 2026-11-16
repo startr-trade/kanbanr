@@ -206,6 +206,28 @@ mod tests {
         d
     }
 
+    /// DEF-060 R-1: the skill offers the allow rule for a granted delegation, once, and never edits
+    /// Claude Code's settings by hand.
+    #[test]
+    fn skill_offers_the_permission_rule_for_a_granted_delegation() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        for needle in [
+            "kanbanr claude permissions --write",
+            "permission_rules_missing",
+            "**ask once**",
+            "fall back to `kanbanr prepare",
+            "Never edit `.claude/settings*.json` by hand",
+            "kanbanr offers the Claude Code allow rule",
+        ] {
+            assert!(flat.contains(needle), "the skill lacks: {needle}");
+        }
+    }
+
     /// DEF-045 R-1: the skill has Claude bring a release fix forward itself and report the merge.
     #[test]
     fn skill_has_claude_bring_a_release_fix_forward() {

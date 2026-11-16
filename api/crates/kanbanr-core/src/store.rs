@@ -3995,13 +3995,39 @@ impl Store {
         id: &str,
         name: Option<String>,
         description: Option<String>,
+        repository: Option<String>,
+        repository_private: Option<bool>,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
+        if repository_private.is_some()
+            && project.config.repository.is_none()
+            && repository.as_deref().is_none_or(|u| u.trim().is_empty())
+        {
+            return Err(CoreError::Unsupported(format!(
+                "no code repository is recorded for '{id}': `kanbanr project edit {id} --repository <URL>` first"
+            )));
+        }
         if let Some(n) = name {
             project.config.name = n;
         }
         if let Some(d) = description {
             project.config.description = d;
+        }
+        match repository.as_deref().map(str::trim) {
+            Some("") => project.config.repository = None,
+            Some(url) => {
+                let repo = project
+                    .config
+                    .repository
+                    .get_or_insert_with(Default::default);
+                repo.url = url.to_string();
+            }
+            None => {}
+        }
+        if let (Some(private), Some(repo)) =
+            (repository_private, project.config.repository.as_mut())
+        {
+            repo.private = private;
         }
         self.save_config(id, &project.config)?;
         crate::boardreadme::write(self)?; // a renamed or re-described project (FEAT-201)

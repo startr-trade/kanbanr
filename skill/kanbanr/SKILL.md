@@ -65,6 +65,10 @@ project"** (or anything equivalent):
    - *Project name and one-line description*: not asked. Use `suggested_name` (the folder's) and
      `suggested_description` (the README's first line, or a manifest's `description`); ask only
      when the description is null or the README is empty.
+   - *Code repository*: read `suggested_repository` from `kanbanr where --json`. When it is not
+     null, ask once whether the board README may link it (recommended when the repository is
+     public), name it without a link (private), or leave it out. A public board never links a
+     private repository.
 
    **b. Identity, once.** One question for the board and the repository both: name and email,
    defaulted from `git config`, else the board's author. It is asked when git has none here;
@@ -147,7 +151,9 @@ project"** (or anything equivalent):
    - *Decisions*: after the process is chosen, run
      `kanbanr decisions defaults --process <name> --dry-run --json` (it needs no board: the
      proposal is computed from the process alone) and show the proposed mode and delegations in
-     the plan under **Decisions**, with "you grant them on the Review page after setup".
+     the plan under **Decisions**, with "you grant them on the Review page after setup; once you
+     grant one, kanbanr offers the Claude Code allow rule that lets the delegated command run in
+     auto mode (`kanbanr claude permissions`); nothing is written before that".
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
    - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
@@ -173,7 +179,7 @@ project"** (or anything equivalent):
    the method's gates are on (`kanbanr config method --off` turns them off later):
 
    ```bash
-   kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
+   kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>" [--repository <url>] [--repository-private on]
    kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
@@ -390,6 +396,19 @@ forward moves. You never change the mode, grant a delegation or review a decisio
 refuses it.
 You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
 grants it on the Review page.
+
+**Auto mode** (DEF-060). Claude Code's auto-mode safety check can stop a delegated command
+(`kanbanr signoff … --under DLG-n`) before kanbanr sees it. When a delegation is granted and the
+mode is `delegated`, check `kanbanr decisions show --json` for `permission_rules_missing` on a
+granted delegation. If a rule is missing, **ask once**, as one question: "DLG-n is granted and the
+mode is delegated. In auto mode Claude Code's safety check may stop `kanbanr signoff … --under
+DLG-n`. Add the allow rule `Bash(kanbanr signoff:*)` to this project's `.claude/settings.local.json`
+(this machine only, never committed)?" with the options **Yes (Recommended)**, **I'll add it
+myself** (give the one command) and **Not now**. On yes, run `kanbanr claude permissions --write`.
+If the check stops that command too, say so and give the person the command for their own
+terminal. **Never edit `.claude/settings*.json` by hand**; that command is the one way. If a
+`--under` command is denied anyway, fall back to `kanbanr prepare …` for the person's click and say
+why.
 
 **Prepare the record before you say a decision waits** (FTR-034). When you have its evidence (the
 CI run's link and result, the commit, the doc that holds the minutes, what the person said), put
@@ -1314,6 +1333,7 @@ kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate,
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
 kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
+kanbanr claude permissions [--write]            # the Claude Code allow rules for delegated commands; --write adds the missing ones to .claude/settings.local.json, with the person's yes
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
 kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps

@@ -114,8 +114,9 @@ pub fn portable_path(path: &str, windows: bool) -> String {
 /// `ask_the_user`. Said by the tool, because a walkthrough showed Claude filling these in itself
 /// when the skill alone asked it to ask: each has an obvious answer, and an obvious answer is still
 /// the user's to give. `tracked`: this folder already points at an existing board.
-/// `git_identity`: git has a name and an email here.
-pub fn setup_questions(tracked: bool, git_identity: bool) -> Vec<String> {
+/// `git_identity`: git has a name and an email here. `has_remote`: the code folder has a git
+/// remote (DEF-053).
+pub fn setup_questions(tracked: bool, git_identity: bool, has_remote: bool) -> Vec<String> {
     let mut ask: Vec<String> = Vec::new();
     if tracked {
         return ask;
@@ -161,6 +162,17 @@ pub fn setup_questions(tracked: bool, git_identity: bool) -> Vec<String> {
              setup without it. Apply it to both (`git config user.name`/`user.email` in this \
              repository only, never --global); the board's commit identity is the same answer. \
              Do not ask for it twice."
+                .into(),
+        );
+    }
+    // DEF-053: asked before anything is written; declining records nothing.
+    if has_remote {
+        ask.push(
+            "Whether the board README may link the code repository (only when the folder has a git \
+             remote; recommend linking it when the repository is public): link it, name it without \
+             a link because it is private, or leave it out. The plan passes the answer to \
+             `kanbanr init … --repository <url>`, with `--repository-private on` for name only, or \
+             `--repository \"\"` to leave it out. A public board never links a private repository."
                 .into(),
         );
     }
@@ -950,13 +962,22 @@ mod tests {
         assert!(why.contains("project shop, board <not recorded>"), "{why}");
     }
 
+    /// DEF-053 R-2: the repository question is asked only for an untracked folder with a remote.
+    #[test]
+    fn the_repository_question_is_asked_only_when_the_folder_has_a_remote() {
+        let asked = |q: Vec<String>| q.iter().any(|x| x.contains("code repository"));
+        assert!(asked(setup_questions(false, true, true)));
+        assert!(!asked(setup_questions(false, true, false)));
+        assert!(!asked(setup_questions(true, true, true)));
+    }
+
     /// FEAT-171, FEAT-173, FEAT-194: a tracked folder is asked nothing; an untracked one is asked
     /// where, which process and its cadence, and for git's identity only when git has none.
     #[test]
     fn setup_asks_what_only_the_user_can_answer() {
-        assert!(setup_questions(true, false).is_empty());
-        assert_eq!(setup_questions(false, true).len(), 5);
-        let all = setup_questions(false, false);
+        assert!(setup_questions(true, false, false).is_empty());
+        assert_eq!(setup_questions(false, true, false).len(), 5);
+        let all = setup_questions(false, false, false);
         assert_eq!(all.len(), 6);
         assert!(all[2].contains("sprints and releases"));
         assert!(all[4].contains("commit identity"));

@@ -6978,14 +6978,14 @@ fn new_board_has_a_readme() {
     assert!(board_git(&["status", "--porcelain"]).trim().is_empty());
     let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
     assert!(
-        readme.contains("`shop`") && readme.contains("kanbanr serve --data-dir"),
+        readme.contains("**shop**") && readme.contains("kanbanr serve --data-dir"),
         "{readme}"
     );
 
     ok(run_in(&base, &work, &["project", "init", "ops"]));
     let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
     assert!(
-        readme.contains("`ops`"),
+        readme.contains("**ops**"),
         "a new project joins the list:\n{readme}"
     );
 
@@ -7001,6 +7001,162 @@ fn new_board_has_a_readme() {
     assert!(!doctor.contains("kanbanr readme"), "{doctor}");
     let again = ok(run_in(&base, &work, &["readme"]));
     assert!(again.contains("up to date"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+fn ident(o: Output) -> Output {
+    o
+}
+
+/// DEF-053 R-2: setup records the code folder's remote on the project and links it from the board
+/// README; `project edit` changes or drops it; `claude sync` refreshes an old README block.
+#[test]
+fn setup_records_the_code_folders_remote_as_the_repository() {
+    let (base, work) = togaf_scratch("def53-repo");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // A folder with no remote: nothing recorded, nothing asked about it.
+    ok(ident(git_in(&base, &work, &["init", "-q"])));
+    let questions = setup_questions_here(&base, &work);
+    assert!(!questions.iter().any(|q| q.contains("code repository")));
+    let v: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    assert!(v["suggested_repository"].is_null());
+
+    ok(ident(git_in(
+        &base,
+        &work,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@git.example.invalid:acme/shop.git",
+        ],
+    )));
+    let v: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    assert_eq!(v["suggested_repository"]["name"], "acme/shop");
+    let questions = setup_questions_here(&base, &work);
+    assert_eq!(
+        questions
+            .iter()
+            .filter(|q| q.contains("code repository"))
+            .count(),
+        1
+    );
+
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert!(
+        said.contains("✓ code repository: git@git.example.invalid:acme/shop.git"),
+        "{said}"
+    );
+    assert!(
+        said.contains("kanbanr project edit shop --repository"),
+        "{said}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(v["data_dir"].as_str().unwrap());
+    // L-41: the board is this test's own, in the temp dir, before the next write.
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{board:?}"
+    );
+    let config = std::fs::read_to_string(board.join("projects/shop/config.yaml")).unwrap();
+    assert!(
+        config.contains("git@git.example.invalid:acme/shop.git"),
+        "{config}"
+    );
+    assert!(!config.contains("private"), "{config}");
+    let readme_path = board.join("README.md");
+    let readme = std::fs::read_to_string(&readme_path).unwrap();
+    assert!(readme.contains("# shop: plan and evidence"), "{readme}");
+    assert!(
+        readme.contains("[acme/shop](https://git.example.invalid/acme/shop)"),
+        "{readme}"
+    );
+
+    ok(run_in(
+        &base,
+        &work,
+        &["project", "edit", "shop", "--repository-private", "on"],
+    ));
+    let readme = std::fs::read_to_string(&readme_path).unwrap();
+    assert!(readme.contains("acme/shop"), "{readme}");
+    assert!(
+        !readme.contains("https://git.example.invalid/acme/shop"),
+        "{readme}"
+    );
+    ok(run_in(
+        &base,
+        &work,
+        &["project", "edit", "shop", "--repository", ""],
+    ));
+    let readme = std::fs::read_to_string(&readme_path).unwrap();
+    assert!(!readme.contains("acme/shop"), "{readme}");
+    let refused = run_in(
+        &base,
+        &work,
+        &["project", "edit", "shop", "--repository-private", "on"],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no code repository is recorded"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    // An older README block, with the owner's line above it, is refreshed by `claude sync`.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "project",
+            "edit",
+            "shop",
+            "--repository",
+            "https://git.example.invalid/acme/shop.git",
+        ],
+    ));
+    let current = std::fs::read_to_string(&readme_path).unwrap();
+    let start = current.find("<!-- kanbanr:readme:start -->").unwrap();
+    let end =
+        current.find("<!-- kanbanr:readme:end -->").unwrap() + "<!-- kanbanr:readme:end -->".len();
+    let old = format!(
+        "Owner line.\n\n{}\n# A kanbanr board\n{}\n",
+        "<!-- kanbanr:readme:start -->", "<!-- kanbanr:readme:end -->"
+    );
+    assert!(end > start);
+    std::fs::write(&readme_path, old).unwrap();
+    let charter = base.join("charter.yaml");
+    std::fs::write(&charter, "purpose: Keep the plan with the work.\n").unwrap();
+    let _ = run_in(
+        &base,
+        &work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    );
+    let synced = ok(run_in(&base, &work, &["claude", "sync"]));
+    assert!(synced.contains("readme: refreshed"), "{synced}");
+    let readme = std::fs::read_to_string(&readme_path).unwrap();
+    assert!(readme.starts_with("Owner line."), "{readme}");
+    assert!(readme.contains("# shop: plan and evidence"), "{readme}");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -11497,6 +11653,102 @@ fn in_session(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> 
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run kanbanr CLI")
+}
+
+/// DEF-060 R-1: granting a delegation in delegated mode names the Claude Code allow rule auto mode
+/// needs, `kanbanr claude permissions` lists it, `--write` adds it to the project's
+/// `settings.local.json` and nothing else, and the view then says it is allowed.
+#[test]
+fn granted_delegation_offers_its_permission_rule() {
+    let (base, work) = delegation_board("def060-rule");
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let rule = "Bash(kanbanr signoff:*)";
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let text = |o: &Output| String::from_utf8_lossy(&o.stdout).to_string();
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    let granted = ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    assert!(
+        !text(&granted).contains(rule),
+        "monitor mode needs no rule: {}",
+        text(&granted)
+    );
+    let mode = ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let said = text(&mode);
+    assert!(
+        said.contains(rule) && said.contains("kanbanr claude permissions --write"),
+        "{said}"
+    );
+
+    let listed = ok(run_in(&base, &work, &["claude", "permissions"]));
+    assert!(
+        text(&listed).contains(&format!("{rule}: missing")),
+        "{}",
+        text(&listed)
+    );
+    let settings = work.join(".claude").join("settings.local.json");
+    assert!(!settings.exists());
+
+    // A file with other content keeps it.
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"theme": "dark", "permissions": {"allow": ["Bash(ls:*)"]}}"#,
+    )
+    .unwrap();
+    let wrote = ok(run_in(&base, &work, &["claude", "permissions", "--write"]));
+    assert!(
+        text(&wrote).contains(&format!("added {rule}")),
+        "{}",
+        text(&wrote)
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(v["theme"], "dark");
+    assert_eq!(
+        v["permissions"]["allow"],
+        serde_json::json!(["Bash(ls:*)", rule])
+    );
+
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["delegations"][0]["permission_rules_checked"], true, "{v}");
+    assert!(
+        v["delegations"][0]
+            .get("permission_rules_missing")
+            .is_none(),
+        "{v}"
+    );
+
+    let again = ok(run_in(&base, &work, &["claude", "permissions", "--write"]));
+    assert!(text(&again).contains("allowed already"), "{}", text(&again));
+
+    // Back in monitor mode no rule is needed; the one left behind is listed as not needed.
+    ok(run_in(&base, &work, &["decisions", "mode", "monitor"]));
+    let idle = ok(run_in(&base, &work, &["claude", "permissions"]));
+    let said = text(&idle);
+    assert!(
+        said.contains("no permission rule is needed") && said.contains("not needed now"),
+        "{said}"
+    );
 }
 
 /// FTR-028 R-2: inside a Claude session a delegation can be proposed but not granted, and the mode

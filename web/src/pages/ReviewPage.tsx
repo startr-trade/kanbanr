@@ -528,6 +528,18 @@ function DecisionsHere({
                 · <strong>not granted through kanbanr</strong>: nothing is taken under it
               </>
             ) : null}
+            {view.mode === "delegated" && g.permission_rules_checked ? (
+              g.permission_rules_missing?.length ? (
+                <>
+                  {" "}
+                  · auto mode: add <code>{g.permission_rules_missing.join(", ")}</code> to{" "}
+                  <code>.claude/settings.local.json</code> (ask Claude, or run{" "}
+                  <code>kanbanr claude permissions --write</code> in your own terminal)
+                </>
+              ) : (
+                " · auto mode: allowed"
+              )
+            ) : null}
           </p>
           {said[g.id] ? (
             <p>{said[g.id]}</p>
