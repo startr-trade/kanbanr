@@ -632,6 +632,7 @@ fn build_base_config(store: &Store, name: &str, body: &Value) -> Result<ProjectC
                 codes: Default::default(),
                 coverage: Vec::new(),
                 paths: Default::default(),
+                tasks: Default::default(),
             }
         }
         None => {
