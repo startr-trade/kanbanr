@@ -1,0 +1,85 @@
+# The API's style and its published contract.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: api
+  description: The API's style and how its contract is published
+  version: 1
+  requires: [core]
+areas:
+  - id: api-style
+    title: API style
+    asks: first_need
+    select: many
+    when: {area: project-kind, options: [service, both]}
+    touches: [endpoint, route, API, OpenAPI, "*.proto", GraphQL, REST, handler]
+    question: What style is the API?
+    options:
+      - id: rest-openapi
+        label: REST with OpenAPI
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [REST, OpenAPI, Swagger]
+        records:
+          - {kind: constraint, text: "The API is {label}"}
+          - &contract {kind: practice, text: "Every endpoint is in the contract before it is built, and the contract is versioned with the code"}
+      - id: grpc
+        label: gRPC
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [gRPC, protobuf]
+        records:
+          - {kind: constraint, text: "The API is {label}"}
+          - *contract
+      - id: graphql
+        label: GraphQL
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [GraphQL]
+        records:
+          - {kind: constraint, text: "The API is {label}"}
+          - *contract
+      - id: json-rpc
+        label: JSON-RPC
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [JSON-RPC]
+        records:
+          - {kind: constraint, text: "The API is {label}"}
+          - *contract
+
+  - id: api-docs
+    title: The API's published contract
+    asks: first_need
+    when: {area: api-style, options: [rest-openapi]}
+    touches: [OpenAPI, Swagger, /openapi.json, /docs, API reference, contract]
+    question: Is the OpenAPI contract served, and rendered?
+    options:
+      - id: served-and-rendered
+        label: Served and rendered
+        recommended: true
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [served spec, Swagger UI, Redoc]
+        records:
+          - {kind: constraint, text: "The server serves its OpenAPI contract at `/openapi.json` and renders it at `/docs`"}
+      - id: served-json-only
+        label: Served as JSON only
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [/openapi.json]
+        records:
+          - {kind: constraint, text: "The server serves its contract at `/openapi.json`"}
+      - id: repository-only
+        label: In the repository only
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [in the repository]
+        records:
+          - {kind: practice, text: The contract lives in the repository and CI checks it against the code}

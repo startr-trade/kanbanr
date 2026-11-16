@@ -1,0 +1,32 @@
+# Where infrastructure state lives, and how environments differ.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: infra
+  description: Infrastructure state and environments
+  version: 1
+  requires: [core]
+areas:
+  - id: infra-state-environments
+    title: Infrastructure state and environments
+    asks: first_need
+    when: {area: iac, options: [opentofu, terraform, pulumi, cloud-native]}
+    touches: [state, workspace, environment, staging, production, "*.tfvars"]
+    question: Where does infrastructure state live?
+    options:
+      - id: remote-state-per-environment
+        label: Remote state, one per environment
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [remote state, workspace]
+        records:
+          - {kind: constraint, text: "Infrastructure state is remote, one per environment"}
+          - &modules {kind: practice, text: Environments are the same modules with different variables}
+      - id: local-state
+        label: Local state
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: constraint, text: Infrastructure state is kept locally}
+          - *modules

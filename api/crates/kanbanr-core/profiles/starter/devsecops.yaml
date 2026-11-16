@@ -1,0 +1,291 @@
+# How code is validated and audited before it is deployed (15 Nov 2026): each answer can require
+# a gate at a release stage. `why`, `fits_when` and `costs` marked TODO(P12) are written by P12.
+profile:
+  name: devsecops
+  description: Review, static analysis, the supply chain, secrets, artifacts, deployment and rollback
+  version: 1
+  requires: [core]
+areas:
+  - id: code-review
+    title: Code review
+    asks: first_need
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [review, pull request, merge request, approve, reviewer, sign-off]
+    question: Who reviews a change before it merges?
+    options:
+      - id: person-signs-design-and-docs
+        label: The person signs off the design and the docs
+        recommended: true
+        why: "The person reviews the design before the build and the docs after, which is what kanbanr's gates already enforce"
+        fits_when: One developer with Claude
+        costs: Two decisions per item
+        mentions: [design-review and docs-folded sign-offs on the monitor]
+        records:
+          - {kind: practice, text: Every item passes design-review before its build and docs-folded before its merge}
+      - id: second-reviewer
+        label: A second person approves the merge
+        why: Four eyes on every change
+        fits_when: A team or a regulated codebase
+        costs: Waiting on a reviewer
+        mentions: [a second person approves the merge]
+        asks_value: who
+        records:
+          - {kind: constraint, text: "A merge needs the approval of {value}"}
+          - {kind: practice, text: The reviewer is named on the item}
+      - id: none
+        label: No review
+        why: Nothing is reviewed before merge
+        fits_when: TODO(P12)
+        costs: No second look
+        records:
+          - {kind: non_goal, text: No review before merge}
+
+  - id: static-analysis
+    title: Static analysis
+    asks: first_need
+    select: many
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [lint, clippy, eslint, type check, SAST, CodeQL, Semgrep, warning, -D warnings]
+    question: Which static analysis runs?
+    options:
+      - id: lint-as-error
+        label: Lint, warnings as errors
+        recommended: true
+        why: A warning never ages into a bug
+        fits_when: Always
+        costs: Fixing lints before merging
+        mentions: [lint, clippy, eslint, warnings are errors]
+        records:
+          - {kind: practice, text: Lint runs with warnings as errors in the fast tier}
+      - id: type-check
+        label: A type check in CI
+        why: Types checked in CI, not only in the editor
+        fits_when: TypeScript, Python with types
+        costs: A CI step
+        mentions: [type check, tsc, mypy]
+        records:
+          - {kind: practice, text: Types are checked in CI}
+      - id: sast
+        label: SAST
+        why: Finds injection and unsafe patterns a reviewer misses
+        fits_when: Anything exposed to a network
+        costs: Run time, so usually a separate pipeline on a schedule or before a release
+        mentions: [SAST, CodeQL, Semgrep]
+        asks_value: the tool
+        records:
+          - {kind: practice, text: "{value} runs before every release and on a schedule; a finding blocks the release stage"}
+        adds:
+          release_gates: [{stage: main, gate: sast}]
+
+  - id: supply-chain
+    title: The supply chain
+    asks: first_need
+    select: many
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [dependency, advisory, CVE, licence, license, lockfile, SBOM, cargo deny, cargo audit, npm audit, pip-audit]
+    question: How are dependencies checked?
+    options:
+      - id: advisories-block
+        label: Advisories block a release
+        recommended: true
+        why: A known vulnerability never ships unknowingly
+        fits_when: Always
+        costs: A scan step and the occasional forced upgrade
+        mentions: [advisory scan, cargo audit, npm audit, pip-audit]
+        records:
+          - {kind: practice, text: "Dependency advisories are scanned on every landing and before a release; a fixable high or critical finding blocks the release"}
+        adds: &supply
+          release_gates: [{stage: main, gate: supply-chain}]
+      - id: licence-policy
+        label: A licence allow-list
+        why: No licence the project cannot accept
+        fits_when: Anything distributed or sold
+        costs: Writing the allow-list once
+        mentions: [licence allow-list, cargo deny licenses]
+        records:
+          - {kind: practice, text: Licences are checked against the allow-list}
+        adds: *supply
+      - id: pinned-lockfiles
+        label: Locked builds
+        why: The build uses the dependencies that were reviewed
+        fits_when: TODO(P12)
+        costs: Deliberate upgrades
+        mentions: [locked builds, --locked]
+        records:
+          - {kind: practice, text: Builds are locked to the lockfile}
+        adds: *supply
+      - id: sbom
+        label: A software bill of materials
+        why: A list of what shipped, for assessors and incident response
+        fits_when: Customers or regulators ask
+        costs: A generation step per release
+        mentions: [SBOM, CycloneDX, SPDX]
+        records:
+          - {kind: practice, text: A software bill of materials is attached to every release}
+        adds: *supply
+
+  - id: secrets-scanning
+    title: Secrets scanning
+    asks: first_need
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [secret, token, credential, gitleaks, trufflehog, leak]
+    question: How are leaked secrets caught?
+    options:
+      - id: scan-commits-and-ci
+        label: Scanned before a push and in CI
+        recommended: true
+        why: A leaked credential is found before it is pushed
+        fits_when: Always
+        costs: A hook and a CI step
+        mentions: [secret scanning in CI and pre-commit]
+        asks_value: the tool
+        records:
+          - {kind: constraint, text: "{value} scans for secrets before a push and in CI"}
+      - id: platform-scanning
+        label: "The host's secret scanning"
+        why: The git host scans pushes
+        fits_when: The plan includes it
+        costs: Only after the push
+        mentions: ["the host's secret scanning"]
+        records:
+          - {kind: constraint, text: "The host's secret scanning is on"}
+      - id: none
+        label: No secret scanning
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: No secret scanning}
+
+  - id: artifact-security
+    title: Artifact security
+    asks: first_need
+    select: many
+    when: {area: packaging, options: [container-image, native-package, release-archive]}
+    touches: [image scan, Trivy, Grype, sign, cosign, provenance, SLSA, checksum, attestation]
+    question: How are released artifacts secured?
+    options:
+      - id: scan-before-publish
+        label: Scanned before publish
+        recommended: true
+        why: A vulnerable image never reaches the registry
+        fits_when: Any published image
+        costs: A scan step
+        mentions: [image scan, Trivy, Grype]
+        records:
+          - {kind: practice, text: Every image is scanned before it is published; a fixable high or critical finding blocks the publish}
+        adds:
+          release_gates: [{stage: tag, gate: artifact-scan}]
+      - id: checksums
+        label: Checksums
+        why: Anyone can verify what they downloaded
+        fits_when: TODO(P12)
+        costs: Nothing
+        mentions: [checksums, SHA-256 in the release]
+        records:
+          - {kind: practice, text: Every release asset is published with its SHA-256 checksum}
+      - id: signed-with-provenance
+        label: Signed, with provenance
+        why: A release proves where it was built
+        fits_when: Customers who verify, supply-chain requirements
+        costs: Key management or keyless signing set-up
+        mentions: [cosign, SLSA, attestation]
+        records:
+          - {kind: practice, text: Every release artifact is signed and carries its build provenance}
+
+  - id: deployment-approval
+    title: Deployment approval
+    asks: first_need
+    when: {area: runs-where, options: [containers, kubernetes, serverless, host]}
+    touches: [deploy, environment, production, approval, protected environment, promote]
+    question: What lets a release reach production?
+    options:
+      - id: person-promotes-on-the-monitor
+        label: The person promotes it on the monitor
+        recommended: true
+        why: "A person's click on the Releases page moves a release stage by stage, with the gates it requires"
+        fits_when: One developer with Claude
+        costs: Being there for the clicks
+        mentions: [release stages, Promote to main, cut]
+        records: &deploy
+          - {kind: constraint, text: "A deployment to production needs {label}"}
+          - {kind: practice, text: Every deployment names the release it deploys}
+      - id: protected-environment
+        label: A protected environment
+        why: The host holds the deploy until an approver agrees
+        fits_when: A team
+        costs: Configuring the environment
+        mentions: [environment protection rule]
+        asks_value: who approves
+        records:
+          - {kind: constraint, text: "A deployment to production needs the approval of {value} on the protected environment"}
+          - {kind: practice, text: Every deployment names the release it deploys}
+      - id: automatic-on-green
+        label: Automatic on a green main
+        why: Every green main deploys
+        fits_when: Strong tests and easy rollback
+        costs: No human pause
+        mentions: [deploy on green main]
+        records: *deploy
+
+  - id: deployment-audit
+    title: Deployment audit
+    asks: first_need
+    when: {area: runs-where, options: [containers, kubernetes, serverless, host]}
+    touches: [change record, deployment log, who deployed, release notes, evidence]
+    question: Where is each deployment recorded?
+    options:
+      - id: release-record-on-the-board
+        label: "The release's board record"
+        recommended: true
+        why: Who promoted, who cut, which gate passed and when are already on the board
+        fits_when: Always
+        costs: Nothing
+        mentions: ["the release's board record"]
+        records:
+          - {kind: practice, text: "A deployment is traceable to the release record: its items, gate results, sign-offs and the person who cut it"}
+      - id: change-ticket
+        label: A change ticket
+        why: An external change process requires it
+        fits_when: ITIL-style organisations
+        costs: A ticket per deployment
+        mentions: [change ticket, CAB]
+        asks_value: the system
+        records:
+          - {kind: constraint, text: "Every production deployment has a change record in {value}"}
+      - id: none
+        label: Not recorded
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+
+  - id: rollback
+    title: Rollback
+    asks: first_need
+    when: {area: runs-where, options: [containers, kubernetes, serverless, host]}
+    touches: [rollback, roll back, previous version, blue-green, canary, revert]
+    question: How is a bad release rolled back?
+    options:
+      - id: redeploy-previous-tag
+        label: Redeploy the previous release
+        recommended: true
+        why: The last good release is one command away
+        fits_when: Stateless services
+        costs: Data migrations must be backward compatible
+        mentions: [redeploy the previous release]
+        records:
+          - {kind: practice, text: A rollback is rehearsed before the first production release and its steps are in the runbook}
+          - {kind: constraint, text: "Every migration in a release is compatible with the previous release's code"}
+      - id: blue-green-or-canary
+        label: Blue/green or canary
+        why: The new version takes traffic gradually
+        fits_when: User-facing services with traffic
+        costs: Twice the capacity during a rollout
+        mentions: [blue/green, canary]
+        records:
+          - {kind: practice, text: A rollback is rehearsed before the first production release and its steps are in the runbook}
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)

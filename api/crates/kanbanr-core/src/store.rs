@@ -189,6 +189,81 @@ impl Store {
         Ok(crate::library::drift(&project.config, current.as_ref()))
     }
 
+    /// The board's pack library (FTR-033): one YAML file per saved practice pack, beside
+    /// `processes/`, so it travels with the board's remote.
+    pub fn profiles_dir(&self) -> PathBuf {
+        self.root.join(crate::profile::FOLDER)
+    }
+
+    /// The board's saved packs, by name.
+    pub fn list_profiles(&self) -> Result<Vec<(String, crate::profile::ProfileFile)>> {
+        crate::profile::list_dir(&self.profiles_dir())
+    }
+
+    /// A pack saved on this board, if there is one by that name.
+    pub fn board_profile(&self, name: &str) -> Result<Option<crate::profile::ProfileFile>> {
+        crate::profile::get_in(&self.profiles_dir(), name)
+    }
+
+    /// Save a pack to the board's library, checked against every library and versioned by
+    /// [`crate::profile::versioned`]. Returns the file as saved.
+    pub fn save_profile(
+        &self,
+        name: &str,
+        file: crate::profile::ProfileFile,
+        description: Option<String>,
+    ) -> Result<crate::profile::ProfileFile> {
+        crate::profile::save_in(
+            &self.profiles_dir(),
+            name,
+            file,
+            description,
+            Some(self),
+            None,
+        )
+    }
+
+    /// Look a pack up by name: the board's library, then the personal one (when the caller can
+    /// see it), then the built-in packs.
+    pub fn resolve_profile(
+        &self,
+        name: &str,
+        personal_dir: Option<&Path>,
+    ) -> Result<(crate::profile::ProfileFile, crate::config::Library)> {
+        crate::profile::resolve(Some(self), name, personal_dir)
+    }
+
+    /// How each pack a project follows (and has not removed) stands against its library's
+    /// current copy. A personal pack is skipped when there is no `personal_dir` to look in: only
+    /// the user's own kanbanr can see that library, so the daemon passes none.
+    pub fn profile_drift(
+        &self,
+        project_id: &str,
+        personal_dir: Option<&Path>,
+    ) -> Result<Vec<crate::profile::Drift>> {
+        let baseline = crate::baseline::load(self, project_id)?;
+        let applied_dir = self
+            .project_dir(project_id)
+            .join(crate::profile::APPLIED_DIR);
+        let mut out = Vec::new();
+        for pack in baseline.packs.iter().filter(|p| p.removed.is_none()) {
+            let source = &pack.source;
+            if source.library == crate::config::Library::Personal && personal_dir.is_none() {
+                continue;
+            }
+            let path = applied_dir.join(format!("{}.yaml", source.name));
+            // Without its applied copy the pack is compared by rev alone.
+            let applied = if path.is_file() {
+                Self::read_yaml(&path)?
+            } else {
+                crate::profile::ProfileFile::default()
+            };
+            let current = crate::profile::copy_in(self, source, personal_dir)?;
+            out.push(crate::profile::drift(source, &applied, current.as_ref()));
+        }
+        Ok(out)
+    }
+
     /// Record which saved process a project's workflow came from, or that it came from none.
     pub fn set_process_source(
         &self,
