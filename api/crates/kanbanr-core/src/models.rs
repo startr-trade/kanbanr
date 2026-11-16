@@ -281,6 +281,12 @@ pub struct FeatureDefinition {
     /// board where it is the only key an older binary does not know reads back byte for byte.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub affects_docs: Vec<String>,
+    /// Why this item changes no doc, in the person's words (DEF-075), recorded when they confirm
+    /// it does: it silences the 'declares no docs' warning that a `docs_updated` gate gives an item
+    /// naming none. Like `affects_docs` it is design, outside the agreed content, and declared
+    /// after it, so an older binary keeps it in `extra` and writes it back in the same place.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub affects_no_docs: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -581,6 +587,8 @@ impl FeatureDefinition {
         // Which docs the work touches is design, written after the definition was agreed: naming
         // them does not reopen the agreement (FEAT-180, Q1).
         bare.affects_docs = Vec::new();
+        // Nor does recording that it changes none (DEF-075).
+        bare.affects_no_docs = String::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -1401,6 +1409,7 @@ zachman:
   why:   \"\"            # the problem or goal served
 affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
                       # design stage; a `docs_updated` gate checks each changed before moving on
+affects_no_docs: \"\"   # only if the person confirms it changes no doc: their reason
 ";
     let requirements = match kind.trim().to_ascii_lowercase().as_str() {
         "defect" | "bug" => {
@@ -1901,6 +1910,38 @@ mod tests {
         sign_off(&mut d, "2026-11-06T11:00:00Z");
         d.affects_docs.push("a.md".into());
         assert_eq!(d.part_revs(), base.part_revs());
+    }
+
+    /// DEF-075 R-1: `affects_no_docs` reads and writes back, is absent when empty, and is design
+    /// rather than agreed content, so recording it changes neither hash.
+    #[test]
+    fn affects_no_docs_round_trips_and_is_outside_the_content() {
+        let without = full_definition();
+        let text = crate::yaml::to_string(&without).unwrap();
+        assert!(!text.contains("affects_no_docs"), "{text}");
+        assert_eq!(
+            crate::yaml::from_str::<FeatureDefinition>(&text).unwrap(),
+            without
+        );
+
+        let mut with = full_definition();
+        with.affects_no_docs = "test-only".into();
+        let text = crate::yaml::to_string(&with).unwrap();
+        assert!(text.contains("affects_no_docs: test-only"), "{text}");
+        let back: FeatureDefinition = crate::yaml::from_str(&text).unwrap();
+        assert_eq!(back.affects_no_docs, "test-only");
+        assert!(!back.extra.contains_key("affects_no_docs"));
+        assert_eq!(back, with);
+
+        assert_eq!(with.content_rev(), without.content_rev());
+        assert_eq!(with.part_revs(), without.part_revs());
+
+        // The template carries the field, and it parses as an empty reason.
+        let template: FeatureDefinition =
+            crate::yaml::from_str(&definition_template("chore")).unwrap();
+        assert!(definition_template("chore").contains("affects_no_docs:"));
+        assert!(template.affects_no_docs.is_empty());
+        assert!(!template.extra.contains_key("affects_no_docs"));
     }
 
     /// FTR-018 R-2: a goal, a Zachman answer, a requirement or a test added keeps the approval.
