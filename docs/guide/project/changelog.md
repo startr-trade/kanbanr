@@ -19,6 +19,8 @@ All notable changes to kanbanr are documented here. The format follows
   nothing until the mode is set to delegated on the Review page (DOC-011).
 - An item whose branch is merged into its release still reads its changed docs as built, so
   docs-folded can be given after the merge (DEF-091).
+- `kanbanr git tidy` lists a finished item's merged branch even while an agent scope issued for
+  that item is still in force, and names the scope to revoke (DEF-096).
 
 ## [0.7.0] - 2026-11-16
 
