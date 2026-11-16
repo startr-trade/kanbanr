@@ -330,6 +330,10 @@ jobs:
       # (FTR-046).
       - name: The UI kit is built on the chosen design tokens
         run: npm run check:ui-tokens
+      # The kit's markup checks render components through Vite's SSR loader; the renderer must
+      # work before they can (FTR-046).
+      - name: The UI kit's renderer draws a component
+        run: npm run check:ui-render
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
