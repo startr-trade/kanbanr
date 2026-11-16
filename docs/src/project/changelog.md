@@ -6,6 +6,38 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-16
+
+### Added
+
+- The guides name agile as the default process, and say a patch starts as a candidate (DOC-009)
+- The agile guide says chores skip Review and omits that a granted delegation does nothing until the mode changes (DOC-010)
+- A shared position, and a view ID (FTR-003)
+- Milestones are listed newest first (FTR-031)
+- The monitor says which kanbanr it runs, and warns when it is behind the code (FTR-036)
+- Walkthroughs that run themselves: the guide's runs driven headlessly, decisions taken on the scratch board by a scripted person, every question and board claim captured (FTR-037)
+
+### Fixed
+
+- The docs_updated gate ignores board docs linked under a design's Affects docs (DEF-047)
+- A release reads as shipped before its tag's workflow has passed (DEF-049)
+- Sprint close asks about each merged branch, and agent branches are left behind (DEF-051)
+- A board's README names kanbanr, not the project it tracks (DEF-053)
+- Claude doesn't prepare a project's first release: release files, the pipeline and override checks (DEF-056)
+- A build in a git worktree keeps the commit of its first build (DEF-058)
+- A granted delegation can't be used when Claude Code runs in auto mode (DEF-060)
+- kanbanr capture records nothing from Vitest 5, pytest -v or Playwright runs (DEF-061)
+- The stop check counts a sprint catch-up merge as agent work ahead of the board (DEF-063)
+- Ratifying an override at an already-ratified definition rev records nothing, and the Review page keeps asking (DEF-064)
+- The Claude docs guard judges a worktree's files by the main checkout's path and refuses the book, the changelog and the skill (DEF-065)
+- A position on a checkout with line-ending conversion reads dirty, where katalogr's contract now says clean (DEF-066)
+- A Python standard-library project's unittest results are never captured, so no test reaches green (DEF-068)
+- doctor warns that a chore has no Design section, though a chore's path has no design stage (DEF-069)
+- Claude re-kinds or renames a test the person named, and each change lapses the approval (DEF-073)
+- doctor judges a stage's docs_updated from when the item entered it, so a doc folded just before the move warns afterwards (DEF-074)
+- Agreeing the charter after setup leaves CLAUDE.md modified on main, so Promote to main refuses the dirty checkout (DEF-083)
+- The skill leaves the styling approach undecided, skips the formatter, misreports what is waiting, and names tests capture can't read (DEF-084)
+
 ## [0.6.1] - 2026-11-16
 
 ### Fixed
@@ -1602,7 +1634,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/startr-trade/kanbanr/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/startr-trade/kanbanr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...v0.5.1
