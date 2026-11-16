@@ -1184,8 +1184,9 @@ runner prints and capture reads (the forms above), with the runner and its repor
 the project has not chosen its test runner yet, ask that (one AskUserQuestion, the option capture
 reads recommended first) while you draft the definition, before the approval request, never after
 it. A test named in another form is renamed before you ask: the same rename after approval lapses
-it, on every item that holds such a name. A test is something the project's runner runs and
-capture reads, a chore's check included. It is never a kanbanr command (`kanbanr doctor`,
+it, on every item that holds such a name. Apart from the item's one manual test and a
+`walkthrough:` test, a test is something the project's runner runs and capture reads, a chore's
+check included. It is never a kanbanr command (`kanbanr doctor`,
 `kanbanr check`) or a shell line: no runner prints those, so capture records nothing and the name
 has to change later. A chore that adds a changelog is checked by a runner test, such as one
 asserting the file has an Unreleased heading. A check only a person can judge is the item's one
