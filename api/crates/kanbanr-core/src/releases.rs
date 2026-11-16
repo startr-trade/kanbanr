@@ -170,11 +170,81 @@ pub struct ReleaseReport {
     pub included: Vec<String>,
 }
 
-/// Every release, reported.
+/// A release version as it sorts (DEF-034): its numeric parts, then its pre-release. Ordering:
+/// `parts` as numbers, then a release above its pre-releases (1.0.0 is newer than 1.0.0-rc.1),
+/// then pre-releases by text. A version that does not parse has no parts and sorts below every
+/// one that does.
+#[derive(Debug, Clone)]
+pub struct VersionKey {
+    parts: Vec<u64>,
+    pre: Option<String>,
+}
+
+impl Ord for VersionKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self.parts.is_empty(), other.parts.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (false, false) => {
+                self.parts
+                    .cmp(&other.parts)
+                    .then_with(|| match (&self.pre, &other.pre) {
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => Ordering::Greater,
+                        (Some(_), None) => Ordering::Less,
+                        (Some(a), Some(b)) => a.cmp(b),
+                    })
+            }
+        }
+    }
+}
+
+impl PartialOrd for VersionKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for VersionKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for VersionKey {}
+
+/// The sort key of a version or tag (DEF-034): a leading `v`/`V` is dropped; the part before the
+/// first `-` is split on `.`, and every part must be an unsigned integer, at least two of them,
+/// else the key has no parts; the text after the first `-` is the pre-release.
+pub fn version_key(version: &str) -> VersionKey {
+    let v = version.trim();
+    let v = v
+        .strip_prefix('v')
+        .or_else(|| v.strip_prefix('V'))
+        .unwrap_or(v);
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) => (core, Some(pre.to_string())),
+        None => (v, None),
+    };
+    let parts: Option<Vec<u64>> = core.split('.').map(|p| p.parse::<u64>().ok()).collect();
+    let parts = parts.filter(|p| p.len() >= 2).unwrap_or_default();
+    VersionKey { parts, pre }
+}
+
+/// Releases newest first by version (DEF-034), the one order the page, `release list` and the API
+/// show. Stable: a version that does not parse keeps its insertion order, after the rest.
+pub fn newest_first(releases: &mut [ReleaseReport]) {
+    releases.sort_by_cached_key(|r| std::cmp::Reverse(version_key(&r.release.version)));
+}
+
+/// Every release, reported, newest first by version (DEF-034). `releases.yaml` keeps the order
+/// they were added in.
 pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
     let project = store.load_meta(id)?;
     let all = load(store, id)?;
-    Ok(all
+    let mut reports: Vec<ReleaseReport> = all
         .clone()
         .into_iter()
         .map(|release| {
@@ -202,7 +272,9 @@ pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
                 release,
             }
         })
-        .collect())
+        .collect();
+    newest_first(&mut reports);
+    Ok(reports)
 }
 
 fn path(store: &Store, id: &str) -> PathBuf {
@@ -5141,6 +5213,64 @@ pub(crate) mod tests {
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].version, "v0.2.0");
         assert!(super::remove(&store, "shop", "v9").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-034 R-1: releases are reported newest first by version; a pre-release sorts just
+    /// before its release, and versions that do not parse keep their insertion order after the
+    /// rest. `releases.yaml` keeps the order they were added in.
+    #[test]
+    fn releases_are_listed_newest_first_by_version() {
+        use super::version_key as k;
+        assert!(k("v0.10.0") > k("v0.9.0"));
+        assert!(k("v0.9.0") > k("v0.5.1"));
+        assert!(k("v0.5.1") > k("v0.5.0"));
+        assert!(k("v0.5.0") > k("v0.5.0-rc.1"));
+        assert!(k("v0.5.0-rc.2") > k("v0.5.0-rc.1"));
+        assert!(k("V1.2") == k("1.2"));
+        assert!(k("v0.0.1") > k("next"));
+        assert!(k("v0.0.1") > k("2026-Q1"));
+        assert!(k("v1") == k("next"), "one part does not parse");
+        assert!(k("next") == k("2026-Q1"));
+
+        let (store, dir) = plain_board("order");
+        let added = [
+            "v0.3.0",
+            "v0.2.1",
+            "v0.10.0",
+            "v0.5.1",
+            "next",
+            "v0.5.0-rc.1",
+            "v0.5.0",
+            "2026-Q1",
+        ];
+        for v in added {
+            super::add(&store, "shop", v, "", "").unwrap();
+        }
+        let shown: Vec<String> = super::report_all(&store, "shop")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.release.version)
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "v0.10.0",
+                "v0.5.1",
+                "v0.5.0",
+                "v0.5.0-rc.1",
+                "v0.3.0",
+                "v0.2.1",
+                "next",
+                "2026-Q1"
+            ]
+        );
+        let stored: Vec<String> = super::load(&store, "shop")
+            .unwrap()
+            .into_iter()
+            .map(|r| r.version)
+            .collect();
+        assert_eq!(stored, added, "load keeps the order they were added in");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
