@@ -1,0 +1,100 @@
+# Container images, and every form the product ships in.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: containers
+  description: Container images and the forms the product ships in
+  version: 1
+  requires: [core]
+areas:
+  - id: containers
+    title: Containers
+    asks: first_need
+    when: {area: runs-where, options: [containers, kubernetes]}
+    touches: [Dockerfile, image, container, registry, compose.yaml, docker-compose]
+    question: How are images built and where are they published?
+    options:
+      - id: hardened-images
+        label: Hardened images
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [non-root, pinned base, scanned]
+        asks_value: the registry
+        records:
+          - {kind: constraint, text: "Images are published to {value}"}
+          - {kind: practice, text: "Images run as non-root, pin their base image and are scanned before publish"}
+      - id: plain-images
+        label: Plain images
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        asks_value: the registry
+        records:
+          - {kind: constraint, text: "Images are published to {value}"}
+
+  - id: packaging
+    title: Packaging
+    asks: first_need
+    select: many
+    when: {area: runs-where, options: [containers, kubernetes, host, user-machine]}
+    touches: [package, image, Dockerfile, compose.yaml, chart, manifest, module, installer, release asset, cargo install, pip install, npm install, .deb, .msi]
+    question: What forms does the product ship in?
+    options:
+      - id: container-image
+        label: A container image
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [image, Dockerfile, registry]
+        detect: [Dockerfile]
+        records: &ships
+          - {kind: constraint, text: "The product ships as {label}"}
+          - &same-commit {kind: practice, text: "Every packaging the baseline names is built and checked in the pipeline's release stage from the same commit, and the install guide covers each"}
+      - id: compose-file
+        label: A Compose file
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Compose, compose.yaml]
+        detect: [compose.yaml, docker-compose.yml]
+        records: *ships
+      - id: kubernetes-manifests
+        label: Kubernetes manifests
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [chart, Kustomize, manifests]
+        detect: [Chart.yaml, kustomization.yaml]
+        records: *ships
+      - id: iac-module
+        label: An infrastructure module
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [OpenTofu module, Terraform module, Pulumi program]
+        detect: ["*.tf"]
+        records: *ships
+      - id: native-package
+        label: A native package
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [cargo install, pip, npm, deb, rpm, msi, brew]
+        asks_value: the registries
+        records:
+          - {kind: constraint, text: "The product ships as a native package on {value}"}
+          - *same-commit
+      - id: installer-script
+        label: An installer script
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [install.sh, install.ps1]
+        records: *ships
+      - id: release-archive
+        label: A release archive
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [tarball, zip, binary]
+        records: *ships

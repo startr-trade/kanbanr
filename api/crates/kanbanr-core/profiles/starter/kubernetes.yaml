@@ -1,0 +1,38 @@
+# How workloads are packaged for Kubernetes.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: kubernetes
+  description: How the workloads are packaged for Kubernetes
+  version: 1
+  requires: [core]
+areas:
+  - id: kubernetes
+    title: Kubernetes
+    asks: first_need
+    when: {area: runs-where, options: [kubernetes]}
+    touches: [manifest, Helm, Kustomize, Chart.yaml, "kind: Deployment", namespace, ingress, Pod]
+    question: How are the workloads packaged?
+    options:
+      - id: helm
+        label: Helm
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Helm, chart]
+        records: &workloads
+          - {kind: constraint, text: "{label} packages the workloads"}
+          - {kind: practice, text: "Every workload sets requests and limits, a readiness probe and a non-root security context"}
+      - id: kustomize
+        label: Kustomize
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Kustomize]
+        records: *workloads
+      - id: plain-manifests
+        label: Plain manifests
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [manifests]
+        records: *workloads

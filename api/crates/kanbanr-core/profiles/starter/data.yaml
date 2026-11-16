@@ -1,0 +1,143 @@
+# The database, its migrations, seed data and backups.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: data
+  description: The database, its migrations, seed data and backups
+  version: 1
+  requires: [core]
+areas:
+  - id: database
+    title: The database
+    asks: first_need
+    select: many
+    touches: [table, schema, migration, migrations/, SQL, query, database, Postgres, SQLite, MySQL, Mongo]
+    question: Which database does the project use?
+    options:
+      - id: postgresql
+        label: PostgreSQL
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [PostgreSQL, Postgres, pg]
+        records:
+          - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
+      - id: sqlite
+        label: SQLite
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [SQLite, sqlite3]
+        records:
+          - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
+      - id: mysql-mariadb
+        label: MySQL or MariaDB
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [MySQL, MariaDB]
+        records:
+          - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
+      - id: document-store
+        label: A document store
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [MongoDB, document store, DynamoDB]
+        records:
+          - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
+      - id: none
+        label: No database
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: "No database: state lives in files"}
+
+  - id: migrations
+    title: Migrations
+    asks: first_need
+    when: {area: database, options: [postgresql, sqlite, mysql-mariadb]}
+    touches: [migration, migrations/, schema change, ALTER, migrate]
+    question: When do schema migrations run?
+    options:
+      - id: job-before-rollout
+        label: A job before the rollout
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [migration job, init job, before the rollout]
+        records:
+          - {kind: constraint, text: "Migrations run as a job before the new version is rolled out (a Kubernetes Job where there is Kubernetes, an init step otherwise)"}
+          - &twice {kind: practice, text: A migration is safe to run twice and never destroys data in the release that stops writing it}
+      - id: at-startup
+        label: At startup
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [on startup, at start]
+        records:
+          - {kind: constraint, text: Migrations run when the new version starts}
+          - *twice
+      - id: manual
+        label: By hand
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [by hand]
+        records:
+          - {kind: constraint, text: Migrations are run by hand before the new version is rolled out}
+          - *twice
+
+  - id: seed-data
+    title: Seed data
+    asks: first_need
+    when: {area: database, options: [postgresql, sqlite, mysql-mariadb, document-store]}
+    touches: [seed, fixture, sample data, demo data]
+    question: Does the project ship seed data?
+    options:
+      - id: versioned-seed
+        label: A versioned seed script
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [seed script]
+        records:
+          - {kind: practice, text: Seed data is a versioned script that runs after the migrations}
+      - id: none
+        label: No seed data
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: No seed data}
+
+  - id: backups
+    title: Backups and restore
+    asks: first_need
+    when: {area: database, options: [postgresql, sqlite, mysql-mariadb, document-store]}
+    touches: [backup, restore, snapshot, retention]
+    question: How is the data backed up and restored?
+    options:
+      - id: scheduled-with-tested-restore
+        label: Scheduled, with a tested restore
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [scheduled backup, restore test]
+        records:
+          - &rehearsed {kind: nfr, text: A restore from backup is rehearsed every release, iso25010: [Reliability]}
+          - &runbook {kind: practice, text: The backup schedule and retention are recorded in the runbook}
+      - id: platform-snapshots
+        label: Platform snapshots
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [snapshot]
+        records:
+          - *rehearsed
+          - *runbook
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)

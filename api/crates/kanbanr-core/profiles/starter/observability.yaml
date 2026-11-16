@@ -1,0 +1,172 @@
+# Normal and audit observability, stated separately (15 Nov 2026), and the dashboards.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: observability
+  description: What the system shows of itself, the audit trail, and the dashboards
+  version: 1
+  requires: [core]
+areas:
+  - id: observability-needs
+    title: Observability needs
+    asks: first_need
+    select: many
+    touches: [log, logging, metric, trace, telemetry, audit, dashboard, alert, who did what]
+    question: What does the project need to observe?
+    options:
+      - id: general
+        label: General observability
+        why: See what the system does
+        fits_when: Anything that runs unattended
+        costs: A sink to run or pay for
+        mentions: [logs, metrics, traces, dashboards]
+      - id: audit
+        label: An audit trail
+        why: An unalterable record of who did what
+        fits_when: Regulated data, money, accounts, anything an assessor asks about
+        costs: A separate append-only sink and a retention rule
+        mentions: [audit trail, who did what, compliance]
+      - id: none-yet
+        label: None yet
+        why: Nothing is kept yet
+        fits_when: TODO(P12)
+        costs: No record when something goes wrong
+        records:
+          - {kind: non_goal, text: "No observability yet; revisit at the first incident or the first assessor"}
+
+  - id: general-observability
+    title: General observability
+    asks: first_need
+    select: many
+    when: {area: observability-needs, options: [general]}
+    touches: [log, logging, metric, trace, OpenTelemetry, OTLP, dashboard, alert, Grafana, Prometheus, Loki, Tempo]
+    question: Where do logs, metrics and traces go?
+    options:
+      - id: otel-to-shared-instance
+        label: OpenTelemetry to a shared instance
+        why: One place the team already watches
+        fits_when: An organisation runs a general observability instance
+        costs: "An OTLP exporter and that instance's retention"
+        mentions: [OpenTelemetry, shared instance]
+        asks_value: the instance
+        records:
+          - {kind: practice, text: Logs are structured and every request carries a correlation id}
+          - {kind: constraint, text: "Telemetry leaves the service over OTLP to {value}"}
+          - {kind: nfr, text: Every alert names its runbook step, iso25010: [Reliability]}
+      - id: otel-own-stack
+        label: OpenTelemetry to the project's own stack
+        why: The project runs its own collector and store
+        fits_when: No shared instance, or isolation is required
+        costs: Operating the stack
+        mentions: [OpenTelemetry, own stack]
+        records:
+          - {kind: practice, text: Logs are structured and every request carries a correlation id}
+          - {kind: constraint, text: "Telemetry leaves the service over OTLP to the project's own collector"}
+          - {kind: nfr, text: Every alert names its runbook step, iso25010: [Reliability]}
+      - id: logs-only
+        label: Logs only
+        why: Structured logs, nothing else
+        fits_when: Small services
+        costs: No metrics or traces when latency matters
+        mentions: [logs only]
+        records:
+          - {kind: practice, text: Logs are structured and every request carries a correlation id}
+          - {kind: nfr, text: Every alert names its runbook step, iso25010: [Reliability]}
+      - id: platform-tooling
+        label: "The platform's monitoring"
+        why: "The platform's built-in tooling"
+        fits_when: Serverless or managed platforms
+        costs: Vendor lock and limited correlation
+        mentions: [platform monitoring]
+        records:
+          - {kind: practice, text: Logs are structured and every request carries a correlation id}
+          - {kind: nfr, text: Every alert names its runbook step, iso25010: [Reliability]}
+
+  - id: audit-trail
+    title: The audit trail
+    asks: first_need
+    when: {area: observability-needs, options: [audit]}
+    touches: [audit, who did what, append-only, tamper, retention, compliance, evidence]
+    question: Where do audit events go?
+    options:
+      - id: separate-append-only-sink
+        label: A separate append-only sink
+        recommended: true
+        why: Audit events cannot be edited or lost with the logs
+        fits_when: An assessor, a regulator or money is involved
+        costs: A second sink and an access rule
+        mentions: [separate audit sink, append-only, WORM]
+        asks_value: the sink and retention
+        records:
+          - {kind: constraint, text: "Audit events go to {value}, append-only, retained as stated, readable by the audit role only"}
+          - {kind: nfr, text: "An audit event is never sampled, edited or dropped", iso25010: [Security, Reliability]}
+      - id: tagged-in-general-logs
+        label: Audit events tagged in the general logs
+        why: Cheaper, one pipeline
+        fits_when: No external assessor and short retention
+        costs: "The trail is only as trustworthy as the logs' retention and access"
+        mentions: [audit events tagged in the logs]
+        asks_value: the retention
+        records:
+          - {kind: constraint, text: "Audit events are tagged `audit` in the general logs with {value} retention"}
+          - {kind: practice, text: "Every design that stores or changes personal, financial or account data names the audit event it emits"}
+
+  - id: dashboards
+    title: Dashboards
+    asks: first_need
+    select: many
+    when: {area: observability-needs, options: [general, audit]}
+    touches: [dashboard, panel, Grafana, Kibana, SLO, golden signals, release, provisioned, dashboards/, "*.json"]
+    question: Which dashboards ship with the release?
+    options:
+      - id: service-health
+        label: Service health
+        recommended: true
+        why: The four golden signals per service, the first thing looked at in an incident
+        fits_when: Any service
+        costs: One dashboard definition kept with the code
+        mentions: [latency, traffic, errors, saturation]
+        records: &dashboard
+          - {kind: practice, text: "The {label} dashboard is provisioned as code with the release (a versioned definition in the repository, applied by the release pipeline), and the release notes link it"}
+        adds: &dashboard-adds
+          tasks: ["Provision the chosen dashboards as code and apply them in the release pipeline's publish stage"]
+          release_gates: [{stage: main, gate: dashboards-provisioned}]
+      - id: release-view
+        label: The release view
+        why: Shows what each release changed in behaviour, which is how a bad release is caught
+        fits_when: Anything with more than one release
+        costs: A version label on every telemetry stream
+        mentions: [deployments, versions, error rate by release]
+        records:
+          - {kind: practice, text: "The {label} dashboard is provisioned as code with the release (a versioned definition in the repository, applied by the release pipeline), and the release notes link it"}
+          - {kind: practice, text: Every telemetry stream carries the release version}
+        adds: *dashboard-adds
+      - id: business-kpis
+        label: Business measures
+        why: "The product's purpose made visible"
+        fits_when: A product with users
+        costs: Instrumenting the events
+        mentions: [orders, sign-ups, "the product's own numbers"]
+        asks_value: the measures
+        records: *dashboard
+        adds: *dashboard-adds
+      - id: audit-review
+        label: Audit review
+        why: "An auditor's view over the audit trail"
+        fits_when: The audit need was stated
+        costs: A dashboard over the audit sink
+        mentions: [who did what, access, anomalies]
+        records: *dashboard
+        adds: *dashboard-adds
+      - id: slo-burn
+        label: SLO burn
+        why: Alerts on budget burn, not on every blip
+        fits_when: An availability promise exists
+        costs: Defining the SLOs first
+        mentions: [SLOs, error budget, burn rate]
+        records: *dashboard
+        adds: *dashboard-adds
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
