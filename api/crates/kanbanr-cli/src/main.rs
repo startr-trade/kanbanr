@@ -1418,6 +1418,10 @@ enum DecisionsCmd {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Claude Code's PostToolUse hook on AskUserQuestion. Reads the payload on stdin; when the
+    /// person chose the approving option of a tagged question, writes a one-time pass and tells
+    /// Claude the command that records it. Never run by hand.
+    Heard,
 }
 
 #[derive(Subcommand)]
@@ -2171,6 +2175,7 @@ fn runs_from_a_hook(command: &Command) -> bool {
             )
             | Command::Claude(ClaudeCmd::Guard)
             | Command::Walkthrough(walkthrough::WalkthroughCmd::Answer)
+            | Command::Decisions(DecisionsCmd::Heard)
     )
 }
 
@@ -2309,7 +2314,6 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Release(_)
         | Command::Gate(_)
         | Command::Prepare(_)
-        | Command::Decisions(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -2320,6 +2324,10 @@ fn command_access(cmd: &Command) -> Access {
         ),
         Command::Review { .. } => Read,
         Command::Capture => Hook,
+        // Makes a pass from the person's answer (FTR-035); every other decisions command writes
+        // through core.
+        Command::Decisions(DecisionsCmd::Heard) => Hook,
+        Command::Decisions(_) => Core,
         Command::Claude(cmd) => match cmd {
             ClaudeCmd::Guard => Hook,
             ClaudeCmd::Sync { show: true, .. } => Read,
@@ -4456,7 +4464,10 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
 fn is_identifying_hook(command: &Command) -> bool {
     matches!(
         command,
-        Command::Capture | Command::Git(GitCmd::Guard) | Command::Claude(ClaudeCmd::Guard)
+        Command::Capture
+            | Command::Git(GitCmd::Guard)
+            | Command::Claude(ClaudeCmd::Guard)
+            | Command::Decisions(DecisionsCmd::Heard)
     )
 }
 
@@ -7878,6 +7889,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Release(cmd) => run_release(cli, &client, cmd),
         Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Prepare(cmd) => run_prepare(cli, &client, cmd),
+        // The hook never fails the turn, so it runs before `run_decisions` asks for a project.
+        Command::Decisions(DecisionsCmd::Heard) => run_decisions_heard(cli, Some(&client)),
         Command::Decisions(cmd) => run_decisions(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
@@ -10980,6 +10993,12 @@ fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
     print_defaults(cli, &json!({"mode": mode, "delegations": delegations}))
 }
 
+/// `kanbanr decisions heard`, Claude Code's PostToolUse hook on AskUserQuestion (FTR-035). A stub
+/// that answers nothing and exits 0 until the pass is made from the payload (FTR-035 T5).
+fn run_decisions_heard(_cli: &Cli, _client: Option<&Backend>) -> anyhow::Result<()> {
+    Ok(())
+}
+
 fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let base = format!("/projects/{p}/decisions");
@@ -10992,6 +11011,7 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
         Ok(())
     };
     match cmd {
+        DecisionsCmd::Heard => run_decisions_heard(cli, Some(client)),
         DecisionsCmd::Show => {
             let resp = get_decisions(client, &base)?;
             show(&resp, &|v| {
