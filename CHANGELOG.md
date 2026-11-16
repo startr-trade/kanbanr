@@ -41,6 +41,8 @@ All notable changes to kanbanr are documented here. The format follows
   tests or docs the item does not name (DEF-072).
 - Rejecting a prepared result on the Review page shows that it was rejected and hides the form,
   and a second press while the call is in flight sends nothing (DEF-090).
+- A manual check opens only once its item reaches its build stage: before then the Review page
+  offers no Passed or Failed and kanbanr refuses the result (DEF-076).
 
 ## [0.7.0] - 2026-11-16
 

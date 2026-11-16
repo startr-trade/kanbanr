@@ -1151,7 +1151,8 @@ give them a `kanbanr test` command to run**, and never record a manual result yo
 refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
 said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
-user whether to file a defect, and file one only when they say so.
+user whether to file a defect, and file one only when they say so. A manual check opens at the
+item's build stage; never prepare one before.
 
 **At most one manual test per item, and only for a person's judgement** (does this read well, is
 this confusing). A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
