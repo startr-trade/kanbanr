@@ -37,6 +37,8 @@ All notable changes to kanbanr are documented here. The format follows
   names the block refresh (DEF-085).
 - `kanbanr doctor` no longer warns that an item names no docs when its kind's path leaves docs
   out (DEF-070).
+- A docs-folded sign-off, and an item's text flags, no longer lapse on a commit that changes only
+  tests or docs the item does not name (DEF-072).
 
 ## [0.7.0] - 2026-11-16
 

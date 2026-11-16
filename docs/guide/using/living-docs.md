@@ -237,8 +237,10 @@ sign-off is held and the reason is said. A sign-off given before this check exis
 and counted.
 
 A `docs-folded` sign-off given with the code repository records the tip of each of the item's
-branches. A commit on any of them after the sign-off lapses it: the Review page asks for it again,
-saying which branch moved on, and a move into the stage that asks for it is refused until it is
-signed again. Fold the docs first, and commit nothing to the branch after asking for the sign-off.
+branches. The sign-off lapses when a later commit on the branch changes shipped code or a doc the
+item names. A commit that changes only tests, or docs the item does not name, leaves it standing.
+Once lapsed, the Review page asks for it again, saying which branch changed which file (or that the
+branch was rewritten), and a move into the stage that asks for it is refused until it is signed
+again. Fold the docs first, and commit no shipped code to the branch after asking for the sign-off.
 A sign-off recorded without branch tips, by an older kanbanr or without the repository, is not
 judged by its branches.

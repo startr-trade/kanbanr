@@ -6,7 +6,8 @@
 //! Design lists there has changed on its branch, and every task is complete (DEF-046). An item that
 //! lists no documents is offered the sign-off once its tasks are done, and the offer says it changes
 //! no documents. A sign-off given with the code repository pins the item's branch tips, and a
-//! commit on any of them after it lapses it ([`moved_on`]).
+//! later commit on any of them that changes shipped code or a doc the item names lapses it
+//! ([`moved_on`], DEF-072).
 //!
 //! The pure parts (what an item lists, what a task writes) come first; reading the board's history
 //! and the code repository comes last, and only when the item lists repository docs.
@@ -308,8 +309,9 @@ pub fn evaluate(
     }
 
     // Repository docs.
-    let board_named: BTreeSet<String> = board_keys.iter().chain(&linked).cloned().collect();
-    let repo_docs = repository_docs(&feature.specification, &board_named);
+    let repo_docs: Vec<String> = named_repository_docs(project, feature)
+        .into_iter()
+        .collect();
     built.listed.extend(repo_docs.iter().cloned());
     if !repo_docs.is_empty() {
         built
@@ -353,6 +355,46 @@ pub fn evaluate(
     built
 }
 
+/// The repository docs `feature` names (the repo paths `evaluate` lists): the same set
+/// `repository_docs(spec, board_named)` gives inside `evaluate`, worked out once here and used by both.
+pub fn named_repository_docs(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+) -> BTreeSet<String> {
+    let board_keys: BTreeSet<String> = feature
+        .definition
+        .as_ref()
+        .map(|d| d.affects_docs.clone())
+        .unwrap_or_default()
+        .iter()
+        .map(|d| crate::readiness::affects_doc_key(d))
+        .collect();
+    let board_named: BTreeSet<String> = board_keys
+        .iter()
+        .cloned()
+        .chain(docs_to_change(&feature.specification, &project.id))
+        .collect();
+    repository_docs(&feature.specification, &board_named)
+        .into_iter()
+        .collect()
+}
+
+/// Does a change to `path` lapse a docs-folded sign-off (DEF-072)? True for a doc in `named`, and
+/// for any path that is neither a test file (`docdrift::is_test_path`) nor documentation
+/// (`docdrift::is_documentation`, except lockfiles, which ship).
+pub fn lapses_signoff(path: &str, named: &BTreeSet<String>) -> bool {
+    if named.contains(path) {
+        return true;
+    }
+    if crate::docdrift::is_test_path(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    let base = lower.rsplit('/').next().unwrap_or(&lower);
+    let lockfile = base.ends_with(".lock") || base == "package-lock.json";
+    lockfile || !crate::docdrift::is_documentation(path)
+}
+
 /// The item's branches and their tips now (DEF-046), as a `docs-folded` sign-off records them.
 /// Empty without the code repository's branches, or when the item has no branch.
 pub fn branch_heads(
@@ -370,7 +412,10 @@ pub fn branch_heads(
 }
 
 /// Why the item's current `docs-folded` sign-off no longer covers what was built (DEF-046): one
-/// of its branches has a tip other than the one recorded, or is new since. `None` when it is not
+/// of its branches is new since, was rewritten, or changed shipped code or a doc the item names
+/// after the tip recorded ([`lapses_signoff`]); a branch whose later commits change only tests, or
+/// docs the item does not name, leaves it standing (DEF-072). Without the code repository, or when
+/// the files changed cannot be read, a moved tip lapses it. `None` when it is not
 /// signed, recorded no branches, or the branches cannot be read: the lapse cannot be shown, so the
 /// sign-off stands. A recorded branch since deleted is not a lapse. Tips are compared, never commit
 /// times, which are whole seconds and can run out of order (DEF-035).
@@ -384,15 +429,34 @@ pub fn moved_on(
         return None;
     }
     let facts = ctx.branch_facts()?;
-    crate::gitmodel::item_branches(&project.config, facts, &feature.code)
-        .into_iter()
-        .find(|b| signed.branch_heads.get(b) != facts.branches.get(b))
-        .map(|b| {
-            format!(
-                "{b} has commits after sign-off '{}' was given",
-                crate::method::DOCS_FOLDED
-            )
-        })
+    let name = crate::method::DOCS_FOLDED;
+    let mut named: Option<BTreeSet<String>> = None;
+    for b in crate::gitmodel::item_branches(&project.config, facts, &feature.code) {
+        let moved = format!("{b} has commits after sign-off '{name}' was given");
+        let (recorded, tip) = match (signed.branch_heads.get(&b), facts.branches.get(&b)) {
+            (r, t) if r == t => continue,
+            (Some(r), Some(t)) => (r, t),
+            _ => return Some(moved),
+        };
+        let Some(root) = ctx.code_repo.as_deref() else {
+            return Some(moved);
+        };
+        let Some(files) = crate::coderepo::changed_between(root, recorded, tip) else {
+            if !crate::coderepo::is_ancestor(root, recorded, tip) {
+                return Some(format!(
+                    "{b} was rewritten after sign-off '{name}' was given"
+                ));
+            }
+            return Some(moved);
+        };
+        let named = named.get_or_insert_with(|| named_repository_docs(project, feature));
+        if let Some(path) = files.iter().find(|p| lapses_signoff(p, named)) {
+            return Some(format!(
+                "{b} changed {path} after sign-off '{name}' was given"
+            ));
+        }
+    }
+    None
 }
 
 /// The repository docs `paths` that have not changed on the item's branch against its line, or one
@@ -784,6 +848,126 @@ mod tests {
                 .why
                 .contains(&format!("no branch for {code}")),
             "{got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// Write `file` in `repo` (making its folders) and commit it on the checked-out branch.
+    fn commit_at(repo: &std::path::Path, file: &str, content: &str) {
+        if let Some(parent) = std::path::Path::new(file).parent() {
+            std::fs::create_dir_all(repo.join(parent)).unwrap();
+        }
+        crate::coderepo::tests::commit_file(repo, file, content, file);
+    }
+
+    /// An item with `spec`, its task done, on its own branch with `first` committed, signed
+    /// docs-folded through the dispatch route with the code repository, as
+    /// `(store, board dir, repo, item, branch)`.
+    fn signed_item(
+        tag: &str,
+        spec: &str,
+        first: &str,
+    ) -> (
+        crate::Store,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        String,
+        String,
+    ) {
+        let (store, dir, repo) = fixture(tag);
+        let code = item(&store, "Folded", spec, &[]);
+        task(&store, &code, "Build it", TaskState::Completed);
+        let branch = branch_for(&store, &code);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_at(&repo, first, "v1\n");
+        sign(&store, &code, &repo, "");
+        (store, dir, repo, code, branch)
+    }
+
+    fn sign(store: &crate::Store, code: &str, repo: &std::path::Path, note: &str) {
+        crate::dispatch::dispatch_in(
+            store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&serde_json::json!({"by": "Ada L", "note": note})),
+            Some(repo),
+        )
+        .unwrap();
+        let project = store.load_for_gates("demo").unwrap();
+        let signed = project
+            .feature(code)
+            .unwrap()
+            .signoff_current(crate::method::DOCS_FOLDED)
+            .cloned()
+            .expect("signed");
+        assert!(
+            !signed.branch_heads.is_empty(),
+            "the sign-off pins the branch"
+        );
+    }
+
+    /// `moved_on` as a caller sees it. The board here has no gate asking for docs-folded, so
+    /// `load_for_gates` would leave the spec out; a full load reads the docs the item names.
+    fn lapse(store: &crate::Store, code: &str, repo: &std::path::Path) -> Option<String> {
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load_in(store, "demo", &project.config, Some(repo));
+        moved_on(&project, project.feature(code).unwrap(), &ctx)
+    }
+
+    /// DEF-072 R-1: commits after the sign-off that change only tests leave it standing.
+    #[test]
+    fn a_test_only_commit_keeps_docs_folded() {
+        let (store, dir, repo, code, _branch) = signed_item("test-only", "", "src/lib.rs");
+        assert_eq!(lapse(&store, &code, &repo), None);
+        commit_at(&repo, "tests/local_mode.rs", "#[test]\nfn t() {}\n");
+        commit_at(&repo, "src/cart.test.ts", "test('x', () => {});\n");
+        assert_eq!(lapse(&store, &code, &repo), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-072 R-1: a commit to shipped code, a lockfile or a doc the item names lapses it, and the
+    /// reason names the file; a doc the item does not name does not.
+    #[test]
+    fn a_commit_to_shipped_code_or_a_named_doc_lapses_docs_folded() {
+        let (store, dir, repo, code, branch) = signed_item("shipped", "", "src/lib.rs");
+        commit_at(&repo, "src/lib.rs", "v2\n");
+        let why = lapse(&store, &code, &repo).expect("lapsed");
+        assert_eq!(
+            why,
+            format!("{branch} changed src/lib.rs after sign-off 'docs-folded' was given")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let spec = "## Design\n\n### Affects docs\nRepository docs: `CHANGELOG.md`.\n";
+        let (store, dir, repo, code, _branch) = signed_item("named", spec, "CHANGELOG.md");
+        commit_at(&repo, "notes/other.md", "named nowhere\n");
+        assert_eq!(lapse(&store, &code, &repo), None);
+        commit_at(&repo, "Cargo.lock", "# lock\n");
+        let why = lapse(&store, &code, &repo).expect("a lockfile ships");
+        assert!(why.contains("changed Cargo.lock"), "{why}");
+        sign(&store, &code, &repo, "again");
+        assert_eq!(lapse(&store, &code, &repo), None);
+        commit_at(&repo, "CHANGELOG.md", "v2\n");
+        let why = lapse(&store, &code, &repo).expect("a named doc lapses it");
+        assert!(why.contains("changed CHANGELOG.md"), "{why}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-072 R-2: a branch rewritten after the sign-off lapses it, even when its new commits
+    /// change only tests, and the reason says it was rewritten.
+    #[test]
+    fn a_rewritten_branch_still_lapses_docs_folded() {
+        let (store, dir, repo, code, branch) = signed_item("rewritten", "", "src/lib.rs");
+        crate::coderepo::git(&repo, &["reset", "-q", "--hard", "main"]).unwrap();
+        commit_at(&repo, "tests/a.rs", "#[test]\nfn t() {}\n");
+        let why = lapse(&store, &code, &repo).expect("lapsed");
+        assert_eq!(
+            why,
+            format!("{branch} was rewritten after sign-off 'docs-folded' was given")
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
