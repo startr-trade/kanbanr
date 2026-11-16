@@ -578,6 +578,61 @@ mod tests {
         );
     }
 
+    /// Preview-7 triage RC5: the agile run's real wordings ("what is the page built with?", "which
+    /// test runner…") take the stack rule; the UI question gets "It has a screen." and nothing
+    /// about the look, which its own rule answers when asked; and at 6.1 the pipeline-capability
+    /// question keeps the separate, rerunnable stages and caching.
+    #[test]
+    fn the_stack_ui_style_and_pipeline_questions_take_their_rules() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for file in ["togaf.md", "agile.md"] {
+            let rb = Runbook::parse(
+                &std::fs::read_to_string(dir.join("walkthroughs").join(file)).unwrap(),
+            )
+            .unwrap();
+            let ask = |step: &str, text: &str, options: &[&str]| {
+                Policy::new(&rb, Some(step)).answer(&question(text, options, Source::Text))
+            };
+            for q in [
+                "What is the page built with?",
+                "Which test runner should the end-to-end tests use?",
+                "Which language should the server use?",
+            ] {
+                let p = ask("3.2", q, &["Plain HTML and Node (recommended)", "Python"]);
+                assert!(
+                    p.pick.starts_with("Python 3 standard library"),
+                    "{file} {q}: {p:?}"
+                );
+            }
+            let ui = ask("2.1", "Does the product have a user interface?", &[]);
+            assert_eq!(ui.pick, "It has a screen.", "{file}");
+            let style = ask(
+                "3.2",
+                "How should the basket page be styled?",
+                &[
+                    "A utility-class framework (recommended)",
+                    "Hand-written CSS",
+                ],
+            );
+            assert!(
+                style.pick.starts_with("Hand-written CSS"),
+                "{file}: {style:?}"
+            );
+        }
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/agile.md")).unwrap())
+                .unwrap();
+        let p = Policy::new(&rb, Some("6.1")).answer(&question(
+            "Which of these can your plan and settings run?",
+            &["Format and lint", "Test", "Build"],
+            Source::Text,
+        ));
+        assert!(
+            p.pick.contains("rerun") && p.pick.contains("caching"),
+            "{p:?}"
+        );
+    }
+
     /// Preview-6 triage: the TOGAF run stopped at setup after 4 turns. Its last message, the
     /// charter draft, asked "**Confirm this draft as it is, or tell me what to change or add.**"
     /// with no `?`, so the turn read as settled. Every final text of that run (scrubbed) now reads

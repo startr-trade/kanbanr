@@ -32,8 +32,9 @@ answers:
   - {match: "^which process|\\bprocess\\b.*\\b(use|want|follow)\\b", pick: "TOGAF, with sprints and releases."}
   - {match: "\\bsprints? and releases?\\b|\\breleases? and sprints?\\b|\\bgit model\\b", pick: "Yes: sprints and releases on, and the git model on."}
   - {match: "\\bpurpose\\b|^(question \\d+: )?what is (this|the) (project|shop) for|\\bproject.s goals?\\b", pick: "A small shop where a shopper's basket survives between visits. One goal: a shopper who comes back finds their basket as they left it."}
-  - {match: "\\btechnolog|\\blanguage\\b|\\b(tech )?stack\\b|\\bframework\\b|which database", pick: "Python 3 standard library and SQLite only, one HTML page served by the same program. Yes, it has a screen."}
-  - {match: "\\bscreens?\\b|user interface|\\bui\\b|\\bstyl(e|ing)\\b|look and feel|how should .* look|\\bfonts?\\b", pick: "It has a screen. Plain and simple: one column, system fonts, no images."}
+  - {match: "\\btechnolog|\\blanguage\\b|\\b(tech )?stack\\b|\\bframework\\b|which database|built with|test runner|which runtime", pick: "Python 3 standard library and SQLite only, one HTML page served by the same program, tested with unittest. Yes, it has a screen."}
+  - {match: "\\bstyl(e|ed|es|ing)\\b|look and feel|how should .* look|\\bfonts?\\b|visual direction|\\bcolou?rs?\\b", pick: "Hand-written CSS. Plain and simple: one column, system fonts, no images."}
+  - {match: "\\bscreens?\\b|user interface|\\bui\\b", pick: "It has a screen."}
   - {match: "(does|will) (the|this) project (have|use) ci|\\bci\\b.*\\b(have|run|product)\\b|continuous integration", pick: "CI runs on the remote server. Keep it minimal, as the delivery-pipeline guide says: one job, one platform."}
   - {match: "delegat", pick: "Propose them; I'll grant them on the Review page."}
   - {match: "\\bskills? folder\\b|\\.claude/skills", pick: "Leave .claude/skills untracked."}
@@ -160,6 +161,23 @@ steps:
     say: "Move the CHANGELOG chore and the pipeline item on to Migration, if they have not moved already."
   - id: "6.3"
     say: "Take every item in v0.1.0 as far as it goes, and tell me what waits for me on the Review page."
+  # Follow-up items Claude filed into the release on its own recommendation (a docs correction, a
+  # formatter chore): the person approves and signs what the Review page offers for them.
+  - id: "6.3a"
+    decide: {approve_waiting: {release: v0.1.0}}
+    offer: {page: review, button: Approve}
+  - id: "6.3b"
+    say: "Take every item in v0.1.0 as far as it goes again, and tell me what waits for me on the Review page."
+  - id: "6.3c"
+    decide: {signoff_waiting: {release: v0.1.0, name: design-review}}
+    offer: {page: review, button: "Sign off design-review"}
+  - id: "6.3d"
+    say: "Build what is left in v0.1.0 and take it as far as it goes. Tell me what waits for me on the Review page."
+  - id: "6.3e"
+    decide: {signoff_waiting: {release: v0.1.0, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded"}
+  - id: "6.3f"
+    say: "Move every item in v0.1.0 on to Migration, if it has not moved already."
   - id: "6.4"
     decide: {promote: {release: v0.1.0, to: candidate}}
     offer: {page: releases, button: "Promote to candidate"}
@@ -209,6 +227,9 @@ steps:
   - id: "6.15b"
     decide: {signoff: {item: {title_matches: "pipeline|\\bci\\b|workflow"}, name: release}}
     offer: {page: review, button: "Sign off release", subject: {item: {title_matches: "pipeline|\\bci\\b|workflow"}}}
+  - id: "6.15c"
+    decide: {signoff_waiting: {release: v0.1.0, name: release}}
+    offer: {page: review, button: "Sign off release"}
   - id: "6.16"
     say: "Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
   - id: "6.17"

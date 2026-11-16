@@ -1623,6 +1623,46 @@ steps:
             }
             assert!(!text.contains("title_contains: cart"), "{file}");
             assert!(!text.contains("title_contains: README"), "{file}");
+            // Preview-7 RC3: before Promote to candidate, the person approves and signs what
+            // waits in the release, follow-ups Claude filed included.
+            let at = |f: &dyn Fn(&Decision) -> bool| {
+                rb.steps
+                    .iter()
+                    .position(|s| s.decide.as_ref().is_some_and(f))
+            };
+            let candidate =
+                at(&|d| matches!(d, Decision::Promote { to: Some(t), .. } if t == "candidate"))
+                    .unwrap();
+            let approve = at(&|d| matches!(d, Decision::ApproveWaiting { .. })).unwrap();
+            let folded = at(
+                &|d| matches!(d, Decision::SignoffWaiting { name, .. } if name == "docs-folded"),
+            )
+            .unwrap();
+            assert!(approve < folded && folded < candidate, "{file}");
+            // Preview-7 RC1: the basket's manual check comes before its docs-folded, which Review
+            // holds until the item's tests are green.
+            let basket = ItemSel::Named("basket".into());
+            let manual =
+                at(&|d| matches!(d, Decision::RecordManual { item, .. } if *item == basket))
+                    .unwrap();
+            let basket_folded = at(&|d| {
+                matches!(d, Decision::Signoff { item, name } if *item == basket && name == "docs-folded")
+            })
+            .unwrap();
+            if process == "agile" {
+                assert!(manual < basket_folded, "{file}");
+            }
+            for sel in [
+                ItemSel::TitleContains("CHANGELOG".into()),
+                ItemSel::TitleMatches("pipeline|\\bci\\b|workflow".into()),
+            ] {
+                assert!(
+                    at(&|d| matches!(d, Decision::Signoff { item, name } if *item == sel && name == "docs-folded"))
+                        .is_some(),
+                    "{file}: no docs-folded for {}",
+                    sel.describe()
+                );
+            }
         }
     }
 
