@@ -265,6 +265,18 @@ pub enum Decision {
     },
     GrantDelegation(DelegationSel),
     SetMode(String),
+    /// Approve every item planned into the release whose approval the Review page offers: the
+    /// follow-up items Claude files mid-run (`approve_waiting: {release: v0.1.0}`). Each one
+    /// approved is listed in a `swept-in` finding.
+    ApproveWaiting {
+        release: String,
+    },
+    /// Give this sign-off to every item planned into the release that the Review page offers it
+    /// for (`signoff_waiting: {release: v0.1.0, name: docs-folded}`); listed the same way.
+    SignoffWaiting {
+        release: String,
+        name: String,
+    },
     RecordManual {
         item: ItemSel,
         /// The requirement, when known; else the waiting test whose name contains `test`.
@@ -288,6 +300,8 @@ impl Decision {
             Decision::ConfirmPrepared { .. } => "confirm-prepared",
             Decision::GrantDelegation(_) => "grant-delegation",
             Decision::SetMode(_) => "set-mode",
+            Decision::ApproveWaiting { .. } => "approve-waiting",
+            Decision::SignoffWaiting { .. } => "signoff-waiting",
             Decision::RecordManual { .. } => "manual-test",
         }
     }
@@ -653,6 +667,21 @@ struct RawDecision {
     grant_delegation: Option<RawGrant>,
     set_mode: Option<String>,
     record_manual: Option<RawManual>,
+    approve_waiting: Option<RawWaiting>,
+    signoff_waiting: Option<RawWaitingSignoff>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWaiting {
+    release: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawWaitingSignoff {
+    release: String,
+    name: String,
 }
 
 impl RawDecision {
@@ -713,6 +742,15 @@ impl RawDecision {
         }
         if let Some(m) = self.set_mode {
             out.push(Decision::SetMode(m));
+        }
+        if let Some(w) = self.approve_waiting {
+            out.push(Decision::ApproveWaiting { release: w.release });
+        }
+        if let Some(w) = self.signoff_waiting {
+            out.push(Decision::SignoffWaiting {
+                release: w.release,
+                name: w.name,
+            });
         }
         if let Some(m) = self.record_manual {
             out.push(Decision::RecordManual {

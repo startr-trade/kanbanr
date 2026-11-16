@@ -535,6 +535,89 @@ impl Running {
         self.findings.push(f);
     }
 
+    /// `approve_waiting` / `signoff_waiting` (preview-7 RC3): every item planned into the release
+    /// that the page offers the decision for gets it, through the page's own route, one by one;
+    /// a `swept-in` finding lists them, so the person sees what came along. An item the page does
+    /// not offer it for is not waiting, and is left alone.
+    fn sweep(
+        &mut self,
+        id: &str,
+        project: &str,
+        sweep: &runbook::Decision,
+        offer: &runbook::Offer,
+        ok: &mut bool,
+        why: &mut Vec<String>,
+    ) {
+        let (release, name) = match sweep {
+            runbook::Decision::ApproveWaiting { release } => (release, None),
+            runbook::Decision::SignoffWaiting { release, name } => (release, Some(name)),
+            _ => return,
+        };
+        let version = release.trim_start_matches('v');
+        let planned: Vec<(String, String)> = kanbanr_core::Store::new(self.dirs.board())
+            .load(project)
+            .map(|p| {
+                let mut f: Vec<_> = p
+                    .features
+                    .iter()
+                    .filter(|f| {
+                        f.release
+                            .as_deref()
+                            .is_some_and(|r| r.trim_start_matches('v') == version)
+                    })
+                    .collect();
+                f.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)));
+                f.into_iter()
+                    .map(|f| (f.code.clone(), f.title.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(m) = self.monitor.as_ref() else {
+            self.finding(
+                id,
+                "offer-missing",
+                format!(
+                    "the guide promises \"{}\" on the {} page",
+                    offer.button, offer.page
+                ),
+                "no monitor".into(),
+            );
+            *ok = false;
+            why.push("no monitor".into());
+            return;
+        };
+        let (taken, failed) = m.sweep(
+            project,
+            &planned,
+            name.map(String::as_str),
+            offer,
+            id,
+            Some(&self.dirs),
+            self.pause,
+        );
+        if !taken.is_empty() {
+            self.finding(
+                id,
+                "swept-in",
+                format!(
+                    "{} for every item in {release} the page offers it for",
+                    offer.button
+                ),
+                format!("taken for {}", taken.join(", ")),
+            );
+        }
+        if !failed.is_empty() {
+            self.finding(
+                id,
+                "decision-failed",
+                format!("{} for the waiting items of {release}", offer.button),
+                failed.join("; "),
+            );
+            *ok = false;
+            why.push(failed.join("; "));
+        }
+    }
+
     /// The run board's items, code and title, oldest first; none before setup made the board.
     fn board_items(&mut self) -> Vec<(String, String)> {
         let project = self.project_name();
@@ -878,7 +961,19 @@ impl Running {
         };
         let step = &resolved;
         let project = self.project_name();
-        if let Some(decision) = &step.decide {
+        if let Some(
+            sweep @ (runbook::Decision::ApproveWaiting { .. }
+            | runbook::Decision::SignoffWaiting { .. }),
+        ) = &step.decide
+        {
+            let offer = step
+                .offer
+                .clone()
+                .expect("lint: a decide step has an offer");
+            self.screenshot(&id, &offer.page, "before");
+            self.sweep(&id, &project, sweep, &offer, &mut step_ok, &mut why);
+            self.screenshot(&id, &offer.page, "after");
+        } else if let Some(decision) = &step.decide {
             let offer = step
                 .offer
                 .clone()
