@@ -190,9 +190,8 @@ pub fn outside_blocks(text: &str) -> String {
     let mut current: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < lines.len() {
-        let close = begin_name(lines[i]).and_then(|name| {
-            (i + 1..lines.len()).find(|&j| is_end(lines[j], name))
-        });
+        let close = begin_name(lines[i])
+            .and_then(|name| (i + 1..lines.len()).find(|&j| is_end(lines[j], name)));
         match close {
             Some(j) => {
                 segments.push(current.join("\n"));
