@@ -1,0 +1,182 @@
+# The starter content catalog (FTR-005), version 1: what a project documents, by question and
+# perspective, each row with its notation, its source and what keeps it true. `kanbanr catalog
+# init` copies it into projects/<id>/catalog.yaml; the project then adds, changes or switches off
+# rows, with a reason. Every question has at least one row that always applies.
+schema: 1
+starter: 1
+rows:
+  - id: purpose
+    title: Purpose and scope
+    answers: [why]
+    for: [sponsor, user]
+    level: system
+    notation: prose
+    source: {kind: generated, generator: "kanbanr:charter"}
+    protection: [none]
+  - id: goals
+    title: Goals and the work behind them
+    answers: [why, when]
+    for: [sponsor]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:trace"}
+    protection: [none]
+  - id: roles
+    title: Stakeholders and roles
+    answers: [who]
+    for: [sponsor, user]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:charter"}
+    protection: [none]
+  - id: context
+    title: System context
+    answers: [what, where]
+    for: [sponsor, architect]
+    level: system
+    notation: mermaid
+    source: {kind: written, path: architecture/context.md}
+    protection: [docs_updated]
+  - id: behaviour
+    title: Behaviour and processes
+    answers: [how]
+    for: [user]
+    level: system
+    notation: prose, bpmn
+    source: {kind: written, path: architecture/behaviour.md}
+    protection: [docs_updated]
+  - id: requirements
+    title: Requirements
+    answers: [what, how]
+    for: [user]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:requirements"}
+    protection: [none]
+  - id: components
+    title: Components
+    answers: [what, how]
+    for: [architect]
+    level: system
+    notation: mermaid
+    source: {kind: written, path: architecture/components.md}
+    protection: [docs_updated, "coverage:catalog"]
+  - id: component-docs
+    title: One design doc per component
+    answers: [what, how, where]
+    for: [builder]
+    level: component
+    notation: prose
+    source: {kind: written, path: architecture/components/}
+    protection: [docs_updated, "coverage:catalog"]
+  - id: data-model
+    title: Data model
+    answers: [what]
+    for: [architect, builder]
+    level: system
+    notation: mermaid
+    source: {kind: written, path: architecture/data.md}
+    protection: [docs_updated]
+    when: {data: [files, sql, nosql, object-store, queue, cache]}
+  - id: interfaces
+    title: Interfaces
+    answers: [how, where]
+    for: [architect, builder]
+    level: system
+    notation: openapi, table
+    source: {kind: written, path: architecture/interfaces.md}
+    protection: [docs_updated, drift]
+    when: {parts: [api, library]}
+  - id: code-structure
+    title: Code structure
+    answers: [what, how]
+    for: [builder]
+    level: system
+    notation: mermaid
+    source: {kind: generated, generator: "katalogr:structure"}
+    protection: [view-id]
+  - id: decisions
+    title: Architecture decisions
+    answers: [why]
+    for: [architect, builder]
+    level: system
+    notation: adr
+    source: {kind: generated, generator: "kanbanr:adr-index"}
+    protection: ["coverage:adr-index"]
+  - id: deployment
+    title: Deployment
+    answers: [where, when]
+    for: [operator]
+    level: system
+    notation: mermaid
+    source: {kind: written, path: architecture/deployment.md}
+    protection: [docs_updated, drift]
+    when: {production: [server, container, kubernetes, serverless, mobile, embedded]}
+  - id: configuration
+    title: Configuration
+    answers: [how, where]
+    for: [operator]
+    level: system
+    notation: table
+    source: {kind: written, path: architecture/configuration.md}
+    protection: [docs_updated, drift]
+    when: {production: [developer-machine, server, container, kubernetes, serverless, browser, mobile, embedded]}
+  - id: observability
+    title: Observability
+    answers: [when, how]
+    for: [operator]
+    level: system
+    notation: prose
+    source: {kind: written, path: architecture/observability.md}
+    protection: [docs_updated]
+    when: {production: [server, container, kubernetes, serverless]}
+  - id: security
+    title: Security
+    answers: [who, where]
+    for: [architect, operator]
+    level: system
+    notation: prose
+    source: {kind: written, path: architecture/security.md}
+    protection: [docs_updated]
+  - id: timeline
+    title: Timeline
+    answers: [when]
+    for: [sponsor]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:gantt"}
+    protection: [none]
+  - id: releases
+    title: Releases
+    answers: [when]
+    for: [operator]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:releases"}
+    protection: [none]
+    when: {config: [releases]}
+  - id: tests
+    title: Tests and evidence
+    answers: [how]
+    for: [builder]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:evidence"}
+    protection: [none]
+  - id: zachman-coverage
+    title: Zachman coverage
+    answers: [what, how, where, when, who, why]
+    for: [architect]
+    level: system
+    notation: table
+    source: {kind: generated, generator: "kanbanr:zachman"}
+    protection: [none]
+  - id: item-design
+    title: Each item's design
+    answers: [how, where]
+    for: [builder]
+    level: item
+    notation: prose
+    # Every item's spec, under `## Design`: no single path; its protections keep it true.
+    source: {kind: written}
+    protection: [spec_sections, design-review]

@@ -17,6 +17,7 @@ mod architecture;
 pub mod atomic;
 pub mod batch;
 pub mod boardreadme;
+pub mod catalog;
 pub mod charter;
 pub mod claude;
 pub mod coderepo;
