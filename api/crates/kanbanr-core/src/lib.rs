@@ -8727,6 +8727,65 @@ requirements:
         );
     }
 
+    /// DEF-075 R-2, R-5: a chore that names no docs moves into Migration, which asks for
+    /// docs_updated under `enforce: block`; the move succeeds and says 'declares no docs'.
+    #[test]
+    fn the_move_into_a_docs_stage_warns_when_no_docs_are_declared() {
+        let (store, _d) = togaf_board();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        store
+            .set_method("demo", false, &[crate::method::Part::SystemBaseline])
+            .unwrap();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        define_and_approve(&store, &code);
+        let (_, first) = store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap();
+        assert!(
+            first.iter().all(|g| g.label != "declares no docs"),
+            "{first:?}"
+        );
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert!(def.affects_docs.is_empty() && def.affects_no_docs.is_empty());
+        def.requirements[0].tests[0].state = crate::models::TestState::Green;
+        def.requirements[0].tests[0].checked_rev = "abc1234".into();
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada L", "", "")
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let migration = project
+            .config
+            .gate_for_kind("Migration", Some("chore"))
+            .unwrap();
+        assert_eq!(migration.enforce, crate::config::Enforce::Block);
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Migration", None)
+            .unwrap();
+        assert_eq!(moved.status, "Migration");
+        let said: Vec<&crate::readiness::Gap> = warnings
+            .iter()
+            .filter(|g| g.label == "declares no docs")
+            .collect();
+        assert_eq!(said.len(), 1, "{warnings:?}");
+        assert_eq!(said[0].level, crate::readiness::Level::Warning);
+        assert!(
+            said[0].message.contains("affects_no_docs"),
+            "{}",
+            said[0].message
+        );
+        assert!(said[0].message.contains("Migration"), "{}", said[0].message);
+    }
+
     #[test]
     fn a_feature_still_walks_every_togaf_stage() {
         let (store, _d) = togaf_board();
