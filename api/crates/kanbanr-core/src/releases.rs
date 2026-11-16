@@ -4100,14 +4100,10 @@ fn branch_to_delete(
             path.display()
         )));
     }
-    let tip = coderepo::rev_parse(repo, branch)?;
-    let remote = match coderepo::upstream_of(repo, branch) {
-        Some(up) => Some(up),
-        None => coderepo::remote_branches_containing(repo, &tip)?
-            .into_iter()
-            .next(),
-    };
-    if let Some(remote) = remote {
+    // Only the release branch itself on a remote (its upstream, or `origin/<branch>`) keeps it: a
+    // tip merely contained in a pushed main does not, so a candidate with no commits of its own
+    // stays undoable after main is pushed (coordinator, 17 Nov 2026).
+    if let Some(remote) = coderepo::upstream_of(repo, branch) {
         return Err(CoreError::Unsupported(format!(
             "`{branch}` is on {remote}: delete it there first"
         )));
@@ -9045,6 +9041,43 @@ pub(crate) mod tests {
         assert_eq!(entered.into_iter().collect::<Vec<_>>(), ["candidate"]);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-034 R-4: a candidate branch with no commits of its own, whose tip a pushed main
+    /// contains, is not on a remote: only the release branch itself there (its upstream or
+    /// `origin/release/<V>`) keeps it, so the undo deletes it (coordinator, 17 Nov 2026).
+    #[test]
+    fn undo_deletes_a_candidate_branch_whose_tip_only_a_pushed_main_contains() {
+        let (store, dir, repo) = board_and_repo("undo-main-pushed");
+        configure(&store, UNDO);
+        super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let bare = with_remote(&repo);
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v1").unwrap(),
+            coderepo::rev_parse(&repo, "origin/main").unwrap(),
+            "the candidate has no commits of its own and main is pushed"
+        );
+        assert!(coderepo::upstream_of(&repo, "release/v1").is_none());
+
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.now_at, "");
+        assert_eq!(done.branch_deleted, "release/v1");
+        assert!(done.commits_removed.is_empty());
+        assert!(!coderepo::branch_exists(&repo, "release/v1"));
+        assert_eq!(release_v1(&store).branch, "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     /// DEF-034 R-4: undo refuses a tagged release, a stage that moved main or tagged, a branch on
