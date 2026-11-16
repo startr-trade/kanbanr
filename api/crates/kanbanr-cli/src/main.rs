@@ -6360,24 +6360,29 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         &std::env::current_dir().unwrap_or_default(),
     );
     let text = capture_text(&payload);
+    let command = payload["tool_input"]["command"].as_str().unwrap_or("");
+    let commands: Vec<Vec<String>> = simple_commands(&without_heredoc_bodies(command))
+        .into_iter()
+        .map(|(_, rest)| rest)
+        .collect();
+    // A wrapper that rewrites the command's output may have cut results short (FTR-059 R-10).
+    let condensed = kanbanr_core::shellwrap::condensing_wrapper(command);
+    let notify = |notice: String| {
+        println!(
+            "{}",
+            serde_json::json!({"hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": notice,
+            }})
+        );
+    };
     if kanbanr_core::evidence::parse_results(&text).is_empty() {
         // Not a test run, or nothing recognizable: record nothing. A test run that printed
         // nothing readable is named to Claude in the hook's answer (DEF-068); never blocks.
-        let command = payload["tool_input"]["command"].as_str().unwrap_or("");
-        let commands: Vec<Vec<String>> = simple_commands(&without_heredoc_bodies(command))
-            .into_iter()
-            .map(|(_, rest)| rest)
-            .collect();
         if require_project_quiet().is_some()
-            && let Some(notice) = kanbanr_core::evidence::unread_run_notice(&commands, true)
+            && let Some(notice) = kanbanr_core::evidence::unread_run_notice(&commands, 0, condensed)
         {
-            println!(
-                "{}",
-                serde_json::json!({"hookSpecificOutput": {
-                    "hookEventName": "PostToolUse",
-                    "additionalContext": notice,
-                }})
-            );
+            notify(notice);
         }
         return Ok(());
     }
@@ -6400,6 +6405,11 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         client.write_from(&cwd, Method::Post, &path, Some(batch))?;
     }
     eprintln!("kanbanr: recorded {n} test result(s) from this run");
+    if condensed.is_some()
+        && let Some(notice) = kanbanr_core::evidence::unread_run_notice(&commands, n, condensed)
+    {
+        notify(notice);
+    }
     Ok(())
 }
 
