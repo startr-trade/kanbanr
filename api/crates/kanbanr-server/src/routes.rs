@@ -165,6 +165,32 @@ pub async fn get_doc_raw(
     }
 }
 
+/// `?flags=` on `/drift/latest` (FTR-045): include the flags; true when absent.
+#[derive(serde::Deserialize)]
+pub struct LatestQuery {
+    flags: Option<bool>,
+}
+
+/// `GET /api/projects/:project/drift/latest[?flags=false]`: the latest background drift result,
+/// from memory (FTR-045). It never computes drift; 404 for an unknown project.
+pub async fn drift_latest(
+    State(st): State<AppState>,
+    Path(p): Path<String>,
+    Query(q): Query<LatestQuery>,
+) -> axum::response::Response {
+    if let Err(e) = st.store.load_meta(&p) {
+        return core_err(e).into_response();
+    }
+    match st.background.get() {
+        Some(bg) => Json(bg.latest(&p, q.flags.unwrap_or(true))).into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the background worker has not started",
+        )
+            .into_response(),
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct ActivityQuery {
     /// Filter to a single work item (feature code).

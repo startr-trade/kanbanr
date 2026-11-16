@@ -477,6 +477,7 @@ mod tests {
             code_repo: None,
             gens: Arc::new(memo::Generations::default()),
             memo: Arc::new(memo::Memo::new(memo::MEMO_CAP_BYTES)),
+            background: Arc::new(std::sync::OnceLock::new()),
         };
         (st, dir)
     }

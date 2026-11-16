@@ -325,6 +325,10 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(base.clone());
             out.push(format!("{base}?state=all&release=1.0"));
         }
+        "/api/projects/{project}/drift/latest" => {
+            out.push(base.clone());
+            out.push(format!("{base}?flags=false"));
+        }
         "/api/projects/{project}/features/{code}/readiness" => {
             out.push(base.clone());
             out.push(base.replace("FEAT-001", "FEAT-002"));
