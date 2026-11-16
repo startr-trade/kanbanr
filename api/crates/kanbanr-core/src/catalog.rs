@@ -1181,6 +1181,8 @@ mod tests {
             "",
             None,
             "",
+            None,
+            None,
         )
         .unwrap();
         // Started ahead of its first day: planned today, active from tomorrow, by date alone.
