@@ -144,7 +144,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr scope here` | which scope applies in this folder, and what it allows |
 | `kanbanr scope list [--all] [--item CODE] [--json]` / `scope show <SC-id>` / `scope brief <SC-id>` | the scopes in force (or every one), one scope, its brief |
 | `kanbanr scope revoke <SC-id> [--reason done]` / `scope renew <SC-id> --for 4h` | end a scope; extend one (72 hours at most) |
-| `kanbanr scope drift [--brief] [--json]` | build agents' commits newer than their item's last task change |
+| `kanbanr scope drift [--brief] [--json]` | build agents' own non-merge commits newer than their item's last task change, not what main, a sprint or a release branch already holds |
 
 **Sharing**
 

@@ -8642,6 +8642,138 @@ fn scope_drift_is_reported() {
     );
 }
 
+/// The DEF-063 fixture: FEAT-001 has a build scope on `feat/FEAT-001-cart`, the sprint branch has
+/// work the item branch lacks, and a catch-up merge brings it in after the item's last task change.
+fn catch_up_fixture(tag: &str) -> ScopeFx {
+    let fx = ScopeFx::new(tag);
+    let out = fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    assert!(out.contains("SC-001"), "{out}");
+    fx.ok_git(&fx.work, &["branch", "sprint/SP-001", "main"]);
+    // The sprint's own commit by plumbing, as the product makes sprint-line commits (merges by
+    // `merge_no_ff`): the commit-msg hook only traces item and spike branches, which a sprint
+    // branch is not.
+    let tree = fx.ok_git(&fx.work, &["rev-parse", "main^{tree}"]);
+    let sprint_commit = fx.ok_git(
+        &fx.work,
+        &[
+            "commit-tree",
+            tree.trim(),
+            "-p",
+            "main",
+            "-m",
+            "[no-ref] sprint work",
+        ],
+    );
+    fx.ok_git(
+        &fx.work,
+        &[
+            "update-ref",
+            "refs/heads/sprint/SP-001",
+            sprint_commit.trim(),
+        ],
+    );
+    fx.ok_git(&fx.work, &["switch", "-q", "feat/FEAT-001-cart"]);
+    fx.ok(
+        &fx.work,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fx.ok_git(
+        &fx.work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "Merge sprint/SP-001 into feat/FEAT-001-cart\n\nRefs: kanbanr:FEAT-001",
+            "sprint/SP-001",
+        ],
+    );
+    fx
+}
+
+/// DEF-063 R-3: a sprint catch-up merge, and the sprint's commits it brings in, are not agent work
+/// ahead of the board; the agent's own commit after it is, alone.
+#[test]
+fn scope_drift_ignores_a_sprint_catch_up_merge() {
+    let fx = catch_up_fixture("catchup");
+    assert!(
+        fx.ok(&fx.work, &["scope", "drift", "--brief"])
+            .trim()
+            .is_empty()
+    );
+    let doctor = fx.run(&fx.work, &["git", "doctor"]);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        !doctor.contains("commit(s) on feat/FEAT-001-cart"),
+        "{doctor}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(fx.work.join("cart.rs"), "\n").unwrap();
+    fx.ok_git(&fx.work, &["add", "cart.rs"]);
+    fx.ok(&fx.work, &["commit", "-m", "keep a cart"]);
+    let drift = fx.ok(&fx.work, &["scope", "drift", "--brief"]);
+    assert!(
+        drift.contains("FEAT-001: 1 commit(s) on feat/FEAT-001-cart")
+            && drift.contains("keep a cart")
+            && !drift.contains("sprint work"),
+        "{drift}"
+    );
+    let doctor = fx.run(&fx.work, &["git", "doctor"]);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        doctor.contains("1 commit(s) on feat/FEAT-001-cart"),
+        "{doctor}"
+    );
+    fx.ok_git(&fx.work, &["switch", "-q", "main"]);
+}
+
+/// DEF-063 R-3, the reported symptom: the Stop hook does not block a session over a catch-up
+/// merge, and does block over the agent's own commit.
+#[cfg(unix)]
+#[test]
+fn the_stop_hook_does_not_block_a_session_over_a_catch_up_merge() {
+    let fx = catch_up_fixture("catchup-stop");
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../skill/kanbanr/hooks/stop-check.sh");
+    let tmp = fx.base.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let stop = |session: &str| -> String {
+        use std::io::Write as _;
+        let mut c = Command::new("bash");
+        c.arg(&script).current_dir(&fx.work);
+        fx.env(&mut c);
+        c.env("TMPDIR", &tmp)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                format!("{{\"session_id\":\"{session}\",\"stop_hook_active\":false}}").as_bytes(),
+            )
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let first = stop("catchup-a");
+    assert!(!first.contains("\"decision\":\"block\""), "{first}");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(fx.work.join("cart.rs"), "\n").unwrap();
+    fx.ok_git(&fx.work, &["add", "cart.rs"]);
+    fx.ok(&fx.work, &["commit", "-m", "keep a cart"]);
+    let second = stop("catchup-b");
+    assert!(
+        second.contains("\"decision\":\"block\"")
+            && second.contains("1 commit(s) on feat/FEAT-001-cart"),
+        "{second}"
+    );
+    fx.ok_git(&fx.work, &["switch", "-q", "main"]);
+}
+
 /// FEAT-214 R-11: with scopes on the board, the main checkout works as it always has: its writes
 /// carry no agent, it moves items, commits on an item branch, sets the identity and syncs.
 #[test]

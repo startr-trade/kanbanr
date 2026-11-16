@@ -85,6 +85,20 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// `git` in `root` with its stdout as bytes, untrimmed: for `-z` listings. A failure carries git's
+/// own reason, as [`git`] does.
+pub fn git_raw(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let out = run(root, args)?;
+    if !out.status.success() {
+        return Err(CoreError::Git(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(out.stdout)
+}
+
 fn succeeds(root: &Path, args: &[&str]) -> bool {
     run(root, args).is_ok_and(|o| o.status.success())
 }
@@ -171,6 +185,7 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
         message,
         setup_pending: setup_pending(root),
         staged: None,
+        block_refresh: claude_block_refresh(root, true),
     }
 }
 
@@ -179,6 +194,7 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
 pub fn repo_facts_staged(root: &Path, message: Option<String>) -> crate::scm::RepoFacts {
     crate::scm::RepoFacts {
         staged: staged_paths(root),
+        block_refresh: claude_block_refresh(root, false),
         ..repo_facts(root, message)
     }
 }
@@ -215,6 +231,45 @@ pub fn staged_paths(root: &Path) -> Option<Vec<String>> {
             .map(str::to_string)
             .collect(),
     )
+}
+
+/// Does the repository's CLAUDE.md differ from HEAD's only inside the generated block (DEF-083)?
+/// HEAD's copy is `git cat-file blob HEAD:CLAUDE.md`, or "" when HEAD has none. The candidates are
+/// the index's copy (`:CLAUDE.md`, when it has one) and, with `worktree`, `root/CLAUDE.md` on disk.
+/// True when any candidate satisfies `claude::block_only_change(head, candidate)`. Fails safe:
+/// false with no commits, or when git cannot be asked (ADR-0004).
+pub fn claude_block_refresh(root: &Path, worktree: bool) -> bool {
+    if !has_commits(root) {
+        return false;
+    }
+    // `Some(None)`: absent; `None`: git could not be asked.
+    let blob = |spec: &str| -> Option<Option<String>> {
+        match run(root, &["cat-file", "-e", spec]) {
+            Ok(o) if !o.status.success() => return Some(None),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+        let out = run(root, &["cat-file", "blob", spec]).ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    };
+    let file = crate::scm::BLOCK_FILE;
+    let Some(head) = blob(&format!("HEAD:{file}")) else {
+        return false;
+    };
+    let head = head.unwrap_or_default();
+    let Some(index) = blob(&format!(":{file}")) else {
+        return false;
+    };
+    let mut candidates: Vec<String> = index.into_iter().collect();
+    if worktree && let Ok(text) = std::fs::read_to_string(root.join(file)) {
+        candidates.push(text);
+    }
+    candidates
+        .iter()
+        .any(|candidate| crate::claude::block_only_change(&head, candidate))
 }
 
 /// The commit a revision names.
@@ -285,13 +340,8 @@ pub fn delete_merged_branch(root: &Path, name: &str, into: &str) -> Result<()> {
     git(root, &["branch", "-D", name]).map(|_| ())
 }
 
-/// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
-/// `for-each-ref` and one `branch --merged`.
-pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
-    let mut facts = crate::gitmodel::BranchFacts {
-        main: main.to_string(),
-        ..Default::default()
-    };
+/// The local branches with their tips: name to sha, from one `for-each-ref` (DEF-063).
+pub fn local_branches(root: &Path) -> Result<std::collections::BTreeMap<String, String>> {
     let refs = git(
         root,
         &[
@@ -300,11 +350,21 @@ pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFa
             "refs/heads",
         ],
     )?;
-    for line in refs.lines() {
-        if let Some((name, sha)) = line.rsplit_once(' ') {
-            facts.branches.insert(name.to_string(), sha.to_string());
-        }
-    }
+    Ok(refs
+        .lines()
+        .filter_map(|l| l.rsplit_once(' '))
+        .map(|(n, s)| (n.to_string(), s.to_string()))
+        .collect())
+}
+
+/// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
+/// `for-each-ref` and one `branch --merged`.
+pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
+    let mut facts = crate::gitmodel::BranchFacts {
+        main: main.to_string(),
+        ..Default::default()
+    };
+    facts.branches = local_branches(root)?;
     if facts.branches.contains_key(main) {
         let merged = git(
             root,
@@ -544,11 +604,24 @@ pub fn worktree_facts(cwd: &Path) -> Option<crate::agentscope::WorktreeFacts> {
     })
 }
 
-/// The commits of `range` committed after `since` (an RFC3339 instant), newest first (FEAT-214:
-/// agent drift). Compared as instants here rather than by `git log --since`, which reads only to
-/// the second and parses fractions loosely.
-pub fn commits_since(root: &Path, range: &str, since: &str) -> Result<Vec<Commit>> {
-    let out = git(root, &["log", "--format=%H%x1f%cI%x1f%s%x1f%B%x1e", range])?;
+/// The non-merge commits of `head` that none of `excluding` reaches, committed after `since` (an
+/// RFC3339 instant), newest first (FEAT-214: agent drift; DEF-063). Compared as instants here
+/// rather than by `git log --since`, which reads only to the second and parses fractions loosely.
+pub fn work_since(
+    root: &Path,
+    head: &str,
+    excluding: &[String],
+    since: &str,
+) -> Result<Vec<Commit>> {
+    let mut args = vec![
+        "log".to_string(),
+        "--no-merges".to_string(),
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1e".to_string(),
+        head.to_string(),
+    ];
+    args.extend(excluding.iter().map(|e| format!("^{e}")));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = git(root, &args)?;
     Ok(out
         .split('\u{1e}')
         .map(str::trim)
@@ -927,6 +1000,87 @@ pub(crate) mod tests {
         git(repo, &["commit", "-q", "-m", message]).unwrap();
     }
 
+    /// DEF-051 R-1: only a merged, unoccupied branch goes, and nothing else is touched.
+    #[test]
+    fn delete_merged_branch_refuses_an_unmerged_or_checked_out_branch() {
+        let repo = scratch_repo("delete-merged");
+        create_branch_from(&repo, "feat/merged", "main").unwrap();
+        create_branch_from(&repo, "feat/unmerged", "main").unwrap();
+        git(&repo, &["checkout", "-q", "feat/unmerged"]).unwrap();
+        commit_file(&repo, "u.txt", "u\n", "unmerged work");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        // unmerged: refused, kept
+        assert!(delete_merged_branch(&repo, "feat/unmerged", "main").is_err());
+        assert!(branch_exists(&repo, "feat/unmerged"));
+        // missing, and option-looking names: refused
+        assert!(delete_merged_branch(&repo, "feat/nope", "main").is_err());
+        assert!(delete_merged_branch(&repo, "-D", "main").is_err());
+        // checked out in the current worktree: refused
+        git(&repo, &["checkout", "-q", "feat/merged"]).unwrap();
+        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
+        assert!(branch_exists(&repo, "feat/merged"));
+        // checked out in another worktree: refused
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let wt = std::env::temp_dir().join(format!("kanbanr-coderepo-{}-wt", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wt);
+        git(
+            &repo,
+            &["worktree", "add", "-q", wt.to_str().unwrap(), "feat/merged"],
+        )
+        .unwrap();
+        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
+        git(
+            &repo,
+            &["worktree", "remove", "--force", wt.to_str().unwrap()],
+        )
+        .unwrap();
+        // merged and free: deleted
+        delete_merged_branch(&repo, "feat/merged", "main").unwrap();
+        assert!(!branch_exists(&repo, "feat/merged"));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-063 R-1, R-2: a branch's own non-merge commits, not a catch-up merge or what it brought.
+    #[test]
+    fn work_since_counts_only_a_branchs_own_non_merge_commits() {
+        let repo = scratch_repo("work-since");
+        create_branch_from(&repo, "sprint/SP-001", "main").unwrap();
+        create_branch_from(&repo, "feat/A", "main").unwrap();
+        git(&repo, &["checkout", "-q", "sprint/SP-001"]).unwrap();
+        commit_file(&repo, "s.txt", "s\n", "sprint work");
+        git(&repo, &["checkout", "-q", "feat/A"]).unwrap();
+        commit_file(&repo, "a.txt", "a\n", "item one");
+        merge_no_ff(&repo, "feat/A", "sprint/SP-001", "Merge sprint into A").unwrap();
+        let since = "2000-01-01T00:00:00Z";
+        let subjects = |ex: &[&str]| -> Vec<String> {
+            let ex: Vec<String> = ex.iter().map(|s| s.to_string()).collect();
+            work_since(&repo, "feat/A", &ex, since)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.subject)
+                .collect()
+        };
+        assert_eq!(subjects(&["main", "sprint/SP-001"]), vec!["item one"]);
+        let mut both = subjects(&["main"]);
+        both.sort();
+        assert_eq!(both, vec!["item one", "sprint work"]);
+        commit_file(&repo, "b.txt", "b\n", "item two");
+        assert_eq!(
+            subjects(&["main", "sprint/SP-001"]),
+            vec!["item two", "item one"]
+        );
+        let branches = local_branches(&repo).unwrap();
+        assert_eq!(
+            branches.keys().cloned().collect::<Vec<_>>(),
+            vec!["feat/A", "main", "sprint/SP-001"]
+        );
+        assert_eq!(
+            branches["feat/A"],
+            git(&repo, &["rev-parse", "feat/A"]).unwrap().trim()
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// DEF-067 R-1: setup is pending from the moment the marker is on disk until it is committed,
     /// never in a repository with no commits; the staged set is what `git add` staged.
     #[test]
@@ -970,44 +1124,46 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&fresh);
     }
 
-    /// DEF-051 R-1: only a merged, unoccupied branch goes, and nothing else is touched.
+    /// DEF-083 R-1: a refresh of CLAUDE.md's block is read from the working tree for the guard
+    /// and commit-msg, from the index for pre-commit, and closes once committed.
     #[test]
-    fn delete_merged_branch_refuses_an_unmerged_or_checked_out_branch() {
-        let repo = scratch_repo("delete-merged");
-        create_branch_from(&repo, "feat/merged", "main").unwrap();
-        create_branch_from(&repo, "feat/unmerged", "main").unwrap();
-        git(&repo, &["checkout", "-q", "feat/unmerged"]).unwrap();
-        commit_file(&repo, "u.txt", "u\n", "unmerged work");
-        git(&repo, &["checkout", "-q", "main"]).unwrap();
-        // unmerged: refused, kept
-        assert!(delete_merged_branch(&repo, "feat/unmerged", "main").is_err());
-        assert!(branch_exists(&repo, "feat/unmerged"));
-        // missing, and option-looking names: refused
-        assert!(delete_merged_branch(&repo, "feat/nope", "main").is_err());
-        assert!(delete_merged_branch(&repo, "-D", "main").is_err());
-        // checked out in the current worktree: refused
-        git(&repo, &["checkout", "-q", "feat/merged"]).unwrap();
-        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
-        assert!(branch_exists(&repo, "feat/merged"));
-        // checked out in another worktree: refused
-        git(&repo, &["checkout", "-q", "main"]).unwrap();
-        let wt = std::env::temp_dir().join(format!("kanbanr-coderepo-{}-wt", std::process::id()));
-        let _ = std::fs::remove_dir_all(&wt);
+    fn a_block_refresh_is_read_from_the_index_and_the_tree() {
+        use crate::claude::{BEGIN, END};
+        let block_a = format!("# p\n\n{BEGIN}\n\nA\n\n{END}\n");
+        let block_b = format!("# p\n\n{BEGIN}\n\nB\n\n{END}\n");
+        let repo = scratch_repo("block-refresh");
+        commit_file(&repo, "CLAUDE.md", &block_a, "claude");
+        assert!(!claude_block_refresh(&repo, true), "nothing changed");
+        std::fs::write(repo.join("CLAUDE.md"), &block_b).unwrap();
+        assert!(claude_block_refresh(&repo, true), "the tree");
+        assert!(!claude_block_refresh(&repo, false), "the index is HEAD's");
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(claude_block_refresh(&repo, true));
+        assert!(claude_block_refresh(&repo, false), "the index");
+        assert!(repo_facts_staged(&repo, None).block_refresh);
+        assert!(repo_facts(&repo, None).block_refresh);
+        // A line outside the markers is the author's: no refresh.
+        std::fs::write(repo.join("CLAUDE.md"), format!("mine\n{block_b}")).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
+        // Committed: the window closes.
+        std::fs::write(repo.join("CLAUDE.md"), &block_b).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
         git(
             &repo,
-            &["worktree", "add", "-q", wt.to_str().unwrap(), "feat/merged"],
+            &["commit", "-q", "-m", "[no-ref] refresh the kanbanr block"],
         )
         .unwrap();
-        assert!(delete_merged_branch(&repo, "feat/merged", "main").is_err());
-        git(
-            &repo,
-            &["worktree", "remove", "--force", wt.to_str().unwrap()],
-        )
-        .unwrap();
-        // merged and free: deleted
-        delete_merged_branch(&repo, "feat/merged", "main").unwrap();
-        assert!(!branch_exists(&repo, "feat/merged"));
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
         let _ = std::fs::remove_dir_all(&repo);
+
+        // HEAD with no CLAUDE.md reads as empty: a block-only file on disk is a refresh.
+        let bare = scratch_repo("block-refresh-bare");
+        std::fs::write(bare.join("CLAUDE.md"), format!("{BEGIN}\n\nA\n\n{END}\n")).unwrap();
+        assert!(claude_block_refresh(&bare, true));
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained

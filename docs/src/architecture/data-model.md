@@ -89,8 +89,8 @@ when and why. Its state is derived from those fields and the clock: issued, acti
 revoked (revoked wins). Scopes are kept in `projects/<id>/scopes.yaml`; the worktree keeps only a
 pointer to its scope.
 
-A **task** records `changed_at`, when its state last changed: a build scope's branch commits newer
-than its item's last change are its *drift*. An **activity entry** and an **event** made under a
+A **task** records `changed_at`, when its state last changed: a build scope's own non-merge
+commits newer than its item's last change, that no line already holds, are its *drift*. An **activity entry** and an **event** made under a
 scope carry `by_agent: {scope, role, item}`. All three fields are optional, so an older board reads
 unchanged and an older binary keeps `changed_at` through its unknown keys.
 
