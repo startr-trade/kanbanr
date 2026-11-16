@@ -729,6 +729,8 @@ impl Running {
         } else {
             self.board_items()
         };
+        // Answers given in this step, against the step's limit of MAX_ANSWERS_PER_STEP.
+        let mut answered = 0usize;
         if let Some(say) = &step.say {
             let mut resends = 0;
             let mut text = fill(say, &self.vars);
@@ -812,6 +814,7 @@ impl Running {
                     "step {id}: Claude asked \"{}\" -> {} ({})",
                     q.text, picked.pick, picked.policy
                 );
+                answered += 1;
                 text = picked.pick;
             }
         }
@@ -1129,19 +1132,50 @@ impl Running {
             );
         }
         // A board that setup never made fails every later step for the same reason: stop here,
-        // say what Claude last asked, and prepare nothing on the target board.
-        if step
+        // say what Claude last asked, and prepare nothing on the target board. While Claude's last
+        // message still asks something (preview-6: a charter draft ending "Confirm this draft…"),
+        // it is answered again first, within the step's answers.
+        let claims_project = step
             .expect
             .as_ref()
-            .is_some_and(|e| e.board == Some(runbook::BoardClaim::ProjectExists))
-            && truth::board_claim(
-                &self.dirs.board(),
-                &self.project_name(),
+            .is_some_and(|e| e.board == Some(runbook::BoardClaim::ProjectExists));
+        let no_project = |me: &mut Self| {
+            truth::board_claim(
+                &me.dirs.board(),
+                &me.project_name(),
                 &runbook::BoardClaim::ProjectExists,
             )
             .map(|r| r.is_err())
             .unwrap_or(true)
+        };
+        while claims_project
+            && answered < MAX_ANSWERS_PER_STEP
+            && no_project(self)
+            && let Some(q) = driver::parse_text_question(&final_text)
         {
+            asked_here.push(q.text.clone());
+            self.last_question = Some(q.text.clone());
+            let question = Question::from_text(&q);
+            let picked = Policy::new(&self.runbook, Some(&id))
+                .with_vars(self.vars.clone())
+                .answer(&question);
+            answer::log(&self.dirs, &id, &question, &picked)?;
+            eprintln!(
+                "step {id}: setup is not done and Claude still asks \"{}\" -> {} ({})",
+                q.text, picked.pick, picked.policy
+            );
+            answered += 1;
+            let turn = self.session.say(&picked.pick)?;
+            self.lines += turn.lines;
+            final_text = turn.final_text.clone();
+            if turn.stopped.is_some() {
+                break;
+            }
+            if turn.agents_running > 0 || turn.notified {
+                self.wait_for_agents(&id);
+            }
+        }
+        if claims_project && no_project(self) {
             let last = self
                 .last_question
                 .clone()

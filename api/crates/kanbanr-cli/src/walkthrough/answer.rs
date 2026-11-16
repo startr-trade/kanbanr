@@ -544,6 +544,59 @@ mod tests {
         }
     }
 
+    /// Preview-6 triage: the TOGAF run stopped at setup after 4 turns. Its last message, the
+    /// charter draft, asked "**Confirm this draft as it is, or tell me what to change or add.**"
+    /// with no `?`, so the turn read as settled. Every final text of that run (scrubbed) now reads
+    /// as a question, and the charter draft is answered by the runbook's confirm rule.
+    #[test]
+    fn a_request_without_a_question_mark_is_asked_and_the_charter_draft_confirmed() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/togaf-v070-preview-6.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(texts.len(), 4);
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/togaf.md")).unwrap())
+                .unwrap();
+        let policy = Policy::new(&rb, Some("1.1"));
+        for t in &texts {
+            let text = t["text"].as_str().unwrap();
+            assert!(
+                crate::walkthrough::driver::parse_text_question(text).is_some(),
+                "settled, but it asks: {text}"
+            );
+        }
+        let charter = texts.last().unwrap()["text"].as_str().unwrap();
+        assert!(!charter.contains('?'));
+        let q = crate::walkthrough::driver::parse_text_question(charter).unwrap();
+        assert_eq!(
+            q.text,
+            "Confirm this draft as it is, or tell me what to change or add."
+        );
+        let picked = policy.answer(&Question::from_text(&q));
+        assert_eq!(picked.pick, "I confirm it as drafted.", "{picked:?}");
+        assert!(
+            picked
+                .rule
+                .as_deref()
+                .is_some_and(|r| r.starts_with("confirm (this|the)")),
+            "{picked:?}"
+        );
+        // A conditional offer at the end of a settled turn still asks nothing.
+        for settled in [
+            "The board is set up. Let me know if you want changes.",
+            "DLG-001 is proposed on the Review page. Tell me when you've decided.",
+            "The draft is confirmed.",
+        ] {
+            assert!(
+                crate::walkthrough::driver::parse_text_question(settled).is_none(),
+                "{settled}"
+            );
+        }
+    }
+
     /// FTR-037 R-2: a question asked in text is parsed into the same `Question` and answered by the
     /// same policy as a dialog; both are logged as one row of `questions.tsv` naming the source,
     /// the options, the pick and the policy; and the hook answers an AskUserQuestion payload with
