@@ -35,7 +35,8 @@
     "check:data-cache": "node scripts/check-data-cache.mjs",
     "check:build-info": "node scripts/check-build-info.mjs",
     "check:ui-tokens": "node scripts/check-ui-tokens.mjs",
-    "check:ui-render": "node scripts/check-ui-render.mjs"
+    "check:ui-render": "node scripts/check-ui-render.mjs",
+    "check:nav": "node scripts/check-nav.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

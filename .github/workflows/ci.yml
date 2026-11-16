@@ -334,6 +334,10 @@ jobs:
       # work before they can (FTR-046).
       - name: The UI kit's renderer draws a component
         run: npm run check:ui-render
+      # The project pages are grouped into areas, each listed once, with the current one marked,
+      # and one menu open at a time that Escape closes (FTR-047).
+      - name: The monitor's navigation lists every page once, grouped into areas
+        run: npm run check:nav
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
