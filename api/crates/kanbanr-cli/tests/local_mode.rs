@@ -2916,6 +2916,179 @@ fn the_charter_agreed_after_setup_commits_its_block_on_main() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-092 R-1, R-2: katalogr's block beside kanbanr's, with the real hooks installed on main.
+/// A `[no-ref]` commit of CLAUDE.md that changes only katalogr's block passes the guard and the
+/// hooks; one that also changes a heading outside both blocks is refused by both.
+#[test]
+fn a_katalogr_block_refresh_commits_on_main_and_an_author_edit_does_not() {
+    let base = std::env::temp_dir().join(format!("kanbanr-katalogr-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("app");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    // Real commits through the real hooks: the hooks run `kanbanr`, so put this build on PATH.
+    let path = format!(
+        "{}:{}",
+        cli().parent().unwrap().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("PATH", &path)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    // The Claude Code guard: the payload's cwd and the process's are the repo.
+    let guard = |command: &str| -> String {
+        let mut c = Command::new(cli());
+        c.args(["git", "guard"])
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                serde_json::json!({"tool_input": {"command": command}, "cwd": work})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    let porcelain = || -> String {
+        String::from_utf8_lossy(&git(&["status", "--porcelain", "--untracked-files=no"]).stdout)
+            .to_string()
+    };
+
+    // A project with history, set up with kanbanr's block in CLAUDE.md and the git model on.
+    assert!(
+        git(&["init", "-q", "--initial-branch=main"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "--allow-empty", "-m", "the project"])
+            .status
+            .success()
+    );
+    run(&[
+        "init",
+        "app",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // L-41: the board is this test's own, beside the scratch repository, before any write to it.
+    let board = kanbanr_core::project::normalize(&base.join("code").join("app.kanbanr"));
+    assert_eq!(run(&["where"]).trim(), board.display().to_string());
+    run(&["config", "workflow", "--preset", "togaf"]);
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+    std::fs::write(work.join("CLAUDE.md"), "# app\n").unwrap();
+    run(&["claude", "sync"]);
+    std::fs::write(work.join(".gitignore"), ".claude/settings.local.json\n").unwrap();
+    assert!(
+        git(&["add", ".kanbanr", "CLAUDE.md", ".gitignore"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] initial setup"])
+            .status
+            .success()
+    );
+    run(&["config", "cadence", "--sprints", "on", "--releases", "on"]);
+    assert!(run(&["git", "model"]).contains("automation: on"));
+    run(&["git", "install-hooks"]);
+    // The hooks are live: an ordinary commit on main is refused.
+    assert!(
+        !git(&["commit", "-q", "--allow-empty", "-m", "wip"])
+            .status
+            .success()
+    );
+
+    // R-1: katalogr's first sync appends its block; the refresh lands on main.
+    let kanbanr_part = std::fs::read_to_string(work.join("CLAUDE.md")).unwrap();
+    let with = |k: &str| {
+        format!(
+            "{}\n\n<!-- katalogr:begin -->\n{k}\n<!-- katalogr:end -->\n",
+            kanbanr_part.trim_end()
+        )
+    };
+    std::fs::write(work.join("CLAUDE.md"), with("K1")).unwrap();
+    let said = guard("git add CLAUDE.md && git commit -q -m \"[no-ref] katalogr claude sync\"");
+    assert!(!said.contains("deny"), "{said}");
+    assert_eq!(said.trim(), "", "the guard says nothing");
+    assert!(git(&["add", "CLAUDE.md"]).status.success());
+    let committed = git(&["commit", "-q", "-m", "[no-ref] katalogr claude sync"]);
+    assert!(
+        committed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&committed.stderr)
+    );
+    assert_eq!(porcelain(), "");
+
+    // R-2: katalogr's block and a heading outside both blocks changed together: refused.
+    std::fs::write(
+        work.join("CLAUDE.md"),
+        with("K2").replace("# app", "# app2"),
+    )
+    .unwrap();
+    let said = guard("git add CLAUDE.md && git commit -q -m \"[no-ref] katalogr claude sync\"");
+    assert!(said.contains("deny"), "{said}");
+    assert!(git(&["add", "CLAUDE.md"]).status.success());
+    let refused = git(&["commit", "-q", "-m", "[no-ref] katalogr claude sync"]);
+    assert!(!refused.status.success(), "the hooks refuse it");
+    assert_eq!(porcelain(), "M  CLAUDE.md\n");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-103: in a folder nothing has set up, looking must not create a board. Every read used to
 /// leave `./data/projects` behind — one did so in a project during its read-only setup interview.
 /// Hook commands stay silent there, and an existing legacy `./data` board keeps working.
