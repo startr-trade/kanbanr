@@ -798,19 +798,33 @@ pub fn propose_defaults(
         .map(Ok)
 }
 
-/// Was delegation `id` granted through kanbanr (T9)? Only when `decisions.yaml` has no change
-/// outside a commit, and the first commit in its history that shows `id` granted carries
-/// `Kanbanr-Origin: monitor` or `terminal`, the trailer kanbanr's write recipe adds to a grant.
-/// A grant written into the file by hand, or one not committed, is not honoured.
-pub fn granted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
+/// Where a delegation's grant came from, as the board's history shows it (T9, DEF-080).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance {
+    /// kanbanr wrote the grant, in a committed file.
+    ThroughKanbanr,
+    /// Written into the file by hand, or not committed.
+    Elsewhere,
+    /// The board's history cannot be read, so nobody can tell: why, naming the repository.
+    Unverifiable(String),
+}
+
+/// Where delegation `id`'s grant came from (T9). Through kanbanr only when `decisions.yaml` has
+/// no change outside a commit, and the first commit in its history that shows `id` granted
+/// carries `Kanbanr-Origin: monitor` or `terminal`, the trailer kanbanr's write recipe adds to a
+/// grant. A history that cannot be read is unverifiable, and says why (DEF-080).
+pub fn grant_provenance(store: &Store, p: &str, id: &str) -> Provenance {
     let rel = format!("projects/{p}/{DECISIONS_FILE}");
     let dir = store.data_dir();
     if let Err(dirty) = crate::git::is_clean(dir)
         && dirty.iter().any(|f| f == &rel)
     {
-        return false;
+        return Provenance::Elsewhere;
     }
-    let history = crate::git::file_history(dir, &rel).unwrap_or_default();
+    let history = match crate::git::file_history(dir, &rel) {
+        Ok(h) => h,
+        Err(e) => return Provenance::Unverifiable(e.to_string()),
+    };
     let Some(first) = history.iter().rev().find(|v| {
         crate::yaml::from_str::<Decisions>(&v.content)
             .ok()
@@ -820,14 +834,25 @@ pub fn granted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
                     .any(|g| g.id == id && g.granted.is_some())
             })
     }) else {
-        return false;
+        return Provenance::Elsewhere;
     };
-    first.message.lines().any(|l| {
+    let through = first.message.lines().any(|l| {
         matches!(
             l.trim(),
             "Kanbanr-Origin: monitor" | "Kanbanr-Origin: terminal"
         )
-    })
+    });
+    if through {
+        Provenance::ThroughKanbanr
+    } else {
+        Provenance::Elsewhere
+    }
+}
+
+/// Was delegation `id` granted through kanbanr (T9)? A grant written into the file by hand, one
+/// not committed, or one whose history cannot be read is not honoured: it fails closed (DEF-080).
+pub fn granted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
+    grant_provenance(store, p, id) == Provenance::ThroughKanbanr
 }
 
 /// A delegation's end as a person gives it: `YYYY-MM-DD` is the end of that day (UTC), RFC 3339
@@ -1165,6 +1190,10 @@ pub struct DelegationView {
     /// Claude's verdicts under it are refused.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub not_granted_through_kanbanr: bool,
+    /// Granted, but the board's history cannot be read, so where the grant came from cannot be
+    /// checked: why, naming the repository (DEF-080). Claude's verdicts under it are refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_unverifiable: Option<String>,
     /// The Claude Code allow rules this delegation's verdicts need to run in auto mode (DEF-060),
     /// whatever its state.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1225,13 +1254,19 @@ pub fn view(
                     ),
                     _ => Vec::new(),
                 };
+                let granted = g.granted.is_some();
+                let prov = granted.then(|| grant_provenance(store, p, &g.id));
                 DelegationView {
                     delegation: g.clone(),
                     state,
                     in_force: state == DelegationState::Granted,
                     rev: g.rev(),
-                    not_granted_through_kanbanr: g.granted.is_some()
-                        && !granted_through_kanbanr(store, p, &g.id),
+                    not_granted_through_kanbanr: granted
+                        && matches!(prov, Some(Provenance::Elsewhere)),
+                    grant_unverifiable: match prov {
+                        Some(Provenance::Unverifiable(r)) => Some(r),
+                        _ => None,
+                    },
                     permission_rules: rules_of_verdicts,
                     permission_rules_checked: checked,
                     permission_rules_missing: missing,
@@ -2368,6 +2403,128 @@ mod tests {
         // Put back, it is honoured.
         std::fs::write(&file, text).unwrap();
         take("DLG-002").unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-080: a board whose DLG-002 was granted through kanbanr.
+    fn granted_through_kanbanr_board() -> (Store, std::path::PathBuf, String) {
+        use crate::agentscope::ProcessScope;
+        use crate::git::PushPolicy;
+        use crate::write::apply_as;
+        let (store, dir, defect, _) = board();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        store
+            .set_feature_definition(
+                "demo",
+                &defect,
+                Some(FeatureDefinition {
+                    statement: "Fix the bug".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::commit_local(&dir, "the board");
+        let until = until_of("", &crate::now_rfc3339()).unwrap();
+        let write = |method: &str, path: &str, body: Value, origin: Origin| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Off,
+                method,
+                path,
+                Some(&body),
+                None,
+                &crate::eventing::NullSender,
+                &ProcessScope::Unscoped,
+                origin,
+            )
+        };
+        write(
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "delegated", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            write(
+                "POST",
+                "/projects/demo/decisions/delegations",
+                json!({"verdicts": ["signoff:design-review"], "kinds": ["defect"], "until": until}),
+                Origin::Conversation,
+            )
+            .unwrap();
+        }
+        let rev = load(&store, "demo").unwrap().delegations[1].rev();
+        write(
+            "POST",
+            "/projects/demo/decisions/delegations/DLG-002/grant",
+            json!({"rev": rev, "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        assert_eq!(
+            grant_provenance(&store, "demo", "DLG-002"),
+            Provenance::ThroughKanbanr
+        );
+        (store, dir, defect)
+    }
+
+    /// DEF-080 R-2: a grant whose history cannot be read is unverifiable, naming the folder, and
+    /// is not shown as granted outside kanbanr.
+    #[test]
+    fn an_unreadable_history_reads_as_unverifiable_not_as_not_granted() {
+        let (store, dir, _) = granted_through_kanbanr_board();
+        std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        match grant_provenance(&store, "demo", "DLG-002") {
+            Provenance::Unverifiable(why) => {
+                assert!(why.contains(&dir.display().to_string()), "{why}");
+                assert!(why.contains("is not a git repository"), "{why}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(!granted_through_kanbanr(&store, "demo", "DLG-002"));
+        let v = view(&store, "demo", None, None, &crate::now_rfc3339()).unwrap();
+        let g = v
+            .delegations
+            .iter()
+            .find(|g| g.delegation.id == "DLG-002")
+            .unwrap();
+        assert!(!g.not_granted_through_kanbanr);
+        assert!(g.grant_unverifiable.is_some());
+        // Put back, it is honoured.
+        std::fs::rename(dir.join(".git-away"), dir.join(".git")).unwrap();
+        assert_eq!(
+            grant_provenance(&store, "demo", "DLG-002"),
+            Provenance::ThroughKanbanr
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-080 R-2, R-4: Claude's verdict under a grant nobody can check is refused, saying why.
+    #[test]
+    fn a_verdict_under_a_grant_whose_history_cannot_be_read_is_refused_naming_the_reason() {
+        use crate::write::WriteError;
+        let (store, dir, defect) = granted_through_kanbanr_board();
+        std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        // The write's own guard, asked directly: a whole write would first make a fresh
+        // repository where `.git` is missing, and refuse for want of a commit identity where it
+        // cannot open one, before it reaches the delegation.
+        let body = json!({"delegation": "DLG-002"});
+        match crate::write::judge(
+            &store,
+            "POST",
+            &route(&defect, "signoff/design-review"),
+            Some(&body),
+            Origin::Conversation,
+        ) {
+            Err(WriteError::Refused(why)) => {
+                assert!(why.contains("could not be checked"), "{why}");
+                assert!(why.contains("is not a git repository"), "{why}");
+            }
+            other => panic!("not refused: {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
