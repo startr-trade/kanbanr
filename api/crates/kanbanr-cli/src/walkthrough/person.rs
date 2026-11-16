@@ -2239,6 +2239,14 @@ pub(crate) mod tests {
         store
             .set_feature_definition("shop", "FEAT-001", Some(def))
             .unwrap();
+        // Commit the direct write, as the CLI does: the board HEAD is part of the monitor's memo
+        // stamp, so the Review page is computed afresh rather than served from memory (DEF-081).
+        assert!(kanbanr_core::git::commit(
+            &run.board(),
+            "Tester",
+            "t@example.com",
+            "test: change FEAT-001's definition"
+        ));
         let approve = Offer {
             page: "review".into(),
             button: "Approve".into(),
