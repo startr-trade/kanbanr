@@ -37,7 +37,8 @@
     "check:ui-tokens": "node scripts/check-ui-tokens.mjs",
     "check:ui-render": "node scripts/check-ui-render.mjs",
     "check:nav": "node scripts/check-nav.mjs",
-    "check:drift-age": "node scripts/check-drift-age.mjs"
+    "check:drift-age": "node scripts/check-drift-age.mjs",
+    "check:ui-tabs": "node scripts/check-ui-tabs.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

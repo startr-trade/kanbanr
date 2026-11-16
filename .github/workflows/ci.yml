@@ -346,6 +346,10 @@ jobs:
       # while a newer run goes, and unavailable without a code repository (FTR-045).
       - name: The monitor labels background drift with its revision and age
         run: npm run check:drift-age
+      # Tabs with counts open on the requested, preferred or largest tab, are a real tablist, and
+      # mark the selected tab with an underline, never an accent fill (FTR-046).
+      - name: The UI kit's tabs pick, render and underline correctly
+        run: npm run check:ui-tabs
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
