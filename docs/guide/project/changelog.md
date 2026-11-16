@@ -11,6 +11,11 @@ All notable changes to kanbanr are documented here. The format follows
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
   representation; published pages keep their URLs (MNT-002).
 
+### Fixed
+
+- The image's health check names `localhost`, so docker and compose report a serving monitor
+  healthy again; it had been refused by the host check since v0.5.0 (DEF-079).
+
 ## [0.7.0] - 2026-11-16
 
 ### Added
