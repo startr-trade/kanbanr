@@ -11,6 +11,8 @@ next stage needs and turns each gap into a draft or a question — see
 
 ## Choosing a process
 
+Start with agile unless your team already has a process of its own; TOGAF, Scrum and the others stay available for projects that need their stages (see [the report](/p/kanbanr/docs/file/notes/developer-path-togaf-vs-agile.md)).
+
 ```bash
 kanbanr config workflow --preset list          # what each preset is
 kanbanr config workflow --preset togaf         # apply one (statuses, transitions and gates)
@@ -739,7 +741,7 @@ kanbanr release add v1.0.1 --patch-of v1.0.0
 
 The patch records its parent, which must have been cut and tagged — any cut release, an older
 supported one included. `release/v1.0.1` is made from the parent's tag, not from where main has
-since gone, and the patch starts at the first stage. It goes through the same stages. Its notes say
+since gone, and the patch starts at candidate. A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. It goes through the same stages. Its notes say
 "Patch of v1.0.0", list what the patch adds, and what it keeps from the parent.
 
 At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on

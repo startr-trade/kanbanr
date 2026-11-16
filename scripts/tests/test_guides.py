@@ -115,8 +115,33 @@ class ExampleTests(unittest.TestCase):
             with self.subTest(guide=name):
                 self.assertTrue("Claude also asks how the screens should look" in read(GUIDES / name))
 
+    def every_guide_index_names_agile_first(self) -> None:
+        """DOC-009 R-1: agile is the first row, marked recommended, and the report is linked."""
+        text = read(GUIDES / "index.md")
+        rows = [l for l in text.splitlines() if l.startswith("|") and not l.startswith("| Process") and not l.startswith("|---")]
+        self.assertTrue(rows[0].startswith("| Agile"), rows[0])
+        self.assertTrue("recommended" in rows[0])
+        self.assertTrue("notes/developer-path-togaf-vs-agile.md" in text)
+
+    def every_release_guide_says_a_patch_starts_as_a_candidate(self) -> None:
+        """DOC-009 R-2: each release guide says a patch starts at candidate."""
+        for process in PROCESSES:
+            for kind in ("with-claude", "cli"):
+                name = f"{process}-{kind}.md"
+                with self.subTest(guide=name):
+                    self.assertTrue("A patch release starts at **candidate**" in read(GUIDES / name))
+        processes = read(ROOT / "docs/src/using/processes.md")
+        self.assertFalse("the patch starts at the first stage" in processes)
+
 
 class SkillTests(unittest.TestCase):
+    def the_skill_recommends_agile_first(self) -> None:
+        """DOC-009 R-1: the setup interview recommends agile and links the report."""
+        text = section(read(SKILL), "## Activation: a setup interview in plan mode, then one approved setup")
+        self.assertTrue("Recommend **agile**" in text)
+        self.assertTrue("developer-path-togaf-vs-agile.md" in text)
+        self.assertTrue(0 <= text.index("**agile**") < text.index("**togaf**"))
+
     def the_skill_asks_about_style_before_a_screen(self) -> None:
         self.assertTrue("Ask how a screen should look before designing it" in read(SKILL))
 

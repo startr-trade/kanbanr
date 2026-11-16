@@ -276,6 +276,8 @@ release/v1.0.0 @ 59e2014: docs/releases/v1.0.0.md
 
 _Released 2026-11-04._
 
+A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. `kanbanr release add v1.0.1 --patch-of v1.0.0` creates it at candidate.
+
 ## What shipped
 
 

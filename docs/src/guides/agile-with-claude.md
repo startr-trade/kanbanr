@@ -186,6 +186,8 @@ because shipped notes can't be edited.
 
 **A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
+A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual.
+
 ## Closing the sprint
 
 > Close the sprint and do a retro.

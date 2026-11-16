@@ -88,6 +88,9 @@ All notable changes to kanbanr are documented here. The format follows
 - `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
   Playwright list-reporter lines (project, location and duration dropped); a name reported more
   than once in a run is green only if every line passed (DEF-061).
+### Changed
+
+- The guides and the setup interview recommend agile for a new project, and every release guide says a patch release starts at candidate (DOC-009).
 
 ## [0.6.0] - 2026-11-14
 
