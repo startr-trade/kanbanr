@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -475,6 +476,95 @@ class KeptRuns(unittest.TestCase):
         self.assertFalse((kept / "junit.xml").exists())
         self.assertEqual((kept / "junit.missing").read_text(),
                          "no JUnit report: the step ran cargo test, which writes none")
+
+
+
+class HeavySteps(unittest.TestCase):
+    """R-5 (MNT-007): heavy steps take the machine's build lock and a memory cap when the tools exist."""
+
+    SESSION = {"XDG_RUNTIME_DIR": "/run/user/1000"}
+
+    def setUp(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.meminfo = Path(scratch.name) / "meminfo"
+        # 40 GiB, so 60% of it is 24 GiB.
+        self.meminfo.write_text("MemTotal:       41943040 kB\nMemFree:         1000000 kB\n")
+        patches = [
+            mock.patch.object(ci_local, "MEMINFO", self.meminfo),
+            mock.patch.object(ci_local.os, "cpu_count", return_value=12),
+            mock.patch.dict(ci_local.os.environ, {}, clear=False),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        for var in ("KANBANR_CI_MEMORY_MAX", "CARGO_BUILD_JOBS"):
+            ci_local.os.environ.pop(var, None)
+
+    def which(self, *present: str):
+        return mock.patch.object(ci_local.shutil, "which",
+                                 side_effect=lambda tool: f"/usr/bin/{tool}" if tool in present else None)
+
+    def test_heavy_steps_take_the_lock_and_the_memory_cap_when_the_tools_exist(self) -> None:
+        cmd = ["bash", "-c", "cargo test"]
+        cap = str(int(41943040 * 1024 * 0.6))
+        with self.which("flock", "systemd-run"):
+            self.assertEqual(ci_local.heavy(cmd, self.SESSION),
+                             ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={cap}",
+                              "flock", str(Path.home() / ".cache/heavy-build.lock"), *cmd])
+            self.assertIsNone(ci_local.heavy_notice(self.SESSION))
+            ci_local.os.environ["KANBANR_CI_MEMORY_MAX"] = "8G"
+            self.assertIn("MemoryMax=8G", ci_local.heavy(cmd, self.SESSION))
+        del ci_local.os.environ["KANBANR_CI_MEMORY_MAX"]
+        self.meminfo.unlink()
+        with self.which("flock", "systemd-run"):
+            self.assertIn("MemoryMax=max", ci_local.heavy(cmd, self.SESSION))
+
+        # Which steps are heavy: Rust, the monitor's build and the image; not a Python check.
+        self.assertTrue(ci_local.is_heavy("cargo clippy --locked --workspace --all-targets"))
+        self.assertTrue(ci_local.is_heavy("cd web\nnpm ci\nnpm run build"))
+        self.assertTrue(ci_local.is_heavy("docker build -f docker/Dockerfile ."))
+        # The Rust tests run through scripts/test.sh (MNT-010), whose text names no cargo.
+        self.assertTrue(ci_local.is_heavy("../scripts/test.sh"))
+        self.assertTrue(ci_local.is_heavy("../scripts/test.sh --ignored -p kanbanr-cli --test build_stamp"))
+        self.assertFalse(ci_local.is_heavy("python3 scripts/check_supply_chain.py"))
+        self.assertFalse(ci_local.is_heavy("npm test"))
+
+        # Two CPUs are left free unless CARGO_BUILD_JOBS says otherwise; never fewer than one job.
+        self.assertEqual(ci_local.build_jobs(), "10")
+        with mock.patch.object(ci_local.os, "cpu_count", return_value=2):
+            self.assertEqual(ci_local.build_jobs(), "1")
+        ci_local.os.environ["CARGO_BUILD_JOBS"] = "4"
+        self.assertEqual(ci_local.build_jobs(), "4")
+
+        # sh(heavy=True) runs the wrapped command; sh() without it runs the command as given.
+        with self.which("flock", "systemd-run"), \
+                mock.patch.object(ci_local.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, "")) as run:
+            ci_local.sh(["cargo", "build"], ci_local.ROOT, dict(self.SESSION), heavy=True)
+            self.assertEqual(run.call_args.args[0][0], "systemd-run")
+            self.assertEqual(run.call_args.args[0][-2:], ["cargo", "build"])
+            ci_local.sh(["python3", "-V"], ci_local.ROOT, dict(self.SESSION))
+            self.assertEqual(run.call_args.args[0], ["python3", "-V"])
+
+    def test_heavy_steps_run_plainly_without_flock_or_systemd_run(self) -> None:
+        cmd = ["bash", "-c", "cargo test"]
+        with self.which():
+            self.assertEqual(ci_local.heavy(cmd, self.SESSION), cmd)
+            notice = ci_local.heavy_notice(self.SESSION)
+            self.assertIn("no flock", notice)
+            self.assertIn("no systemd-run", notice)
+            self.assertNotIn("\n", notice)
+        # A user manager is needed for the cap: systemd-run alone, without a session, is not enough.
+        with self.which("flock", "systemd-run"):
+            self.assertEqual(ci_local.heavy(cmd, {}), ["flock", str(ci_local.LOCK), *cmd])
+            self.assertIn("memory cap", ci_local.heavy_notice({}))
+            self.assertNotIn("build lock", ci_local.heavy_notice({}))
+        with self.which("systemd-run"):
+            wrapped = ci_local.heavy(cmd, self.SESSION)
+            self.assertEqual(wrapped[0], "systemd-run")
+            self.assertNotIn("flock", wrapped)
+            self.assertEqual(wrapped[-3:], cmd)
 
 
 if __name__ == "__main__":

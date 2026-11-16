@@ -97,6 +97,39 @@ pub fn is_documentation(path: &str) -> bool {
         .any(|e| base.ends_with(e))
 }
 
+/// Folder names, lowercase, that hold tests (DEF-072): any component of a path matching one.
+pub const TEST_FOLDERS: &[&str] = &[
+    "tests",
+    "test",
+    "__tests__",
+    "spec",
+    "specs",
+    "testdata",
+    "fixtures",
+    "e2e",
+];
+
+/// Is this repository path a test file (DEF-072)? A folder component, compared case-insensitively,
+/// of `tests`, `test`, `__tests__`, `spec`, `specs`, `testdata`, `fixtures` or `e2e`; or a file
+/// name, case-insensitive, matching `*_test.*`, `*.test.*`, `*.spec.*`, `*_spec.*`, `test_*.py` or
+/// `conftest.py`. Components split on `/` (git's separator, on every platform).
+pub fn is_test_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let parts: Vec<&str> = lower.split('/').collect();
+    let (dirs, file) = parts.split_at(parts.len() - 1);
+    if dirs.iter().any(|d| TEST_FOLDERS.contains(d)) {
+        return true;
+    }
+    let file = file[0];
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    stem.ends_with("_test")
+        || stem.ends_with("_spec")
+        || file.contains(".test.")
+        || file.contains(".spec.")
+        || (file.starts_with("test_") && file.ends_with(".py"))
+        || file == "conftest.py"
+}
+
 fn is_word_byte(c: char) -> bool {
     c.is_ascii_alphanumeric()
 }
@@ -384,7 +417,7 @@ fn names_in_line(path: &str, content: &str, state: &mut FileState, out: &mut BTr
 }
 
 /// The names a patch put in the code, by pattern. The input is the text of `git log -p -U0` for
-/// one commit (or any unified diff); lines of documentation files are ignored.
+/// one commit (or any unified diff); lines of documentation and test files are ignored (DEF-072).
 pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
     let mut out = BTreeSet::new();
     let mut file: Option<String> = None;
@@ -396,7 +429,7 @@ pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
             state = FileState::default();
             file = rest.rsplit_once(" b/").map(|(_, b)| b.to_string());
             if let Some(path) = file.as_deref()
-                && !is_documentation(path)
+                && !(is_documentation(path) || is_test_path(path))
             {
                 out.insert(Name::new(NameKind::File, path));
             }
@@ -416,7 +449,7 @@ pub fn names_in_diff(patch: &str) -> BTreeSet<Name> {
         let Some(content) = line.strip_prefix(['+', '-']) else {
             continue;
         };
-        if path != OPENAPI && is_documentation(path) {
+        if path != OPENAPI && (is_documentation(path) || is_test_path(path)) {
             continue;
         }
         names_in_line(path, content, &mut state, &mut out);
@@ -1874,6 +1907,55 @@ mod tests {
         );
         assert!(is_documentation("docs/x/y.png"));
         assert!(!is_documentation("api/src/lib.rs"));
+    }
+
+    /// DEF-072 R-3: a commit that changes only test files puts no name in the code, so it flags
+    /// no text; the same lines in shipped code do.
+    #[test]
+    fn a_test_only_commit_names_nothing() {
+        let line = ["+    run(\"--some-flag\", \"KANBANR_X\");"];
+        let patch = format!(
+            "{}{}",
+            file_patch("api/crates/kanbanr-cli/tests/local_mode.rs", &line),
+            file_patch("web/src/__tests__/x.ts", &line),
+        );
+        assert_eq!(names_in_diff(&patch), BTreeSet::new());
+        let shipped = names_in_diff(&file_patch("src/main.rs", &line));
+        assert!(has(&shipped, NameKind::Flag, "--some-flag"), "{shipped:?}");
+        assert!(has(&shipped, NameKind::Env, "KANBANR_X"), "{shipped:?}");
+        assert!(has(&shipped, NameKind::File, "src/main.rs"), "{shipped:?}");
+    }
+
+    /// DEF-072 R-4, R-5: test files are told by folder and file name alone, by constants; the
+    /// monitor's check scripts read as shipped.
+    #[test]
+    fn test_paths_are_told_by_folder_and_file_name() {
+        for p in [
+            "api/crates/x/tests/a.rs",
+            "Tests/A.cs",
+            "src/__tests__/a.ts",
+            "spec/a_spec.rb",
+            "pkg/a_test.go",
+            "src/cart.test.ts",
+            "src/cart.spec.tsx",
+            "test_cart.py",
+            "conftest.py",
+            "testdata/x.json",
+            "api/fixtures/b.json",
+            "e2e/run.ts",
+        ] {
+            assert!(is_test_path(p), "{p} should be a test path");
+        }
+        for p in [
+            "src/latest.rs",
+            "contest/a.rs",
+            "docs/testing.md",
+            "src/tester.rs",
+            "attest.py",
+            "web/scripts/check-release-action.mjs",
+        ] {
+            assert!(!is_test_path(p), "{p} should not be a test path");
+        }
     }
 
     #[test]

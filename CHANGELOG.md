@@ -13,6 +13,10 @@ All notable changes to kanbanr are documented here. The format follows
 - ISO 25010 tags, Zachman columns and layers have one spelling: `feature define` and `adr new`
   store the canonical one and refuse an unknown one, ADRs are read in canonical form, and the
   doctor counts a quality once whatever its case (MNT-009).
+- The Rust tests run through cargo-nextest when it is installed, locally and in CI, falling back
+  to cargo test; doctests run apart; each run writes a JUnit report with every test's time, which
+  CI uploads and `make ci` keeps with the step's log; a test running past 60 s is named in the
+  output (MNT-010).
 
 ### Fixed
 
@@ -26,6 +30,15 @@ All notable changes to kanbanr are documented here. The format follows
   katalogr's, is let through like kanbanr's own block refresh (DEF-092).
 - `kanbanr git tidy` lists a finished item's merged branch even while an agent scope issued for
   that item is still in force, and names the scope to revoke (DEF-096).
+- The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
+  what is in progress, what waits for you and the sprint and release, and counts the rest, instead
+  of printing every item (DEF-093).
+- A refusal on the default branch no longer calls setup's commit the one exception when it also
+  names the block refresh (DEF-085).
+- `kanbanr doctor` no longer warns that an item names no docs when its kind's path leaves docs
+  out (DEF-070).
+- A docs-folded sign-off, and an item's text flags, no longer lapse on a commit that changes only
+  tests or docs the item does not name (DEF-072).
 
 ## [0.7.0] - 2026-11-16
 

@@ -32,6 +32,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr board` / `kanbanr feature list / show / add / edit` | the kanban and its items |
+| `kanbanr recover [--budget BYTES]` | the plan to resume from, sized for a session start (what the SessionStart hook prints): the whole summary when it fits the budget, else a brief form with the counts per status, every item in progress, what waits for you, the sprint and release, and where to read more. The budget is `--budget`, else `KANBANR_SESSION_BUDGET`, else 8000 bytes, never below 2000; `--json` gives `{bytes, form, text}`. With no project it prints nothing and succeeds |
 | `kanbanr move <CODE> <STATUS> [--override "…"]` | a status change, validated against the workflow and the stage's gate; `--override` passes a gate and records why. Merging an item into a release past its first stage sends the release back to that stage and prints the steps from there; a release tagged and not shipped refuses the merge |
 | `kanbanr start <CODE>` / `kanbanr finish <CODE>` | begin (branch, active stage) and end an item, each through its gate |
 | `kanbanr milestone add / list / edit / delete` | milestones (a dependency DAG; cycles rejected); list prints newest first; `--oldest-first` gives creation order |

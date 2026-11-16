@@ -965,8 +965,14 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
             .into_string()
             .unwrap();
         let releases: serde_json::Value = serde_json::from_str(&releases).unwrap();
-        assert_eq!(releases[1]["version"], "v2.0.0");
-        assert!(releases[1].get("stage").is_none(), "{releases}");
+        // The list is newest first (DEF-034): the release under test is picked by its version.
+        let v2 = releases
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["version"] == "v2.0.0")
+            .unwrap_or_else(|| panic!("v2.0.0 is listed: {releases}"));
+        assert!(v2.get("stage").is_none(), "{releases}");
     }
     let _ = std::fs::remove_dir_all(&base);
 }

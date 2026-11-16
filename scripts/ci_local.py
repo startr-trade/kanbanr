@@ -229,7 +229,73 @@ def say(name: str, ok: bool, detail: str = "") -> None:
         print("\n".join("    " + line for line in detail.rstrip().splitlines()[-30:]), flush=True)
 
 
-def sh(cmd: list[str] | str, cwd: Path, env: dict[str, str] | None = None) -> tuple[bool, str]:
+# The machine's build lock and a memory cap for make ci's heavy steps (MNT-007): another heavy
+# build on the machine queues behind this one rather than racing it, and a runaway build is killed
+# before the desktop is. systemd-run sits outside flock, so the lock is held only while the capped
+# process runs. Without the tools (no flock, no user session manager: a container, macOS) a heavy
+# step runs plainly, and make ci says so once at the start.
+LOCK = Path.home() / ".cache/heavy-build.lock"
+MEMINFO = Path("/proc/meminfo")
+# scripts/test.sh runs cargo nextest or cargo test (MNT-010); the Test steps name only the script.
+HEAVY = re.compile(r"\bcargo\b|\bdocker build\b|\bnpm (ci|run build)\b|\bscripts/test\.sh\b")
+
+
+def memory_cap() -> str:
+    """KANBANR_CI_MEMORY_MAX, else 60% of MemTotal in bytes, else "max" (no cap; systemd accepts it)."""
+    if os.environ.get("KANBANR_CI_MEMORY_MAX"):
+        return os.environ["KANBANR_CI_MEMORY_MAX"]
+    try:
+        found = re.search(r"^MemTotal:\s+(\d+)\s+kB", MEMINFO.read_text(), re.M)
+    except OSError:
+        found = None
+    return str(int(int(found.group(1)) * 1024 * 0.6)) if found else "max"
+
+
+def has_user_manager(env: dict[str, str]) -> bool:
+    return bool(shutil.which("systemd-run")) and bool(env.get("XDG_RUNTIME_DIR"))
+
+
+def heavy(cmd: list[str], env: dict[str, str]) -> list[str]:
+    """`cmd` under the machine's build lock and a memory cap, as far as this machine has the tools."""
+    if shutil.which("flock"):
+        cmd = ["flock", str(LOCK), *cmd]
+    if has_user_manager(env):
+        cmd = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={memory_cap()}", *cmd]
+    return cmd
+
+
+_wrap_heavy = heavy  # sh()'s parameter is named heavy too
+
+
+def is_heavy(script: str) -> bool:
+    """A step that builds or tests Rust, builds the monitor or builds the image."""
+    return HEAVY.search(script) is not None
+
+
+def build_jobs() -> str:
+    """CARGO_BUILD_JOBS, else the machine's CPUs minus two (two are left for the desktop)."""
+    return os.environ.get("CARGO_BUILD_JOBS") or str(max(1, (os.cpu_count() or 1) - 2))
+
+
+def heavy_notice(env: dict[str, str]) -> str | None:
+    """The one line make ci prints when a heavy step will run without the lock or the cap."""
+    missing = []
+    if not shutil.which("flock"):
+        missing.append("the machine's build lock (no flock)")
+    if not has_user_manager(env):
+        missing.append("a memory cap (no systemd-run user session)")
+    if not missing:
+        return None
+    return "make ci: heavy steps run without " + " and without ".join(missing)
+
+
+def sh(cmd: list[str] | str, cwd: Path, env: dict[str, str] | None = None,
+       heavy: bool = False) -> tuple[bool, str]:
+    capped = False
+    if heavy and isinstance(cmd, list):
+        wrap_env = env if env is not None else dict(os.environ)
+        cmd = _wrap_heavy(cmd, wrap_env)
+        capped = cmd[0] == "systemd-run"
     proc = subprocess.run(
         cmd,
         cwd=cwd,
@@ -239,7 +305,11 @@ def sh(cmd: list[str] | str, cwd: Path, env: dict[str, str] | None = None) -> tu
         stderr=subprocess.STDOUT,
         text=True,
     )
-    return proc.returncode == 0, proc.stdout
+    out = proc.stdout
+    if capped and proc.returncode in (-9, 137):
+        out += (f"\nkilled: the step reached make ci's memory cap ({cmd[5]}; "
+                "set KANBANR_CI_MEMORY_MAX to change it)\n")
+    return proc.returncode == 0, out
 
 
 def keep_run(output: str, junit: Path, head: str, now: datetime, runs: Path = RUNS) -> Path:
@@ -388,7 +458,7 @@ def run_workflow_steps() -> None:
                 wd = TREE / (step.get("working-directory") or job_wd or ".")
                 with tempfile.TemporaryDirectory() as scratch:
                     env = {
-                        **os.environ, **job_env, **step_env,
+                        **os.environ, "CARGO_BUILD_JOBS": build_jobs(), **job_env, **step_env,
                         "CI": "true", "GITHUB_SHA": head, "GITHUB_REF_NAME": f"v{version}",
                         "GITHUB_REPOSITORY": "startr-trade/kanbanr",
                         "GITHUB_OUTPUT": f"{scratch}/output", "GITHUB_ENV": f"{scratch}/env",
@@ -400,7 +470,8 @@ def run_workflow_steps() -> None:
                         ok, out = sh(["docker", "run", "--rm", "-v", f"{TREE}:/repo", "-w", f"/repo/{rel}",
                                       PWSH, "pwsh", "-NoProfile", "-Command", script], TREE)
                     else:
-                        ok, out = sh(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], wd, env)
+                        ok, out = sh(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], wd, env,
+                                     heavy=is_heavy(script))
                 say(label, ok, out)
                 if (wf_name, job_id, name) in KEEP:
                     # Keeping a run never fails it.
@@ -575,7 +646,7 @@ def uses_equivalents() -> None:
     problem = dockerfile_refreshes_packages()
     say("release image: the package layer is refreshed on every local build (MNT-006)", problem is None,
         problem or "")
-    ok, out = sh(image_build_command(sha.strip(), date.strip(), refresh_token()), TREE)
+    ok, out = sh(image_build_command(sha.strip(), date.strip(), refresh_token()), TREE, heavy=True)
     say("release image: docker/Dockerfile builds, package layer refreshed (docker/build-push-action, without the push)", ok, out)
     ok, out = sh([str(TREE / "scripts/check-image.sh"), "kanbanr:ci-local"], TREE)
     say("release image: its kanbanr names its commit and date, and carries the repository's skill", ok, out)
@@ -792,19 +863,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def unittest_by_name(file: str) -> list[str]:
+    """Run one test file so unittest prints each test's line under the bare file name as its module
+    (`test_x (test_ci_local.Class.test_x) ... ok`), the names the board tracks (MNT-007, DEF-068)."""
+    return [sys.executable, "-m", "unittest", "discover", "-s", "scripts/tests", "-p", file, "-v"]
+
+
 def main(argv: list[str] | None = None) -> int:
     parse_args(argv)
-    print(f"make ci: a clean copy of the tracked tree at {TREE}\n", flush=True)
+    print(f"make ci: a clean copy of the tracked tree at {TREE}", flush=True)
+    notice = heavy_notice(dict(os.environ))
+    if notice:
+        print(notice, flush=True)
+    if shutil.which("flock"):
+        LOCK.parent.mkdir(parents=True, exist_ok=True)
+    print(flush=True)
     # A test that reaches the real board writes to someone's data, and its push publishes it.
     # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
     board_before = board_state()
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_ci_local.py"), ROOT)
     say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_check_supply_chain.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_check_supply_chain.py"), ROOT)
     say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_guides.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_guides.py"), ROOT)
     say("make ci: the guides cover the pipeline and a product people use (DOC-007)", ok, out)
-    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_privacy_scan.py"], ROOT)
+    ok, out = sh(unittest_by_name("test_privacy_scan.py"), ROOT)
     say("make ci: the privacy scan lists what a public board would show (MNT-012)", ok, out)
     fresh_tree()
     lint_workflows()

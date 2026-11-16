@@ -8,9 +8,11 @@
 # memory (operationalizes the "Recover & resume" section of SKILL.md).
 #
 # What it does: if `kanbanr` is on PATH *and* a project is resolvable (a
-# `.kanbanr` marker in the cwd, or $env:KANBANR_PROJECT set), it prints the
-# current board and recent activity on stdout. SessionStart hook stdout is
-# surfaced to Claude as context.
+# `.kanbanr` marker in the cwd, or $env:KANBANR_PROJECT set), it prints
+# `kanbanr recover` on stdout: the recovered plan, sized to fit (DEF-093) -
+# 8000 bytes by default, $env:KANBANR_SESSION_BUDGET to change it. SessionStart
+# hook stdout is surfaced to Claude as context. A kanbanr older than this script
+# (no `recover`) gets the 0.7.0 sequence instead, cut to the same budget.
 #
 # SAFETY CONTRACT: BEST-EFFORT and must NEVER break a session.
 #   - If kanbanr is not installed, or no project is resolvable, or any command
@@ -47,8 +49,22 @@ if (-not $env:KANBANR_PROJECT -and -not (Test-Path -LiteralPath '.kanbanr' -Path
     exit 0
 }
 
-# 3) Print the board and recent activity. Guard EACH call so a failure here
+# 3) Print the recovered plan, sized to fit (DEF-093): `kanbanr recover` keeps
+#    the full summary when it fits the budget and otherwise leads with what is
+#    in progress, what waits for the person and the sprint and release. A
+#    kanbanr on PATH older than this script has no `recover`: it gets the 0.7.0
+#    sequence below, cut to the same budget. Guard EACH call so a failure here
 #    (e.g. data dir missing, project mis-resolved) still exits 0.
+$budget = 8000
+$parsed = 0
+if ([int]::TryParse("$env:KANBANR_SESSION_BUDGET", [ref]$parsed)) { $budget = $parsed }
+
+$out = $null
+try { $out = & kanbanr recover 2>$null } catch { $global:LASTEXITCODE = 1 }
+if ($LASTEXITCODE -eq 0) {
+    $out | Write-Output
+} else {
+& {
 Write-Output "## kanbanr — recovered project state (SessionStart)"
 Write-Output ""
 
@@ -125,6 +141,8 @@ Write-Output "specs/decisions/progress). Resume from the board above; record new
 Write-Output "kanbanr as you go. Every document (requested or self-initiated) goes in"
 Write-Output "kanbanr docs (``kanbanr doc add …``), NOT the working folder — unless the user"
 Write-Output "asks for it in the project folder._"
+} | Out-String | ForEach-Object { $_.Substring(0, [Math]::Min($_.Length, $budget)) }
+}
 
 # Always succeed: recovery is advisory, never fatal.
 exit 0

@@ -1033,7 +1033,39 @@ pub fn generate(
                 .collect(),
         )),
         "kanbanr:releases" => ser(&crate::releases::report_all(store, id)?),
-        "kanbanr:gantt" => Ok(Value::String(crate::gantt::project_gantt(store, id)?)),
+        // The chart's inputs, not its text: the rendered chart tags a sprint active or done by
+        // today's date, which would read as a change with nothing changed (FTR-006 T2 review).
+        "kanbanr:gantt" => {
+            let mut milestones: Vec<&crate::models::Milestone> =
+                project.milestones.iter().collect();
+            milestones.sort_by(|a, b| a.code.cmp(&b.code));
+            let sprints = if project.config.cadence.sprints {
+                let mut sprints = crate::sprints::load(store, id)?;
+                sprints.sort_by(|a, b| a.code.cmp(&b.code));
+                sprints
+                    .iter()
+                    .map(|s| json!({"code": s.code, "start": s.start, "end": s.end}))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok(json!({
+                "milestones": milestones
+                    .iter()
+                    .map(|m| json!({"code": m.code, "name": m.name, "depends_on": m.depends_on}))
+                    .collect::<Vec<_>>(),
+                "sprints": sprints,
+                "items": features
+                    .iter()
+                    .map(|f| json!({
+                        "code": f.code,
+                        "milestone": f.milestone,
+                        "sprint": f.sprint,
+                        "depends_on": f.depends_on,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
         "kanbanr:evidence" => Ok(Value::Array(
             features
                 .iter()
@@ -1127,6 +1159,59 @@ mod tests {
         }
         assert!(generate(&store, &project, "katalogr:structure").is_err());
         assert!(generate(&store, &project, "kanbanr:nothing").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-006 T2 review: `kanbanr:gantt` is pinned by the chart's inputs, not its text. A sprint
+    /// that turns active by date changes the rendered chart ("active") but nothing it is drawn
+    /// from, so the generated value — and its hash — does not move.
+    #[test]
+    fn gantt_is_generated_from_its_inputs_so_a_sprint_turning_active_by_date_is_no_change() {
+        let (store, dir) = temp_store();
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.cadence.sprints = true;
+        store.save_config("demo", &config).unwrap();
+        let today = crate::sprints::today();
+        let start = today.checked_add(time::Duration::days(1)).unwrap();
+        let mut sprint = crate::sprints::add(
+            &store,
+            "demo",
+            &crate::gantt::fmt_date(start),
+            Some(5),
+            "",
+            None,
+            "",
+        )
+        .unwrap();
+        // Started ahead of its first day: planned today, active from tomorrow, by date alone.
+        sprint.state = crate::sprints::SprintState::Active;
+        std::fs::write(
+            store.project_dir("demo").join("sprints.yaml"),
+            crate::yaml::to_string(&vec![sprint.clone()]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sprint.state_on(today), crate::sprints::SprintState::Planned);
+        assert_eq!(sprint.state_on(start), crate::sprints::SprintState::Active);
+
+        let project = store.load_meta("demo").unwrap();
+        let value = generate(&store, &project, "kanbanr:gantt").unwrap();
+        assert_eq!(
+            value["sprints"],
+            serde_json::json!([{"code": sprint.code, "start": sprint.start, "end": sprint.end}]),
+            "a sprint is its code and dates, never its state on a day"
+        );
+        for key in ["milestones", "items"] {
+            assert!(value[key].is_array(), "{key}: {value}");
+        }
+        let text = value.to_string();
+        assert!(
+            !text.contains("active") && !text.contains("done"),
+            "nothing in the value is derived from today: {text}"
+        );
+        let hash =
+            |v: &serde_json::Value| crate::hash::stable_hash(&crate::hash::canonical_json(v));
+        let again = generate(&store, &store.load_meta("demo").unwrap(), "kanbanr:gantt").unwrap();
+        assert_eq!(hash(&value), hash(&again));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

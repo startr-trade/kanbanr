@@ -884,8 +884,9 @@ Before the move:
   linked under `Affects docs`, and the repository docs its Design lists there. **docs-folded** is
   offered only once every task is complete and every doc linked under `Affects docs` (board or
   repository) has changed; until then the Review page does not offer it and `kanbanr check` names
-  what is missing. A commit on the item's branch after the sign-off lapses it, so fold first and
-  commit nothing to the branch after asking;
+  what is missing. A later commit on the item's branch that changes shipped code or a doc the item
+  names lapses the sign-off; one that changes only tests, or docs the item does not name, leaves it
+  standing. So fold first and commit no shipped code to the branch after asking;
 - settle the **texts to check** before docs-folded is offered. They are the docs and items that name
   a flag, route, setting, stage, status or file the item changed and have not changed since
   (`kanbanr check` lists those left under "Texts to settle"; `kanbanr drift` lists them for the
@@ -1129,6 +1130,9 @@ project revision it was observed at. So:
   forms. A runner outside them (go test, Jest, Maven, nextest until MNT-007) records nothing. Say
   so in the Design and ask before choosing it. When the hook says it read no test result from a
   run, rerun in a form it reads; never set the test by hand.
+- `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`); until
+  the installed kanbanr reads nextest's lines (FTR-058, v0.8.0), run
+  `KANBANR_TEST_RUNNER=cargo make test` when the run's results should be captured.
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed
@@ -1338,6 +1342,10 @@ Before doing project work in a new or resumed session, **recover the state from 
 run `kanbanr board` and read the relevant feature items (`kanbanr feature show …`,
 `kanbanr todo list …`). Continue exactly where the project left off; do not restart from memory.
 
+The session start prints a summary sized to fit (`kanbanr recover`): what is in progress, what
+waits for the person, the sprint and release. Read `kanbanr board` when you need every item; never
+assume an item is absent because the summary did not list it.
+
 ## Keep the tool updated — before AND after every task
 
 Treat kanbanr updates as part of doing the work, not an afterthought:
@@ -1505,6 +1513,7 @@ kanbanr claude sync [--show]                    # refresh the generated block in
 kanbanr claude permissions [--write]            # the Claude Code allow rules for delegated commands; --write adds the missing ones to .claude/settings.local.json, with the person's yes
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
+kanbanr recover [--budget BYTES]                # the plan to resume from, sized for a session start (8000 bytes; $KANBANR_SESSION_BUDGET)
 kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]

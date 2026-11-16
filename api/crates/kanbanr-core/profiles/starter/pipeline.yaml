@@ -1,0 +1,82 @@
+# How the pipeline is shaped, where it runs, and its test tiers.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: pipeline
+  description: How the pipelines are split, where they run, and the test tiers
+  version: 1
+  requires: [core]
+areas:
+  - id: pipeline-shape
+    title: The pipeline's shape
+    asks: first_need
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [pipeline, workflow, job, trigger, schedule, tag, scan, Trivy, CodeQL, release]
+    question: How are the pipelines split?
+    options:
+      - id: split-by-trigger
+        label: Split by trigger
+        recommended: true
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [CI on push, scanning on schedule and dependency change, release on tag]
+        records:
+          - {kind: practice, text: "Pipelines are split by trigger: CI on every push, dependency and image scanning on a schedule and on dependency changes, release on a tag; each job is rerunnable alone and a green result is reused until the code it covers changes"}
+      - id: single-pipeline
+        label: One pipeline
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [one workflow]
+        records:
+          - {kind: practice, text: "One workflow runs every stage; stages that did not change are skipped by cache"}
+
+  - id: runners
+    title: Runners
+    asks: first_need
+    select: many
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [runner, self-hosted, hosted, agent, build machine]
+    question: Which runners run the pipeline?
+    options:
+      - id: hosted-runners
+        label: Hosted runners
+        recommended: true
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [hosted runners]
+        records:
+          - {kind: constraint, text: "The pipeline runs on {label}", why: "The account's limits and the secrets the runners can reach"}
+      - id: self-hosted-runners
+        label: Self-hosted runners
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [self-hosted, own runners]
+        asks_value: where they run
+        records:
+          - {kind: constraint, text: "The pipeline runs on self-hosted runners in {value}", why: "The account's limits and the secrets the runners can reach"}
+
+  - id: ci-tiers
+    title: CI tiers
+    asks: first_need
+    when: {area: delivery, options: [github-actions, bitbucket-pipelines, gitlab-ci, other]}
+    touches: [test tier, slow tests, integration tests, make ci, nightly, release gate]
+    question: How are the tests tiered?
+    options:
+      - id: fast-then-full
+        label: A fast tier, then a full tier
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [fast tier, full tier]
+        records:
+          - {kind: practice, text: "The same checks run locally (`make ci`) and in CI: the fast tier on every landing, the full tier before a release"}
+      - id: single-tier
+        label: One tier
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: practice, text: "The same checks run locally (`make ci`) and in CI, all of them on every landing"}

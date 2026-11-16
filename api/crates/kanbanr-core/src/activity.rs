@@ -145,9 +145,195 @@ pub fn append_with(
     );
 }
 
+/// Activity verbs and their past tense (FTR-048), as the Overview's Activity lines read them. A
+/// verb the board writes as two words (`sign off`) is listed in that form too.
+const PAST: &[(&str, &str)] = &[
+    ("add", "added"),
+    ("edit", "edited"),
+    ("move", "moved"),
+    ("approve", "approved"),
+    ("unapprove", "withdrew approval of"),
+    ("signoff", "signed off"),
+    ("sign off", "signed off"),
+    ("ratify", "ratified"),
+    ("define", "defined"),
+    ("plan", "planned"),
+    ("cut", "cut"),
+    ("promote", "promoted"),
+    ("ship", "shipped"),
+    ("record", "recorded"),
+    ("prepare", "prepared"),
+    ("confirm", "confirmed"),
+    ("reject", "rejected"),
+    ("task", "updated tasks of"),
+    ("test", "updated tests of"),
+    ("delete", "deleted"),
+    ("remove", "removed"),
+    ("close", "closed"),
+    ("start", "started"),
+];
+
+/// Object nouns dropped when an item code follows them ("edit feature FTR-043").
+const NOUNS: &[&str] = &[
+    "feature",
+    "item",
+    "milestone",
+    "sprint",
+    "release",
+    "todo-list",
+    "task",
+    "test",
+    "doc",
+    "adr",
+];
+
+/// An activity message in plain words (FTR-048): `(item code, words)`.
+///
+/// The first word (or the two words of `sign off`) is the verb, put in the past tense by [`PAST`].
+/// The item code is recognised by its boundary (L-23): a whole whitespace-separated token, with
+/// trailing `.,;:` trimmed, that `title_of` knows. A part of a longer token (`FTR-0431`, or the
+/// `FTR-037` of `FTR-037/R-1`) is never the code, and a code-shaped token the board does not
+/// know (`SP-003`) is not an item. With a code, the words are `"<CODE> <title> <past> <rest>"`,
+/// the object noun right before the code dropped; without one, `"<Past> <rest>"` capitalised.
+/// An unknown verb keeps the message as it is, with the title inserted after the code.
+pub fn humanise(
+    message: &str,
+    title_of: impl Fn(&str) -> Option<String>,
+) -> (Option<String>, String) {
+    let tokens: Vec<&str> = message.split_whitespace().collect();
+    let code_at = tokens.iter().position(|t| {
+        let bare = t.trim_end_matches(['.', ',', ';', ':']);
+        !bare.is_empty() && title_of(bare).is_some()
+    });
+    let code = code_at.map(|i| tokens[i].trim_end_matches(['.', ',', ';', ':']).to_string());
+    let title = code.as_deref().and_then(&title_of);
+
+    let lower: Vec<String> = tokens.iter().take(2).map(|t| t.to_lowercase()).collect();
+    let verb = PAST.iter().find_map(|(v, past)| {
+        let words = v.split(' ').count();
+        (lower.len() >= words && lower[..words].join(" ") == *v).then_some((words, *past))
+    });
+    // A code inside the verb's own words is not the verb.
+    let verb = verb.filter(|(n, _)| code_at.is_none_or(|i| i >= *n));
+
+    let Some((verb_len, past)) = verb else {
+        // Unknown verb: the message as it is, the title after the code.
+        let words = match (code_at, &title) {
+            (Some(i), Some(t)) => {
+                let mut out: Vec<String> = tokens.iter().map(|s| s.to_string()).collect();
+                out.insert(i + 1, t.clone());
+                out.join(" ")
+            }
+            _ => message.to_string(),
+        };
+        return (code, words);
+    };
+
+    let mut rest: Vec<&str> = Vec::new();
+    for (i, t) in tokens.iter().enumerate().skip(verb_len) {
+        if Some(i) == code_at {
+            continue;
+        }
+        let noun_before_code = code_at == Some(i + 1) && NOUNS.contains(&t.to_lowercase().as_str());
+        if !noun_before_code {
+            rest.push(t);
+        }
+    }
+    let rest = rest.join(" ");
+    let words = match (&code, &title) {
+        (Some(c), Some(t)) => [c.as_str(), t.as_str(), past, rest.as_str()]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => {
+            let line = if rest.is_empty() {
+                past.to_string()
+            } else {
+                format!("{past} {rest}")
+            };
+            let mut chars = line.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => line,
+            }
+        }
+    };
+    (code, words)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R-8: a message reads as the item and what happened to it.
+    #[test]
+    fn a_message_reads_as_the_item_and_what_happened() {
+        let title_of = |c: &str| match c {
+            "FTR-043" => Some("One Plan page".to_string()),
+            "DEF-056" => Some("A broken link".to_string()),
+            _ => None,
+        };
+        // A known verb with a code: the code, its title, the past tense; the noun dropped.
+        assert_eq!(
+            humanise("edit feature FTR-043", title_of),
+            (
+                Some("FTR-043".to_string()),
+                "FTR-043 One Plan page edited".to_string()
+            )
+        );
+        // No code: the past tense first, capitalised (coordinator, 17 Nov).
+        assert_eq!(
+            humanise("add milestone", title_of),
+            (None, "Added milestone".to_string())
+        );
+        // A code-shaped token the board does not know is not an item, and its noun stays.
+        assert_eq!(
+            humanise("plan sprint SP-003", title_of),
+            (None, "Planned sprint SP-003".to_string())
+        );
+        // Sign-off, in one word and in the two words the board writes.
+        assert_eq!(
+            humanise("signoff design-review on FTR-043", title_of).1,
+            "FTR-043 One Plan page signed off design-review on"
+        );
+        assert_eq!(
+            humanise("sign off docs-folded on DEF-056", title_of),
+            (
+                Some("DEF-056".to_string()),
+                "DEF-056 A broken link signed off docs-folded on".to_string()
+            )
+        );
+        // A verb phrase that is not a plain past tense.
+        assert_eq!(
+            humanise("unapprove feature FTR-043", title_of).1,
+            "FTR-043 One Plan page withdrew approval of"
+        );
+        // An unknown verb keeps its text, with the title after the code.
+        assert_eq!(
+            humanise("frobnicate FTR-043 twice", title_of),
+            (
+                Some("FTR-043".to_string()),
+                "frobnicate FTR-043 One Plan page twice".to_string()
+            )
+        );
+        assert_eq!(
+            humanise("frobnicate the board", title_of),
+            (None, "frobnicate the board".to_string())
+        );
+        // L-23: a code is a whole token, never a part of one.
+        let (code, words) = humanise("edit feature FTR-0431", title_of);
+        assert_eq!(code, None);
+        assert_eq!(words, "Edited feature FTR-0431");
+        let (code, _) = humanise("test a::b of FTR-043/R-1 is now green", title_of);
+        assert_eq!(code, None);
+        // Trailing punctuation is not part of the code.
+        assert_eq!(
+            humanise("move FTR-043.", title_of).0.as_deref(),
+            Some("FTR-043")
+        );
+    }
 
     fn scratch(name: &str) -> std::path::PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

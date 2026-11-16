@@ -70,13 +70,19 @@ pub enum Check {
     /// The item is covered by the project's coverage rules (FEAT-197), judged as if it were already
     /// in the stage it is entering; `{docs_cover: [id]}` asks for only those rules.
     DocsCover,
+    /// The project's system baseline has been accepted at least once (FTR-006): the system
+    /// design is agreed before the first build. A pinned source changed since warns, never blocks.
+    SystemBaselineAccepted,
+    /// The spec's Design holds the subsections the item's kind asks for (FTR-006,
+    /// [`crate::design`]). Judged too wherever a gate asks for the Design section.
+    DesignSections,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 20] = [
+    pub const GATEABLE: [Check; 22] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -97,6 +103,8 @@ impl Check {
         Check::DocsUpdated,
         Check::DiagramsValid,
         Check::DocsCover,
+        Check::SystemBaselineAccepted,
+        Check::DesignSections,
     ];
 
     /// The name a gate uses for this check.
@@ -154,6 +162,14 @@ impl Check {
             Check::DocsCover => {
                 "the item is covered by every project coverage rule it falls under; \
                  `{docs_cover: [id]}` asks for only those rules"
+            }
+            Check::SystemBaselineAccepted => {
+                "the project's system baseline has been accepted at least once (`kanbanr catalog \
+                 baseline`); a project with none opts in with `kanbanr catalog baseline init`"
+            }
+            Check::DesignSections => {
+                "the spec's Design holds the subsections the item's kind asks for (`kanbanr \
+                 feature design --template --kind <kind>` lists them)"
             }
         }
     }
@@ -262,6 +278,7 @@ impl Condition {
             Condition::SpecSections { .. }
                 | Condition::Check(Check::SpecSections)
                 | Condition::Check(Check::DiagramsValid)
+                | Condition::Check(Check::DesignSections)
         )
     }
 }
@@ -405,6 +422,9 @@ pub struct Context {
     pub(crate) branches: std::sync::OnceLock<Option<crate::gitmodel::BranchFacts>>,
     /// `cadence.main_branch`, when set.
     pub(crate) main_branch: Option<String>,
+    /// The project's system baseline as it stands (FTR-006), loaded only when some effective gate
+    /// names `system_baseline_accepted`; `None` asks nothing. Not FTR-033's engineering baseline.
+    pub system_baseline: Option<std::sync::Arc<crate::systembaseline::State>>,
 }
 
 impl Context {
@@ -478,6 +498,7 @@ impl Context {
             active_sprint: crate::sprints::active_on(&all_sprints, today).map(|a| a.code.clone()),
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            system_baseline: Self::system_baseline(store, id, config, repo),
             build_onward: crate::manual::build_onward(config),
             unshipped_releases: if config.cadence.releases {
                 crate::releases::load(store, id)
@@ -493,6 +514,40 @@ impl Context {
             },
             history: Default::default(),
         }
+    }
+
+    /// The system baseline's state, when a gate will ask for it (FTR-006). One that cannot be read
+    /// reads as not initialised, naming why, so the gate holds rather than passes.
+    fn system_baseline(
+        store: &crate::Store,
+        id: &str,
+        config: &crate::ProjectConfig,
+        repo: Option<&std::path::Path>,
+    ) -> Option<std::sync::Arc<crate::systembaseline::State>> {
+        let want = Condition::Check(Check::SystemBaselineAccepted);
+        let asked = config
+            .effective_gates()
+            .values()
+            .any(|g| g.requires.iter().chain(&g.warns).any(|c| *c == want));
+        if !asked {
+            return None;
+        }
+        let state = store
+            .load_meta(id)
+            .and_then(|p| crate::systembaseline::state(store, &p, repo))
+            .unwrap_or_else(|e| crate::systembaseline::State {
+                kind: crate::systembaseline::StateKind::NotInitialised,
+                rows: Vec::new(),
+                accepted: None,
+                accepted_count: 0,
+                changes: Vec::new(),
+                unpinned: Vec::new(),
+                missing: Vec::new(),
+                can_accept: false,
+                cannot_accept_why: format!("{UNREADABLE}: {e}"),
+                pins_rev: String::new(),
+            });
+        Some(std::sync::Arc::new(state))
     }
 
     /// The coverage snapshot, when a gate will ask for it; one that names why, when it cannot be
@@ -620,6 +675,15 @@ fn evaluate_entering_window(
         .collect();
     if !sections.is_empty() && !is_exempt(feature) {
         gaps.extend(spec_section_gaps(&feature.specification, &sections));
+    }
+    // Wherever the Design section is asked, the kind's Design subsections are judged too
+    // (FTR-006); a gate that names `design_sections` itself was judged above. The Design heading
+    // is the gate's own `spec_sections` gap, so it is not said twice.
+    if !checks.contains(&Check::DesignSections)
+        && crate::method::asks_design(conditions)
+        && !is_exempt(feature)
+    {
+        gaps.extend(design_sections_gaps(feature, true));
     }
     let columns: Vec<String> = conditions
         .iter()
@@ -968,6 +1032,7 @@ pub fn next_gates(
             }
             let mut requires_gaps =
                 evaluate_entering(feature, goal_ids.as_ref(), &gate.requires, ctx, to);
+            let said = never_blocks(&mut requires_gaps);
             requires_gaps.extend(additions_gap(
                 feature,
                 &gate.requires,
@@ -1027,7 +1092,16 @@ pub fn next_gates(
                 enforce: gate.enforce,
                 gaps,
                 requires_gaps,
-                warnings: evaluate_entering(feature, goal_ids.as_ref(), &gate.warns, ctx, to),
+                warnings: said
+                    .into_iter()
+                    .chain(evaluate_entering(
+                        feature,
+                        goal_ids.as_ref(),
+                        &gate.warns,
+                        ctx,
+                        to,
+                    ))
+                    .collect(),
                 signoffs_needed,
                 signoffs_held,
                 docs_built,
@@ -1271,6 +1345,12 @@ fn evaluate_in_window(
             &["Design".to_string()],
         ));
     }
+    if checks.contains(&Check::DesignSections) && !exempt {
+        gaps.extend(design_sections_gaps(feature, false));
+    }
+    if checks.contains(&Check::SystemBaselineAccepted) && !exempt {
+        gaps.extend(system_baseline_gaps(feature, ctx));
+    }
     if checks.contains(&Check::DocsUpdated)
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
@@ -1386,6 +1466,8 @@ pub fn evaluate_definition(
                     | Check::DocsUpdated
                     | Check::DiagramsValid
                     | Check::DocsCover
+                    | Check::SystemBaselineAccepted
+                    | Check::DesignSections
             )
         });
         if reads_definition {
@@ -1573,7 +1655,9 @@ fn item_level(
         | Check::SpecSections
         | Check::DocsUpdated
         | Check::DiagramsValid
-        | Check::DocsCover => {}
+        | Check::DocsCover
+        | Check::SystemBaselineAccepted
+        | Check::DesignSections => {}
     }
 }
 
@@ -1771,6 +1855,102 @@ fn spec_section_gaps(spec: &str, names: &[String]) -> Vec<Gap> {
             },
         )
         .collect()
+}
+
+/// What `design_sections` lacks (FTR-006): each subsection the item's kind asks of its Design
+/// ([`crate::design::required_sections`]) that is absent or empty. An item of a kind with no own
+/// entry is judged as a feature. Labelled "[Design: Cause missing]". `design_asked`: the gate's
+/// `spec_sections` already judges the Design heading itself.
+fn design_sections_gaps(feature: &FeatureItem, design_asked: bool) -> Vec<Gap> {
+    crate::design::required_sections(feature.kind.as_deref())
+        .iter()
+        .filter(|name| !(design_asked && name.eq_ignore_ascii_case("Design")))
+        .flat_map(|name| {
+            let name = name.to_string();
+            spec_section_gaps(&feature.specification, std::slice::from_ref(&name))
+                .into_iter()
+                .map(move |g| Gap {
+                    check: Check::DesignSections,
+                    label: format!("[Design: {name} missing]"),
+                    ..g
+                })
+        })
+        .collect()
+}
+
+/// The start of the label of a system baseline row changed since acceptance: said, never enforced.
+const CHANGED: &str = "[system baseline changed: ";
+
+/// The start of the message a baseline that cannot be read carries.
+const UNREADABLE: &str = "the system baseline cannot be read";
+
+/// What `system_baseline_accepted` lacks (FTR-006). No gate asked (`ctx.system_baseline` is
+/// `None`): nothing. Not initialised or awaiting acceptance: one blocking gap. Changed since the
+/// latest acceptance: one Warning per changed row, which a gate never blocks on
+/// ([`never_blocks`]).
+fn system_baseline_gaps(feature: &FeatureItem, ctx: &Context) -> Vec<Gap> {
+    use crate::systembaseline::StateKind;
+    if is_exempt(feature) {
+        return Vec::new();
+    }
+    let Some(state) = ctx.system_baseline.as_deref() else {
+        return Vec::new();
+    };
+    let blocking =
+        |label: &str, message: String| gap(Check::SystemBaselineAccepted, None, label, message);
+    match state.kind {
+        StateKind::NotInitialised => {
+            let message = if state.cannot_accept_why.starts_with(UNREADABLE) {
+                state.cannot_accept_why.clone()
+            } else {
+                "no system baseline — `kanbanr catalog baseline init`, then the person accepts it \
+                 on the Review page"
+                    .to_string()
+            };
+            vec![blocking("no system baseline", message)]
+        }
+        StateKind::Awaiting => vec![blocking(
+            "system baseline not accepted",
+            "the system baseline is not accepted — it waits on the Review page (`kanbanr prepare \
+             system-baseline` to prepare it)"
+                .to_string(),
+        )],
+        StateKind::Accepted => Vec::new(),
+        StateKind::Changed => {
+            let date = state
+                .accepted
+                .as_ref()
+                .map(|a| a.at.get(..10).unwrap_or(&a.at).to_string())
+                .unwrap_or_default();
+            state
+                .changes
+                .iter()
+                .map(|c| {
+                    let what = if c.source.is_empty() {
+                        &c.row
+                    } else {
+                        &c.source
+                    };
+                    gap(
+                        Check::SystemBaselineAccepted,
+                        None,
+                        &format!("{CHANGED}{}]", c.row),
+                        format!("{what} changed since the system baseline was accepted on {date}"),
+                    )
+                })
+                .collect()
+        }
+    }
+}
+
+/// Take out of a gate's failing `requires` the gaps that are said, never enforced (FTR-006): a
+/// system baseline changed since it was accepted warns. Returns them, for the gate's warnings.
+pub fn never_blocks(gaps: &mut Vec<Gap>) -> Vec<Gap> {
+    let (said, kept): (Vec<Gap>, Vec<Gap>) = std::mem::take(gaps)
+        .into_iter()
+        .partition(|g| g.check == Check::SystemBaselineAccepted && g.label.starts_with(CHANGED));
+    *gaps = kept;
+    said
 }
 
 /// A requirement's name for a message: its id, or the start of its text when it has none yet (a
@@ -3388,6 +3568,227 @@ mod tests {
         assert!(Context::default().builds("x"));
     }
 
+    /// FTR-006 R-4: the system baseline holds the first build. No file blocks with the init text
+    /// (L-29); awaiting blocks; accepted passes; a changed doc is a Warning and the move goes on;
+    /// an exempt item skips; with no gate asking, `Context.system_baseline` is `None` and nothing
+    /// is read.
+    #[test]
+    fn system_system_baseline_accepted_gate() {
+        use crate::catalog::{Catalog, Level as RowLevel, Row, Source, SourceKind};
+        assert_eq!(
+            Check::SystemBaselineAccepted.name(),
+            "system_baseline_accepted"
+        );
+        let dir = std::env::temp_dir().join(format!("kanbanr-sb-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = crate::Store::new(dir.clone());
+        // L-41: the board is this test's own, under the system temp folder.
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Agree the system before building it.".into(),
+                goals: vec![crate::charter::Goal {
+                    id: "G-1".into(),
+                    statement: "The system design is agreed first".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let code = store
+            .add_feature("demo", "Cart", "", "M", None)
+            .unwrap()
+            .code;
+        let ask = [Condition::Check(Check::SystemBaselineAccepted)];
+        let gaps_now = |store: &crate::Store| {
+            let project = store.load("demo").unwrap();
+            let ctx = Context::load(store, "demo", &project.config);
+            let gaps = evaluate_conditions(project.feature(&code).unwrap(), None, &ask, &ctx);
+            (ctx, gaps)
+        };
+
+        // No gate asks: nothing is read, even a file that would not parse.
+        let file = store
+            .project_dir("demo")
+            .join(crate::systembaseline::BASELINE_FILE);
+        std::fs::write(&file, "rows: [unclosed").unwrap();
+        let (ctx, gaps) = gaps_now(&store);
+        assert!(ctx.system_baseline.is_none());
+        assert!(gaps.is_empty(), "{gaps:?}");
+        std::fs::remove_file(&file).unwrap();
+
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.gates.insert(
+            "Scheduled".into(),
+            crate::config::Gate {
+                requires: ask.to_vec(),
+                ..Default::default()
+            },
+        );
+        store.save_config("demo", &config).unwrap();
+
+        // Not initialised: one blocking gap that says how to start (L-29).
+        let (ctx, gaps) = gaps_now(&store);
+        assert!(ctx.system_baseline.is_some());
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].check, Check::SystemBaselineAccepted);
+        assert_eq!(
+            gaps[0].message,
+            "no system baseline — `kanbanr catalog baseline init`, then the person accepts it on \
+             the Review page"
+        );
+        assert!(
+            store
+                .move_feature_gated("demo", &code, "Scheduled", None)
+                .is_err()
+        );
+        // An exempt item skips.
+        let mut exempt = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        exempt.definition = Some(FeatureDefinition {
+            exempt: "a one-line fix".into(),
+            ..Default::default()
+        });
+        assert!(evaluate_conditions(&exempt, None, &ask, &ctx).is_empty());
+
+        // Awaiting acceptance: blocks, naming where it waits.
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![Row {
+                    id: "context".into(),
+                    title: "Context".into(),
+                    answers: vec!["what".into()],
+                    for_: vec!["architect".into()],
+                    level: RowLevel::System,
+                    source: Source {
+                        kind: SourceKind::Written,
+                        path: "architecture/context.md".into(),
+                        ..Source::default()
+                    },
+                    ..Row::default()
+                }],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# Context\n\nThe system.\n",
+            )
+            .unwrap();
+        crate::systembaseline::init(&store, "demo").unwrap();
+        let (_, gaps) = gaps_now(&store);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(
+            gaps[0]
+                .message
+                .starts_with("the system baseline is not accepted — it waits on the Review page"),
+            "{gaps:?}"
+        );
+        assert!(
+            store
+                .move_feature_gated("demo", &code, "Scheduled", None)
+                .is_err()
+        );
+
+        // Accepted: passes.
+        crate::systembaseline::accept(&store, "demo", "Ada", "monitor", "", "", None).unwrap();
+        let (_, gaps) = gaps_now(&store);
+        assert!(gaps.is_empty(), "{gaps:?}");
+
+        // Changed since: one Warning per changed row, and the move goes on with it said.
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# Context\n\nThe system, grown.\n",
+            )
+            .unwrap();
+        let (_, gaps) = gaps_now(&store);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].level, Level::Warning);
+        let today = crate::now_rfc3339()[..10].to_string();
+        assert_eq!(
+            gaps[0].message,
+            format!(
+                "architecture/context.md changed since the system baseline was accepted on {today}"
+            )
+        );
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.check == Check::SystemBaselineAccepted),
+            "{warnings:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-006 R-7: the Design a gate asks for is judged by the item's kind. A defect with Cause
+    /// and Fix passes where a feature with the same text lacks its Implementation tasks; an item
+    /// with no kind is judged as a feature; the check is judged by a gate asking only
+    /// `spec_sections: [Design]`, and by one naming `design_sections` alone.
+    #[test]
+    fn design_sections_gate_scales_by_kind() {
+        let spec = "# Fix the cart\n\n## Design\n\n### Cause\nThe total rounds early.\n\n\
+                    ### Fix\nRound once, at the end.\n\n### Affects docs\n- none\n";
+        let of_kind = |kind: Option<&str>| {
+            let mut f = item(Some(FeatureDefinition {
+                statement: "s".into(),
+                ..Default::default()
+            }));
+            f.kind = kind.map(str::to_string);
+            f.specification = spec.into();
+            f
+        };
+        let ctx = Context::default();
+        let design_only = [Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }];
+        let named = [Condition::Check(Check::DesignSections)];
+        let plain = [Condition::Check(Check::SpecSections)];
+        for conditions in [&design_only[..], &named[..], &plain[..]] {
+            for kind in ["defect", "bug"] {
+                let gaps = evaluate_conditions(&of_kind(Some(kind)), None, conditions, &ctx);
+                assert!(gaps.is_empty(), "{kind} {conditions:?}: {gaps:?}");
+            }
+            for kind in [Some("feature"), None, Some("no-such-kind")] {
+                let gaps = evaluate_conditions(&of_kind(kind), None, conditions, &ctx);
+                let labels: Vec<&str> = gaps.iter().map(|g| g.label.as_str()).collect();
+                assert_eq!(
+                    labels,
+                    vec!["[Design: Implementation tasks missing]"],
+                    "{kind:?} {conditions:?}"
+                );
+                assert_eq!(gaps[0].check, Check::DesignSections);
+            }
+        }
+        // A gate that asks for neither does not judge it.
+        let other = [Condition::Check(Check::Statement)];
+        assert!(evaluate_conditions(&of_kind(None), None, &other, &ctx).is_empty());
+        // An exempt item has nothing to answer.
+        let mut exempt = of_kind(None);
+        exempt.definition.as_mut().unwrap().exempt = "trivial".into();
+        assert!(evaluate_conditions(&exempt, None, &named, &ctx).is_empty());
+        assert!(Condition::Check(Check::DesignSections).reads_spec());
+    }
+
     #[test]
     fn every_check_is_listed_with_a_description() {
         let mut names: Vec<String> = Check::GATEABLE.iter().map(|c| c.name()).collect();
@@ -3458,8 +3859,16 @@ mod tests {
             }]
         };
         let ctx = Context::default();
-        let gaps =
-            |f: &FeatureItem, names: &[&str]| evaluate_conditions(f, None, &ask(names), &ctx);
+        // Asking for Design judges the kind's Design subsections too (FTR-006,
+        // `design_sections_gate_scales_by_kind`); this test is about the sections asked by name.
+        let only_named = |gaps: Vec<Gap>| -> Vec<Gap> {
+            gaps.into_iter()
+                .filter(|g| g.check == Check::SpecSections)
+                .collect()
+        };
+        let gaps = |f: &FeatureItem, names: &[&str]| {
+            only_named(evaluate_conditions(f, None, &ask(names), &ctx))
+        };
 
         let none = with_spec("# Title\n\nWhy it exists.\n");
         let g = gaps(&none, &["Design"]);
@@ -3490,8 +3899,11 @@ mod tests {
 
         // Plain `spec_sections` asks for Design.
         let plain = vec![Condition::Check(Check::SpecSections)];
-        assert_eq!(evaluate_conditions(&none, None, &plain, &ctx).len(), 1);
-        assert!(evaluate_conditions(&nested, None, &plain, &ctx).is_empty());
+        assert_eq!(
+            only_named(evaluate_conditions(&none, None, &plain, &ctx)).len(),
+            1
+        );
+        assert!(only_named(evaluate_conditions(&nested, None, &plain, &ctx)).is_empty());
 
         let mut exempt = with_spec("");
         exempt.definition.as_mut().unwrap().exempt = "predates the method".into();

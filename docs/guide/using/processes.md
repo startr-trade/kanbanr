@@ -107,6 +107,8 @@ board.
 | `docs_updated` | every board doc the item declares in `affects_docs`, and every board doc linked under the Design's Affects docs (except lines marked unchanged), has changed since it entered its current stage |
 | `diagrams_valid` | every Mermaid diagram in the spec and in each doc it names in `affects_docs` passes the diagram lint |
 | `docs_cover` | the item is covered by every project coverage rule it falls under; `{docs_cover: [id]}` asks for only those rules |
+| `system_baseline_accepted` | the project's system baseline has been accepted at least once (`kanbanr catalog baseline`); a project with none opts in with `kanbanr catalog baseline init` |
+| `design_sections` | the spec's Design holds the subsections the item's kind asks for (`kanbanr feature design --template --kind <kind>` lists them) |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.

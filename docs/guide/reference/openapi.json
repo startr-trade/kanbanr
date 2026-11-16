@@ -825,6 +825,16 @@
             "const": "docs_cover",
             "description": "The item is covered by the project's coverage rules (FEAT-197), judged as if it were already\nin the stage it is entering; `{docs_cover: [id]}` asks for only those rules.",
             "type": "string"
+          },
+          {
+            "const": "system_baseline_accepted",
+            "description": "The project's system baseline has been accepted at least once (FTR-006): the system\ndesign is agreed before the first build. A pinned source changed since warns, never blocks.",
+            "type": "string"
+          },
+          {
+            "const": "design_sections",
+            "description": "The spec's Design holds the subsections the item's kind asks for (FTR-006,\n[`crate::design`]). Judged too wherever a gate asks for the Design section.",
+            "type": "string"
           }
         ]
       },
@@ -3361,6 +3371,11 @@
           {
             "const": "links",
             "description": "Doctor reports references to things the board does not have.",
+            "type": "string"
+          },
+          {
+            "const": "system-baseline",
+            "description": "The project's system baseline is accepted before the first build (FTR-006).",
             "type": "string"
           }
         ]

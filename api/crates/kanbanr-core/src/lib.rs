@@ -15,6 +15,7 @@ pub mod adr;
 pub mod agentscope;
 mod architecture;
 pub mod atomic;
+pub mod baseline;
 pub mod batch;
 pub mod boardreadme;
 pub mod catalog;
@@ -65,6 +66,7 @@ pub mod origin;
 pub mod portfolio;
 pub mod position;
 pub mod prepared;
+pub mod profile;
 pub mod project;
 pub mod query;
 pub mod readiness;
@@ -80,6 +82,7 @@ pub mod review;
 pub mod reviewgroups;
 pub mod scm;
 pub mod server;
+pub mod shellwrap;
 pub mod sprints;
 pub mod store;
 pub mod systembaseline;
@@ -3236,6 +3239,10 @@ requirements:
             .signoffs
             .push("design-review".into());
         store.save_config("demo", &config).unwrap();
+        // The system baseline holds every first build (FTR-006); not this test's subject.
+        store
+            .set_method("demo", false, &[crate::method::Part::SystemBaseline])
+            .unwrap();
         let queue = || -> Vec<Value> {
             let out =
                 crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
@@ -3244,7 +3251,13 @@ requirements:
         let entry = |code: &str| queue().into_iter().find(|v| v["code"] == code);
         let add = |title: &str| {
             let f = store
-                .add_feature("demo", title, "## Design\n\nHow.", "M", None)
+                .add_feature(
+                    "demo",
+                    title,
+                    "## Design\n\nHow.\n\n### Implementation tasks\n- T1\n\n### Affects docs\n- none\n",
+                    "M",
+                    None,
+                )
                 .unwrap();
             let mut small = full_definition("Keep carts 7 days");
             small.zachman.how.clear();
@@ -4051,9 +4064,14 @@ requirements:
                 .unwrap()
                 .contains("future: kept")
         );
-        // The release report carries the stage to the monitor.
+        // The release report carries the stage to the monitor. The report is newest first
+        // (DEF-034), so the release under test is picked by its version.
         let report = crate::releases::report_all(&store, "demo").unwrap();
-        let shown = serde_json::to_value(&report[0]).unwrap();
+        let v010 = report
+            .iter()
+            .find(|r| r.release.version == "v0.1.0")
+            .unwrap();
+        let shown = serde_json::to_value(v010).unwrap();
         assert_eq!(shown["stage"], "uat");
         assert_eq!(shown["stages"].as_array().unwrap().len(), 2);
     }
@@ -5262,7 +5280,9 @@ requirements:
         let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
             spec_sections: vec!["Design".into()],
         }]);
-        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        // A feature's Design holds its tasks and the docs it affects (FTR-006 `design_sections`).
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n\n### Implementation tasks\n- T1\n\n\
+                    ### Affects docs\n- none\n";
         store
             .edit_feature("demo", &code, None, Some(spec.into()), None, None)
             .unwrap();
@@ -8515,6 +8535,11 @@ requirements:
     #[test]
     fn a_chore_with_a_statement_goals_and_requirements_moves_on() {
         let (store, _d) = togaf_board();
+        // The system baseline holds every first build (FTR-006); this test is about the chore's
+        // own path, so the part is off.
+        store
+            .set_method("demo", false, &[crate::method::Part::SystemBaseline])
+            .unwrap();
         let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
         define_and_approve(&store, &code);
         // The Design section and its review are the feature's, not the chore's.
@@ -8658,6 +8683,11 @@ requirements:
     #[test]
     fn a_chore_still_needs_the_users_approval_to_start_building() {
         let (store, _d) = togaf_board();
+        // The system baseline holds every first build (FTR-006); this test is about the chore's
+        // own path, so the part is off.
+        store
+            .set_method("demo", false, &[crate::method::Part::SystemBaseline])
+            .unwrap();
         let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
         store
             .set_feature_definition("demo", &code, Some(full_definition("Pin the image")))

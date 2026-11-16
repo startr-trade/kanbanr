@@ -8,10 +8,12 @@
 # of skill/kanbanr/SKILL.md.
 #
 # What it does: if `kanbanr` is on PATH *and* a project is resolvable (a
-# `.kanbanr` marker in the cwd, or $KANBANR_PROJECT set), it prints the current
-# board and recent activity on stdout. SessionStart hook stdout is surfaced to
-# Claude as context, so the model sees the live plan without having to remember
-# to ask for it.
+# `.kanbanr` marker in the cwd, or $KANBANR_PROJECT set), it prints
+# `kanbanr recover` on stdout: the recovered plan, sized to fit (DEF-093) —
+# 8000 bytes by default, $KANBANR_SESSION_BUDGET to change it. SessionStart hook
+# stdout is surfaced to Claude as context, so the model sees the live plan
+# without having to remember to ask for it. A kanbanr older than this script
+# (no `recover`) gets the 0.7.0 sequence instead, cut to the same budget.
 #
 # SAFETY CONTRACT: this hook is BEST-EFFORT and must NEVER break a session.
 #   - If kanbanr is not installed, or no project is resolvable, or any command
@@ -63,8 +65,14 @@ else
   exit 0
 fi
 
-# 3) Print the board and recent activity. Guard EACH call: a failure here
+# 3) Print the recovered plan, sized to fit (DEF-093): `kanbanr recover` keeps
+#    the full summary when it fits the budget and otherwise leads with what is
+#    in progress, what waits for the person and the sprint and release. A
+#    kanbanr on PATH older than this script has no `recover`: it gets the 0.7.0
+#    sequence below, cut to the same budget. Guard EACH call: a failure here
 #    (e.g. data dir missing, project mis-resolved) should still exit 0.
+if ! kanbanr "${PROJECT_ARGS[@]}" recover 2>/dev/null; then
+{
 echo "## kanbanr — recovered project state (SessionStart)"
 echo
 
@@ -135,6 +143,8 @@ echo "specs/decisions/progress). Resume from the board above; record new work in
 echo "kanbanr as you go. Every document (requested or self-initiated) goes in"
 echo "kanbanr docs (\`kanbanr doc add …\`), NOT the working folder — unless the user"
 echo "asks for it in the project folder._"
+} | head -c "${KANBANR_SESSION_BUDGET:-8000}"
+fi
 
 # Always succeed: recovery is advisory, never fatal.
 exit 0

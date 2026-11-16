@@ -5578,7 +5578,8 @@ fn method_gates_opt_out() {
     let parts: serde_json::Value =
         serde_json::from_str(&ok(run_in(&base, &work, &["--json", "config", "method"]))).unwrap();
     let parts = parts["parts"].as_array().unwrap();
-    assert_eq!(parts.len(), 5);
+    // Six since the system baseline (FTR-006).
+    assert_eq!(parts.len(), 6);
     assert!(parts.iter().all(|p| p["on"] == false), "{parts:?}");
     let status = ok(run_in(&base, &work, &["process", "status"]));
     assert!(
@@ -14215,5 +14216,189 @@ fn adr_new_refuses_an_unknown_zachman_column() {
         &["adr", "new", "Y", "--zachman", "how"],
     ));
     assert!(made.contains("ADR-0001"), "{made}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A temp board for the session summary (L-41): a git repo with a first commit and `init` under
+/// the system temp dir, asserted to be the test's own before anything is written to it.
+fn recover_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    assert!(
+        base.canonicalize()
+            .unwrap()
+            .starts_with(std::env::temp_dir().canonicalize().unwrap()),
+        "the board is the test's own, under the temp dir"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "--initial-branch=main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let board = std::fs::canonicalize(work.join("..").join("shop.kanbanr")).unwrap();
+    assert!(board.starts_with(base.canonicalize().unwrap()), "{board:?}");
+    (base, work)
+}
+
+/// DEF-093 R-1, R-2, R-5: on a board of 400 items (300 Completed, 85 Planned, 10 In Progress, 5
+/// awaiting approval) `kanbanr recover` stays within the 8000-byte default, names every item in
+/// progress and no planned one, points at `kanbanr board` and `kanbanr ready`, and takes under 2 s;
+/// `--budget 3000` stays within 3000.
+#[test]
+fn the_session_summary_of_a_400_item_board_stays_under_budget() {
+    let (base, work) = recover_scratch("def093-400");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    // A workflow without gates, so one batch can put every item where the fixture needs it.
+    let process = base.join("process.yaml");
+    std::fs::write(
+        &process,
+        "statuses: [Planned, In Progress, Completed]\n\
+         default_state: Planned\n\
+         displayed_states: [Planned, In Progress, Completed]\n\
+         terminal_states: [Completed]\n\
+         transitions:\n  Planned: [In Progress]\n  In Progress: [Completed, Planned]\n  Completed: [In Progress]\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    ));
+    // FEAT-001..300 Completed, FEAT-301..310 In Progress, FEAT-311..395 Planned, and
+    // FEAT-396..400 Planned with a definition nobody has approved yet.
+    let mut ops = vec![serde_json::json!({"op": "milestone.add", "ref": "m", "name": "M"})];
+    for n in 0..400 {
+        let mut op = serde_json::json!({
+            "op": "feature.add",
+            "ref": format!("f{n}"),
+            "title": format!("Item {n:03} with a title of a realistic length for a board"),
+            "milestone": "m",
+        });
+        if n >= 395 {
+            op["definition"] = serde_json::json!({"statement": "It matters"});
+        }
+        ops.push(op);
+    }
+    for n in 0..310 {
+        ops.push(
+            serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "In Progress"}),
+        );
+    }
+    for n in 0..300 {
+        ops.push(
+            serde_json::json!({"op": "feature.move", "code": format!("f{n}"), "to": "Completed"}),
+        );
+    }
+    let bundle = base.join("bundle.json");
+    std::fs::write(
+        &bundle,
+        serde_json::to_string(&serde_json::json!({ "operations": ops })).unwrap(),
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["batch", "--file", bundle.to_str().unwrap()],
+    ));
+    let board = ok(run_in(&base, &work, &["board"]));
+    assert!(
+        board.stdout.len() > 20_000,
+        "the whole board is too big to print"
+    );
+
+    let started = std::time::Instant::now();
+    let out = ok(run_in(&base, &work, &["recover"]));
+    let took = started.elapsed();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(text.len() <= 8000, "{} bytes:\n{text}", text.len());
+    assert!(took < std::time::Duration::from_secs(2), "took {took:?}");
+    for n in 301..=310 {
+        assert!(
+            text.contains(&format!("FEAT-{n:03}")),
+            "FEAT-{n} missing:\n{text}"
+        );
+    }
+    for n in 311..=395 {
+        assert!(
+            !text.contains(&format!("FEAT-{n:03}")),
+            "FEAT-{n} listed:\n{text}"
+        );
+    }
+    assert!(text.contains("`kanbanr board`") && text.contains("`kanbanr ready`"));
+    assert!(text.contains("### In progress (10)"), "{text}");
+    assert!(text.contains("5 item(s) to approve or sign off"), "{text}");
+
+    let json = ok(run_in(&base, &work, &["--json", "recover"]));
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["form"], "brief");
+    assert_eq!(v["bytes"].as_u64().unwrap() as usize, text.len());
+
+    let tight = ok(run_in(&base, &work, &["recover", "--budget", "3000"]));
+    assert!(tight.stdout.len() <= 3000, "{} bytes", tight.stdout.len());
+    let tight = String::from_utf8_lossy(&tight.stdout);
+    assert!((301..=310).all(|n| tight.contains(&format!("FEAT-{n:03}"))));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-093 R-3: a fresh project's summary keeps the 0.7.0 form: its header, `### Board` then
+/// `### Recent activity`, the closing paragraph, and no brief-form sections.
+#[test]
+fn an_empty_boards_session_summary_keeps_its_full_form() {
+    let (base, work) = recover_scratch("def093-empty");
+    let out = run_in(&base, &work, &["recover"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.starts_with("## kanbanr — recovered project state (SessionStart)\n\n"),
+        "{text}"
+    );
+    let board = text.find("### Board\n").expect("### Board");
+    let activity = text
+        .find("### Recent activity\n")
+        .expect("### Recent activity");
+    assert!(board < activity, "{text}");
+    assert!(
+        text.trim_end()
+            .ends_with("asks for it in the project folder._"),
+        "{text}"
+    );
+    assert!(text.contains("Resume from the board above"), "{text}");
+    assert!(!text.contains("### In progress"), "{text}");
+    assert!(!text.contains("### Read more"), "{text}");
     let _ = std::fs::remove_dir_all(&base);
 }

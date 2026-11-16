@@ -94,6 +94,13 @@ When decisions are waiting, the session start mentions them. Claude says in one 
 there are, which, and the address of the page where they wait. It doesn't list them as questions.
 If you ask it to explain one, it does, and sends you back to the page.
 
+The session start's summary is sized to fit what Claude Code shows a session in full: 8000 bytes by
+default (set `KANBANR_SESSION_BUDGET` to change it, never below 2000). On a small board it is the
+whole board, the recent activity and the lessons, as before. On a large one it leads with what is
+in progress, what waits for you and the sprint and release, counts the rest by status, and names
+where to read more (`kanbanr board`, `kanbanr ready`). Claude reads the whole board when the work
+needs it; ask it to, or open the board in the monitor. `kanbanr recover` prints the same summary.
+
 | You decide | Where |
 |---|---|
 | Approve a definition, or ratify work done under a recorded override | **Review** page |

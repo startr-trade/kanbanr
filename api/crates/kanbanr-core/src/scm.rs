@@ -394,7 +394,7 @@ pub fn setup_hint(facts: &RepoFacts) -> Option<&'static str> {
         && !facts.merging
         && facts.branch.as_deref() == Some(facts.default_branch.as_str()))
     .then_some(
-        "Setup's own first commit is the one exception: stage only .kanbanr, CLAUDE.md and \
+        "Setup's own first commit is let through: stage only .kanbanr, CLAUDE.md and \
          .gitignore, and commit them with `[no-ref] initial setup`.",
     )
 }
@@ -1070,7 +1070,7 @@ mod tests {
 
     // ---- setup's own first commit (DEF-067) ----------------------------------------------
 
-    const HINT: &str = "Setup's own first commit is the one exception";
+    const HINT: &str = "Setup's own first commit is let through";
 
     /// Setup's facts: on main of a repository with history, the marker on disk and not in HEAD.
     fn setup(message: Option<&str>, staged: Option<&[&str]>) -> RepoFacts {
@@ -1317,9 +1317,24 @@ Refs: kanbanr:FEAT-001",
         assert_eq!(
             refusal(commit_verdict(&setup(Some("wip"), None), &p)),
             "This would commit straight to main. Work belongs on a branch for its item: run \
-             `kanbanr start <CODE>` first.\n\nSetup's own first commit is the one exception: \
+             `kanbanr start <CODE>` first.\n\nSetup's own first commit is let through: \
              stage only .kanbanr, CLAUDE.md and .gitignore, and commit them with \
              `[no-ref] initial setup`."
         );
+    }
+
+    /// DEF-085 R-1: with both hints on one refusal, setup's no longer claims to be the only
+    /// exception before the block's says "too".
+    #[test]
+    fn a_refusal_with_both_hints_names_no_one_exception() {
+        let mut facts = setup(Some("wip"), None);
+        facts.block_refresh = true;
+        let text = refusal(commit_verdict(&facts, &board(false)));
+        let setup_at = text
+            .find("Setup's own first commit is let through")
+            .expect("setup's hint");
+        let block_at = text.find("is let through too").expect("the block's hint");
+        assert!(setup_at < block_at, "setup's hint comes first: {text}");
+        assert!(!text.contains("one exception"), "{text}");
     }
 }

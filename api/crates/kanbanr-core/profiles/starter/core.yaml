@@ -1,0 +1,471 @@
+# What the project is, its stack, where it runs, infrastructure as code, delivery and the practice
+# baseline (asked at setup), and the project-wide concerns every kind of project meets.
+# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+profile:
+  name: core
+  description: What the project is, its stack, where it runs and how it is delivered
+  version: 1
+areas:
+  - id: project-kind
+    title: What the project is
+    asks: setup
+    touches: [screen, page, endpoint, API, library, CLI]
+    question: What kind of project is this?
+    options:
+      - id: service
+        label: An API or backend service
+        why: The product is used by other programs through an API
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        detect:
+          - {fact: parts, any: [api]}
+          - openapi.yaml
+          - openapi.json
+      - id: screen
+        label: A product used through screens
+        why: People use the product through its screens
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        detect:
+          - {fact: parts, any: [web-ui, desktop-ui, mobile-app]}
+          - {file: package.json, contains: '"react"'}
+          - {file: package.json, contains: '"vue"'}
+      - id: both
+        label: Both screens and an API
+        why: The product has screens and an API others call
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+      - id: library
+        label: A library or SDK
+        why: Other code builds on the product; it runs inside their programs
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        detect:
+          - {fact: parts, any: [library]}
+      - id: cli
+        label: A command-line tool
+        why: People and scripts run the product from a terminal
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        detect:
+          - {fact: parts, any: [cli]}
+
+  - id: stack
+    title: The stack
+    asks: setup
+    question: Which language and runtime is the project built in?
+    options:
+      - id: rust
+        label: Rust
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Rust, cargo]
+        detect: [{fact: languages, any: [rust]}, Cargo.toml]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: node
+        label: Node
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Node, npm, TypeScript]
+        detect: [{fact: languages, any: [typescript, javascript]}, package.json]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: python
+        label: Python
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Python, pip]
+        detect: [{fact: languages, any: [python]}, pyproject.toml, requirements.txt]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: go
+        label: Go
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Go]
+        detect: [{fact: languages, any: [go]}, go.mod]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: java-kotlin
+        label: Java or Kotlin
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Java, Kotlin, Gradle, Maven]
+        detect: [{fact: languages, any: [java, kotlin]}, pom.xml, build.gradle, build.gradle.kts]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: dotnet
+        label: .NET
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [.NET, C#]
+        detect: [{fact: languages, any: [csharp]}, "*.csproj"]
+        records:
+          - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+      - id: other
+        label: Another language
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        asks_value: the language and runtime
+        records:
+          - {kind: constraint, text: "{value} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
+
+  - id: runs-where
+    title: Where it runs
+    asks: setup
+    select: many
+    touches: [deploy, container, Kubernetes, serverless, systemd, host]
+    question: Where does the product run?
+    options:
+      - id: containers
+        label: Containers on a host
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Docker, Compose, container]
+        detect: [{fact: production, any: [container]}, Dockerfile, compose.yaml, docker-compose.yml]
+        records:
+          - {kind: constraint, text: Containers on a host run the product}
+          - {kind: non_goal, text: "No Kubernetes: containers run on a host with Compose"}
+      - id: kubernetes
+        label: Kubernetes
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Kubernetes, k8s, Helm]
+        detect: [{fact: production, any: [kubernetes]}, Chart.yaml, kustomization.yaml]
+        records:
+          - {kind: constraint, text: Kubernetes runs the product}
+      - id: serverless
+        label: Serverless functions
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Lambda, Functions, serverless]
+        detect: [{fact: production, any: [serverless]}, serverless.yml, template.yaml]
+        records:
+          - {kind: constraint, text: Serverless functions run the product}
+      - id: host
+        label: A host or VM, without containers
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [systemd, bare metal, VM]
+        detect: [{fact: production, any: [server]}]
+        records:
+          - {kind: constraint, text: The product runs directly on a host or VM}
+      - id: user-machine
+        label: The user's machine
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [desktop, local]
+        detect: [{fact: production, any: [developer-machine]}]
+        records:
+          - {kind: constraint, text: "The product runs on the user's machine"}
+          - {kind: non_goal, text: No server to operate}
+
+  - id: iac
+    title: Infrastructure as code
+    asks: setup
+    when: {area: runs-where, options: [containers, kubernetes, serverless, host]}
+    touches: [infrastructure, "*.tf", Terraform, OpenTofu, Pulumi, CloudFormation, Bicep]
+    question: What describes the infrastructure as code?
+    options:
+      - id: opentofu
+        label: OpenTofu
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [OpenTofu, tofu]
+        detect: ["*.tf"]
+        records:
+          - {kind: constraint, text: "{label} describes the infrastructure"}
+      - id: terraform
+        label: Terraform
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Terraform]
+        records:
+          - {kind: constraint, text: "{label} describes the infrastructure"}
+      - id: pulumi
+        label: Pulumi
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Pulumi]
+        detect: [Pulumi.yaml]
+        records:
+          - {kind: constraint, text: "{label} describes the infrastructure"}
+      - id: cloud-native
+        label: The cloud's own templates
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [CloudFormation, Bicep, ARM]
+        detect: [template.yaml, "*.bicep"]
+        records:
+          - {kind: constraint, text: "{label} describes the infrastructure"}
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: practice, text: Every environment change is recorded in the runbook until infrastructure as code is adopted}
+
+  - id: delivery
+    title: Delivery
+    asks: setup
+    select: many
+    touches: [pipeline, CI, workflow, .github/workflows/, bitbucket-pipelines.yml, .gitlab-ci.yml]
+    question: Which CI service runs the pipeline?
+    options:
+      - id: github-actions
+        label: GitHub Actions
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [GitHub Actions]
+        detect: [.github/workflows/]
+        records: &pipeline-records
+          - {kind: constraint, text: "{label} runs the pipeline"}
+          - {kind: practice, text: "The pipeline runs lint, tests, build, integration, scan and publish in that order, each a job rerunnable alone, with artifacts passed between them"}
+          - {kind: practice, text: Cache keys come from the lock files and caches are saved from main only}
+          - {kind: practice, text: Every job has a timeout and a superseded run is cancelled}
+        adds: &pipeline-adds
+          tasks: ["Write the pipeline with the stages and caches the baseline names: for Rust cargo-chef, sccache and a Rust cache; for Python the pip cache; for Node the npm cache; for images a build cache"]
+          release_gates: [{stage: main, gate: ci}]
+      - id: bitbucket-pipelines
+        label: Bitbucket Pipelines
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [Bitbucket Pipelines]
+        detect: [bitbucket-pipelines.yml]
+        records: *pipeline-records
+        adds: *pipeline-adds
+      - id: gitlab-ci
+        label: GitLab CI
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [GitLab CI]
+        detect: [.gitlab-ci.yml]
+        records: *pipeline-records
+        adds: *pipeline-adds
+      - id: other
+        label: Another CI service
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        asks_value: the CI service
+        records:
+          - {kind: constraint, text: "{value} runs the pipeline"}
+          - {kind: practice, text: "The pipeline runs lint, tests, build, integration, scan and publish in that order, each a job rerunnable alone, with artifacts passed between them"}
+          - {kind: practice, text: Cache keys come from the lock files and caches are saved from main only}
+          - {kind: practice, text: Every job has a timeout and a superseded run is cancelled}
+        adds: *pipeline-adds
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+
+  - id: practice-baseline
+    title: The practice baseline
+    asks: setup
+    select: many
+    touches: [factor, twelve-factor, fifteen-factor]
+    question: Which practice baseline does every design follow?
+    options:
+      - id: fifteen-factors
+        label: The fifteen factors
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [fifteen factors, 15-factor]
+        records:
+          - {kind: practice, text: "The project follows the fifteen factors; each design names the factors it touches under `### Factors` with a test or a reason"}
+      - id: twelve-factors
+        label: The twelve factors
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [twelve-factor, 12-factor]
+        records:
+          - {kind: practice, text: "The project follows the twelve factors; each design names the factors it touches under `### Factors` with a test or a reason"}
+      - id: house-rules
+        label: Our house rules
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        asks_value: the board doc that holds them
+        records:
+          - {kind: practice, text: "Every design names the house rules it touches ({value})"}
+      - id: none
+        label: None
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: No practice baseline beyond this record}
+
+  - id: edge
+    title: The edge
+    asks: first_need
+    when: {area: runs-where, options: [containers, kubernetes, host]}
+    touches: [proxy, TLS, certificate, ingress, nginx, Caddy, Traefik, CORS, hostname, HTTPS, "*.conf"]
+    question: Where does TLS end, and what sits in front of the services?
+    options:
+      - id: proxy-ends-tls
+        label: A reverse proxy ends TLS
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [reverse proxy, TLS ends, nginx, Caddy, Traefik]
+        asks_value: the proxy
+        records:
+          - {kind: constraint, text: "TLS ends at {value}; services speak plain HTTP behind it"}
+          - {kind: practice, text: "Hosts, certificates and CORS origins are configuration, never code"}
+      - id: service-ends-tls
+        label: Each service ends its own TLS
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [TLS at the service]
+        records:
+          - {kind: constraint, text: Each service ends its own TLS}
+          - {kind: practice, text: "Hosts, certificates and CORS origins are configuration, never code"}
+      - id: platform-ingress
+        label: The platform's ingress ends TLS
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [ingress, load balancer]
+        records:
+          - {kind: constraint, text: "The platform's ingress ends TLS"}
+          - {kind: practice, text: "Hosts, certificates and CORS origins are configuration, never code"}
+
+  - id: identity
+    title: Identity
+    asks: first_need
+    when: {area: project-kind, options: [service, screen, both]}
+    touches: [login, session, token, JWT, OAuth, OIDC, password, role, permission, authenticate, authorise]
+    question: How does the product know who its users are?
+    options:
+      - id: oidc-provider
+        label: An identity provider (OIDC)
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [OIDC, OAuth, identity provider, SSO]
+        asks_value: the provider
+        records:
+          - {kind: constraint, text: "{value} is the identity provider; the product keeps no passwords"}
+          - {kind: nfr, text: "A credential never appears in a log, a URL or a repository", iso25010: [Security]}
+      - id: own-accounts
+        label: Its own accounts
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [own accounts, password]
+        records:
+          - {kind: constraint, text: The product keeps its own accounts}
+          - {kind: nfr, text: "A credential never appears in a log, a URL or a repository", iso25010: [Security]}
+      - id: none
+        label: No accounts
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: "No accounts: the product tells no users apart"}
+
+  - id: config-secrets
+    title: Configuration and secrets
+    asks: first_need
+    touches: [environment variable, .env, secret, config file, settings, credential]
+    question: Where do configuration and secrets come from?
+    options:
+      - id: env-and-secret-store
+        label: The environment and a secret store
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [environment, secret store, Vault, secrets manager]
+        asks_value: the store
+        records:
+          - {kind: practice, text: "Configuration comes from the environment; a secret is read from {value} and never committed"}
+          - {kind: nfr, text: A secret never appears in a log or a repository, iso25010: [Security]}
+      - id: config-files
+        label: Configuration files
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [config file, settings file]
+        records:
+          - {kind: practice, text: "Configuration comes from files outside the repository; a secret is never committed"}
+          - {kind: nfr, text: A secret never appears in a log or a repository, iso25010: [Security]}
+      - id: platform-managed
+        label: The platform's secrets
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [platform secrets]
+        records:
+          - {kind: practice, text: "Configuration comes from the environment; a secret is read from the platform's secrets and never committed"}
+          - {kind: nfr, text: A secret never appears in a log or a repository, iso25010: [Security]}
+
+  - id: performance-budgets
+    title: Performance budgets
+    asks: first_need
+    touches: [latency, p95, throughput, budget, benchmark, load test]
+    question: Does the project name performance budgets?
+    options:
+      - id: budgets-with-benchmarks
+        label: Budgets, each with its benchmark
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [budget, benchmark]
+        records:
+          - {kind: nfr, text: p95 latency and throughput budgets are named per endpoint with the benchmark that measures them, iso25010: [Performance Efficiency]}
+      - id: none-yet
+        label: None yet
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: No performance budgets yet}
+
+  - id: data-protection
+    title: Data protection
+    asks: first_need
+    touches: [personal data, PII, GDPR, consent, retention, delete account, export, email address]
+    question: Does the product store personal data?
+    options:
+      - id: personal-data-handled
+        label: It stores personal data
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        mentions: [personal data]
+        records:
+          - {kind: nfr, text: "Personal data is minimised, deletable on request and never in logs", iso25010: [Security]}
+          - {kind: practice, text: "A design that stores personal data names the field, the purpose and the retention"}
+      - id: no-personal-data
+        label: No personal data
+        why: TODO(P12)
+        fits_when: TODO(P12)
+        costs: TODO(P12)
+        records:
+          - {kind: non_goal, text: No personal data is stored}

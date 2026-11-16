@@ -799,9 +799,9 @@ fn scan_declared_docs(
     ctx: &crate::readiness::Context,
     report: &mut Report,
 ) {
-    let gates = project.config.effective_gates();
-    let asks = |status: &str| {
-        gates.get(status).is_some_and(|g| {
+    // Judged by the gate the item's kind meets, its path's parts left out (DEF-070, DEF-069).
+    let asks = |status: &str, kind: Option<&str>| {
+        project.config.gate_for_kind(status, kind).is_some_and(|g| {
             g.requires.iter().chain(g.warns.iter()).any(|c| {
                 *c == crate::readiness::Condition::Check(crate::readiness::Check::DocsUpdated)
             })
@@ -819,7 +819,7 @@ fn scan_declared_docs(
         {
             continue;
         }
-        if asks(&f.status) {
+        if asks(&f.status, f.kind.as_deref()) {
             report.issues.push(Issue {
                 severity: Severity::Warning,
                 project: project.id.clone(),
@@ -832,7 +832,7 @@ fn scan_declared_docs(
             });
         } else if let Some(next) =
             crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
-            && asks(&next.status)
+            && asks(&next.status, f.kind.as_deref())
         {
             // Only the stage reached next asks: said as a count (DEF-021).
             report.count_ahead(project, &f.code, &next.status, 1);
@@ -1610,9 +1610,10 @@ mod tests {
                 before.iter().any(|g| g.check == Check::SpecSections),
                 "{p}: the full gate asks a chore for the Design section (the DEF-069 warning)"
             );
+            // The Design's subsections (FTR-006) go with the Design section the path leaves out.
             let expected: Vec<_> = before
                 .into_iter()
-                .filter(|g| g.check != Check::SpecSections)
+                .filter(|g| g.check != Check::SpecSections && g.check != Check::DesignSections)
                 .collect();
             assert_eq!(
                 now, expected,
@@ -1664,6 +1665,101 @@ mod tests {
                 .any(|m| m.contains("the spec has no 'Design' section")),
             "{said:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-070 R-1: on the togaf preset with a chore path that leaves docs out (set on the config's
+    /// `paths` in Rust before the board is made, B-28), a chore that names no docs is not warned at
+    /// the stage whose gate asks for docs_updated, nor counted one stage before it; a feature, which
+    /// has no path, still is.
+    #[test]
+    fn a_path_that_leaves_docs_out_gets_no_docs_warning() {
+        use crate::method::Part;
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-doctor-docs-off-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the board is the test's own"
+        );
+        let mut config = crate::config::preset("togaf").unwrap().into_config("demo");
+        let mut path = config
+            .paths
+            .get("chore")
+            .cloned()
+            .expect("togaf has a chore path");
+        if !path.method_off.contains(&Part::Docs) {
+            path.method_off.push(Part::Docs);
+        }
+        config.paths.insert("chore".into(), path);
+        let store = Store::new(dir.clone());
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Keep the reasoning with the work.".into(),
+                goals: vec![crate::charter::Goal {
+                    id: "G-1".into(),
+                    statement: "Nothing is built on reasoning nobody agreed to".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let chore = item_without_design(&store, Some("chore"));
+        let feature = item_without_design(&store, None);
+        let config = store.load("demo").unwrap().config;
+        assert!(
+            config
+                .gate_for_kind("Migration", None)
+                .unwrap()
+                .requires
+                .contains(&crate::readiness::Condition::Check(
+                    crate::readiness::Check::DocsUpdated
+                )),
+            "Migration asks for docs_updated"
+        );
+
+        // One stage before Migration: the feature is counted, the chore is not.
+        store
+            .move_feature("demo", &chore, "Implementation")
+            .unwrap();
+        for stage in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &feature, stage).unwrap();
+        }
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let mut report = Report::default();
+        scan_declared_docs(&project, &charter, &ctx, &mut report);
+        let counted = |code: &str| {
+            report
+                .ahead_seen
+                .contains(&("demo".into(), "Migration".into(), code.to_string()))
+        };
+        assert!(counted(&feature), "{:?}", report.ahead);
+        assert!(!counted(&chore), "{:?}", report.ahead);
+
+        // At Migration: doctor warns for the feature only.
+        store.move_feature("demo", &chore, "Migration").unwrap();
+        store.move_feature("demo", &feature, "Migration").unwrap();
+        let warned = |code: &str| {
+            said_of(&store, code)
+                .iter()
+                .filter(|m| m.contains("declares no docs"))
+                .count()
+        };
+        assert_eq!(warned(&feature), 1, "{:?}", said_of(&store, &feature));
+        assert_eq!(warned(&chore), 0, "{:?}", said_of(&store, &chore));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
