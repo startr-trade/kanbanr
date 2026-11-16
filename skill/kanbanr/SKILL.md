@@ -154,7 +154,8 @@ project"** (or anything equivalent):
      one initial commit (the `.kanbanr` marker, `CLAUDE.md`, a `.gitignore`) **before** the git
      hooks. An item branch needs a commit to branch from, and `kanbanr start` refuses until one
      exists. The first commit lands on the default branch and says `[no-ref] initial commit` in its
-     message. The `.gitignore` lists `.claude/settings.json` and `.claude/settings.local.json`.
+     message. The `.gitignore` lists `.claude/settings.json`, `.claude/settings.local.json` and
+     `.claude/worktrees/` (where agents' and your own worktrees go).
      `kanbanr hooks install` generates the settings file on each machine with that machine's
      absolute paths, so it's never committed.
    - *A git repository with commits already?* Plan one setup commit on the default branch, after
@@ -162,7 +163,12 @@ project"** (or anything equivalent):
      `git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial setup"`. The hooks
      and the guard take exactly this commit (only those three files, `[no-ref]` in the message)
      while the marker is not yet committed, so build agents' worktrees, cut from that branch, find
-     the board. Never put it on another branch: a branch that names no item is refused.
+     the board. Never put it on another branch: a branch that names no item is refused. If the
+     charter is agreed, or changed, after that commit, `kanbanr claude sync` changes `CLAUDE.md`
+     on the default branch again: commit it alone at once,
+     `git add CLAUDE.md && git commit -m "[no-ref] refresh the kanbanr block"`. The hooks and the
+     guard take that commit while nothing outside the kanbanr markers changed. Left uncommitted,
+     it makes Promote to main refuse the dirty checkout later.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
@@ -180,7 +186,7 @@ project"** (or anything equivalent):
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
-   printf '.claude/settings.json\n.claude/settings.local.json\n' >> .gitignore
+   printf '.claude/settings.json\n.claude/settings.local.json\n.claude/worktrees/\n' >> .gitignore
    git config user.name "<name>" && git config user.email "<email>"   # if git had none and the user said Yes
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
                                                    # with -c user.name=… -c user.email=… if they said No
@@ -1063,8 +1069,10 @@ gates, tell the user what differs and ask which holds.
 
 - `kanbanr claude sync` writes a marked block into the project's `CLAUDE.md` with its purpose,
   goals, non-goals and constraints, and regenerates that block whenever the charter changes.
-  Everything outside the markers belongs to the author. **Never hand-copy the charter into
-  instructions** — reference it.
+  Everything outside the markers belongs to the author. When it changes the block on the default
+  branch, commit `CLAUDE.md` alone with `[no-ref] refresh the kanbanr block`; on an item's branch
+  it goes in that item's next commit. **Never hand-copy the charter into instructions** —
+  reference it.
 - `kanbanr hooks install` registers the hooks for **this project** (`<project>/.claude/settings.json`),
   not the machine; `--global` is the opt-in. A checkout with no board carries none of them.
 - Prose is surfaced, never enforced. Non-goals appear as context so you do not propose against

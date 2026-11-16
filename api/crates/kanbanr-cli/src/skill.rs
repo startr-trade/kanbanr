@@ -398,6 +398,26 @@ mod tests {
         }
     }
 
+    /// DEF-083 R-3: the skill has Claude commit a refreshed CLAUDE.md block on its own at once,
+    /// the charter agreed after setup's commit included; setup ignores the worktrees folder (Q2).
+    #[test]
+    fn skill_commits_a_refreshed_block_on_its_own() {
+        let skill = skill_md();
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        for want in [
+            "If the charter is agreed, or changed, after that commit",
+            "git add CLAUDE.md && git commit -m \"[no-ref] refresh the kanbanr block\"",
+            "on an item's branch it goes in that item's next commit",
+        ] {
+            assert!(flat.contains(want), "the skill says {want:?}");
+        }
+        let printf = skill
+            .lines()
+            .find(|l| l.trim_start().starts_with("printf '.claude/settings.json"))
+            .expect("the plan's .gitignore line");
+        assert!(printf.contains(".claude/worktrees/"), "{printf}");
+    }
+
     /// FTR-024 R-6: plan mode is for setup and the process, and never while a sub-agent runs.
     #[test]
     fn skill_keeps_plan_mode_for_setup_and_process() {
