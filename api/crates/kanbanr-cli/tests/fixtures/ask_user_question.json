@@ -1,0 +1,50 @@
+{
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "/tmp/kanbanr-fixture/transcript.jsonl",
+  "cwd": "/tmp/kanbanr-fixture/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_use_id": "toolu_00000000000000000000000000",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Approve FTR-1 \"Example item\" 's definition as it stands (rev 00000000)? [kanbanr approve FTR-1 --rev 0000000000000000 --project example-project]",
+        "header": "Approve",
+        "options": [
+          {
+            "label": "Approve",
+            "description": "Record it now as your decision; kanbanr keeps this question and your answer on the record"
+          },
+          {
+            "label": "Not yet",
+            "description": "Record nothing; tell Claude what to change or what you need to see first"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_response": {
+    "questions": [
+      {
+        "question": "Approve FTR-1 \"Example item\" 's definition as it stands (rev 00000000)? [kanbanr approve FTR-1 --rev 0000000000000000 --project example-project]",
+        "header": "Approve",
+        "options": [
+          {
+            "label": "Approve",
+            "description": "Record it now as your decision; kanbanr keeps this question and your answer on the record"
+          },
+          {
+            "label": "Not yet",
+            "description": "Record nothing; tell Claude what to change or what you need to see first"
+          }
+        ],
+        "multiSelect": false
+      }
+    ],
+    "answers": {
+      "Approve FTR-1 \"Example item\" 's definition as it stands (rev 00000000)? [kanbanr approve FTR-1 --rev 0000000000000000 --project example-project]": "Approve"
+    }
+  }
+}

@@ -8111,7 +8111,7 @@ impl ScopeFx {
         fx
     }
 
-    /// The three hooks that tell an agent from the coordinator, in the project's settings.
+    /// The hooks that tell an agent from the coordinator, in the project's settings.
     fn register_claude_hooks(&self) {
         let dir = self.work.join(".claude");
         std::fs::create_dir_all(&dir).unwrap();
@@ -8121,7 +8121,10 @@ impl ScopeFx {
                 hook("Bash", "kanbanr git guard")[0].clone(),
                 hook("Write|Edit", "kanbanr claude guard")[0].clone(),
             ],
-            "PostToolUse": hook("Bash", "kanbanr capture"),
+            "PostToolUse": [
+                hook("Bash", "kanbanr capture")[0].clone(),
+                hook("AskUserQuestion", "kanbanr decisions heard")[0].clone(),
+            ],
         }});
         std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
     }
@@ -13123,7 +13126,7 @@ fn git_tidy_names_the_scope_left_on_a_finished_item() {
     let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
     let settings = serde_json::json!({ "hooks": {
         "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
-        "PostToolUse": [hook("Bash", "kanbanr capture")],
+        "PostToolUse": [hook("Bash", "kanbanr capture"), hook("AskUserQuestion", "kanbanr decisions heard")],
     }});
     std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();
     ok(run_in(

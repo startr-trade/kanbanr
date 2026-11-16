@@ -38,12 +38,15 @@ fn script_hooks() -> Vec<(&'static str, &'static str)> {
 /// output of a run to record which tracked tests actually passed (FEAT-053), the other checks a
 /// `git commit` before it is attempted, so the feedback arrives with a suggestion rather than as a
 /// failure after the fact (FEAT-056).
-const CLI_HOOKS: [(&str, &str, &str); 3] = [
+const CLI_HOOKS: [(&str, &str, &str); 4] = [
     ("PostToolUse", "Bash", "kanbanr capture"),
     ("PreToolUse", "Bash", "kanbanr git guard"),
     // Documentation belongs on the board (FEAT-040). The rule lived only in the skill's prose
     // until this hook; it decides from the path alone and stays silent where no board is active.
     ("PreToolUse", "Write|Edit", "kanbanr claude guard"),
+    // A decision taken in the conversation (FTR-035): it reads the person's answer to a tagged
+    // question from Claude Code's own record of it and makes the one-time pass the verdict needs.
+    ("PostToolUse", "AskUserQuestion", "kanbanr decisions heard"),
 ];
 
 /// Where a project's own hooks are registered: `<root>/.claude`, which Claude Code reads for that
@@ -144,7 +147,12 @@ pub fn plugin_enabled(settings: &Value) -> bool {
 /// the project's `settings.json` or `settings.local.json` or the user's `settings.json`, or the
 /// kanbanr plugin, which brings them, is enabled. A scope is told apart from its agent by them.
 pub fn identifying_hooks_registered(project_root: &Path) -> bool {
-    let files = kanbanr_core::claude::settings_files(project_root);
+    identifying_hooks_registered_in(&kanbanr_core::claude::settings_files(project_root))
+}
+
+/// [`identifying_hooks_registered`] over the settings files given, so a test need not read the
+/// user's own settings.
+fn identifying_hooks_registered_in(files: &[PathBuf]) -> bool {
     let all: Vec<Value> = files
         .iter()
         .filter_map(|f| std::fs::read_to_string(f).ok())
@@ -702,7 +710,7 @@ mod tests {
         assert_eq!(
             uninstall(&dir).unwrap(),
             script_hooks().len() + CLI_HOOKS.len(),
-            "every script hook plus the three that run the CLI"
+            "every script hook plus those that run the CLI"
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
@@ -732,6 +740,78 @@ mod tests {
             .collect();
         assert_eq!(starts.len(), 1, "stale entry replaced, not kept: {v}");
         assert!(!starts[0].starts_with("/old/place"));
+    }
+
+    /// FTR-035 R-1: install registers the AskUserQuestion hook that makes a pass from the person's
+    /// answer, once; uninstall takes it away and leaves the other hooks on its event alone; and a
+    /// scope is not told apart from its agent without it.
+    #[test]
+    fn install_registers_the_ask_user_question_hook() {
+        let dir = temp_claude_dir(true);
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "notify-send ran"}]}]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(install(&dir).unwrap(), Installed::Added(_)));
+        let read = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap()
+        };
+        let heard = |v: &Value| -> Vec<Value> {
+            v["hooks"]["PostToolUse"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|g| g["hooks"][0]["command"] == "kanbanr decisions heard")
+                .cloned()
+                .collect()
+        };
+        let v = read();
+        let groups = heard(&v);
+        assert_eq!(groups.len(), 1, "{v}");
+        assert_eq!(groups[0]["matcher"], "AskUserQuestion");
+        assert!(
+            commands(&v, "PostToolUse").any(|c| c == "kanbanr capture"),
+            "the capture hook sits beside it"
+        );
+        assert!(missing(&v).is_empty());
+
+        // A second install adds nothing.
+        assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
+        assert_eq!(heard(&read()).len(), 1);
+
+        // Without it the set is incomplete: PostToolUse is missing, and only it is added back.
+        let mut partial = v.clone();
+        partial["hooks"]["PostToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|g| g["hooks"][0]["command"] != "kanbanr decisions heard");
+        assert_eq!(missing(&partial), ["PostToolUse"]);
+        let scope_files = |settings: &Value| {
+            let root = temp_claude_dir(false);
+            let file = root.join("settings.json");
+            std::fs::write(&file, settings.to_string()).unwrap();
+            vec![file]
+        };
+        assert!(identifying_hooks_registered_in(&scope_files(&v)));
+        assert!(
+            !identifying_hooks_registered_in(&scope_files(&partial)),
+            "all four CLI hooks must be registered"
+        );
+        assert_eq!(
+            add(&mut partial, &scripts_dir(&dir)).unwrap(),
+            ["PostToolUse"]
+        );
+        assert_eq!(heard(&partial).len(), 1);
+
+        // Uninstall removes it, and leaves the person's own hook on the same event.
+        uninstall(&dir).unwrap();
+        let v = read();
+        assert!(heard(&v).is_empty(), "{v}");
+        assert_eq!(
+            commands(&v, "PostToolUse").collect::<Vec<_>>(),
+            ["notify-send ran"]
+        );
     }
 
     #[test]
