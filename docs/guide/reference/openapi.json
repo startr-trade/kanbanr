@@ -4744,6 +4744,10 @@
             "$ref": "#/components/schemas/ApprovalKind",
             "description": "What is being asked."
           },
+          "changed_at": {
+            "description": "When the item last changed: its `updated_at` (FTR-038).",
+            "type": "string"
+          },
           "changes": {
             "$ref": "#/components/schemas/PartChanges",
             "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
@@ -4776,6 +4780,10 @@
               "$ref": "#/components/schemas/OverrideView"
             },
             "type": "array"
+          },
+          "release": {
+            "description": "The release the item is planned into (FTR-038); empty when none.",
+            "type": "string"
           },
           "release_choices": {
             "description": "The planned releases it could ship in, in file order (FEAT-185). Present whenever the\nrelease question is due, so a surface asking another question first can ask this one too.\nEmpty: only a new release to choose.",
@@ -4812,6 +4820,10 @@
           },
           "spec_rev": {
             "description": "The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023): what\nthe verdict is pinned to, sent back with it.",
+            "type": "string"
+          },
+          "sprint": {
+            "description": "The sprint the item is in (FTR-038); empty when none.",
             "type": "string"
           },
           "started_unapproved": {
