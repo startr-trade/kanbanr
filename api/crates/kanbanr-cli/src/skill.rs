@@ -215,6 +215,73 @@ mod tests {
         skill.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// The flattened "Tests are evidence, not intentions" section of the skill.
+    fn tests_section(flat: &str) -> &str {
+        flat.split("## Tests are evidence, not intentions")
+            .nth(1)
+            .and_then(|r| r.split("## Every change points back").next())
+            .expect("tests section")
+    }
+
+    /// DEF-073 R-1: the skill keeps walkthrough tests to what a kanbanr runbook can observe on the
+    /// board, the monitor or the remote, never the product's own behaviour.
+    #[test]
+    fn skill_keeps_walkthrough_tests_to_what_a_runbook_can_observe() {
+        let flat = skill_flat();
+        let section = tests_section(&flat);
+        for needle in [
+            "A test of kind `walkthrough` is only for what a kanbanr runbook can observe on the board, the monitor or the remote",
+            "The product's own behaviour is never a walkthrough test",
+            "A runbook drives kanbanr, not the project's app",
+        ] {
+            assert!(section.contains(needle), "the skill lacks: {needle}");
+        }
+        assert!(
+            !flat.contains("Anything a run can see"),
+            "the skill still says: Anything a run can see"
+        );
+    }
+
+    /// DEF-073 R-2: the skill records a test the person named with the kind and name they gave,
+    /// and never changes either without their agreement.
+    #[test]
+    fn skill_keeps_the_kind_and_name_of_a_test_the_person_named() {
+        let flat = skill_flat();
+        let section = tests_section(&flat);
+        for needle in [
+            "A test the person named keeps its kind and its name",
+            "record it with the kind and the words they gave",
+            "Never change it afterwards on your own",
+            "propose it and make it only when the person agrees",
+        ] {
+            assert!(section.contains(needle), "the skill lacks: {needle}");
+        }
+        let needle = "a test the person named keeps theirs";
+        assert!(flat.contains(needle), "the skill lacks: {needle}");
+    }
+
+    /// DEF-073 R-3: the skill settles each test's name in the runner's form before it asks the
+    /// person to approve a definition.
+    #[test]
+    fn skill_settles_test_names_in_runner_form_before_approval() {
+        let flat = skill_flat();
+        let section = tests_section(&flat);
+        for needle in [
+            "Settle test names before asking for approval",
+            "the form the project's runner prints and capture reads",
+            "before the approval request, never after it",
+            "Settle that form before you ask for approval",
+        ] {
+            assert!(section.contains(needle), "the skill lacks: {needle}");
+        }
+        for needle in [
+            "Before you ask for approval, settle what would otherwise change after it",
+            "So settle test kinds and runner-form names before the first approval, not after it",
+        ] {
+            assert!(flat.contains(needle), "the skill lacks: {needle}");
+        }
+    }
+
     /// DEF-056 R-1: the first release proposes release-prepare and the pipeline before Promote.
     #[test]
     fn the_first_release_proposes_release_prepare_and_the_pipeline() {
