@@ -5,34 +5,18 @@
 //   web::check_type_scale_is_the_chosen_five_steps (R-9) — 13 / 14 / 16 / 18 / 22 px;
 //   web::check_severity_palette_is_the_chosen_values (R-10) — the computed palette, both themes.
 //
-// The palette check has its own small parser of tokens.css until DEF-082's `parseTokens` exists
-// (DEF-082 T1 replaces it with the import).
+// The palette check reads tokens.css through DEF-082's `parseTokens`, the parser the contrast
+// check measures with.
 //
 // Usage: npm run check:ui-tokens
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { mix, parseTokens } from "../src/ui/contrast.ts";
 
 const uiDir = new URL("../src/ui", import.meta.url).pathname;
 const read = (name) => readFileSync(join(uiDir, name), "utf8");
 const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const tokensCss = read("tokens.css");
-
-/** Custom properties per theme, in cascade order, with `var()` resolved. */
-function parseTokens(css) {
-  const blocks = [...stripComments(css).matchAll(/([^{}]+)\{([^}]*)\}/g)].map((m) => ({
-    selectors: m[1].split(",").map((s) => s.trim()),
-    props: [...m[2].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((p) => [p[1], p[2].trim()]),
-  }));
-  const theme = (name) => {
-    const applies = [":root", "[data-theme]", `[data-theme="${name}"]`];
-    const raw = new Map();
-    for (const b of blocks) if (b.selectors.some((s) => applies.includes(s))) for (const [k, v] of b.props) raw.set(k, v);
-    const resolve = (v, depth = 0) =>
-      depth > 20 ? v : v.replace(/var\((--[a-z0-9-]+)\)/g, (all, k) => (raw.has(k) ? resolve(raw.get(k), depth + 1) : all));
-    return { raw, value: (k) => (raw.has(k) ? resolve(raw.get(k)) : undefined) };
-  };
-  return { dark: theme("dark"), light: theme("light") };
-}
 
 function report(name, problems) {
   if (problems.length) {
@@ -70,11 +54,11 @@ const themes = parseTokens(tokensCss);
   const problems = [];
   const want = ["0.8125rem", "0.875rem", "1rem", "1.125rem", "1.375rem"];
   for (const [name, t] of Object.entries(themes)) {
-    const steps = [...t.raw.keys()].filter((k) => /^--fs-/.test(k)).sort();
+    const steps = Object.keys(t).filter((k) => /^--fs-/.test(k)).sort();
     const expected = want.map((_, i) => `--fs-${i + 1}`);
     if (steps.join(" ") !== expected.join(" ")) problems.push(`${name}: type steps are ${steps.join(" ") || "none"}, expected ${expected.join(" ")}`);
     want.forEach((v, i) => {
-      const got = t.value(`--fs-${i + 1}`);
+      const got = t[`--fs-${i + 1}`];
       if (got !== v) problems.push(`${name}: --fs-${i + 1} is ${got}, expected ${v}`);
     });
   }
@@ -90,17 +74,17 @@ const themes = parseTokens(tokensCss);
   };
   for (const [name, t] of Object.entries(themes)) {
     for (const [k, v] of Object.entries(want[name])) {
-      const got = t.value(k)?.toLowerCase();
+      const got = t[k]?.toLowerCase();
       if (got !== v) problems.push(`${name}: ${k} is ${got}, expected ${v}`);
       const plain = k.replace(/-fg$/, "");
-      if (t.value(plain)?.toLowerCase() !== v) problems.push(`${name}: ${plain} is ${t.value(plain)}, expected ${v}`);
+      if (t[plain]?.toLowerCase() !== v) problems.push(`${name}: ${plain} is ${t[plain]}, expected ${v}`);
     }
-    const accent = t.value("--accent");
-    if (!accent || t.value("--info-fg") !== accent) problems.push(`${name}: --info-fg is ${t.value("--info-fg")}, expected --accent (${accent})`);
+    const accent = t["--accent"];
+    if (!accent || t["--info-fg"] !== accent) problems.push(`${name}: --info-fg is ${t["--info-fg"]}, expected --accent (${accent})`);
     for (const tone of ["ok", "warn", "error", "info"]) {
-      const bg = t.raw.get(`--${tone}-bg`)?.replace(/\s+/g, " ");
-      const mix = `color-mix(in srgb, var(--${tone}-fg) 12%, var(--surface))`;
-      if (bg !== mix) problems.push(`${name}: --${tone}-bg is ${bg}, expected ${mix}`);
+      const bg = t[`--${tone}-bg`];
+      const want = mix(t[`--${tone}-fg`], t["--surface"], 0.12);
+      if (bg !== want) problems.push(`${name}: --${tone}-bg is ${bg}, expected --${tone}-fg at 12% over --surface (${want})`);
     }
   }
   ok = report("web::check_severity_palette_is_the_chosen_values", problems) && ok;

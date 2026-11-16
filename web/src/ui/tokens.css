@@ -9,7 +9,11 @@
  *
  * Decided by the person on 16 Nov 2026: the type scale (R-9), the severity palette (R-10), no page
  * cap with prose at 80ch and 36 px rows (R-11). The greys and the filled accent are DEF-082's rows
- * of the same decision; until DEF-082 T2 lands they keep today's values.
+ * of the same decision (R-8): each passes 4.5:1 on every surface it is drawn on.
+ *
+ * `--border` is a decorative separator. A control's edge, which a person needs to find the control,
+ * is `--border-strong`: the nearest grey to `--border` that reaches 3:1 on `--surface` and `--bg`
+ * (WCAG 1.4.11; DEF-082, decided by the coordinator on 17 Nov 2026).
  */
 
 /* Dark theme: the default. */
@@ -18,12 +22,14 @@
   --surface: #171a21;
   --surface-2: #1d212b;
   --border: #2a2f3a;
+  --border-strong: #62666e;   /* 3.02 on --surface, 3.28 on --bg */
   --text: #e6e9ef;
   --text-muted: #9aa3b2;
-  --text-subtle: #6e7681;
+  --text-subtle: #959daa;     /* 6.37 on --surface, 4.77 on --control */
   --accent: #5b8cff;
   --accent-strong: #3a6df0;
-  --on-accent: #fff;     /* text on an accent-filled surface */
+  --on-accent: #0f1115;       /* text on an accent-filled surface: 5.97 on --accent */
+  --on-accent-strong: #fff;   /* text on --accent-strong (the active shell tab): 4.54 */
   --ok: #3fb950;
   --warn: #d29922;
   --error: #ff7b72;
@@ -42,12 +48,14 @@
   --surface: #ffffff;
   --surface-2: #eef1f5;
   --border: #d7dce3;
+  --border-strong: #8c8f94;   /* 3.24 on --surface, 3.03 on --bg */
   --text: #1b1f27;
   --text-muted: #5a6573;
-  --text-subtle: #8a93a0;
+  --text-subtle: #616b78;     /* 5.41 on --surface, 4.77 on --surface-2 */
   --accent: #2f5fe0;
   --accent-strong: #3a6df0;
-  --on-accent: #fff;
+  --on-accent: #ffffff;       /* 5.48 on --accent */
+  --on-accent-strong: #fff;
   --ok: #177233;
   --warn: #875f00;
   --error: #b3262f;

@@ -350,6 +350,14 @@ jobs:
       # mark the selected tab with an underline, never an accent fill (FTR-046).
       - name: The UI kit's tabs pick, render and underline correctly
         run: npm run check:ui-tabs
+      # Every colour pair the monitor draws meets WCAG 2.1 AA in both themes: text 4.5:1, boundaries
+      # and the focus ring 3:1 (DEF-082).
+      - name: The monitor's colours meet WCAG 2.1 AA contrast
+        run: npm run check:a11y-contrast
+      # No text under 13 px: every font size in the monitor's CSS is a step of the type scale
+      # (DEF-082).
+      - name: The monitor draws no text under 13 px
+        run: npm run check:a11y-type
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
