@@ -38,6 +38,7 @@ pub mod error;
 pub mod eventing;
 pub mod evidence;
 pub mod export;
+pub mod facts;
 pub mod flow;
 pub mod gantt;
 pub mod gates;
