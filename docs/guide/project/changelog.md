@@ -19,6 +19,8 @@ All notable changes to kanbanr are documented here. The format follows
   nothing until the mode is set to delegated on the Review page (DOC-011).
 - An item whose branch is merged into its release still reads its changed docs as built, so
   docs-folded can be given after the merge (DEF-091).
+- A commit on main that changes only another tool's generated block in CLAUDE.md, such as
+  katalogr's, is let through like kanbanr's own block refresh (DEF-092).
 
 ## [0.7.0] - 2026-11-16
 
