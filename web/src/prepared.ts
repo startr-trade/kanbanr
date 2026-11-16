@@ -21,6 +21,30 @@ export function openFor(
   return found[0];
 }
 
+/** One batch of open records (FTR-037): its name and the records, oldest first. */
+export interface Batch {
+  name: string;
+  views: PreparedView[];
+}
+
+/**
+ * The open records grouped by batch, batches in the order their first record was prepared; a record
+ * prepared alone belongs to no batch and is not listed. The Review page offers "Confirm all N" and
+ * "Reject all N" per batch beside the single buttons.
+ */
+export function batches(views: PreparedView[] | null | undefined): Batch[] {
+  const out: Batch[] = [];
+  const open = (views ?? []).filter((v) => v.state === "open" && (v.batch ?? "").trim() !== "");
+  open.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "") || (a.id ?? "").localeCompare(b.id ?? ""));
+  for (const v of open) {
+    const name = (v.batch ?? "").trim();
+    const found = out.find((b) => b.name === name);
+    if (found) found.views.push(v);
+    else out.push({ name, views: [v] });
+  }
+  return out;
+}
+
 /**
  * Where a source links: a board doc or an item on this monitor, an http(s) link outside it, or
  * nothing (a commit is shown as code; a bare label or anything else is text, never a link).

@@ -109,6 +109,7 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
             ]
             | ["projects", _, "gate-results"]
             | ["projects", _, "prepared", _, "confirm" | "reject"]
+            | ["projects", _, "prepared", "batch", _, "confirm" | "reject"]
     )
 }
 
@@ -329,6 +330,9 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "gate-results"]) => Verdict::GateResult,
         ("POST", ["projects", _, "prepared", _, "confirm"]) => Verdict::ConfirmPrepared,
         ("POST", ["projects", _, "prepared", _, "reject"]) => Verdict::RejectPrepared,
+        // A whole batch at once (FTR-037): the same verdicts, the person's alone.
+        ("POST", ["projects", _, "prepared", "batch", _, "confirm"]) => Verdict::ConfirmPrepared,
+        ("POST", ["projects", _, "prepared", "batch", _, "reject"]) => Verdict::RejectPrepared,
         _ => return None,
     })
 }

@@ -1701,9 +1701,19 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
                 && !r.tests.iter().any(|t| t.state == TestState::Green)
                 && r.tests.iter().any(|t| t.at.trim().is_empty())
             {
+                // A walkthrough test is proved by a run, never asked of the person (FTR-037 R-6).
+                let hint = if r
+                    .tests
+                    .iter()
+                    .any(|t| t.kind.trim().eq_ignore_ascii_case("walkthrough"))
+                {
+                    format!(" ({})", crate::evidence::WALKTHROUGH_HINT)
+                } else {
+                    String::new()
+                };
                 push(
                     "not proven",
-                    format!("{id} has tests but none is green — not yet proven"),
+                    format!("{id} has tests but none is green — not yet proven{hint}"),
                 );
             }
         }

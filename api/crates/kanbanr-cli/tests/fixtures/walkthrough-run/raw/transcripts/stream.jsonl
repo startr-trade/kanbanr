@@ -1,0 +1,8 @@
+# >>> {"type":"user","message":{"role":"user","content":"Start using kanbanr for this project. Use TOGAF, with sprints and releases."}}
+{"type":"system","subtype":"init","session_id":"s-1","model":"claude-sonnet-5-5","tools":[]}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Where should the board live?"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s-1","total_cost_usd":0.12,"num_turns":2,"result":"Where should the board live?"}
+# >>> {"type":"user","message":{"role":"user","content":"In ../board, next to this project."}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s-1","total_cost_usd":0.31,"num_turns":4,"result":"The board is set up. What is the project for?"}
+# >>> {"type":"user","message":{"role":"user","content":"A small shop."}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s-1","total_cost_usd":0.55,"num_turns":3,"result":"Done."}

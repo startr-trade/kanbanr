@@ -240,7 +240,29 @@ known:
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
   version and the target date, then `kanbanr release add`. If an empty planned release exists,
-  reuse it; a mistaken empty one is `kanbanr release remove <V>`.
+  reuse it; a mistaken empty one is `kanbanr release remove <V>`. **The first release has a
+  checklist, finished before you name Promote to candidate** (the `next, for Claude:` lines
+  `release add` prints say the same):
+  (a) `kanbanr config release-prepare` with no flag shows what is configured. When it writes
+  nothing, propose it in **one** AskUserQuestion, the answers read from the repository and
+  recommended first: the manifest for `--version-file` (`Cargo.toml`, `package.json`,
+  `pyproject.toml`, or the file the person names), `CHANGELOG.md` for `--changelog` when it
+  exists, and the notes path (the doc site's releases folder if there is one,
+  `docs/src/releases/{version}.md` for an mdBook, else `RELEASES/{version}.md`). Run the command
+  the answer gives.
+  (b) When there is no `CHANGELOG.md`, offer a chore in the same message ("a CHANGELOG.md in Keep a
+  Changelog form, with an `## [Unreleased]` heading", planned into the release) and file it on yes,
+  by the chore rule below.
+  (c) When `kanbanr release stages` shows the tag waits for `ci`, or `kanbanr config show --json`
+  has `cadence.has_ci: true`, propose a **pipeline item** planned into this release, designed by
+  the rules in "Designing CI or a release workflow", as one multi-select question whose options are
+  the stages (format and lint, test, build, scan, publish or release) and the manual no-publish
+  run, not CI jobs alone.
+  (d) Only when (a) to (c) are done or declined, say what **Promote to candidate** will do (the
+  branch, the version files, the changelog heading, the notes draft) and that it is on the Releases
+  page. Never name the button first and configure afterwards. If the person has already clicked,
+  say the one command that prepares again (`kanbanr release promote <V> candidate`, theirs, in
+  their terminal; [DEF-057](/p/kanbanr/feature/DEF-057) gives the Releases page a button for it).
 - A started sprint is a record and is not edited. A sprint or release that holds items, a stage,
   a branch or a patch is not removed.
 
@@ -431,7 +453,10 @@ under "Lighter paths"; the built-in processes give `chore` one) skips the stages
 out. Do not walk a chore through stages its path omits, and do not pad answers to satisfy a stage it
 never meets: `kanbanr check` lists only the next stage on its path. Its first move asks the path's
 own conditions too (a statement, goals and requirements), so draft those once. Make one with
-`kanbanr feature add --kind chore`. The approval and the sign-offs the stage it enters asks for
+`kanbanr feature add --kind chore`. A chore you file yourself (a CHANGELOG, a pin, a pipeline) is
+asked for like one the person asks for: draft its statement, goal and one EARS invariant, and put
+them to the person as **one** AskUserQuestion (confirm, or change) before
+`kanbanr feature add --kind chore`; never file a chore with a blank definition. The approval and the sign-offs the stage it enters asks for
 stay the user's, as ever.
 
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
@@ -481,6 +506,8 @@ informed. Never leave them as "for you to decide" after the approval is given.
 When one request spans several stages ("take it to business architecture, then design it"), say at
 the top of the brief which stages it covers.
 
+Before you ask for approval, settle what would otherwise change after it: each test's kind (a
+test the person named keeps theirs) and its name in the runner's form (see Tests are evidence).
 Then write the definition to the board (`kanbanr feature define`), show its brief in a few lines,
 and say it is waiting for their approval on the Review page, with the link. Choices you had to
 make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
@@ -574,7 +601,11 @@ match a process by hand.
 
 The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
 `kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
-table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
+table — and offer to work through it. Before any `--override`, run `kanbanr check <CODE> --json`
+again and read the gate's gaps at that moment: a sign-off or approval given while you were asking
+closes them. If the gap is gone, move without `--override`. Override only a gap still there, with
+the user's reason; kanbanr records no override a gate did not need, and says `gate: the gate was
+met`. `--override "<reason>"` is for genuine emergencies, with the
 user's reason, and the item then needs ratifying. An override is yours to explain and the person's
 to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
 --reason … --source …`) and tell the person it waits on the Review page. The item does not ship
@@ -837,6 +868,20 @@ branches; fix it before going on.
   `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
   stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
+- **Before a candidate's release sign-off, run the walkthroughs** (FTR-037):
+  `kanbanr walkthrough run walkthroughs/<process>.md` drives the guide headlessly on a scratch
+  project inside a fence, takes each decision on the scratch board as the scripted person, and
+  prepares its checks on this board as one batch. Tell the person the batch waits on the Review page
+  (**Confirm all N**) and read `findings.md` with them; file items from findings only when they
+  agree. A runbook is a board doc under `walkthroughs/` whose first fenced yaml block holds the
+  steps. Draft one from a guide: each "you say" becomes a `say` step in the guide's words; each
+  monitor decision a `decide` with the `offer` the guide names (page and button); each push a `push`
+  to `code` or `board`; each manual check a `check: MT-n` defined under `checks` with its item,
+  requirement and exact test name; the setup interview's answers go under `answers` as
+  `{match, pick}` rules, `{board_remote}`, `{code_remote}`, `{monitor_url}` and `{today}` filled in
+  by the run. `kanbanr walkthrough lint <doc>` before the first run. A run acts only on a board
+  inside a fence and copies nothing of the person's configuration beyond their rules, settings and
+  credentials into its own folder.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
   make a feature item to prepare a release.
@@ -893,8 +938,9 @@ branches; fix it before going on.
   to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
-- **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
-  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: propose
+- **Designing CI or a release workflow.** Design the pipeline with the first release, or when the
+  user asks. The book's page *Designing CI and the release workflow* says the same; never point
+  the person at a source path. Make it an item with its own definition: propose
   separate stages (lint, test, build, then scan and publish in the release workflow), each a job
   that can be rerun alone, passing what it built to the next as an artifact; caches keyed on the
   lock files and saved from main only; a timeout on every job; a superseded run cancelled; and the
@@ -986,7 +1032,14 @@ command you run and flips the tracked tests to match what actually happened, sta
 project revision it was observed at. So:
 
 - Name the test entry exactly as the runner prints it (`cart::retains_for_seven_days`,
-  `src/cart.test.ts`), or the run cannot find it.
+  `src/cart.test.ts`), or the run cannot find it. Run tests so the hook can read them, and name
+  tracked tests as the hook reads them: cargo `module::tests::name`; Vitest with
+  `--reporter=verbose`, `src/App.test.tsx > title shows the basket item count` (the duration is
+  dropped); pytest with `-v`, `tests/test_x.py::test_y`; Playwright with `--reporter=list`,
+  `e2e/basket.spec.ts › kept basket › basket is kept after the browser is closed and reopened`
+  (project, location and duration dropped; the titles alone also match). Vitest's default
+  reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
+  them records nothing. Settle that form before you ask for approval (below).
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed
@@ -1005,6 +1058,30 @@ refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
 said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
 user whether to file a defect, and file one only when they say so.
+
+**At most one manual test per item, and only for a person's judgement** (does this read well, is
+this confusing). A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
+the board, the monitor or the remote: a button the monitor offers, a decision taken with nothing
+typed, a question Claude asked or did not ask, a board claim, a tag on the remote. Name it
+`walkthrough: <what the run shows>`: automated evidence, proved by
+`kanbanr walkthrough run <runbook doc>`, never asked of the person, and never searched for in the
+repository (FTR-037). `kanbanr check` says so for one not yet green. **The product's own behaviour
+is never a walkthrough test.** A runbook drives kanbanr, not the project's app, so a page, an API
+or a stored value of the project is proved by a test in the project's own runner (unit,
+integration or end-to-end), or, when only a person can judge it, by the item's one manual test.
+
+**A test the person named keeps its kind and its name.** When the person asks for a test (a
+manual check of the basket page, a test with this wording), record it with the kind and the words
+they gave. If you think another kind fits better, say why in a question before you record it, and
+record what they choose. Never change it afterwards on your own: after approval a change of kind
+or name lapses the approval, so propose it and make it only when the person agrees.
+
+**Settle test names before asking for approval.** Name every test in the form the project's
+runner prints and capture reads (the forms above), with the runner and its reporter chosen. If
+the project has not chosen its test runner yet, ask that (one AskUserQuestion, the option capture
+reads recommended first) while you draft the definition, before the approval request, never after
+it. A test named in another form is renamed before you ask: the same rename after approval lapses
+it, on every item that holds such a name.
 
 ## Every change points back at the reason for it
 
@@ -1310,6 +1387,9 @@ kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the d
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
+kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click
+kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions]   # a guide's run, headless; its checks prepared as one batch
+kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
@@ -1337,7 +1417,7 @@ kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severi
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when Claude runs it
 kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back (the user's too); the earlier entry stays as history
-kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
+kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded (after a fresh `kanbanr check`)
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
 kanbanr mirror enable --repo owner/repo [--allow-public] | disable | status [--all]
@@ -1414,7 +1494,8 @@ Under a phased process, grow an item's definition stage by stage.
 - **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
   standing, to be reviewed at the next decision (before build) or at once (from build on, when the
   Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
-  to approve again before the move.
+  to approve again before the move. So settle test kinds and runner-form names before the first
+  approval, not after it.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the

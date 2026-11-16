@@ -1,0 +1,4 @@
+time	step	source	question	options	pick	policy
+2026-11-15T10:00:05Z	1.1	text	Where should the board live?		In ../board, next to this project.	runbook (where .*board)
+2026-11-15T10:00:09Z	1.1	text	What is the project for?		A small shop.	runbook (purpose|what .*(project|shop|it) .*(for|about|do))
+2026-11-15T10:02:00Z	3.1	text	Which colour should the basket page use?	Red | Blue (recommended)	Blue (recommended)	recommended

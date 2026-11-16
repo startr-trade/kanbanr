@@ -79,6 +79,7 @@ it becomes an item on the board, so it has a definition, a test and an approval 
 
 | When | What |
 |---|---|
+| When you plan the first release | Claude proposes the pipeline item (if setup recorded CI); you approve it like any other design |
 | During setup or the first sprint | Ask Claude to design the pipeline, and approve it |
 | Before **Promote to main** | Run the release workflow without a tag, and fix what it shows |
 | After you push main | Wait for CI to go green, check the result Claude prepared and click **Record ci passed**, then **Check again** and **Cut** |

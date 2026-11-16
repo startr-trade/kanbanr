@@ -238,6 +238,10 @@ jobs:
       # the check to make, and recorded there as passed or failed (DEF-040).
       - name: The Review page lists manual checks waiting for you
         run: npm run check:manual-tests
+      # A walkthrough run's checks are prepared as one batch, confirmed or rejected with one click
+      # beside the single buttons (FTR-037).
+      - name: The Review page offers one click for a batch
+        run: npm run check:review-batch
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails

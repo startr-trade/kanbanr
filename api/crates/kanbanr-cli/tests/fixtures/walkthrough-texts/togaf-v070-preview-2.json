@@ -1,0 +1,51 @@
+[
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "How should the tests be recorded?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "The build is finished, but FEAT-001 is stuck on one thing I can't settle myself: how the tests get recorded.\n\n**The build.** The agent built T1 to T5, one commit each, on the item branch. Nothing is pushed.\n- **Tests:** I re-ran all four tests myself. They pass, 4 of 4.\n- **Server check:** the agent's own check after T4 gave 200 and a cookie on `GET /`, a 303 on a post, and 400 and 404 where expected. Its 405 and 500 paths were not exercised.\n- **Cleanup:** the agent's worktree is removed and its scope SC-002 is revoked. My checkout is now on the item branch.\n\n**The problem.** The board shows none of R-1 to R-4 green, even though they pass. The capture hook reads cargo, Vitest, pytest and Playwright output, and not Python's `unittest`. It also can't match the test names the Design uses. I won't mark them green by hand. **How should the tests be recorded?**\n\n1. **Use pytest to run the tests, and name them `tests/test_basket.py::BasketTests::<test>`.** This is a developer-only dependency, and the shop program itself stays stdlib-only. It means renaming the tracked tests. (recommended)\n2. **Keep `unittest`, and you record the four results** on the Review page after I prepare them.\n3. **Keep `unittest`, and I add a small runner wrapper** that prints pytest-style lines. It's more code, and it does nothing about the names.\n\n**Waiting for you on the Review page:** <monitor_url>/p/project/review\n- **FEAT-004's approval**, the `/basket` to `/cart` rename. Its Design and two-task list are already written. It can't go on to Business Arch, System Design and Implementation until you approve it and give `design-review`.\n- **FEAT-002's approval**, the CHANGELOG chore.\n- **ADR-0001**, the persistent cookie.\n\n**FEAT-003**, the README chore, is approved and sits in Implementation. It's the furthest it can go until FEAT-001 is integrated.\n\n**About the rename.** The page lives at `/`, and `/basket` is only the address its forms post to. I took \"rename\" to mean that form address, and the old one answers 404 afterwards. Tell me if you meant something else.\n\nOne small thing I noticed: `.gitignore` doesn't cover `__pycache__/`. I'd add the line on the item branch if you agree."
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "Which stages should the single job run?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "Understood: one job, on one platform. The pipeline item's design asks which stages go into that job. **Which stages should the single job run?** Pick any number.\n\n1. **Test** (recommended): runs the Python `unittest` suite on Linux\n2. **Format and lint**\n3. **Build**\n4. **Scan**\n5. **Publish or release**\n6. **A manual run** that runs everything above but publishes nothing. You'd run it before the cut.\n\nBecause the release's `tag` stage needs a passed CI result, whatever you pick is what that gate will read. I'd leave scan and publish out of a first pipeline."
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "Where should the unfinished items go?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "Closing SP-001 is a one-way step, and its unfinished items need somewhere to go. The sprint has 14 days left, runs to 2026-11-28, and none of its five items is finished. Nothing is closed yet.\n\n- **FEAT-001:** Implementation.\n- **FEAT-003:** Implementation.\n- **FEAT-002:** Vision.\n- **FEAT-004:** Vision.\n- **FEAT-005:** Vision.\n\nWith releases on, closing a sprint doesn't cut main, so the close only decides where the items go. A retro would show little: no item is finished, no estimates were given, and the burndown is flat.\n\n**Where should the unfinished items go?**\n\n1. **Back to the backlog** (recommended, since no next sprint exists and you'd plan one when you're ready). Their branches are kept.\n2. **To a new sprint,** which I'd first create. I'd need its goal, its first day and its capacity.\n3. **Don't close yet,** and keep SP-001 running to its end date.\n\nOnce you choose, I'll close SP-001, run `kanbanr git tidy` and ask once about leftover branches, and write the retro to a board doc."
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "How should the setup commit land?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "The setup commit didn't land. The hook that checks commit branches refused it. A branch has to name an item on the board, either `feat/<CODE>-…` or `spike/…`, and `chore/setup` names none. I did not use `--no-verify`. I've switched back to main and deleted the empty `chore/setup` branch. The three files are staged and uncommitted: `.kanbanr`, `CLAUDE.md` and `.gitignore`.\n\nHow should the setup commit land?\n\n1. Leave them staged, and you commit them yourself from your terminal on main (recommended, since the hooks are there to stop me committing on main)\n2. I first file a chore item, \"Setup: kanbanr marker, CLAUDE.md, .gitignore\", with its definition for you to approve on the Review page. Then I commit on its branch, once it reaches the build stage. That's heavier, but it keeps the history traceable."
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "What quality should the saved basket reach?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "FEAT-001 is in **Business Arch**, and the gate for System Design shows no gaps. I haven't moved it on yet, because that stage's purpose is \"how and where it will be built, and the quality it must reach\". The definition has no quality target, so I'd like your answer first rather than guess one.\n\n**What quality should the saved basket reach?**\n\n1. **No target** (recommended for a first release: the four requirements already cover behaviour, and I won't invent a number I can't test)\n2. **Speed:** the page shows the saved basket within a time you give, checked by a named test\n3. **Survives a crash:** a basket saved a moment before the program is killed is still there, checked by a named test"
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "What can a shopper put in the basket?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "Before I write the Design, there's one scope question I can't settle from the charter. **What can a shopper put in the basket?**\n\n1. **A short fixed list of products in the program**, each with a name and a price, and the shopper picks quantities (recommended: the smallest thing that makes \"items and quantities\" real, and it needs no admin screen)\n2. **Free text:** the shopper types any item name and a quantity\n3. **A catalogue kept in SQLite** that the program seeds with a few products. This is more work now, and a later item could edit it"
+  },
+  {
+    "from": "togaf-v070-preview-2",
+    "question": "Start SP-001 today?",
+    "rule": "recommended",
+    "recommended": true,
+    "text": "That's the charter again, and it's already adopted: the purpose is \"A small shop where a shopper's basket survives between visits\", and the only goal is G-1. Nothing has changed.\n\nTwo questions are open, and I'll ask one at a time. **Start SP-001 today?**\n\n1. Yes, start it today (recommended)\n2. Not yet"
+  }
+]

@@ -1,0 +1,19 @@
+- time: 2026-11-15T08:02:38.208106983Z
+  actor: Tester
+  message: add milestone
+- time: 2026-11-15T08:02:38.222306226Z
+  actor: Tester
+  message: add feature item
+- time: 2026-11-15T08:02:38.241228412Z
+  actor: Tester
+  message: define feature FEAT-001
+  item: FEAT-001
+- time: 2026-11-15T08:03:30.287780592Z
+  actor: Tester
+  message: "update config: cadence"
+- time: 2026-11-15T08:03:30.303969146Z
+  actor: Tester
+  message: add a release
+- time: 2026-11-15T08:03:30.319398797Z
+  actor: Tester
+  message: plan release v0.1.0

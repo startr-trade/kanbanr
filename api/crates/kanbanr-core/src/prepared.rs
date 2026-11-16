@@ -54,6 +54,11 @@ pub struct Prepared {
     /// What it was prepared against: the definition's revision, the release tip or the commit.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rev: String,
+    /// The batch it belongs to (FTR-037): a walkthrough run prepares its checks as one batch, named
+    /// for the run, which the Review page confirms or rejects with one click. None for a record
+    /// prepared alone; an older kanbanr keeps the key through `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<String>,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
@@ -893,6 +898,25 @@ pub fn prepare(
             "a prepared record names who prepared it: pass `by`".into(),
         ));
     }
+    // The batch, when the record is one of several prepared together (FTR-037).
+    let batch = body
+        .get("batch")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string);
+    if let Some(b) = &batch {
+        if b.chars().count() > MAX_LABEL {
+            return Err(unsupported(format!(
+                "a batch name is at most {MAX_LABEL} characters"
+            )));
+        }
+        if b.contains('/') || b.contains(char::is_whitespace) {
+            return Err(unsupported(
+                "a batch name has no slash or whitespace: it is part of a route".into(),
+            ));
+        }
+    }
     let record = Prepared {
         id: String::new(),
         kind: kind_name,
@@ -903,6 +927,7 @@ pub fn prepare(
         origin,
         at: crate::now_rfc3339(),
         rev,
+        batch,
         extra: Default::default(),
     };
     let path = write_record(store, p, &record)?;
@@ -1714,6 +1739,142 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+// ---- batches (FTR-037) ----------------------------------------------------------------------
+
+/// `(project, batch, "confirm" | "reject")` for a route that answers a whole batch.
+pub fn batch_route(method: &str, path: &str) -> Option<(String, String, String)> {
+    if !method.eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    match seg.as_slice() {
+        [
+            "projects",
+            p,
+            "prepared",
+            "batch",
+            batch,
+            action @ ("confirm" | "reject"),
+        ] => Some((p.to_string(), batch.to_string(), action.to_string())),
+        _ => None,
+    }
+}
+
+/// The open records of a batch, oldest first.
+pub fn open_in_batch(
+    store: &Store,
+    p: &str,
+    batch: &str,
+    repo: Option<&std::path::Path>,
+) -> Result<Vec<PreparedView>> {
+    let mut views = standing(store, p, repo)?;
+    views.retain(|v| v.state == State::Open && v.record.batch.as_deref() == Some(batch));
+    Ok(views)
+}
+
+/// What answering one record of a batch did.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Resolved {
+    pub id: String,
+    pub kind: String,
+    pub verdict: Answer,
+    /// The verdict route it made; empty on a rejection or a failure.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Why this one could not be answered, when it could not; the rest of the batch still was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Keep the same answer for every open record of `batch`, each as its own `.resolved.yaml` with
+/// the record's id: how a batch is rejected, and how a batch's confirmations are kept once each
+/// verdict went through. Refused when the batch has no open record.
+pub fn resolve_batch(
+    store: &Store,
+    p: &str,
+    batch: &str,
+    resolution: &Resolution,
+) -> Result<Vec<Resolved>> {
+    let open = open_in_batch(store, p, batch, None)?;
+    if open.is_empty() {
+        return Err(unsupported(format!(
+            "no prepared record of batch {batch} waits for the person"
+        )));
+    }
+    let mut out = Vec::with_capacity(open.len());
+    for v in open {
+        let r = Resolution {
+            id: v.record.id.clone(),
+            ..resolution.clone()
+        };
+        let error = resolve(store, p, &r).err().map(|e| e.to_string());
+        out.push(Resolved {
+            id: v.record.id.clone(),
+            kind: v.record.kind.clone(),
+            verdict: resolution.verdict,
+            made: r.made.clone(),
+            error,
+        });
+    }
+    Ok(out)
+}
+
+/// Reject every open record of a batch (`POST /projects/{p}/prepared/batch/{batch}/reject`,
+/// `{by, reason?}`): the guard, then each record's answer is kept; nothing else changes.
+pub fn reject_batch(store: &Store, p: &str, batch: &str, body: &Value) -> Result<Vec<Resolved>> {
+    use crate::origin::{DecisionContext, Origin, Taker, Verdict, verdict_refusal};
+    let origin = Origin::parse(&crate::origin::from_body(body));
+    let taker = origin.map(Taker::of_origin).unwrap_or(Taker::Claude);
+    if let Some(why) = verdict_refusal(
+        Verdict::RejectPrepared,
+        taker,
+        &DecisionContext::monitor_mode(),
+    ) {
+        return Err(CoreError::Refused(why));
+    }
+    let by = body
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| unsupported("a rejection must name who gave it: pass `by`".into()))?
+        .to_string();
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if reason.chars().count() > MAX_TEXT {
+        return Err(unsupported(format!(
+            "a rejection's reason is at most {MAX_TEXT} characters"
+        )));
+    }
+    resolve_batch(
+        store,
+        p,
+        batch,
+        &Resolution {
+            id: String::new(),
+            verdict: Answer::Rejected,
+            by,
+            origin: origin.map(|o| o.as_str().to_string()).unwrap_or_default(),
+            at: crate::now_rfc3339(),
+            changed: Vec::new(),
+            reason,
+            made: String::new(),
+            extra: Default::default(),
+        },
+    )
+}
+
 /// Reject an open record (`POST /projects/{p}/prepared/{id}/reject`, `{by, reason?}`): the guard,
 /// then the record must be open; the answer is kept and nothing else changes. `body` carries the
 /// origin the front end stamped; a body with none is not taken as the person's.
@@ -2290,6 +2451,191 @@ mod tests {
             .project_dir("demo")
             .join(format!("prepared/{id}.resolved.yaml"));
         crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// FTR-037 R-5: records prepared together carry their batch; the listing shows it; one
+    /// `POST …/prepared/batch/{batch}/confirm` as the person makes every record's verdict in one
+    /// board commit and keeps each answer; `…/reject` turns them all down and records nothing; a
+    /// record prepared alone is untouched by either; Claude cannot confirm a batch.
+    #[test]
+    fn a_batch_of_results_is_confirmed_or_rejected_at_once() {
+        use crate::models::{Requirement, TestRef, TestState};
+        let (store, dir, code) = board_with_item(false);
+        let tests: Vec<TestRef> = ["one", "two", "three", "alone"]
+            .iter()
+            .map(|n| TestRef {
+                name: format!("manual: check {n}"),
+                kind: "manual".into(),
+                ..Default::default()
+            })
+            .collect();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let body = |test: &str, batch: Option<&str>| {
+            let mut b = serde_json::json!({"kind": "manual-test",
+                "subject": {"item": code, "requirement": "R-1", "test": format!("manual: check {test}")},
+                "fields": {"state": "green", "checked_rev": "abc1234"},
+                "sources": [{"label": format!("walkthrough run togaf-1 step {test}")}]});
+            if let Some(name) = batch {
+                b["batch"] = Value::String(name.into());
+            }
+            b
+        };
+        let one = prepare_as_claude(&store, body("one", Some("togaf-1")));
+        let two = prepare_as_claude(&store, body("two", Some("togaf-1")));
+        let three = prepare_as_claude(&store, body("three", Some("agile-1")));
+        let alone = prepare_as_claude(&store, body("alone", None));
+        // A batch name is part of a route.
+        let mut bad = body("one", Some("has space"));
+        bad["origin"] = Value::String("conversation".into());
+        assert!(prepare(&store, "demo", &bad, None).is_err());
+        // The listing carries the batch.
+        let views = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        let batch_of = |id: &str| {
+            views
+                .iter()
+                .find(|v| v.record.id == id)
+                .unwrap()
+                .record
+                .batch
+                .clone()
+        };
+        assert_eq!(batch_of(&one).as_deref(), Some("togaf-1"));
+        assert_eq!(batch_of(&two).as_deref(), Some("togaf-1"));
+        assert_eq!(batch_of(&alone), None);
+        assert_eq!(
+            open_in_batch(&store, "demo", "togaf-1", None)
+                .unwrap()
+                .len(),
+            2
+        );
+        // Claude cannot confirm a batch.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared/batch/togaf-1/confirm",
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        let commits = || {
+            let out = std::process::Command::new("git")
+                .args(["log", "--oneline"])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().count()
+        };
+        let before = commits();
+        // The person confirms the batch with one click: every record's verdict, one commit.
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared/batch/togaf-1/confirm",
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["batch"], "togaf-1");
+        let results = out["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "{out}");
+        assert!(results.iter().all(|r| r["error"].is_null()), "{out}");
+        assert!(results.iter().all(|r| r["verdict"] == "confirmed"));
+        assert_eq!(
+            commits(),
+            before + 1,
+            "one board commit for the whole batch"
+        );
+        let state_of = |name: &str| {
+            let p = store.load("demo").unwrap();
+            p.feature(&code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .requirements[0]
+                .tests
+                .iter()
+                .find(|t| t.name == format!("manual: check {name}"))
+                .unwrap()
+                .state
+        };
+        assert_eq!(state_of("one"), TestState::Green);
+        assert_eq!(state_of("two"), TestState::Green);
+        assert_eq!(state_of("three"), TestState::Planned, "another batch");
+        assert_eq!(state_of("alone"), TestState::Planned, "prepared alone");
+        for id in [&one, &two] {
+            let a = resolution_of(&store, id);
+            assert_eq!(a.verdict, Answer::Confirmed);
+            assert_eq!(a.by, "Ada L");
+            assert!(
+                a.made.starts_with("PUT /projects/demo/features/"),
+                "{}",
+                a.made
+            );
+        }
+        let kept = crate::manual::results(&store, "demo", None).unwrap();
+        assert_eq!(kept.len(), 2);
+        assert!(
+            kept.iter()
+                .all(|k| k.origin == "monitor" && k.by == "Ada L")
+        );
+        // An answered batch is gone; confirming it again finds nothing.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared/batch/togaf-1/confirm",
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Monitor,
+            )
+            .is_err()
+        );
+        // The other batch is rejected at once: answers kept, nothing recorded.
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared/batch/agile-1/reject",
+            serde_json::json!({"by": "Ada L", "reason": "the run was not representative"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["results"].as_array().unwrap().len(), 1);
+        let a = resolution_of(&store, &three);
+        assert_eq!(
+            (a.verdict, a.reason.as_str()),
+            (Answer::Rejected, "the run was not representative")
+        );
+        assert_eq!(state_of("three"), TestState::Planned);
+        // The record prepared alone still waits, for its own button.
+        let views = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(
+            views
+                .iter()
+                .map(|v| v.record.id.as_str())
+                .collect::<Vec<_>>(),
+            [alone.as_str()]
+        );
     }
 
     /// DEF-040 R-2: a result the person states in the conversation is prepared as a manual-test
