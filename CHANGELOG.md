@@ -53,6 +53,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 - A release whose tag stage is last now reads as tagged until its tag workflow's passed result is
   recorded, then ships (DEF-049).
+### Fixed
+
+- A flagged text stays flagged after an edit, and the Review page shows the edit and its diff;
+  Claude is refused an edit to another item's approved spec (DEF-050).
 ### Added
 
 - **`kanbanr git tidy [--yes]` lists the merged branches that can go and deletes them locally

@@ -1071,6 +1071,13 @@ export interface DriftFlag {
   hits: { name: DriftName; lines: number[] }[];
   commits: { sha: string; at: string; item: string; names: DriftName[] }[];
   target_changed_at: string;
+  /** Edits to the text since the first change that opened the flag, oldest first. The flag stays
+   * open after an edit; only Claude's check settles it (DEF-050). `sha` is empty for an edit not
+   * yet committed. */
+  edits?: { sha: string; at: string; subject: string }[];
+  /** Unified diff from the text as it stood when the flag opened to the text now. */
+  diff?: string;
+  diff_truncated?: boolean;
 }
 
 /** How a flagged text was settled at the sign-off (FTR-013). */
@@ -1089,6 +1096,8 @@ export interface DriftChecked {
   why?: string;
   /** The `text-check` prepared record it came from. */
   prepared?: string;
+  /** The shas of the edits made while the text was flagged, which the check rested on (DEF-050). */
+  edits?: string[];
 }
 
 /** A flagged text and the check Claude recorded for it (DEF-039). */

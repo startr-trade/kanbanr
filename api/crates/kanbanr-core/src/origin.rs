@@ -376,6 +376,77 @@ pub fn guarded_verdict(
     }
 }
 
+/// The refusal for Claude editing another item's approved specification outside a proposed
+/// change (DEF-050): the sentence, or `None` when the request is allowed. A spec write is a
+/// `PATCH` of an item with a `specification`, or a batch `feature.edit` with `spec` or
+/// `specification`. It is refused when Claude (the conversation or a delegation) writes it, the
+/// target's definition is approved, and `current` (the item being worked on) is a different item.
+/// With no current item nothing is refused: the design stage has no branch yet.
+pub fn guarded_spec_edit(
+    store: &crate::store::Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    taker: Taker,
+    current: Option<&str>,
+) -> Option<String> {
+    if taker != Taker::Claude {
+        return None;
+    }
+    let current = current?;
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let has = |v: &Value, keys: &[&str]| keys.iter().any(|k| v.get(*k).is_some());
+    let mut targets: Vec<(String, String)> = Vec::new();
+    match (method, seg.as_slice()) {
+        ("PATCH", ["projects", p, "features", code]) => {
+            if body.is_some_and(|b| has(b, &["specification"])) {
+                targets.push((p.to_string(), crate::dispatch::percent_decode(code)));
+            }
+        }
+        ("POST", ["projects", p, "batch"]) => {
+            for op in body
+                .and_then(|b| b.get("operations"))
+                .and_then(|o| o.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if op.get("op").and_then(|v| v.as_str()) == Some("feature.edit")
+                    && has(op, &["spec", "specification"])
+                    && let Some(code) = op.get("code").and_then(|v| v.as_str())
+                {
+                    targets.push((p.to_string(), code.to_string()));
+                }
+            }
+        }
+        _ => {}
+    }
+    targets.into_iter().find_map(|(p, code)| {
+        if code == current {
+            return None;
+        }
+        let project = store.load_meta(&p).ok()?;
+        let agreed = project
+            .feature(&code)
+            .ok()?
+            .definition
+            .as_ref()
+            .is_some_and(|d| d.approval_state().is_agreed());
+        agreed.then(|| {
+            format!(
+                "refused: {code}'s specification belongs to an approved item. Edit it only as a \
+                 proposed change: ask the person to unapprove {code} first (the Review page), \
+                 then edit and bring it back through review. Work on {current} stays on {current}."
+            )
+        })
+    })
+}
+
 /// The verdict a kanbanr command line records, from its subcommand path (`["release", "cut"]`)
 /// and its words after `kanbanr`; `None` for a command that records no verdict.
 pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {

@@ -169,7 +169,7 @@ code, from the diff of the commits whose `Refs:` trailer names it: long flags, c
 names. It then looks at the texts linked to the item: the docs in its `affects_docs`, the docs whose
 front matter lists it under `items` or `refs`, the ADRs whose `affects` names it, the docs and items
 that link it, and the items its spec links. A text is **flagged** when it holds one of those names as
-a whole token and last changed before the commit that changed the name. A config key, check, stage
+a whole token when the commit that changed the name was made. A config key, check, stage
 or status name counts only inside a code span, and a command only on a line that says `kanbanr`.
 
 A flag says which text names which changed name. It never says the text is wrong, so read it and
@@ -178,11 +178,17 @@ decide:
 - Claude settles each flagged text before `docs-folded` is offered: it reads the text against the
   change, then records that it is still right, with why, or that a correction is filed
   (`kanbanr prepare text`). The record names who settled it and the revision it checked. A new
-  commit that names the text again, or an edit to the text, puts it back among those left. The
+  commit that names the text again, or a later edit to the text, puts it back among those left. The
   Review page lists the texts left, with the names found and their lines, and says Claude settles
   them; the sign-off appears once none is left, and the page shows what Claude checked under
   "Checked by Claude". The sign-off keeps those records. `kanbanr check` lists the texts left under
   "Texts to settle".
+- An edit never settles a flag. A flagged text that is edited stays flagged until Claude's check
+  covers the edit, and the Review page shows the edit, with its diff, as "Edited while flagged", so
+  the person signing docs-folded sees a text that changed while it was flagged. The board does not
+  record who made an edit, so every edit to the text is shown. Claude is also refused an edit to
+  another item's approved specification: to change one, the person unapproves that item first (the
+  Review page), and the edit goes back through review.
 - When an item is merged, the flagged texts are listed on stderr.
 - `kanbanr drift` lists them for the board, grouped by text, for the items with commits since
   `--since` (default: the latest shipped release's tag date, else 60 days back). A date means from

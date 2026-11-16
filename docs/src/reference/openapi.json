@@ -774,6 +774,13 @@
             "description": "The code of the filed correction, when the outcome is `corrected`.",
             "type": "string"
           },
+          "edits": {
+            "description": "The shas of the edits made to the text while it was flagged, which the check rested on\n(DEF-050); an empty sha is an edit not yet committed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "origin": {
             "description": "Where it was settled.",
             "type": "string"
@@ -1488,6 +1495,27 @@
         ],
         "type": "object"
       },
+      "Edit": {
+        "description": "One edit to a flagged text after the change that opened the flag (DEF-050). `sha` is empty for\nan edit not yet committed.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "at",
+          "subject"
+        ],
+        "type": "object"
+      },
       "Enforce": {
         "description": "Whether a failed gate stops the move or only reports.",
         "enum": [
@@ -1968,11 +1996,25 @@
         "type": "object"
       },
       "Flag": {
-        "description": "A linked text that names something changed after it last changed. A flag says which text names\nwhich changed name, never that the text is wrong.",
+        "description": "A linked text that names something changed in the code. A flag says which text names which\nchanged name, never that the text is wrong. It stays open after the text is edited, until a\ncheck settles it (DEF-050).",
         "properties": {
           "commits": {
             "items": {
               "$ref": "#/components/schemas/CommitRef"
+            },
+            "type": "array"
+          },
+          "diff": {
+            "description": "Unified diff from the text as it stood when the flag opened to the text now.",
+            "type": "string"
+          },
+          "diff_truncated": {
+            "type": "boolean"
+          },
+          "edits": {
+            "description": "Edits to the text since the first change that opened the flag, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/Edit"
             },
             "type": "array"
           },

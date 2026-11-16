@@ -987,6 +987,7 @@ fn prepare_text_check(
         serde_json::json!({
             "text_changed_at": flag.target_changed_at,
             "commits": flag.commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>(),
+            "edits": flag.edits.iter().map(|e| e.sha.clone()).collect::<Vec<_>>(),
         }),
     );
     let mut defaults = Vec::new();
@@ -1020,8 +1021,9 @@ fn field_text_of<'a>(fields: &'a Map<String, Value>, name: &str) -> &'a str {
 }
 
 /// Does the check `r` cover `flag` (pure)? The same text, as it last changed, and every commit
-/// the flag names was seen when it was checked. A new commit naming the text again, or an edit of
-/// the text, makes the flag need settling again.
+/// the flag names was seen when it was checked, and every edit of the text since the flag opened.
+/// A new commit naming the text again, or a later edit of the text, makes the flag need settling
+/// again.
 pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
     if r.kind != "text-check" || r.subject.target != flag.target.key() {
         return false;
@@ -1039,7 +1041,17 @@ pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    flag.commits.iter().all(|c| seen.contains(&c.sha.as_str()))
+    if !flag.commits.iter().all(|c| seen.contains(&c.sha.as_str())) {
+        return false;
+    }
+    // The edits the check saw (DEF-050). A record made before this version has none, and so
+    // covers a flag with no edits and no other.
+    let saw: Vec<&str> = covers
+        .get("edits")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    flag.edits.iter().all(|e| saw.contains(&e.sha.as_str()))
 }
 
 /// The sign-off's record of a settlement `r` that `settles` `flag`.
@@ -1060,6 +1072,7 @@ pub fn checked_of(r: &Prepared, flag: &crate::docdrift::Flag) -> crate::models::
         text_changed_at: flag.target_changed_at.clone(),
         why: field("why"),
         prepared: r.id.clone(),
+        edits: flag.edits.iter().map(|e| e.sha.clone()).collect(),
         ..Default::default()
     }
 }
@@ -2805,5 +2818,82 @@ mod tests {
         assert_eq!(flags.len(), 1);
         assert!(flags[0].commits.len() >= 2, "{:?}", flags[0].commits);
         assert!(!settles(&got, &flags[0]));
+    }
+
+    /// Edit the flagged doc and commit it to the board at `when` (after the change at 2099-01-01).
+    fn edit_doc(store: &Store, board: &std::path::Path, text: &str, when: &str) {
+        use crate::docdrift::testkit::git_env;
+        store.write_doc("demo", "design/data.md", text).unwrap();
+        git_env(board, &["add", "-A"], None);
+        git_env(board, &["commit", "-q", "-m", "edit doc"], Some(when));
+    }
+
+    /// DEF-050 R-1: a settlement covers the edits it saw; a later edit opens the flag again.
+    #[test]
+    fn a_settlement_covers_the_edits_it_saw_and_a_later_edit_reopens_the_flag() {
+        let (store, d, code, repo) = crate::tests::drift_board();
+        edit_doc(
+            &store,
+            &d.path,
+            &format!("---\nitems: [{code}]\n---\n\n# Data\n\nRun with --since, reworded.\n"),
+            "2099-06-01T00:00:00+00:00",
+        );
+        let flags = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert_eq!(flags.len(), 1, "{flags:?}");
+        assert_eq!(flags[0].edits.len(), 1, "{:?}", flags[0].edits);
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/data.md", "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(
+            got.fields["covers"]["edits"][0],
+            flags[0].edits[0].sha.as_str()
+        );
+        assert!(settles(&got, &flags[0]));
+        let checked = checked_of(&got, &flags[0]);
+        assert_eq!(checked.edits, vec![flags[0].edits[0].sha.clone()]);
+        edit_doc(
+            &store,
+            &d.path,
+            &format!("---\nitems: [{code}]\n---\n\n# Data\n\nRun with --since, reworded again.\n"),
+            "2099-07-01T00:00:00+00:00",
+        );
+        let later = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert_eq!(later.len(), 1, "{later:?}");
+        assert_eq!(later[0].edits.len(), 2);
+        assert!(!settles(&got, &later[0]));
+    }
+
+    /// DEF-050 R-1: a settlement made before edits were recorded still covers a flag with none.
+    #[test]
+    fn a_settlement_made_before_this_version_covers_a_flag_with_no_edits() {
+        let (store, d, code, repo) = crate::tests::drift_board();
+        let mut got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/data.md", "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        got.fields["covers"]
+            .as_object_mut()
+            .unwrap()
+            .remove("edits");
+        let flags = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert!(flags[0].edits.is_empty());
+        assert!(settles(&got, &flags[0]));
+        assert!(checked_of(&got, &flags[0]).edits.is_empty());
+        edit_doc(
+            &store,
+            &d.path,
+            &format!("---\nitems: [{code}]\n---\n\n# Data\n\nRun with --since, edited.\n"),
+            "2099-06-01T00:00:00+00:00",
+        );
+        let edited = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert_eq!(edited[0].edits.len(), 1);
+        assert!(!settles(&got, &edited[0]));
     }
 }

@@ -29,6 +29,11 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
         "it is the one write",
     ),
     (
+        "kanbanr-core/src/docdrift.rs",
+        "std::fs::write(dir.join(",
+        "two scratch texts under the system temporary folder for git diff --no-index, removed after the diff",
+    ),
+    (
         "kanbanr-cli/src/self_update.rs",
         "std::fs::write(&staged, bytes)",
         "replaces the running binary by staging and renaming it, keeping the old one aside; the executable bit is set before the rename",

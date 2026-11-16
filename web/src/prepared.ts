@@ -1,6 +1,6 @@
 // What Claude prepared for a decision (FTR-034), as the monitor shows it. Pure, so the pages, the
 // panel and web::prepared (scripts/check-prepared.mjs) use the same code.
-import type { PreparedSource, PreparedSubject, PreparedView } from "./types";
+import type { DriftFlag, PreparedSource, PreparedSubject, PreparedView } from "./types";
 
 /**
  * The newest open record of `kind` whose subject has every key `subject` names. Stale, superseded,
@@ -92,4 +92,22 @@ export function preparedLine(view: PreparedView): string {
   return `Prepared by ${view.by || "someone"}${view.at ? ` on ${day(view.at)}` : ""}${
     from.length ? ` from ${from.join(", ")}` : ""
   }`;
+}
+
+/**
+ * The edits made to a flagged text since its flag opened, for the Review entry (DEF-050): how many,
+ * which commits, the diff and whether it was cut. `null` when the text was not edited, so the entry
+ * shows nothing extra. An edit never settles a flag; only Claude's check does.
+ */
+export function editedWhileFlagged(
+  flag: Pick<DriftFlag, "edits" | "diff" | "diff_truncated">,
+): { count: number; shas: string[]; diff: string; truncated: boolean } | null {
+  const edits = flag.edits ?? [];
+  if (!edits.length) return null;
+  return {
+    count: edits.length,
+    shas: edits.map((e) => (e.sha ? e.sha.slice(0, 7) : "uncommitted")),
+    diff: flag.diff ?? "",
+    truncated: flag.diff_truncated === true,
+  };
 }
