@@ -27,6 +27,7 @@ checks:
   MT-7: {item: DOC-008, requirement: R-2, test: "manual: the agile walkthrough reaches its cut with no question about push order or the Record result form"}
   MT-8: {item: DOC-008, requirement: R-3, test: "manual: the agile walkthrough's proposed pipeline has separate rerunnable stages and stack caching"}
 answers:
+  - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
   - {match: "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
   - {match: "\\bcode remote\\b|remote .*\\b(code|repository)\\b|^where .*\\bpush", pick: "The code remote is {code_remote}."}
   - {match: "^which process|\\bprocess\\b.*\\b(use|want|follow)\\b", pick: "Agile, with sprints and releases."}
@@ -151,16 +152,22 @@ steps:
     say: "Run the full checks over the release."
   - id: "6.8"
     say: "While the release is a candidate we found that the basket page's title does not name the shop: it should read \"Your basket - the corner shop\". Add it as a defect with that in its title, and fix it in the release. Take the defect as far as it goes and tell me what waits for me on the Review page."
-    expect: {board: {item: {title_matches: "\\btitle\\b"}}}
+    expect: {board: {item: {title_contains: "corner shop"}}}
     check: MT-5
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
+    answers:
+    - {match: "how should i (record|file|track)|record (it|this|the (change|fix))|\\bamend\\b|new item or|defect or", pick: "File it as a defect, with \"corner shop\" in its title."}
   - id: "6.9"
-    decide: {approve: {item: {title_matches: "\\btitle\\b"}}}
-    offer: {page: review, button: Approve, subject: {item: {title_matches: "\\btitle\\b"}}}
+    decide: {approve: {item: {title_contains: "corner shop"}}}
+    offer: {page: review, button: Approve, subject: {item: {title_contains: "corner shop"}}}
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.10"
     say: "Move the defect on as far as it goes. Tell me what waits for me on the Review page."
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.11"
-    decide: {signoff: {item: {title_matches: "\\btitle\\b"}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_matches: "\\btitle\\b"}}}
+    decide: {signoff: {item: {title_contains: "corner shop"}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: "corner shop"}}}
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.12"
     say: "Move the defect on to Review, if it has not moved already. Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
   - id: "6.13"
@@ -194,4 +201,6 @@ steps:
   - id: "7.3"
     push: {repo: board, refspec: "{board_branch}"}
 ```
+
+
 

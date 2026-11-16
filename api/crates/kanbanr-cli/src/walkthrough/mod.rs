@@ -671,6 +671,34 @@ impl Running {
             self.stopped = Some("wall time".into());
             return Ok(false);
         }
+        // A step that runs only when the board holds a claim (the defect step, once the release is
+        // a candidate): otherwise it is skipped, and its check measures nothing.
+        if let Some(claim) = &step.only_if {
+            let project = self.project_name();
+            let holds = truth::board_claim(&self.dirs.board(), &project, claim);
+            if let Some(instead) = match holds {
+                Ok(Ok(())) => None,
+                Ok(Err(instead)) => Some(instead),
+                Err(e) => Some(e.to_string()),
+            } {
+                self.finding(
+                    &id,
+                    "skipped",
+                    format!("the step runs only if {claim:?}"),
+                    instead.clone(),
+                );
+                if let Some(marker) = &step.check {
+                    self.checks.push(CheckResult {
+                        marker: marker.clone(),
+                        step: id.clone(),
+                        passed: false,
+                        why: format!("{NOT_MEASURED} (skipped: {instead})"),
+                        measured: false,
+                    });
+                }
+                return Ok(true);
+            }
+        }
         let mut step_ok = true;
         let mut why = Vec::new();
         let mut asked_here: Vec<String> = Vec::new();

@@ -352,6 +352,9 @@ pub struct Step {
     pub push: Option<Push>,
     pub check: Option<String>,
     pub stop_on_mismatch: bool,
+    /// Run the step only when this board claim holds (`only_if: {board: …}`); otherwise it is
+    /// skipped with a finding, and its check is not measured.
+    pub only_if: Option<BoardClaim>,
 }
 
 /// A runbook: the first fenced `yaml` block of a board doc.
@@ -746,6 +749,14 @@ struct RawStep {
     check: Option<String>,
     #[serde(default)]
     stop_on_mismatch: bool,
+    #[serde(default)]
+    only_if: Option<RawOnlyIf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawOnlyIf {
+    board: RawBoardClaim,
 }
 
 #[derive(Debug, Deserialize)]
@@ -832,6 +843,7 @@ impl Runbook {
                     }),
                 }),
             };
+            let only_if = s.only_if.map(|o| o.board.into_claim(&id)).transpose()?;
             steps.push(Step {
                 id,
                 say: s.say,
@@ -843,6 +855,7 @@ impl Runbook {
                 push: s.push,
                 check: s.check,
                 stop_on_mismatch: s.stop_on_mismatch,
+                only_if,
             });
         }
         Ok(Runbook {
@@ -1390,6 +1403,18 @@ steps:
         assert_eq!(talk.asked.as_deref(), Some("style|look"));
         assert_eq!(talk.not_asked.as_deref(), Some("push order"));
         assert_eq!(lint(&rb), Vec::<LintError>::new());
+        // A step can run only when a board claim holds.
+        let gated = Runbook::parse(
+            "```yaml\nrunbook: g\nprocess: p\nsteps:\n  - id: a\n    say: \"File the defect.\"\n    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            gated.steps[0].only_if,
+            Some(BoardClaim::Release {
+                version: "v0.1.0".into(),
+                stage: "candidate".into()
+            })
+        );
         // T16: a title pattern, in a board claim and in a selector; lint names a bad one.
         let re = Runbook::parse(
             "```yaml\nrunbook: x\nprocess: y\nsteps:\n  - id: a\n    expect: {board: {item: {title_matches: \"basket|cart\"}}}\n  - id: b\n    decide: {approve: {item: {title_matches: \"^saved\"}}}\n    offer: {page: review, button: Approve, subject: {item: {title_matches: \"^saved\"}}}\n  - id: c\n    expect: {board: {item: {title_matches: \"(unclosed\"}}}\n```",
