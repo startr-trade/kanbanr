@@ -73,7 +73,7 @@ monitor-bundle:
 ci:
 	scripts/ci-local.sh
 
-# The supply-chain gate CI's supply-chain job runs (FEAT-130): licences, sources, advisories.
+# The supply-chain gate deps.yml's supply-chain job runs (FEAT-130): licences, sources, advisories.
 audit:
 	cd api && cargo deny check
 	cd api && cargo audit

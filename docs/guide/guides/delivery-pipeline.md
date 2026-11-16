@@ -42,7 +42,7 @@ it becomes an item on the board, so it has a definition, a test and an approval 
 
    | Stack | Cache keyed on | Speed-ups |
    |---|---|---|
-   | Rust | `Cargo.lock`, `rust-toolchain.toml` | a cache of the registry and `target/`; sccache for compiled crates; cargo-chef for an image's dependency layer; no incremental builds or debug info in CI; cargo-nextest to run tests side by side |
+   | Rust | `Cargo.lock`, `rust-toolchain.toml` | a cache of the registry and `target/`; sccache for compiled crates; cargo-chef for an image's dependency layer; no incremental builds or debug info in CI; cargo-nextest to run tests side by side; a dependency tier that runs when the lock or toolchain files change |
    | Python | the lock or requirements files | the pip cache (or the installer's own) |
    | Node | `package-lock.json` (or the lock file in use) | the npm cache, and `npm ci` |
    | Container images | the Dockerfile and the lock files | a layer cache for the image build, one per image |
