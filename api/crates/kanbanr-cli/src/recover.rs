@@ -25,6 +25,14 @@ kanbanr as you go. Every document (requested or self-initiated) goes in\n\
 kanbanr docs (`kanbanr doc add …`), NOT the working folder — unless the user\n\
 asks for it in the project folder._";
 
+/// The brief form's closing paragraph: it lists no board, so it points at the summary instead
+/// (coordinator decision, 17 Nov 2026).
+const BRIEF_FOOTER: &str = "_kanbanr is the system of record for this project's PLAN (features/tasks/\n\
+specs/decisions/progress). Resume from the summary above; kanbanr board gives the whole board.\n\
+Record new work in kanbanr as you go. Every document (requested or self-initiated) goes in\n\
+kanbanr docs (`kanbanr doc add …`), NOT the working folder — unless the user\n\
+asks for it in the project folder._";
+
 /// The budget in force: the flag, else the environment, else the default; never below the
 /// minimum.
 fn budget(flag: Option<usize>) -> usize {
@@ -283,6 +291,7 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
         release: release_line(client, p, project),
         optional,
         footer: FOOTER.to_string(),
+        brief_footer: BRIEF_FOOTER.to_string(),
     }
 }
 
