@@ -393,15 +393,13 @@ fn current_stage_gaps(
         return Vec::new();
     };
     let goal_ids = charter.goal_ids();
-    let status = &feature.status;
-    let mut gaps =
-        crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.requires, ctx, status);
-    gaps.extend(crate::readiness::evaluate_entering(
+    // Judged as the move judged it: `docs_updated` over the window the move used (DEF-074).
+    let mut gaps = crate::readiness::evaluate_passed(feature, Some(&goal_ids), &gate.requires, ctx);
+    gaps.extend(crate::readiness::evaluate_passed(
         feature,
         Some(&goal_ids),
         &gate.warns,
         ctx,
-        status,
     ));
     gaps.retain(doctor_relevant);
     gaps
@@ -2043,6 +2041,128 @@ mod tests {
         };
         assert_eq!(told(&linked.code), 0, "{issues:?}");
         assert_eq!(told(&bare.code), 1, "{issues:?}");
+    }
+
+    /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
+    fn next_second() {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    /// A git board with one item that declares `declared` and links `linked` under its Design's
+    /// `Affects docs` (DEF-074). It moves Planned → Scheduled, the docs in `folded` are written
+    /// again and committed, and it moves back to Planned, a live stage, whose gate then asks for
+    /// `docs_updated` (set after the moves, so no move is held). Each commit comes before the
+    /// comparison that depends on it (L-45). Returns the store, the folder and the item's code.
+    fn moved_back_board(
+        declared: &[&str],
+        linked: &[&str],
+        folded: &[&str],
+    ) -> (Store, std::path::PathBuf, String) {
+        let (store, dir) = fixture();
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let commit = |msg: &str| assert!(crate::git::commit(&dir, "Ada", "ada@example.com", msg));
+        for doc in declared.iter().chain(linked) {
+            store
+                .write_doc("demo", &format!("architecture/{doc}.md"), "# Doc\n\nv1\n")
+                .unwrap();
+        }
+        commit("docs");
+        let links: String = linked
+            .iter()
+            .map(|d| format!("- [{d}](/p/demo/docs/file/architecture/{d}.md)\n"))
+            .collect();
+        let spec = format!("## Design\n\n### Affects docs\n{links}");
+        let item = store.add_feature("demo", "Cart", &spec, "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    goals: vec!["G-1".into()],
+                    affects_docs: declared
+                        .iter()
+                        .map(|d| format!("architecture/{d}"))
+                        .collect(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        commit("board");
+        next_second();
+        store.move_feature("demo", &item.code, "Scheduled").unwrap();
+        commit("move");
+        next_second();
+        for doc in folded {
+            store
+                .write_doc("demo", &format!("architecture/{doc}.md"), "# Doc\n\nv2\n")
+                .unwrap();
+        }
+        commit("fold");
+        next_second();
+        store.move_feature("demo", &item.code, "Planned").unwrap();
+        commit("move");
+        let gate = crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::DocsUpdated,
+            )],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Planned".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        (store, dir, item.code)
+    }
+
+    /// The messages doctor gives `code` that say a doc has not changed.
+    fn unchanged_said(store: &Store, code: &str) -> Vec<String> {
+        run_project(store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| {
+                i.code.as_deref() == Some(code) && i.message.contains("has not changed since")
+            })
+            .map(|i| i.message)
+            .collect()
+    }
+
+    /// DEF-074 R-1: a declared doc and a linked doc folded before the move are not reported as
+    /// unchanged after it — doctor re-judges the passed gate over the window the move used.
+    #[test]
+    fn a_doc_folded_before_the_move_does_not_warn_after_it() {
+        let (store, dir, code) =
+            moved_back_board(&["ci-pipeline"], &["data"], &["ci-pipeline", "data"]);
+        let said = unchanged_said(&store, &code);
+        assert!(said.is_empty(), "{said:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-074 R-1 (DEF-021 R-4, DEF-047): a declared doc and a linked doc not folded in the
+    /// move's window still warn after the move, naming the stage the window began in.
+    #[test]
+    fn a_doc_not_folded_before_the_move_still_warns_after_it() {
+        let (store, dir, code) = moved_back_board(
+            &["ci-pipeline", "api"],
+            &["data", "queue"],
+            &["ci-pipeline", "data"],
+        );
+        let mut said = unchanged_said(&store, &code);
+        said.sort();
+        let tail =
+            format!("has not changed since {code} entered Scheduled — fold the design into it");
+        assert_eq!(
+            said,
+            vec![
+                format!("architecture/api.md {tail}"),
+                format!("architecture/queue.md {tail}"),
+            ],
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-193 Q3: a project from before the method is asked once to choose, and choosing either

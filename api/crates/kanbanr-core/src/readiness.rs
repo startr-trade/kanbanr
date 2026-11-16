@@ -2931,7 +2931,9 @@ mod tests {
         let next = docs_gaps(&store, &code);
         assert_eq!(next.len(), 1, "{next:?}");
         assert!(
-            next[0].message.contains(&format!("since {code} entered Planned")),
+            next[0]
+                .message
+                .contains(&format!("since {code} entered Planned")),
             "{}",
             next[0].message
         );
