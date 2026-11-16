@@ -484,6 +484,12 @@ impl Cadence {
         }
     }
 
+    /// Whether a release waits at the tag for its workflow (DEF-049): the tag stage is the last
+    /// and a gate judges the tag. A project with no commit gate has nothing to wait for.
+    pub fn tag_waits(&self) -> bool {
+        self.cut_index() + 1 == self.stages().len() && self.tag_gate_name().is_some()
+    }
+
     /// The gate whose result judges a release's tag: `tag_gate`, else the first commit gate.
     pub fn tag_gate_name(&self) -> Option<String> {
         self.tag_gate

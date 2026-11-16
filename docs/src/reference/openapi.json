@@ -3818,6 +3818,10 @@
             "description": "What comes after this promotion, e.g. \"push main, wait for CI, then Cut v0.2.1\".",
             "type": "string"
           },
+          "awaiting": {
+            "description": "This plan is the release waiting at the last stage for its tag workflow's result: it\nships once that is recorded as passed (DEF-049).",
+            "type": "boolean"
+          },
           "button": {
             "description": "What the one button says: \"Promote to main\", \"Cut v0.2.1\", \"Promote to main again\".",
             "type": "string"

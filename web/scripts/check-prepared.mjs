@@ -8,6 +8,7 @@
 // Usage: npm run check:prepared
 import { readFileSync } from "node:fs";
 import { EDITABLE, openFor, preparedLine, sourceHref } from "../src/prepared.ts";
+import { releaseAction } from "../src/releaseAction.ts";
 
 const problems = [];
 const expect = (name, got, want) => {
@@ -133,6 +134,39 @@ if (!/openFor\(prepared, "promotion"/.test(button) || !/<PreparedPanel/.test(but
   problems.push("ReleasesPage.tsx: the confirmation after the tag does not render a prepared promotion in a PreparedPanel");
 }
 if (!/expect: tip/.test(button)) problems.push("ReleasesPage.tsx: a prepared promotion is not pinned to the release tip shown");
+
+// A release tagged at the last stage waits for the tag workflow (DEF-049): the tag panel and a
+// ship button that stays off until the tag's result is passed; the page asks for no stage then.
+const waiting = (state) => ({
+  version: "v1",
+  from: "production",
+  to: "production",
+  direction: "again",
+  cut: false,
+  confirm: false,
+  ships: true,
+  awaiting: true,
+  tag: { commit: sha, gate: "ci", state },
+  button: state === "passed" ? "Ship v1" : "Waiting for the tag workflow",
+  conditions: [{ check: "tag_passed", stage: "production", holds: state === "passed", detail: "", fix: "" }],
+  steps: [],
+  release_tip: "",
+  missing: state === "passed" ? [] : ["run your CI on the tag, then record its verdict; if it failed: start a patch release"],
+  ready: state === "passed",
+  needs_reason: false,
+  repo: true,
+  empty: false,
+});
+expect("a tagged release waits: no ship until a result", releaseAction(waiting("none"), true).enabled, false);
+expect("a failed result keeps it waiting", releaseAction(waiting("failed"), true).enabled, false);
+expect("a passed result offers Ship", [releaseAction(waiting("passed"), true).enabled, releaseAction(waiting("passed"), true).label], [true, "Ship v1"]);
+const awaitingPage = read("../src/pages/ReleasesPage.tsx");
+if (!/plan\.data\.awaiting \? "" : plan\.data\.to/.test(awaitingPage)) {
+  problems.push("ReleasesPage.tsx: a waiting release is promoted with a stage named, which the daemon refuses");
+}
+if (!/r\.tagged_at && at >= 0 && at \+ 1 === stages\.length/.test(awaitingPage)) {
+  problems.push("ReleasesPage.tsx: a release tagged at the last stage shows no tag panel or button");
+}
 
 if (problems.length) {
   for (const p of problems) console.error(`web::prepared — ${p}`);

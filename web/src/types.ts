@@ -625,6 +625,10 @@ export interface GateResult {
   origin?: string;
 }
 
+/** The answer to recording a gate result: the version it shipped, when it was the pass of the tag
+ * workflow a tagged release waited on (DEF-049). */
+export type GateResultResponse = GateResult & { settled?: string };
+
 /** Where a piece of a prepared record's evidence came from (FTR-034): an http(s) link or a board
  * reference (`doc:<path>`, `item:<CODE>`, `commit:<sha>`), or no link at all. */
 export interface PreparedSource {
@@ -775,6 +779,8 @@ export interface ReleasePlan {
   confirm: boolean;
   /** This promotion enters the last stage and ships the release (FTR-026). */
   ships: boolean;
+  /** The release waits at its last stage for the tag workflow's result and ships on a pass (DEF-049). */
+  awaiting?: boolean;
   /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
   tag?: TagResult;
   /** The merge that sent the release back and the steps from there, until it is cut (DEF-031). */

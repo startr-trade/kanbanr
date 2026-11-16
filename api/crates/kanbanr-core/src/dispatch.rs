@@ -1580,7 +1580,24 @@ fn dispatch_routes(
                 origin: crate::origin::from_body(b),
             };
             crate::gates::record(store, p, &result)?;
-            ser(&result)
+            // The result is a fact and stays; a release that waited on it ships (DEF-049).
+            let settled = crate::releases::settle_tagged(
+                store,
+                p,
+                &result,
+                &result.by,
+                &result.origin,
+                repo,
+            )?;
+            match settled {
+                Some(cut) => {
+                    let mut v = serde_json::to_value(&result)
+                        .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+                    v["settled"] = serde_json::Value::String(cut.release.version);
+                    ser(&v)
+                }
+                None => ser(&result),
+            }
         }
         // ---- where decisions are taken, and delegations (FTR-028) ----
         ("GET", ["projects", p, "decisions"]) => ser(&crate::decisions::view(

@@ -10136,6 +10136,44 @@ fn tagged_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (base, work)
 }
 
+/// DEF-049 R-1: when the tag stage is the last and a gate judges the tag, the cut leaves the
+/// release tagged and the list says it waits; recording the passed result ships it.
+#[test]
+fn release_list_says_tagged_until_the_tag_workflow_passes() {
+    let (base, work) = release_scratch("def049-list");
+    let ok = |args: &[&str]| -> String {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(&["config", "commit-gates", "ci"]);
+    ok(&["release", "promote", "v1.0.0"]);
+    let tip = rev(&base, &work, "release/v1.0.0");
+    ok(&["gate", "record", "ci", "--passed", "--commit", &tip]);
+    for stage in ["test", "staging", "production"] {
+        ok(&["release", "promote", "v1.0.0", stage]);
+    }
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "planned", "{r}");
+    let listed = ok(&["release", "list"]);
+    assert!(listed.contains("tagged, waiting for ci"), "{listed}");
+    // Nothing is recorded for the tag yet: the manual ship is refused.
+    let refused = run_in(&base, &work, &["release", "promote", "v1.0.0"]);
+    assert!(!refused.status.success());
+    // The workflow passes: recording its result ships the release.
+    let said = ok(&["gate", "record", "ci", "--passed", "--commit", "v1.0.0"]);
+    assert!(said.contains("v1.0.0 shipped"), "{said}");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "shipped", "{r}");
+    let listed = ok(&["release", "list"]);
+    assert!(!listed.contains("waiting"), "{listed}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-031 R-6: a pass recorded for an earlier commit stands across a documentation-only change,
 /// the plan names the commit it carries from, and a code change ends it.
 #[test]
