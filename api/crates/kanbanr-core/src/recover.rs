@@ -68,6 +68,9 @@ pub struct Inputs {
     pub optional: Vec<Section>,
     /// The closing paragraph.
     pub footer: String,
+    /// The brief form's closing paragraph, which has no board above it to point at; the full
+    /// form's `footer` when empty.
+    pub brief_footer: String,
 }
 
 /// The sentence on offering a review in the conversation, as 0.7.0 printed it.
@@ -185,7 +188,12 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
         head.push_str(&section("Sprint and release", &plan.join("\n")));
     }
 
-    let tail = format!("{}{}", section("Read more", READ_MORE), footer(&i.footer));
+    let closing = if i.brief_footer.trim().is_empty() {
+        &i.footer
+    } else {
+        &i.brief_footer
+    };
+    let tail = format!("{}{}", section("Read more", READ_MORE), footer(closing));
     (head, tail)
 }
 
@@ -264,6 +272,7 @@ mod tests {
                 sec("Recent activity", 1000),
             ],
             footer: "_kanbanr is the system of record._".into(),
+            brief_footer: String::new(),
         }
     }
 

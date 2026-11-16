@@ -48,10 +48,21 @@ repo while leaving the plan stale in kanbanr — which is exactly the failure th
 ### `session-start.sh` — recover state (SessionStart)
 Best-effort recovery. If `kanbanr` is on `PATH` **and** the directory looks
 tracked (a `.kanbanr` marker exists, or `$KANBANR_PROJECT` is set), it prints
-`kanbanr board` and `kanbanr activity` to stdout. Claude Code surfaces that as
-session context, so Claude resumes from the real plan instead of from memory.
+`kanbanr recover` to stdout. Claude Code surfaces that as session context, so
+Claude resumes from the real plan instead of from memory.
 If kanbanr isn't installed or no project is resolvable, it exits 0 and stays
 quiet — it will **never** break a session.
+
+The summary is sized to fit (DEF-093): 8000 bytes by default, never below 2000
+(`$KANBANR_SESSION_BUDGET` changes it). Claude Code keeps a hook's output inline
+only up to a limit and shows a preview of about 2 KB beyond it, so a summary that
+printed every item hid what was in progress. When the whole summary (board,
+recent activity, lessons, what waits for the user, agents at work, the process)
+fits, it is printed as before. Otherwise a brief form leads with the item counts,
+every item in progress, what waits for the person, the sprint and release, and
+the commands to read more (`kanbanr board`, `kanbanr ready`), and adds the agents,
+process, lessons and recent activity only while they fit. A `kanbanr` older than
+the script, with no `recover`, gets the 0.7.0 sequence cut to the same budget.
 
 ### `stop-check.sh` — make sure work gets recorded (Stop)
 After Claude finishes a turn, it checks whether work may have gone unrecorded. Claude Code only
@@ -135,7 +146,7 @@ project folders.
 `SessionStart`/`Stop` hooks, add the entries to those arrays rather than overwriting them.
 
 Then start a new Claude Code session in a kanbanr-tracked directory: the board appears as recovered
-context at session start.
+context at session start, sized to fit.
 
 ### Configuration knobs (env vars)
 - `CLAUDE_CONFIG_DIR` — where `kanbanr hooks install` / `kanbanr init` register the hooks
@@ -147,6 +158,8 @@ context at session start.
   asks `kanbanr where` for the folder and inspects that repo's commit recency.
 - `KANBANR_STOP_WINDOW_MIN` — how many minutes count as "updated this session"
   for the Stop nudge (default `30`).
+- `KANBANR_SESSION_BUDGET` — the most bytes the SessionStart summary prints
+  (default `8000`, never below `2000`).
 
 ## Safety design
 

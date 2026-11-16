@@ -26,6 +26,9 @@ All notable changes to kanbanr are documented here. The format follows
   katalogr's, is let through like kanbanr's own block refresh (DEF-092).
 - `kanbanr git tidy` lists a finished item's merged branch even while an agent scope issued for
   that item is still in force, and names the scope to revoke (DEF-096).
+- The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
+  what is in progress, what waits for you and the sprint and release, and counts the rest, instead
+  of printing every item (DEF-093).
 
 ## [0.7.0] - 2026-11-16
 
