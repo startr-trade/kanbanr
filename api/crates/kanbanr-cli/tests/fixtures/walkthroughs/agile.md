@@ -28,6 +28,7 @@ checks:
   MT-8: {item: DOC-008, requirement: R-3, test: "manual: the agile walkthrough's proposed pipeline has separate rerunnable stages and stack caching"}
 answers:
   - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
+  - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "Nothing yet: finish the setup, and I'll tell you what to build in a later step."}
   - {match: "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
   - {match: "\\bcode remote\\b|remote .*\\b(code|repository)\\b|^where .*\\bpush", pick: "The code remote is {code_remote}."}
   - {match: "^which process|\\bprocess\\b.*\\b(use|want|follow)\\b", pick: "Agile, with sprints and releases."}
@@ -62,15 +63,18 @@ steps:
   - id: "2.1"
     say: "Start a two-week sprint for the saved basket. Put it in, for release 0.1.0."
     expect: {board: {sprint: active}}
+    names: {basket: {new_item: {title_matches: "\\bbasket\\b"}}}
+    answers:
+    - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there."}
   - id: "2.2"
     say: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design."
-    expect: {board: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    expect: {board: {item: {named: basket}}}
   - id: "2.3"
     say: "Add a manual test to the saved basket: open the basket page, add an item, close the browser, reopen the page, and the item is still there."
   # 3 One item, stage by stage
   - id: "3.1"
-    decide: {approve: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
-    offer: {page: review, button: Approve, subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {approve: {item: {named: basket}}}
+    offer: {page: review, button: Approve, subject: {item: {named: basket}}}
   - id: "3.2"
     say: "Build the basket page."
     expect: {talk: {asked: "style|styling|look|feel|screen"}}
@@ -78,46 +82,48 @@ steps:
   - id: "3.3"
     say: "Move the saved basket on to Develop: write the design and its task list, and name a test for each requirement."
   - id: "3.4"
-    decide: {signoff: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, name: design-review}}
-    offer: {page: review, button: "Sign off design-review", subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {signoff: {item: {named: basket}, name: design-review}}
+    offer: {page: review, button: "Sign off design-review", subject: {item: {named: basket}}}
   - id: "3.5"
     say: "Have a sub-agent build these tasks."
   - id: "3.6"
     say: "Move the saved basket on to Test, then to Review. Tell me what waits for me on the Review page."
   - id: "3.7"
-    decide: {signoff: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {signoff: {item: {named: basket}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: basket}}}
   - id: "3.8"
     say: "Move the saved basket on to Review, if it has not moved already."
-    expect: {board: {item: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, status: Review}}}
+    expect: {board: {item: {item: {named: basket}, status: Review}}}
   # 4 A chore, and the manual check
   - id: "4.1"
     say: "Add a README that says how to run the shop, and name the address of the basket page in it: it's a chore. Take it to its last stage and tell me what waits for me on the Review page."
+    names: {readme: new_item}
   - id: "4.2"
-    decide: {approve: {item: {title_contains: README}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: README}}}
+    decide: {approve: {item: {named: readme}}}
+    offer: {page: review, button: Approve, subject: {item: {named: readme}}}
   - id: "4.3"
     say: "Move the README chore on as far as it goes. Tell me what waits for me on the Review page."
   - id: "4.4"
-    decide: {record_manual: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, test: "basket", passed: true}}
-    offer: {page: review, button: Passed, subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {record_manual: {item: {named: basket}, test: "basket", passed: true}}
+    offer: {page: review, button: Passed, subject: {item: {named: basket}}}
     check: MT-4
   # 5 A second item, with drifted docs
   - id: "5.1"
     say: "Add an item to rename the basket page address from /basket to /cart. Take it to Design and tell me what waits for me on the Review page."
+    names: {rename: new_item}
   - id: "5.2"
-    decide: {approve: {item: {title_contains: cart}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: cart}}}
+    decide: {approve: {item: {named: rename}}}
+    offer: {page: review, button: Approve, subject: {item: {named: rename}}}
   - id: "5.3"
     say: "Move the rename on to Develop: write its design and task list."
   - id: "5.4"
-    decide: {signoff: {item: {title_contains: cart}, name: design-review}}
-    offer: {page: review, button: "Sign off design-review", subject: {item: {title_contains: cart}}}
+    decide: {signoff: {item: {named: rename}, name: design-review}}
+    offer: {page: review, button: "Sign off design-review", subject: {item: {named: rename}}}
   - id: "5.5"
     say: "Build the rename yourself, then move it on to Test and Review. Check every doc that names the old address. Tell me what waits for me on the Review page."
   - id: "5.6"
-    decide: {signoff: {item: {title_contains: cart}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: cart}}}
+    decide: {signoff: {item: {named: rename}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: rename}}}
     check: MT-3
   - id: "5.7"
     say: "Move the rename on to Review, if it has not moved already."
@@ -152,24 +158,26 @@ steps:
     say: "Run the full checks over the release."
   - id: "6.8"
     say: "While the release is a candidate we found that the basket page's title does not name the shop: it should read \"Your basket - the corner shop\". Add it as a defect with that in its title, and fix it in the release. Take the defect as far as it goes and tell me what waits for me on the Review page."
-    expect: {board: {item: {title_contains: "corner shop"}}}
+    expect: {board: {item: {named: defect}}}
     check: MT-5
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
     answers:
     - {match: "how should i (record|file|track)|record (it|this|the (change|fix))|\\bamend\\b|new item or|defect or", pick: "File it as a defect, with \"corner shop\" in its title."}
+    names: {defect: new_item}
   - id: "6.9"
-    decide: {approve: {item: {title_contains: "corner shop"}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: "corner shop"}}}
+    decide: {approve: {item: {named: defect}}}
+    offer: {page: review, button: Approve, subject: {item: {named: defect}}}
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.10"
     say: "Move the defect on as far as it goes. Tell me what waits for me on the Review page."
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.11"
-    decide: {signoff: {item: {title_contains: "corner shop"}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: "corner shop"}}}
+    decide: {signoff: {item: {named: defect}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: defect}}}
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.12"
     say: "Move the defect on to Review, if it has not moved already. Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.13"
     decide: {promote: {release: v0.1.0, to: main}}
     offer: {page: releases, button: "Promote to main"}

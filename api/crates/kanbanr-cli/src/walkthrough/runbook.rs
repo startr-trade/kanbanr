@@ -31,6 +31,85 @@ pub enum ItemSel {
     TitleContains(String),
     /// The item whose title matches this pattern (case-insensitive); the newest when several do.
     TitleMatches(String),
+    /// The item a step's `names:` bound to this name (`item: {named: basket}`). The run reads it
+    /// as the bound code before acting; a name never bound is a finding, never a guess.
+    Named(String),
+}
+
+/// The code a name binds to, from the board's items before and after the step (code and title,
+/// oldest first); `Err` names the candidates when none or several fit (`naming-failed`). A title
+/// binding already made is kept: `None`, nothing to do.
+pub fn bind_name(
+    source: &NameSource,
+    before: &[(String, String)],
+    after: &[(String, String)],
+    already_bound: bool,
+) -> Option<std::result::Result<String, String>> {
+    let list = |v: &[&(String, String)]| {
+        if v.is_empty() {
+            "none".to_string()
+        } else {
+            v.iter()
+                .map(|(c, t)| format!("{c} \"{t}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    match source {
+        NameSource::NewItem(filter) => {
+            let created: Vec<&(String, String)> = after
+                .iter()
+                .filter(|(c, _)| !before.iter().any(|(b, _)| b == c))
+                .collect();
+            let fit: Vec<&(String, String)> = created
+                .iter()
+                .copied()
+                .filter(|(_, t)| filter.as_ref().is_none_or(|f| f.title_fits(t)))
+                .collect();
+            Some(match fit.as_slice() {
+                [one] => Ok(one.0.clone()),
+                _ => Err(format!(
+                    "{} item(s) created in the step{}: {}",
+                    fit.len(),
+                    filter
+                        .as_ref()
+                        .map(|f| format!(" fit {}", f.describe()))
+                        .unwrap_or_default(),
+                    list(if filter.is_some() && fit.is_empty() {
+                        &created
+                    } else {
+                        &fit
+                    })
+                )),
+            })
+        }
+        NameSource::Title(_) if already_bound => None,
+        NameSource::Title(sel) => {
+            let all: Vec<&(String, String)> = after.iter().collect();
+            let fit: Vec<&(String, String)> =
+                after.iter().filter(|(_, t)| sel.title_fits(t)).collect();
+            Some(match fit.as_slice() {
+                [one] => Ok(one.0.clone()),
+                _ => Err(format!(
+                    "{} item(s) fit {}: {}",
+                    fit.len(),
+                    sel.describe(),
+                    list(if fit.is_empty() { &all } else { &fit })
+                )),
+            })
+        }
+    }
+}
+
+/// How a step binds a name to an item (`names: {basket: …}`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameSource {
+    /// The one item created during the step (`new_item`), or the one among them whose title
+    /// fits the filter (`{new_item: {title_matches: …}}`) when the step makes several.
+    NewItem(Option<ItemSel>),
+    /// The one item whose title fits, bound once (`{title_matches: …}`), for an item the runbook
+    /// did not create.
+    Title(ItemSel),
 }
 
 /// What a selector picked from the board's items.
@@ -93,6 +172,8 @@ impl ItemSel {
             ItemSel::TitleMatches(_) => {
                 of(items.iter().filter(|i| self.title_fits(title(i))).collect())
             }
+            // Read as a code before any pick; one left unread picks nothing.
+            ItemSel::Named(_) => Pick::None,
         }
     }
 
@@ -126,6 +207,7 @@ impl ItemSel {
             ItemSel::Code(c) => c.clone(),
             ItemSel::TitleContains(t) => format!("the item titled like \"{t}\""),
             ItemSel::TitleMatches(p) => format!("the item whose title matches /{p}/"),
+            ItemSel::Named(n) => format!("the item named `{n}`"),
         }
     }
 
@@ -266,6 +348,8 @@ pub enum BoardClaim {
     ItemTitleMatches(String),
     /// The item is at this status.
     ItemStatus { item: ItemSel, status: String },
+    /// The item exists (`item: {named: basket}`, or a code).
+    ItemExists(ItemSel),
     /// Release preparation (notes, changelog, version files) is configured (W2b).
     ReleasePrepareConfigured,
     /// A sprint is running.
@@ -355,6 +439,65 @@ pub struct Step {
     /// Run the step only when this board claim holds (`only_if: {board: …}`); otherwise it is
     /// skipped with a finding, and its check is not measured.
     pub only_if: Option<BoardClaim>,
+    /// Names this step binds once its say is done (`names: {basket: new_item}`).
+    pub names: BTreeMap<String, NameSource>,
+}
+
+impl Step {
+    /// Every item selector the step acts on, to read its names as codes.
+    pub fn selectors_mut(&mut self) -> Vec<&mut ItemSel> {
+        let mut sels: Vec<&mut ItemSel> = Vec::new();
+        if let Some(d) = &mut self.decide {
+            match d {
+                Decision::Approve(i) | Decision::Ratify(i) => sels.push(i),
+                Decision::Signoff { item, .. } | Decision::RecordManual { item, .. } => {
+                    sels.push(item)
+                }
+                _ => {}
+            }
+        }
+        sels.extend(self.press.as_mut().and_then(|p| p.subject.as_mut()));
+        sels.extend(self.offer.as_mut().and_then(|o| o.subject.as_mut()));
+        if let Some(e) = &mut self.expect {
+            match &mut e.board {
+                Some(BoardClaim::ItemStatus { item, .. }) | Some(BoardClaim::ItemExists(item)) => {
+                    sels.push(item)
+                }
+                _ => {}
+            }
+            if let Some(TruthClaim::Merged { item }) = &mut e.truth {
+                sels.push(item);
+            }
+        }
+        sels
+    }
+
+    /// The step with every `named:` selector read as the code `names` bound it to; the names
+    /// never bound, when there are any.
+    pub fn with_names(
+        &self,
+        names: &BTreeMap<String, String>,
+    ) -> std::result::Result<Step, Vec<String>> {
+        let mut out = self.clone();
+        let mut unbound = Vec::new();
+        for sel in out.selectors_mut() {
+            if let ItemSel::Named(n) = sel {
+                match names.get(n.as_str()) {
+                    Some(code) => *sel = ItemSel::Code(code.clone()),
+                    None => {
+                        if !unbound.contains(n) {
+                            unbound.push(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if unbound.is_empty() {
+            Ok(out)
+        } else {
+            Err(unbound)
+        }
+    }
 }
 
 /// A runbook: the first fenced `yaml` block of a board doc.
@@ -379,6 +522,46 @@ enum RawItemSel {
     Word(String),
     Titled { title_contains: String },
     TitledLike { title_matches: String },
+    Named { named: String },
+}
+
+/// `new_item`, `{new_item: {title_contains|title_matches: …}}`, or `{title_contains|title_matches: …}`.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawNameSource {
+    Word(String),
+    NewItem { new_item: RawItemSel },
+    Titled { title_contains: String },
+    TitledLike { title_matches: String },
+}
+
+impl RawNameSource {
+    fn into_source(self, step: &str, name: &str) -> Result<NameSource> {
+        Ok(match self {
+            RawNameSource::Word(w) if w == "new_item" => NameSource::NewItem(None),
+            RawNameSource::Word(w) => {
+                return Err(anyhow!(
+                    "step {step}: name `{name}` is `new_item`, `{{new_item: {{title_matches: …}}}}` or `{{title_matches: …}}`, not '{w}'"
+                ));
+            }
+            RawNameSource::NewItem { new_item } => match new_item.into_sel() {
+                s @ (ItemSel::TitleContains(_) | ItemSel::TitleMatches(_)) => {
+                    NameSource::NewItem(Some(s))
+                }
+                _ => {
+                    return Err(anyhow!(
+                        "step {step}: name `{name}`: a new_item filter is a title_contains or a title_matches"
+                    ));
+                }
+            },
+            RawNameSource::Titled { title_contains } => {
+                NameSource::Title(ItemSel::TitleContains(title_contains))
+            }
+            RawNameSource::TitledLike { title_matches } => {
+                NameSource::Title(ItemSel::TitleMatches(title_matches))
+            }
+        })
+    }
 }
 
 impl RawItemSel {
@@ -388,6 +571,7 @@ impl RawItemSel {
             RawItemSel::Word(w) => ItemSel::Code(w),
             RawItemSel::Titled { title_contains } => ItemSel::TitleContains(title_contains),
             RawItemSel::TitledLike { title_matches } => ItemSel::TitleMatches(title_matches),
+            RawItemSel::Named { named } => ItemSel::Named(named),
         }
     }
 }
@@ -575,6 +759,8 @@ struct RawItemClaim {
     item: Option<RawItemSel>,
     #[serde(default)]
     status: Option<String>,
+    #[serde(default)]
+    named: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -611,16 +797,19 @@ impl RawBoardClaim {
             });
         }
         if let Some(i) = self.item {
-            match (i.title_contains, i.title_matches, i.item, i.status) {
-                (Some(t), None, None, None) => out.push(BoardClaim::ItemTitleContains(t)),
-                (None, Some(p), None, None) => out.push(BoardClaim::ItemTitleMatches(p)),
-                (None, None, Some(sel), Some(status)) => out.push(BoardClaim::ItemStatus {
+            match (i.title_contains, i.title_matches, i.item, i.status, i.named) {
+                (Some(t), None, None, None, None) => out.push(BoardClaim::ItemTitleContains(t)),
+                (None, Some(p), None, None, None) => out.push(BoardClaim::ItemTitleMatches(p)),
+                (None, None, Some(sel), Some(status), None) => out.push(BoardClaim::ItemStatus {
                     item: sel.into_sel(),
                     status,
                 }),
+                (None, None, None, None, Some(n)) => {
+                    out.push(BoardClaim::ItemExists(ItemSel::Named(n)))
+                }
                 _ => {
                     return Err(anyhow!(
-                        "step {step}: an item claim is `{{title_contains: …}}`, `{{title_matches: …}}` or `{{item: …, status: …}}`"
+                        "step {step}: an item claim is `{{title_contains: …}}`, `{{title_matches: …}}`, `{{named: …}}` or `{{item: …, status: …}}`"
                     ));
                 }
             }
@@ -751,6 +940,8 @@ struct RawStep {
     stop_on_mismatch: bool,
     #[serde(default)]
     only_if: Option<RawOnlyIf>,
+    #[serde(default)]
+    names: BTreeMap<String, RawNameSource>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -844,6 +1035,11 @@ impl Runbook {
                 }),
             };
             let only_if = s.only_if.map(|o| o.board.into_claim(&id)).transpose()?;
+            let names = s
+                .names
+                .into_iter()
+                .map(|(n, src)| src.into_source(&id, &n).map(|s| (n, s)))
+                .collect::<Result<BTreeMap<_, _>>>()?;
             steps.push(Step {
                 id,
                 say: s.say,
@@ -856,6 +1052,7 @@ impl Runbook {
                 check: s.check,
                 stop_on_mismatch: s.stop_on_mismatch,
                 only_if,
+                names,
             });
         }
         Ok(Runbook {
@@ -914,7 +1111,7 @@ fn selectors(s: &Step) -> Vec<&ItemSel> {
     sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
     sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
     if let Some(e) = &s.expect {
-        if let Some(BoardClaim::ItemStatus { item, .. }) = &e.board {
+        if let Some(BoardClaim::ItemStatus { item, .. } | BoardClaim::ItemExists(item)) = &e.board {
             sels.push(item);
         }
         if let Some(TruthClaim::Merged { item }) = &e.truth {
@@ -922,6 +1119,27 @@ fn selectors(s: &Step) -> Vec<&ItemSel> {
         }
     }
     sels
+}
+
+/// Each `named:` a step uses that no earlier step's `names:` binds, nor the step's own (a step's
+/// names are bound once its say is done, before its decision and claims).
+fn unbound_names(rb: &Runbook) -> Vec<LintError> {
+    let mut bound = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for s in &rb.steps {
+        bound.extend(s.names.keys().cloned());
+        for sel in selectors(s) {
+            if let ItemSel::Named(n) = sel
+                && !bound.contains(n)
+            {
+                out.push(LintError {
+                    step: s.id.clone(),
+                    message: format!("`named: {n}` is used before any step's `names:` binds it"),
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Does a `say` ask Claude to create an item?
@@ -953,7 +1171,7 @@ pub fn lint_warnings(rb: &Runbook) -> Vec<LintError> {
     let mut warned = std::collections::BTreeSet::new();
     for (i, s) in rb.steps.iter().enumerate() {
         for sel in selectors(s) {
-            if matches!(sel, ItemSel::Newest | ItemSel::Code(_)) {
+            if matches!(sel, ItemSel::Newest | ItemSel::Code(_) | ItemSel::Named(_)) {
                 continue;
             }
             let creators: Vec<usize> = (0..i)
@@ -1142,6 +1360,7 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
             }
         }
     }
+    out.extend(unbound_names(rb));
     out
 }
 
@@ -1356,7 +1575,172 @@ steps:
                     "{file} names something private: {word}"
                 );
             }
+            // Preview-5 triage: the basket, the README chore, the rename and the defect are each
+            // named by the step that asks for them, and every later selector uses the name.
+            for name in ["basket", "readme", "rename", "defect"] {
+                assert!(
+                    rb.steps.iter().any(|s| s.names.contains_key(name)),
+                    "{file}: nothing names `{name}`"
+                );
+            }
+            assert!(!text.contains("title_contains: cart"), "{file}");
+            assert!(!text.contains("title_contains: README"), "{file}");
         }
+    }
+
+    /// The board's items before and after step 2.1 of the two preview-5 runs, from their board
+    /// bundles (togaf-v070-preview-5, agile-v070-preview-2): code and title, oldest first.
+    type Items = Vec<(String, String)>;
+
+    fn preview5_items() -> Vec<(String, Items, Items)> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/walkthrough-names/preview-5.json");
+        let v: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let items = |x: &serde_json::Value| -> Vec<(String, String)> {
+            x.as_array()
+                .unwrap()
+                .iter()
+                .map(|p| {
+                    (
+                        p[0].as_str().unwrap().to_string(),
+                        p[1].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect()
+        };
+        v.iter()
+            .map(|r| {
+                (
+                    r["from"].as_str().unwrap().to_string(),
+                    items(&r["before"]),
+                    items(&r["after"]),
+                )
+            })
+            .collect()
+    }
+
+    /// Preview-5 triage: a name is bound from the item the step created. In both runs step 2.1
+    /// made the saved basket FEAT-002 (the TOGAF run with a CHANGELOG and a pipeline chore beside
+    /// it, so the runbook's basket filter picks it), however Claude worded its title.
+    #[test]
+    fn a_name_is_bound_from_the_item_its_step_created() {
+        let basket = NameSource::NewItem(Some(ItemSel::TitleMatches(r"\bbasket\b".into())));
+        for (run, before, after) in preview5_items() {
+            assert_eq!(
+                bind_name(&basket, &before, &after, false),
+                Some(Ok("FEAT-002".to_string())),
+                "{run}"
+            );
+        }
+        // The agile step made one item: plain `new_item` binds it.
+        let (_, before, after) = preview5_items().remove(1);
+        assert_eq!(
+            bind_name(&NameSource::NewItem(None), &before, &after, false),
+            Some(Ok("FEAT-002".to_string()))
+        );
+        // A title binding is made once and then kept.
+        let titled = NameSource::Title(ItemSel::TitleContains("greeting".into()));
+        assert_eq!(
+            bind_name(&titled, &before, &after, false),
+            Some(Ok("FEAT-001".to_string()))
+        );
+        assert_eq!(bind_name(&titled, &before, &after, true), None);
+        // The runbook form parses into those sources.
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: n\nprocess: p\nsteps:\n  - id: a\n    say: \"Add it.\"\n    names: {basket: {new_item: {title_matches: \"basket\"}}, readme: new_item, shop: {title_contains: shop}}\n  - id: b\n    decide: {approve: {item: {named: basket}}}\n    offer: {page: review, button: Approve, subject: {item: {named: basket}}}\n    expect: {board: {item: {named: readme}}}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            rb.steps[0].names.get("readme"),
+            Some(&NameSource::NewItem(None))
+        );
+        assert_eq!(
+            rb.steps[0].names.get("shop"),
+            Some(&NameSource::Title(ItemSel::TitleContains("shop".into())))
+        );
+        assert_eq!(lint(&rb), Vec::<LintError>::new());
+        let names = BTreeMap::from([
+            ("basket".to_string(), "FEAT-002".to_string()),
+            ("readme".to_string(), "FEAT-003".to_string()),
+        ]);
+        let read = rb.steps[1].with_names(&names).unwrap();
+        assert_eq!(
+            read.decide,
+            Some(Decision::Approve(ItemSel::Code("FEAT-002".into())))
+        );
+        assert_eq!(
+            read.offer.unwrap().subject,
+            Some(ItemSel::Code("FEAT-002".into()))
+        );
+        assert_eq!(
+            read.expect.unwrap().board,
+            Some(BoardClaim::ItemExists(ItemSel::Code("FEAT-003".into())))
+        );
+    }
+
+    /// Preview-5 triage: a step that made several items, or none, binds nothing; the finding
+    /// (`naming-failed`) lists the candidates.
+    #[test]
+    fn several_or_no_created_items_are_a_naming_finding() {
+        let (_, before, after) = preview5_items().remove(0);
+        let Some(Err(why)) = bind_name(&NameSource::NewItem(None), &before, &after, false) else {
+            panic!("the TOGAF step made three items")
+        };
+        assert!(
+            why.starts_with("3 item(s)")
+                && why.contains("FEAT-002")
+                && why.contains("FEAT-003")
+                && why.contains("FEAT-004")
+                && !why.contains("FEAT-001"),
+            "{why}"
+        );
+        let Some(Err(why)) = bind_name(&NameSource::NewItem(None), &after, &after, false) else {
+            panic!("nothing was made")
+        };
+        assert!(why.starts_with("0 item(s)"), "{why}");
+        // A filter that fits none of the created items lists what was created.
+        let pipeline = NameSource::NewItem(Some(ItemSel::TitleContains("rename".into())));
+        let Some(Err(why)) = bind_name(&pipeline, &before, &after, false) else {
+            panic!("no created item is a rename")
+        };
+        assert!(why.contains("FEAT-003"), "{why}");
+        // A title that several items fit binds nothing either.
+        let Some(Err(why)) = bind_name(
+            &NameSource::Title(ItemSel::TitleContains("basket".into())),
+            &before,
+            &after,
+            false,
+        ) else {
+            panic!("two items name the basket")
+        };
+        assert!(why.starts_with("2 item(s)"), "{why}");
+    }
+
+    /// Preview-5 triage: a `named:` selector whose name no step bound is never guessed: the step
+    /// reports the name, and lint names one used before any step binds it.
+    #[test]
+    fn an_unbound_name_is_a_finding_never_a_guess() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: n\nprocess: p\nsteps:\n  - id: a\n    decide: {signoff: {item: {named: basket}, name: release}}\n    offer: {page: review, button: \"Sign off release\", subject: {item: {named: basket}}}\n  - id: b\n    say: \"Add the basket.\"\n    names: {basket: new_item}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            rb.steps[0].with_names(&BTreeMap::new()),
+            Err(vec!["basket".to_string()])
+        );
+        let errs = lint(&rb);
+        assert!(
+            errs.iter()
+                .any(|e| e.step == "a" && e.message.contains("`named: basket`")),
+            "{errs:?}"
+        );
+        // An unread name picks nothing, rather than some item.
+        let items = [("FEAT-001".to_string(), "Saved basket".to_string())];
+        assert_eq!(
+            ItemSel::Named("basket".into()).pick(&items, |i| &i.0, |i| &i.1),
+            Pick::None
+        );
     }
 
     /// FTR-037 W2b: the board claims DEF-056's runbook needs before its promote step — release

@@ -506,6 +506,44 @@ mod tests {
         }
     }
 
+    /// Preview-5 triage: in both runs Claude asked what to build first during setup, and the run
+    /// took Claude's own suggestion (a greeting list). Each such text of those runs (paths and
+    /// remotes scrubbed) is now answered by rule: during setup the run defers, and in the step
+    /// that says what to build, the step's own rule answers with the guide's words.
+    #[test]
+    fn the_first_build_question_is_answered_with_the_build_steps_words() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/preview-5-first-build.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(texts.len() >= 4);
+        for file in ["togaf.md", "agile.md"] {
+            let rb = Runbook::parse(
+                &std::fs::read_to_string(dir.join("walkthroughs").join(file)).unwrap(),
+            )
+            .unwrap();
+            let build_say = "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.";
+            for t in &texts {
+                let text = t["text"].as_str().unwrap();
+                let q = crate::walkthrough::driver::parse_text_question(text)
+                    .unwrap_or_else(|| panic!("not read as a question: {text}"));
+                let q = Question::from_text(&q);
+                let setup = Policy::new(&rb, Some("1.1")).answer(&q);
+                assert!(
+                    setup.pick.starts_with("Nothing yet"),
+                    "{file} 1.1: {:?} -> {:?} ({})",
+                    q.text,
+                    setup.pick,
+                    setup.policy
+                );
+                let build = Policy::new(&rb, Some("2.1")).answer(&q);
+                assert_eq!(build.pick, build_say, "{file} 2.1: {:?}", q.text);
+            }
+        }
+    }
+
     /// FTR-037 R-2: a question asked in text is parsed into the same `Question` and answered by the
     /// same policy as a dialog; both are logged as one row of `questions.tsv` naming the source,
     /// the options, the pick and the policy; and the hook answers an AskUserQuestion payload with

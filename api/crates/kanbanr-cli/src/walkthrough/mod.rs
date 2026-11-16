@@ -509,6 +509,8 @@ struct Running {
     last_question: Option<String>,
     /// Setup never made the board: the run stops and prepares no batch.
     setup_failed: bool,
+    /// The names steps bound (`names:`), to the item codes they stand for.
+    names: BTreeMap<String, String>,
     lines: usize,
     stopped: Option<String>,
     pause: bool,
@@ -531,6 +533,20 @@ impl Running {
         eprintln!("finding: {f}");
         let _ = append_finding(&self.dirs, &f);
         self.findings.push(f);
+    }
+
+    /// The run board's items, code and title, oldest first; none before setup made the board.
+    fn board_items(&mut self) -> Vec<(String, String)> {
+        let project = self.project_name();
+        let Ok(p) = kanbanr_core::Store::new(self.dirs.board()).load(&project) else {
+            return Vec::new();
+        };
+        let mut items: Vec<_> = p.features.iter().collect();
+        items.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)));
+        items
+            .into_iter()
+            .map(|f| (f.code.clone(), f.title.clone()))
+            .collect()
     }
 
     fn project_name(&mut self) -> String {
@@ -707,6 +723,12 @@ impl Running {
         // RC3: a step starts on an idle session — no sub-agent build still running, nothing still
         // arriving — so its say is not answered by a turn about earlier work.
         self.wait_for_agents(&id);
+        // The board's items as the step starts, for the names it binds from what it creates.
+        let items_before = if step.names.is_empty() {
+            Vec::new()
+        } else {
+            self.board_items()
+        };
         if let Some(say) = &step.say {
             let mut resends = 0;
             let mut text = fill(say, &self.vars);
@@ -803,6 +825,55 @@ impl Running {
             step_ok = false;
             why.push("no monitor".into());
         }
+        // Names (preview-5 triage): the step's say is done, so bind the names it gives, then read
+        // every `named:` selector of its decision, press, offer and claims as the bound code. A
+        // name never bound leaves those undone: a finding, never a guess.
+        if !step.names.is_empty() {
+            let items_after = self.board_items();
+            for (name, source) in &step.names {
+                let bound = self.names.contains_key(name);
+                match runbook::bind_name(source, &items_before, &items_after, bound) {
+                    None => {}
+                    Some(Ok(code)) => {
+                        eprintln!("step {id}: `{name}` is {code}");
+                        self.names.insert(name.clone(), code);
+                    }
+                    Some(Err(candidates)) => {
+                        self.finding(
+                            &id,
+                            "naming-failed",
+                            format!("the step names one item `{name}`"),
+                            candidates.clone(),
+                        );
+                        step_ok = false;
+                        why.push(format!("`{name}` not bound: {candidates}"));
+                    }
+                }
+            }
+        }
+        let original = step;
+        let resolved = match step.with_names(&self.names) {
+            Ok(s) => s,
+            Err(unbound) => {
+                for n in &unbound {
+                    self.finding(
+                        &id,
+                        "unbound-name",
+                        format!("the step acts on the item named `{n}`"),
+                        format!("no step bound `{n}`; its decision and claims were not taken"),
+                    );
+                    why.push(format!("`{n}` was never bound"));
+                }
+                step_ok = false;
+                let mut s = step.clone();
+                s.decide = None;
+                s.press = None;
+                s.offer = None;
+                s.expect = None;
+                s
+            }
+        };
+        let step = &resolved;
         let project = self.project_name();
         if let Some(decision) = &step.decide {
             let offer = step
@@ -1088,10 +1159,12 @@ impl Running {
             return Ok(false);
         }
         if let Some(marker) = &step.check {
-            let measured = step.decide.is_some()
-                || step.press.is_some()
-                || step.push.is_some()
-                || step.expect.as_ref().is_some_and(|e| !e.is_empty());
+            // Measured by what the runbook asked of the step, even when an unbound name left it
+            // undone: that is a failed check, not an unmeasured one.
+            let measured = original.decide.is_some()
+                || original.press.is_some()
+                || original.push.is_some()
+                || original.expect.as_ref().is_some_and(|e| !e.is_empty());
             self.checks.push(CheckResult {
                 marker: marker.clone(),
                 step: id.clone(),
@@ -1445,6 +1518,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         started: Instant::now(),
         last_question: None,
         setup_failed: false,
+        names: BTreeMap::new(),
         lines: 0,
         stopped: None,
         pause: args.pause_at_decisions,
