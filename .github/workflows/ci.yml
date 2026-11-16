@@ -56,6 +56,13 @@ jobs:
           # The workspace lives in api/, not at the repo root.
           workspaces: "api"
 
+      # The tests run through cargo-nextest (MNT-010), pinned: FTR-058's reader parses its lines,
+      # so an upgrade is a deliberate bump, not a surprise.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest@0.9.151
+
       # --- Build dependencies for the vendored C libraries (libgit2 + OpenSSL) ---
       # These are needed to compile the vendored sources from scratch.
 
@@ -119,15 +126,33 @@ jobs:
 
       # --no-fail-fast: every test binary runs even after one fails, so a platform's failures all
       # show in one run. Without it Windows revealed its failures one test binary per push.
+      # scripts/test.sh runs cargo-nextest when it is installed, and the doctests after it (MNT-010).
       - name: Test
-        run: cargo test --locked --workspace --no-fail-fast
+        shell: bash
+        run: ../scripts/test.sh
+
+      # Every test has its time in the run's JUnit report (api/.config/nextest.toml). Checked on
+      # Linux, where python3 is python3; the report is written on every system.
+      - name: The run left a JUnit report with a time for every test
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python3 ../scripts/check_junit.py target/nextest/default/junit.xml
+
+      # Kept as raw data, a red run's too: each test's duration on each system.
+      - name: Keep the JUnit report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: junit-${{ matrix.os }}
+          path: api/target/nextest/default/junit.xml
+          if-no-files-found: warn
 
       # DEF-058: build.rs must restamp a build in a linked git worktree after HEAD moves. The test
       # clones the repository, so it is #[ignore]d in the workspace run above (a minute or two) and
       # runs here, on Linux only: the fix is in build.rs, not the platform.
       - name: Build stamp follows HEAD in a worktree
         if: runner.os == 'Linux'
-        run: cargo test --locked -p kanbanr-cli --test build_stamp -- --ignored
+        shell: bash
+        run: ../scripts/test.sh --ignored -p kanbanr-cli --test build_stamp
 
   # A contribution states why it exists and proves each requirement with a green test
   # (CONTRIBUTING.md). The definition travels in the PR body, because a contributor has no board
@@ -465,6 +490,11 @@ jobs:
           set -eu
           python3 -m unittest -q scripts/tests/test_check_tracked_files.py
           sh scripts/check-tracked-files.sh
+
+      # The test runner, its config and the JUnit check follow the shared Rust CI practices (MNT-010;
+      # MNT-007 adds its classes to the same file).
+      - name: The pipeline follows the shared Rust CI practices
+        run: python3 -m unittest discover -s scripts/tests -p 'test_pipeline_practices.py' -v && python3 -m unittest discover -s scripts/tests -p 'test_check_junit.py' -v
 
       # The guides cover designing a pipeline and describe a product by what a person does (DOC-007).
       - name: The guides cover the pipeline and a product people use

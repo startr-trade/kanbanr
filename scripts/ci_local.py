@@ -41,6 +41,11 @@ PWSH = "mcr.microsoft.com/powershell:lts-7.4-ubuntu-22.04"
 
 LOCAL = "local"
 
+# Each run of a step in KEEP leaves its full output and JUnit report here, one folder a run, never
+# pruned: the raw data a test's durations are read from (MNT-010; FTR-058 captures them).
+RUNS = TREE.parent / "runs"
+KEEP = {("ci.yml", "rust", "Test")}
+
 # What each repository variable (`vars.NAME`) reads as when make ci runs a step locally. An unset
 # variable reads as empty on GitHub too. ATTEST_RELEASE is on unless it is `false`, so the notes
 # step runs as it does by default; the publish switches stay off, as nothing is published here.
@@ -62,6 +67,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Clippy (ubuntu only)": LOCAL,
             "The published OpenAPI matches the code": LOCAL,
             "Test": LOCAL,
+            "The run left a JUnit report with a time for every test": LOCAL,
             "Build stamp follows HEAD in a worktree": LOCAL,
         },
         "definition": {
@@ -105,6 +111,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "No tracked merge leftovers (*.orig, *.rej)": LOCAL,
             "The version being built has release notes": LOCAL,
             "The guides cover the pipeline and a product people use": LOCAL,
+            "The pipeline follows the shared Rust CI practices": LOCAL,
             "The docs layout holds": LOCAL,
             "Every gate check is described in Working with Claude": LOCAL,
             "Every third-party action is pinned to a commit": LOCAL,
@@ -232,6 +239,31 @@ def sh(cmd: list[str] | str, cwd: Path, env: dict[str, str] | None = None) -> tu
         text=True,
     )
     return proc.returncode == 0, proc.stdout
+
+
+def keep_run(output: str, junit: Path, head: str, now: datetime, runs: Path = RUNS) -> Path:
+    """Keep a test step's full output and its JUnit report in a new folder under `runs`.
+
+    The folder is `<YYYYMMDDTHHMMSSZ>-<sha7>`, with `-2`, `-3` … when that exists, so names sort
+    by time and an earlier run is never overwritten. Without a report it says why in
+    `junit.missing`.
+    """
+    base = f"{now:%Y%m%dT%H%M%SZ}-{head[:7]}"
+    runs.mkdir(parents=True, exist_ok=True)
+    folder, n = runs / base, 1
+    while True:
+        try:
+            folder.mkdir()
+            break
+        except FileExistsError:
+            n += 1
+            folder = runs / f"{base}-{n}"
+    (folder / "test.log").write_text(output, encoding="utf-8")
+    if junit.is_file():
+        shutil.copyfile(junit, folder / "junit.xml")
+    else:
+        (folder / "junit.missing").write_text("no JUnit report: the step ran cargo test, which writes none")
+    return folder
 
 
 def fresh_tree() -> None:
@@ -369,6 +401,14 @@ def run_workflow_steps() -> None:
                     else:
                         ok, out = sh(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], wd, env)
                 say(label, ok, out)
+                if (wf_name, job_id, name) in KEEP:
+                    # Keeping a run never fails it.
+                    try:
+                        kept = keep_run(out, TREE / "api/target/nextest/default/junit.xml", head,
+                                        datetime.now(timezone.utc))
+                        print(f"    kept: {kept}", flush=True)
+                    except OSError as err:
+                        print(f"    not kept: {err}", flush=True)
             for name in plan:
                 if not any(s.get("name") == name for s in job.get("steps", [])):
                     say(f"{wf_name} {job_id}: {name}", False,
@@ -546,6 +586,7 @@ def uses_equivalents() -> None:
     say("trivy.yml: no finding in dependencies, secrets or the Dockerfile (stricter than CI)", ok, out)
     not_verified.append("codeql.yml: CodeQL (run `make codeql`; several minutes, so not part of make ci)")
     not_verified.append("codeql.yml / trivy.yml: uploads to code scanning")
+    not_verified.append("ci.yml rust: uploading each system's JUnit report")
     # The plugin manifests (FEAT-139): nothing checked them, and a skills path Claude Code could not
     # resolve shipped. Validated wherever the claude command is installed; said so where it is not.
     if shutil.which("claude"):

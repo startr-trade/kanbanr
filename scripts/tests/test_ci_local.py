@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -436,6 +437,44 @@ class TestScript(unittest.TestCase):
         r = self.run_script(*args, nextest=False)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.logged(), [self.VERSION, "test --locked -p kanbanr-cli --test build_stamp -- --ignored"])
+
+
+class KeptRuns(unittest.TestCase):
+    """MNT-010 R-6: make ci keeps the Test step's full output and its JUnit report, one folder a run."""
+
+    HEAD = "0123456789abcdef0123456789abcdef01234567"
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.runs = self.tmp / "runs"
+        self.now = datetime(2026, 11, 17, 9, 5, 7, tzinfo=timezone.utc)
+
+    def test_the_test_steps_output_and_report_are_kept_per_run(self) -> None:
+        junit = self.tmp / "junit.xml"
+        junit.write_text('<testsuites><testsuite name="b"><testcase name="t" time="0.1"/></testsuite></testsuites>')
+        output = "PASS [   0.100s] (1/1) b t\nsummé\n"
+        first = ci_local.keep_run(output, junit, self.HEAD, self.now, self.runs)
+        self.assertEqual(first, self.runs / "20261117T090507Z-0123456")
+        self.assertEqual((first / "test.log").read_text(encoding="utf-8"), output)
+        self.assertEqual((first / "junit.xml").read_text(), junit.read_text())
+        self.assertFalse((first / "junit.missing").exists())
+        second = ci_local.keep_run("again\n", junit, self.HEAD, self.now, self.runs)
+        self.assertEqual(second, self.runs / "20261117T090507Z-0123456-2")
+        self.assertEqual((first / "test.log").read_text(encoding="utf-8"), output)
+        self.assertEqual((second / "test.log").read_text(encoding="utf-8"), "again\n")
+        third = ci_local.keep_run("third\n", junit, self.HEAD, self.now, self.runs)
+        self.assertEqual(third, self.runs / "20261117T090507Z-0123456-3")
+        self.assertEqual(sorted(p.name for p in self.runs.iterdir()),
+                         ["20261117T090507Z-0123456", "20261117T090507Z-0123456-2", "20261117T090507Z-0123456-3"])
+
+    def test_a_run_without_a_report_says_so_in_its_folder(self) -> None:
+        kept = ci_local.keep_run("cargo test output\n", self.tmp / "absent.xml", self.HEAD, self.now, self.runs)
+        self.assertEqual((kept / "test.log").read_text(encoding="utf-8"), "cargo test output\n")
+        self.assertFalse((kept / "junit.xml").exists())
+        self.assertEqual((kept / "junit.missing").read_text(),
+                         "no JUnit report: the step ran cargo test, which writes none")
 
 
 if __name__ == "__main__":
