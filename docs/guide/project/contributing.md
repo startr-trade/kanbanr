@@ -76,6 +76,16 @@ board instead.
 the image's package layer is never taken from Docker's cache and a fixable finding is never hidden by
 an old one. It also refuses a tracked `*.orig` or `*.rej` file, which a merge tool leaves behind.
 
+**`make ci` takes the machine's build lock and a memory cap.** Its heavy steps (cargo, the
+monitor build, the image build) run under `flock ~/.cache/heavy-build.lock`, so another heavy
+build on the machine waits for it rather than racing it, and inside
+`systemd-run --user --scope -p MemoryMax=…`, so a runaway build is killed before the desktop is.
+The cap is 60% of the machine's memory; set `KANBANR_CI_MEMORY_MAX` (bytes, or anything systemd's
+`MemoryMax=` takes) to change it. A step that reaches the cap fails with the cap in its message.
+Every step gets `CARGO_BUILD_JOBS`, which defaults to the machine's CPUs minus two; set it to
+change that. Without `flock` or a systemd user session (a container, macOS) the heavy steps run
+plainly, and `make ci` says so in one line at the start.
+
 `make ci` also records its verdict as the gate `local` for HEAD (`kanbanr gate record local`): a
 failure always, a pass only when the working tree is clean. A project that wants its local run
 required adds `local` to `kanbanr config commit-gates`.
@@ -90,6 +100,13 @@ It copies the tracked tree to a clean folder (`~/.cache/kanbanr-ci/tree`, with i
 cache) and runs every CI check that can run off GitHub, reading each step's script from the
 workflow file itself, plus actionlint and a check that every action the workflows use exists. It
 ends by listing what only GitHub can verify: the macOS and Windows legs, uploads and publishing.
+Those workflows include `deps.yml`, the dependency tier: cargo deny, cargo audit, npm audit, the
+locked-build and clean-install check, the SBOMs, the TLS backend check, and a
+`cargo check --locked --workspace --all-targets` on the `rust-version` `api/Cargo.toml` declares
+(the MSRV). On GitHub that tier runs only when a lock, manifest or toolchain file changes, nightly,
+on demand and before a release; `make ci` runs it every time. So the first `make ci` has rustup
+install that Rust version (1.89), and every run adds one full `cargo check` on it, under the
+build lock.
 It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellcheck`, and the
 `mdbook` version pinned in `docs.yml`, and `cargo-deny`, `cargo-audit` + `cargo-cyclonedx`
 (`cargo install cargo-deny cargo-audit cargo-cyclonedx --locked`). The individual checks, if you want one:

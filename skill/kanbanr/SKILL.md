@@ -1134,6 +1134,11 @@ project revision it was observed at. So:
 - `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`); until
   the installed kanbanr reads nextest's lines (FTR-058, v0.8.0), run
   `KANBANR_TEST_RUNNER=cargo make test` when the run's results should be captured.
+- In kanbanr's own repository, `make ci` runs its heavy steps (cargo, the monitor build, the
+  image build) under the machine's build lock (`flock ~/.cache/heavy-build.lock`) and a memory cap
+  (`systemd-run --user --scope`, 60% of memory unless `KANBANR_CI_MEMORY_MAX` says otherwise), with
+  `CARGO_BUILD_JOBS` leaving two CPUs free: a second heavy build on the machine waits for it rather
+  than racing it. Start it bare, never wrapped in `rtk proxy`: a wrapped run records nothing.
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed

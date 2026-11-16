@@ -17,6 +17,10 @@ All notable changes to kanbanr are documented here. The format follows
   to cargo test; doctests run apart; each run writes a JUnit report with every test's time, which
   CI uploads and `make ci` keeps with the step's log; a test running past 60 s is named in the
   output (MNT-010).
+- The pipeline follows the shared Rust CI practices: dependency-only proofs run in their own tier
+  on dependency changes, nightly and before a release; compiling jobs set the CI build
+  environment, a timeout and a main-only cache; `make ci` takes the machine's build lock and a
+  memory cap; one toolchain is named once (MNT-007).
 
 ### Fixed
 
