@@ -268,7 +268,16 @@ fn runbook_file(w: &World, name: &str, tail: &str) -> PathBuf {
     path
 }
 
+/// The commit every test run names with `--rev` (DEF-089), so the runs prepare their results on a
+/// dirty developer build as on CI's clean one.
+const FIXED_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
 fn run_walkthrough(w: &World, runbook: &Path, name: &str) -> Output {
+    run_walkthrough_with(w, runbook, name, &["--rev", FIXED_SHA])
+}
+
+/// A run with `extra` arguments after the usual ones; `--rev` only if `extra` names it.
+fn run_walkthrough_with(w: &World, runbook: &Path, name: &str, extra: &[&str]) -> Output {
     Command::new(cli())
         .args([
             "--data-dir",
@@ -288,6 +297,7 @@ fn run_walkthrough(w: &World, runbook: &Path, name: &str) -> Output {
             "--ui-dir",
             &fixtures().join("walkthrough-ui").display().to_string(),
         ])
+        .args(extra)
         .current_dir(&w.target_project)
         .env("KANBANR_BOARD_FENCE", &w.root)
         // The person's Claude Code folder is a stand-in under the temporary directory: a test run
@@ -533,7 +543,7 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
         v["definition"]["requirements"][0]["tests"][0].clone()
     };
     assert_ne!(first_test(&item)["state"], "green", "{item}");
-    // A walkthrough-kind test is the run's own automated evidence: recorded, at the binary's
+    // A walkthrough-kind test is the run's own automated evidence: recorded, at the build's
     // commit; a check on a step that checked nothing is put nowhere.
     let item2 = std::fs::read_to_string(
         w.target_board
@@ -542,26 +552,8 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
     .unwrap();
     let test2 = first_test(&item2);
     assert_eq!(test2["state"], "green", "{item2}");
-    let own = Command::new(cli()).arg("--version").output().unwrap();
-    let own = String::from_utf8_lossy(&own.stdout).to_string();
-    let sha = own
-        .split('(')
-        .nth(1)
-        .unwrap()
-        .split(',')
-        .next()
-        .unwrap()
-        .trim()
-        .to_string();
-    // The binary's commit is the evidence's revision; a dirty build names none.
-    if sha.chars().all(|c| c.is_ascii_hexdigit()) {
-        assert_eq!(test2["checked_rev"], sha.as_str(), "{item2}");
-    } else {
-        assert!(
-            test2["checked_rev"].as_str().unwrap_or("").is_empty(),
-            "{item2}"
-        );
-    }
+    // The commit the run was told the build holds is the evidence's revision (DEF-089).
+    assert_eq!(test2["checked_rev"], FIXED_SHA, "{item2}");
     assert!(
         shown.contains("recorded walkthrough test: MT-W FEAT-002 R-1 green"),
         "{shown}"
@@ -624,6 +616,118 @@ fn a_run_whose_setup_never_made_its_board_stops_and_prepares_nothing() {
     assert!(new.is_empty(), "prepared on the target board: {new:?}");
     // The captures are still made.
     assert!(w.runs.join("n1/raw/MANIFEST.sha256").exists());
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
+/// The prepared records on a world's target board, read as YAML.
+fn prepared_records(w: &World) -> Vec<serde_json::Value> {
+    walk(&w.target_board)
+        .into_iter()
+        .filter(|f| f.contains("/prepared/") && f.ends_with(".yaml") && !f.contains("/.git/"))
+        .filter(|f| !f.ends_with(".resolved.yaml"))
+        .map(|f| kanbanr_core::yaml::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap())
+        .collect()
+}
+
+/// The walkthrough-kind test of FEAT-002 on a world's target board.
+fn walkthrough_test(w: &World) -> serde_json::Value {
+    let item = std::fs::read_to_string(
+        w.target_board
+            .join("projects/target/features/Planned/FEAT-002.yaml"),
+    )
+    .unwrap();
+    let v: serde_json::Value = kanbanr_core::yaml::from_str(&item).unwrap();
+    v["definition"]["requirements"][0]["tests"][0].clone()
+}
+
+/// The commit the test binary's `kanbanr --version` names: `kanbanr 0.8.0 (<sha>, built …)`.
+fn build_sha() -> String {
+    let own = Command::new(cli()).arg("--version").output().unwrap();
+    let own = String::from_utf8_lossy(&own.stdout).to_string();
+    own.split('(')
+        .nth(1)
+        .unwrap_or("")
+        .split([',', ')'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// DEF-089 R-1, R-3: a run started from a checkout at another commit prepares its results at the
+/// commit `--rev` names, with the check id beside the step.
+#[cfg(unix)]
+#[test]
+fn a_run_prepares_its_results_at_the_named_commit_not_the_checkout() {
+    let w = world("namedrev");
+    let rb = runbook_file(&w, "smoke", "");
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&w.target_project)
+        .output()
+        .unwrap();
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    assert_ne!(head, FIXED_SHA);
+    let out = run_walkthrough(&w, &rb, "r1");
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    let records = prepared_records(&w);
+    assert_eq!(records.len(), 1, "{records:?}\n{shown}");
+    let r = &records[0];
+    assert_eq!(r["fields"]["checked_rev"], FIXED_SHA, "{r}");
+    assert_ne!(r["fields"]["checked_rev"], head.as_str(), "{r}");
+    assert_eq!(r["fields"]["check"], "MT-1", "{r}");
+    let label = r["sources"][0]["label"].as_str().unwrap_or("");
+    assert!(label.contains("check MT-1"), "{r}");
+    assert_eq!(walkthrough_test(&w)["checked_rev"], FIXED_SHA);
+    let setup = std::fs::read_to_string(w.runs.join("r1/raw/setup.log")).unwrap();
+    assert!(setup.contains(&format!("evidence_rev {FIXED_SHA}\n")), "{setup}");
+    assert!(setup.contains("evidence_rev_from --rev\n"), "{setup}");
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
+/// DEF-089 R-1, R-2, R-6: without `--rev`, a clean build's results name the build's commit; a
+/// dirty or unknown build is refused before any session starts, and nothing reaches the board.
+/// CI builds clean, so it takes the first branch; a dirty developer build the second.
+#[cfg(unix)]
+#[test]
+fn a_run_without_rev_uses_the_builds_commit_or_refuses() {
+    let w = world("norev");
+    let rb = runbook_file(&w, "smoke", "");
+    let sha = build_sha();
+    let before = walk(&w.target_board);
+    let out = run_walkthrough_with(&w, &rb, "n1", &[]);
+    let shown = text(&out);
+    if sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        assert!(out.status.success(), "{shown}");
+        let records = prepared_records(&w);
+        assert!(!records.is_empty(), "{shown}");
+        for r in &records {
+            assert_eq!(r["fields"]["checked_rev"], sha.as_str(), "{r}");
+        }
+        assert_eq!(walkthrough_test(&w)["checked_rev"], sha.as_str());
+        let setup = std::fs::read_to_string(w.runs.join("n1/raw/setup.log")).unwrap();
+        assert!(setup.contains("evidence_rev_from the build\n"), "{setup}");
+    } else {
+        assert!(!out.status.success(), "a {sha} build is refused:\n{shown}");
+        assert!(shown.contains("--rev"), "{shown}");
+        assert!(
+            !w.runs.join("n1/raw/transcripts/stream.jsonl").exists(),
+            "a refused run starts no session:\n{shown}"
+        );
+        let prepared = |files: &[String]| -> Vec<String> {
+            files
+                .iter()
+                .filter(|f| f.contains("/prepared/"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(
+            prepared(&walk(&w.target_board)),
+            prepared(&before),
+            "{shown}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&w.root);
 }
 
