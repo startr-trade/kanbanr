@@ -1127,6 +1127,9 @@ project revision it was observed at. So:
   forms. A runner outside them (go test, Jest, Maven, nextest until MNT-007) records nothing. Say
   so in the Design and ask before choosing it. When the hook says it read no test result from a
   run, rerun in a form it reads; never set the test by hand.
+- `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`); until
+  the installed kanbanr reads nextest's lines (FTR-058, v0.8.0), run
+  `KANBANR_TEST_RUNNER=cargo make test` when the run's results should be captured.
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed

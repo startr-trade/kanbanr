@@ -10,6 +10,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
   representation; published pages keep their URLs (MNT-002).
+- The Rust tests run through cargo-nextest when it is installed, locally and in CI, falling back
+  to cargo test; doctests run apart; each run writes a JUnit report with every test's time, which
+  CI uploads and `make ci` keeps with the step's log; a test running past 60 s is named in the
+  output (MNT-010).
 
 ### Fixed
 
