@@ -92,7 +92,7 @@ fn sprint_line(client: &Backend, p: &str, project: &Project) -> Option<String> {
         .collect();
     let done = items
         .iter()
-        .filter(|f| project.config.is_terminal(&f.status))
+        .filter(|f| kanbanr_core::graph::is_terminal_status(&project.config, &f.status))
         .count();
     Some(format!(
         "Sprint {} \"{}\", {} to {}: {done}/{} items finished.",
@@ -138,6 +138,16 @@ fn release_line(client: &Backend, p: &str, project: &Project) -> Option<String> 
         })
         .collect();
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// Is an item in this status in progress: on the board, past the default state, and neither
+/// finished nor a no-op disposition. Finished as `graph::is_terminal_status` decides it, so a board
+/// that declares no `terminal_states` treats Completed as finished, as the rest of kanbanr does.
+fn in_progress(config: &kanbanr_core::ProjectConfig, status: &str) -> bool {
+    status != config.default_state
+        && !kanbanr_core::graph::is_terminal_status(config, status)
+        && !config.is_no_op(status)
+        && config.board_states().iter().any(|s| s == status)
 }
 
 /// Everything `render` needs, gathered best effort.
@@ -253,12 +263,7 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
     let in_progress = project
         .features
         .iter()
-        .filter(|f| {
-            f.status != config.default_state
-                && !config.is_terminal(&f.status)
-                && !config.is_no_op(&f.status)
-                && config.board_states().contains(&f.status)
-        })
+        .filter(|f| in_progress(config, &f.status))
         .map(|f| Line {
             code: f.code.clone(),
             status: f.status.clone(),
@@ -325,4 +330,27 @@ pub fn run_recover(cli: &Cli, client: &Backend, flag: Option<usize>) -> anyhow::
         print!("{text}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DEF-093 R-1: a board that declares no `terminal_states` (one made before they existed, like
+    /// kanbanr's own) still counts Completed as finished, so the summary does not list it as work
+    /// in progress.
+    #[test]
+    fn a_board_without_terminal_states_does_not_list_completed_items_as_in_progress() {
+        let mut config = kanbanr_core::ProjectConfig::for_new_project("demo");
+        config.terminal_states.clear();
+        assert!(config.board_states().iter().any(|s| s == "Completed"));
+        assert!(in_progress(&config, "In Progress"));
+        assert!(!in_progress(&config, "Completed"), "Completed is finished");
+        assert!(!in_progress(&config, &config.default_state.clone()));
+
+        // A workflow that names its own end state is taken at its word.
+        config.terminal_states = vec!["Completed".into()];
+        assert!(!in_progress(&config, "Completed"));
+        assert!(in_progress(&config, "In Progress"));
+    }
 }
