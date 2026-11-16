@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `kanbanr prepare signoff`, `promotion`, `gate` and `ratify` take `--batch`, so the person
+  confirms several prepared decisions in one action (FTR-055).
+
 ### Changed
 
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system

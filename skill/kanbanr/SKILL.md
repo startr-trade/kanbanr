@@ -656,7 +656,8 @@ to ratify. After any `--override`, prepare its ratification at once (`kanbanr pr
 --reason … --source …`) and tell the person it waits on the Review page. The item does not ship
 until it is ratified. Each override is ratified on its own, even when the item was ratified before
 at the same definition: after a second `--override`, prepare its ratification again and say it
-waits on the Review page. A write that prints `coverage:` lines has left a view behind:
+waits on the Review page. Several ratifications waiting? Prepare them with one `--batch <name>`, so
+the person confirms them in one action on the Review page. A write that prints `coverage:` lines has left a view behind:
 add the links each one names before you move the item on.
 
 ### The rules underneath
@@ -1578,10 +1579,10 @@ kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; 
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
 kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
-kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…]   # a CI result you read, for the person to confirm on the Releases page
-kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S…   # a sign-off's note and doc, for the Review page
-kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what was checked, for a stage confirmed after the tag
-kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
+kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…] [--batch NAME]   # a CI result you read, for the person to confirm on the Releases page
+kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S… [--batch NAME]   # a sign-off's note and doc, for the Review page
+kanbanr prepare promotion <V> [--stage S] --checked "…" --source S… [--batch NAME]   # what was checked, for a stage confirmed after the tag
+kanbanr prepare ratify <CODE> --reason "…" --source S… [--batch NAME]   # why the work went ahead, for the person to ratify
 kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
 kanbanr decisions show                            # the mode, delegations, delegated decisions to review, what waits where
 kanbanr decisions propose --verdict signoff:<name>|approve|ratify [--step S] [--item CODE] [--kind K] [--milestone MS] [--all] [--until YYYY-MM-DD] [--note …]   # yours: inert until the user grants it

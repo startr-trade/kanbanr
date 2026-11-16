@@ -2668,6 +2668,118 @@ mod tests {
         );
     }
 
+    /// FTR-055 R-2: two ratifications prepared with one batch are confirmed in one action: the
+    /// person's `POST …/prepared/batch/{batch}/confirm` ratifies both items in one board commit and
+    /// resolves both records; Claude's confirmation of the batch is refused.
+    #[test]
+    fn a_batch_of_ratifications_is_confirmed_in_one_action() {
+        // Two items, each started unapproved: each has an open bypass to ratify.
+        let (store, dir, first) = board_with_item(true);
+        let second = store
+            .add_feature("demo", "Till", "spec", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &second,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Take the money".into(),
+                    started_unapproved: "urgent".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let ratify = |code: &str| {
+            prepare_as_claude(
+                &store,
+                serde_json::json!({"kind": "ratification", "subject": {"item": code},
+                                   "fields": {"reason": "built in the outage"},
+                                   "sources": [{"label": "what the person said"}],
+                                   "batch": "ratify-1"}),
+            )
+        };
+        let ids = [ratify(&first), ratify(&second)];
+        assert_eq!(
+            open_in_batch(&store, "demo", "ratify-1", None)
+                .unwrap()
+                .len(),
+            2
+        );
+        // Claude cannot confirm the batch.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared/batch/ratify-1/confirm",
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        let commits = || {
+            let out = std::process::Command::new("git")
+                .args(["log", "--oneline"])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().count()
+        };
+        let before = commits();
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared/batch/ratify-1/confirm",
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["batch"], "ratify-1");
+        let results = out["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "{out}");
+        assert!(results.iter().all(|r| r["error"].is_null()), "{out}");
+        assert!(results.iter().all(|r| r["verdict"] == "confirmed"), "{out}");
+        assert_eq!(
+            commits(),
+            before + 1,
+            "one board commit for the whole batch"
+        );
+        let project = store.load("demo").unwrap();
+        for code in [&first, &second] {
+            let item = project.feature(code).unwrap();
+            let last = item
+                .definition
+                .as_ref()
+                .unwrap()
+                .approvals
+                .last()
+                .unwrap_or_else(|| panic!("{code} not ratified"));
+            assert_eq!(
+                (
+                    last.verdict.as_str(),
+                    last.by.as_str(),
+                    last.origin.as_str()
+                ),
+                ("ratified", "Ada L", "monitor")
+            );
+            assert!(
+                !crate::doctor::awaiting_ratification(item),
+                "{code} still waits"
+            );
+        }
+        for id in &ids {
+            let a = resolution_of(&store, id);
+            assert_eq!((a.verdict, a.by.as_str()), (Answer::Confirmed, "Ada L"));
+        }
+        assert!(
+            list(&store, "demo", &ListQuery::default(), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// DEF-076 R-2: a manual-test record is not prepared for an item before its build stage; at
     /// the build stage it is.
     #[test]
