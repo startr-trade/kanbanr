@@ -127,11 +127,10 @@ fn applying_system_rows(status: &catalog::CatalogStatus) -> Vec<&catalog::RowSta
         .collect()
 }
 
-/// Write the file from the catalog's applying system rows. Refuses without a catalog and when the
-/// file exists.
-///
-/// Turning the method's `system-baseline` part on in the same step joins this when the part
-/// exists (FTR-006 T3, `Part::SystemBaseline`).
+/// Write the file from the catalog's applying system rows, and turn the method's
+/// `system-baseline` part on (`system_baseline_accepted` at the build role, saved in the config).
+/// Refuses without a catalog and when the file exists. If the config cannot be saved after the
+/// file was written, the error says `kanbanr config method --on system-baseline` completes it.
 pub fn init(store: &Store, id: &str) -> Result<Baseline> {
     if catalog::load(store, id)?.is_none() {
         return Err(CoreError::Unsupported(
@@ -158,6 +157,14 @@ pub fn init(store: &Store, id: &str) -> Result<Baseline> {
         extra: Extra::new(),
     };
     save(store, id, &baseline)?;
+    store
+        .set_method(id, true, &[crate::method::Part::SystemBaseline])
+        .map_err(|e| {
+            CoreError::Unsupported(format!(
+                "the system baseline was written, but the build gate was not turned on ({e}): \
+                 `kanbanr config method --on system-baseline` completes it"
+            ))
+        })?;
     Ok(baseline)
 }
 
@@ -522,8 +529,8 @@ mod tests {
         store.load_meta("demo").unwrap()
     }
 
-    /// R-1: with a catalog, `init` writes the applying system rows only; without a catalog it
-    /// refuses; a second `init` refuses.
+    /// R-1: with a catalog, `init` writes the applying system rows only and adds the part to
+    /// `@build`; without a catalog it refuses; a second `init` refuses.
     #[test]
     fn init_lists_the_applying_system_rows_and_needs_a_catalog() {
         let (store, dir) = temp_store();
@@ -533,6 +540,18 @@ mod tests {
             "{err}"
         );
         assert!(load(&store, "demo").unwrap().is_none());
+        // A process with a build role, from before the part: the method without it.
+        let mut wf = crate::config::preset("togaf").unwrap();
+        crate::method::remove(&mut wf, &[crate::method::Part::SystemBaseline]);
+        store.save_config("demo", &wf.into_config("demo")).unwrap();
+        let part_at = |store: &Store| {
+            let config = store.load_meta("demo").unwrap().config;
+            crate::method::present(
+                &crate::config::WorkflowFile::from_config(&config),
+                crate::method::Part::SystemBaseline,
+            )
+        };
+        assert_eq!(part_at(&store), None);
 
         let off = Row {
             applies: Some(false),
@@ -554,6 +573,18 @@ mod tests {
         assert!(b.accepted.is_empty());
         assert!(!b.initialised_at.is_empty());
         assert_eq!(load(&store, "demo").unwrap(), Some(b));
+        assert_eq!(
+            part_at(&store).as_deref(),
+            Some("Implementation"),
+            "init turns system_baseline_accepted on at the build role"
+        );
+        let gate = store.load_meta("demo").unwrap().config.effective_gates();
+        assert!(
+            gate.values()
+                .any(|g| g.requires.contains(&crate::readiness::Condition::Check(
+                    crate::readiness::Check::SystemBaselineAccepted
+                )))
+        );
 
         let again = init(&store, "demo").unwrap_err().to_string();
         assert!(again.contains("already initialised"), "{again}");

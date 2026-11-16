@@ -3571,7 +3571,14 @@ mod tests {
             .collect();
         assert_eq!(
             parts,
-            ["design", "design-review", "docs", "docs-folded", "links"],
+            [
+                "design",
+                "design-review",
+                "docs",
+                "docs-folded",
+                "links",
+                "system-baseline"
+            ],
             "{g}"
         );
         assert!(
