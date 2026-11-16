@@ -77,6 +77,7 @@ mod repoform;
 pub mod report;
 pub mod retro;
 pub mod review;
+pub mod reviewgroups;
 pub mod scm;
 pub mod server;
 pub mod sprints;
