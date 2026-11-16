@@ -217,6 +217,41 @@ class BuildEnvironment(unittest.TestCase):
                                      f"{path.name} job {name!r} compiles Rust without {var}={value}")
 
 
+# A job that compiles or tests the workspace may take an hour (the cold rust job with vendored C
+# takes about 25 minutes on Windows); every other job, at most half that.
+COMPILING_MINUTES = 60
+OTHER_MINUTES = 30
+WORKSPACE_BUILD = re.compile(
+    r"\bcargo (?:build|check|clippy|nextest|run|test)\b|\bscripts/test\.sh\b|\bdocker build\b")
+
+
+def builds_the_workspace(job: dict) -> bool:
+    """A job that compiles or tests the workspace, or builds the image (which compiles the binary)."""
+    return any(WORKSPACE_BUILD.search(str(s.get("run", ""))) or uses(s, "docker/build-push-action")
+               for s in steps_of(job))
+
+
+class Timeouts(unittest.TestCase):
+    """R-2: a hung job fails within the hour instead of holding a runner for six."""
+
+    def test_every_job_has_a_timeout_and_compiling_jobs_get_sixty_minutes(self) -> None:
+        for path in compiling_workflows():
+            self.assertTrue(path.exists(), f"{path.name} is missing")
+            for name, job in jobs(workflow(path)).items():
+                # A job that calls a reusable workflow cannot set timeout-minutes (GitHub refuses
+                # it); the called workflow's own jobs carry theirs, and deps.yml is checked here.
+                if "uses" in job:
+                    continue
+                minutes = job.get("timeout-minutes")
+                self.assertIsInstance(minutes, int,
+                                      f"{path.name} job {name!r} has no timeout-minutes")
+                self.assertGreater(minutes, 0, f"{path.name} job {name!r}: timeout-minutes {minutes}")
+                limit = COMPILING_MINUTES if builds_the_workspace(job) else OTHER_MINUTES
+                self.assertLessEqual(minutes, limit,
+                                     f"{path.name} job {name!r}: timeout-minutes {minutes}, "
+                                     f"over {limit}")
+
+
 class Cache(unittest.TestCase):
     """R-3: a pull request restores main's cache and never saves its own; the release keeps its own."""
 
