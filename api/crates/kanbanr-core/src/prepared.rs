@@ -2887,8 +2887,7 @@ mod tests {
             &serde_json::json!({"by": "Ada L", "edits": {"check": "MT-7"}}),
             crate::origin::Origin::Monitor,
         )
-        .err()
-        .expect("an edit of the check id is refused")
+        .expect_err("an edit of the check id is refused")
         .to_string();
         assert!(
             refused.contains("'check' is not a field the person can change"),
