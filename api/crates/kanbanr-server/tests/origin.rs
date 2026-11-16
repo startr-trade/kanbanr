@@ -244,3 +244,60 @@ fn a_read_only_monitor_binds_anywhere() {
     }
     panic!("the read-only monitor did not come up on 0.0.0.0:{port}");
 }
+
+/// The request the image's HEALTHCHECK sends, read from `docker/Dockerfile`: the text between
+/// `printf '` and the next `'` on its `CMD` line, with `\\r` and `\\n` unescaped (DEF-079).
+fn image_health_check_request() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docker/Dockerfile");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let at: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.contains("HEALTHCHECK"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(at.len(), 1, "one HEALTHCHECK line in the Dockerfile");
+    let cmd = lines[at[0]..]
+        .iter()
+        .find(|l| l.contains("CMD"))
+        .expect("the HEALTHCHECK's CMD line");
+    let start = cmd.find("printf '").expect("printf in the CMD") + "printf '".len();
+    let len = cmd[start..].find('\'').expect("the printf text's end");
+    let payload = cmd[start..start + len]
+        .replace("\\\\r", "\r")
+        .replace("\\\\n", "\n");
+    assert!(payload.starts_with("GET /healthz "), "{payload:?}");
+    payload
+}
+
+/// Sends `payload`'s bytes exactly to `url`'s address and returns the response's first line.
+fn first_line(url: &str, payload: &str) -> String {
+    use std::io::{BufRead, BufReader, Write};
+    let addr = url.trim_start_matches("http://");
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(payload.as_bytes()).unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    line
+}
+
+#[test]
+fn the_image_health_check_request_passes_the_host_check() {
+    let payload = image_health_check_request();
+    let s = Scratch::new("healthcheck");
+    let url = serve(&s, &board(&s));
+    let line = first_line(&url, &payload);
+    assert!(line.contains(" 200 "), "the image's request: {line:?}");
+    // The control: the same request without its Host line is refused, so this exercises the guard.
+    let bare: String = payload
+        .split_inclusive("\r\n")
+        .filter(|l| !l.to_ascii_lowercase().starts_with("host:"))
+        .collect();
+    assert!(!bare.to_ascii_lowercase().contains("host:"), "{bare:?}");
+    let line = first_line(&url, &bare);
+    assert!(line.contains(" 403 "), "without a Host line: {line:?}");
+}
