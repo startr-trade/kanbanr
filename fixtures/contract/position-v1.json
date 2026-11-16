@@ -1,0 +1,131 @@
+{
+  "format": 1,
+  "commit": {
+    "author": "position vector <vector@example.invalid>",
+    "time": "0 +0000",
+    "message": "position vector\n"
+  },
+  "cases": [
+    {
+      "name": "clean",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954"
+    },
+    {
+      "name": "edited",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "changed\n",
+        "src/b.txt": "two\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954+83ebb47e03fee94773edcd621a87f37980b3b408b96467062fcc87368f3260c7"
+    },
+    {
+      "name": "deleted",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954+c09b5a87b6536d1a72e30c97cfd47a03df6b36c40af129dabe9947c4f99b0ce0"
+    },
+    {
+      "name": "untracked",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n",
+        "new.txt": "new\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954+d12b81ae5c979f72e6d12ad0d7c884a29fb2c5d08c3a442782e4fc708253a544"
+    },
+    {
+      "name": "ignored",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n",
+        "x.log": "noise\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954"
+    },
+    {
+      "name": "staged_only",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "index": {
+        "a.txt": "staged\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954"
+    },
+    {
+      "name": "edited_and_staged",
+      "head": {
+        ".gitignore": "*.log\n",
+        "a.txt": "one\n",
+        "src/b.txt": "two\n"
+      },
+      "worktree": {
+        ".gitignore": "*.log\n",
+        "a.txt": "changed\n",
+        "src/b.txt": "two\n"
+      },
+      "index": {
+        "a.txt": "changed\n"
+      },
+      "expected": "e410760849abb8cd9fa8fbba305f5dd5d96ba954+83ebb47e03fee94773edcd621a87f37980b3b408b96467062fcc87368f3260c7"
+    },
+    {
+      "name": "line_endings",
+      "head": {
+        ".gitattributes": "* text=auto\n",
+        "c.txt": "a\nb\n"
+      },
+      "worktree": {
+        ".gitattributes": "* text=auto\n",
+        "c.txt": "a\r\nb\r\n"
+      },
+      "config": {
+        "core.autocrlf": "true"
+      },
+      "expected": "24decf6736b06f0cc4316d60422201b95902e9be+3323e56b80880664fc6ed84e5adf81db2f5bf5a9400eb3998e66dde99b3e2432",
+      "note": "git status reports this clean, because it applies filters; a position compares raw bytes, so it is dirty"
+    }
+  ]
+}
