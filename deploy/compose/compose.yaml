@@ -1,0 +1,27 @@
+# kanbanr hosted site, compose (FTR-030): one read-only monitor over a list of
+# boards. The mode comes from COMPOSE_FILE in .env (see .env.example):
+#   (a) compose.yaml:compose.remote.yaml  remote URLs in boards.conf, cloned and followed
+#   (b) compose.yaml:compose.local.yaml   local board folders, mounted read-only, no sync
+# This is the read-only site. docker/docker-compose.yml (make docker-up) is the
+# developer's monitor over their own board, writable.
+name: kanbanr-site
+
+services:
+  monitor:
+    image: ${KANBANR_IMAGE:?set KANBANR_IMAGE in .env to the kanbanr image, v0.8.0 or later}
+    entrypoint: ["bash", "/scripts/serve.sh"]
+    user: "${KANBANR_UID:-10001}:${KANBANR_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=16m"]
+    environment:
+      KANBANR_BIND: 0.0.0.0:8080
+      KANBANR_ALLOWED_HOSTS: ${KANBANR_ALLOWED_HOSTS:-}
+      KANBANR_LOCAL_BOARDS: ${KANBANR_LOCAL_BOARDS:-}
+    volumes:
+      - ./serve.sh:/scripts/serve.sh:ro
+    ports:
+      - "${KANBANR_PUBLISH_ADDRESS:-127.0.0.1}:${KANBANR_PORT:-18080}:8080"
+    restart: unless-stopped
+    # The image's own health check (GET /healthz as localhost) applies.

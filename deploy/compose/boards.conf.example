@@ -1,0 +1,12 @@
+# The boards of a compose site in mode (a), one per line, in the order the site
+# lists them. Copy to boards.conf (git ignores it) and fill in:
+#
+#   <name> <url> [<interval>] [<branch>]
+#
+# <name> is a lowercase DNS label, unique, and the board's folder under /boards.
+# <url> is the board's git remote, cloned anonymously (the .invalid names below
+# are placeholders that never resolve). <interval> is the pull interval in
+# seconds (default 60). <branch> defaults to the remote's default branch.
+# Lines starting with # and blank lines are skipped.
+board-a https://git.example.invalid/team/board-a.git 60
+board-b https://git.example.invalid/team/board-b.git 60
