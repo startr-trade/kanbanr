@@ -841,6 +841,36 @@ pub fn move_would_merge(config: &ProjectConfig, from: &str, to: &str) -> bool {
         && is_integrated(config, to)
 }
 
+/// Would moving `feature` to `to` merge its branch into its own release's branch (DEF-077)? True
+/// when the move integrates (`move_would_merge`), the item is planned into a release that is not
+/// shipped, has a branch and is not tagged, and the item has a branch in `facts`. A move this
+/// answers true for is the integration DEF-019's cut-wait reason does not cover.
+pub fn integrates_into_release(
+    config: &ProjectConfig,
+    releases: &[crate::releases::Release],
+    facts: Option<&BranchFacts>,
+    feature: &FeatureItem,
+    to: &str,
+) -> bool {
+    if !move_would_merge(config, &feature.status, to) {
+        return false;
+    }
+    let Some(facts) = facts else {
+        return false;
+    };
+    let Some(release) = feature
+        .release
+        .as_deref()
+        .and_then(|v| releases.iter().find(|r| r.version == v))
+    else {
+        return false;
+    };
+    release.state != crate::releases::ReleaseState::Shipped
+        && !release.branch.is_empty()
+        && release.tagged_at.is_empty()
+        && !item_branches(config, facts, &feature.code).is_empty()
+}
+
 /// What bringing a carried item's branch up to date did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]

@@ -4573,6 +4573,119 @@ requirements:
         assert_eq!(f.status, "Scheduled");
     }
 
+    /// `planned_board` with the git model on and a code repository: v0.1.0 promoted to its first
+    /// stage (so `release/v0.1.0` exists), the item signed off; with `branch`, the item has its
+    /// own branch from the release branch, one commit ahead (DEF-077).
+    fn planned_git_board(
+        tag: &str,
+        branch: bool,
+    ) -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
+        let (store, d, code, _tl) = planned_board();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = true;
+        cadence.sprints = false;
+        cadence.releases = true;
+        // This board's shape: the first stage asks nothing, so the release reaches it before its
+        // item is integrated.
+        for gate in cadence.release_gates.values_mut() {
+            gate.requires
+                .retain(|c| *c != crate::releasegates::ReleaseCheck::ItemsMerged);
+        }
+        store.set_cadence("demo", None, cadence).unwrap();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(&format!("def077-{tag}"));
+        let first = store.load("demo").unwrap().config.cadence.stages()[0].clone();
+        crate::releases::promote(
+            &store,
+            "demo",
+            "v0.1.0",
+            Some(&first),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let release = crate::releases::load(&store, "demo")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.version == "v0.1.0")
+            .unwrap();
+        assert_eq!(release.branch, "release/v0.1.0");
+        if branch {
+            let project = store.load("demo").unwrap();
+            let title = project.feature(&code).unwrap().title.clone();
+            let name = crate::scm::branch_for(project.config.branch_pattern(), &code, &title);
+            crate::coderepo::git(&repo, &["checkout", "-q", "-b", &name, "release/v0.1.0"])
+                .unwrap();
+            crate::coderepo::tests::commit_file(&repo, "fix.rs", "fixed\n", "the fix");
+            crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        }
+        (store, d, code, repo)
+    }
+
+    /// DEF-077 R-3: integrating a planned item into its own open release's branch is the step that
+    /// makes the release ready, so it needs no cut-wait reason and records no bypass.
+    #[test]
+    fn integrating_a_planned_item_into_its_open_release_needs_no_reason() {
+        let (store, _d, code, repo) = planned_git_board("merge", true);
+        let moved = crate::gitmodel::move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        assert_eq!(moved.feature.status, "Completed");
+        let merged = moved.merged.expect("its branch was merged");
+        assert_eq!(merged.into, "release/v0.1.0");
+        assert!(!merged.already);
+        assert!(crate::coderepo::is_ancestor(
+            &repo,
+            &merged.branch,
+            "release/v0.1.0"
+        ));
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Completed");
+        assert_eq!(f.history.last().unwrap().override_reason, None);
+        assert!(crate::readiness::open_overrides(&f).is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-077 R-3: an item with no branch merges nothing, so its end-move still needs DEF-019's
+    /// reason.
+    #[test]
+    fn a_planned_item_with_no_branch_still_needs_a_reason_to_end() {
+        let (store, _d, code, repo) = planned_git_board("nobranch", false);
+        let err = crate::gitmodel::move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("v0.1.0")
+                && err.contains("has not been cut")
+                && err.contains("--override"),
+            "{err}"
+        );
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Scheduled");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// DEF-019 R-5: with a reason the move is made and the reason stays on the item.
     #[test]
     fn a_reason_lets_a_person_move_it_and_stays_on_the_item() {
