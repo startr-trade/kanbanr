@@ -460,6 +460,23 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT, DOC_PATH],
             response: Response::Bytes,
         },
+        // ---- drift (FTR-045) ----
+        RouteDoc {
+            path: "/api/projects/{project}/drift/latest",
+            summary: "The latest background drift result, with its revisions and age",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "flags",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::Boolean,
+                    description: "Include the flags; true when absent. With false, only the \
+                                  state, revisions and count.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::docdrift::Latest>),
+        },
         // ---- activity ----
         RouteDoc {
             path: "/api/projects/{project}/activity",
