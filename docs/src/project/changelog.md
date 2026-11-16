@@ -6,6 +6,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The agile guide's chore path matches the process: a chore passes Review, where it merges after
+  **docs-folded**. The agile and scrum guides now say that **docs-folded** waits for a passed manual
+  check and that a granted delegation does nothing until the mode is set to delegated (DOC-010).
+
 ## [0.6.1] - 2026-11-16
 
 ### Fixed
