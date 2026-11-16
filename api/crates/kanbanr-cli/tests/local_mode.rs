@@ -13231,3 +13231,167 @@ fn a_board_write_stamps_the_writer() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-068 R-1, R-2: a `python -m unittest -v` run records its tests under the dotted names
+/// unittest prints, and a test run the hook cannot read is named to Claude in the hook's answer.
+#[test]
+fn capture_reads_unittest_and_says_when_a_run_reads_nothing() {
+    let base = std::env::temp_dir().join(format!("kanbanr-unittest-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let exec = |args: &[&str], stdin: Option<&str>| -> Output {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT");
+        match stdin {
+            None => {
+                cmd.stdin(std::process::Stdio::null());
+                cmd.output().expect("run kanbanr CLI")
+            }
+            Some(text) => {
+                use std::io::Write;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().expect("spawn kanbanr CLI");
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                child.wait_with_output().expect("run kanbanr CLI")
+            }
+        }
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args, None);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // The board is this test's own, never the repository's (L-41).
+    let board = PathBuf::from(run(&["where"]).trim());
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{board:?}"
+    );
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Basket",
+        "--milestone",
+        "MS-001",
+    ]);
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a basket's items\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN an item is added, THE SYSTEM SHALL keep it.\"\n\
+         \x20   tests:\n      - name: tests.test_basket.BasketTests.test_add\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    // unittest writes its verbose lines to stderr; the hook reads them under the dotted name.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 -m unittest -v"},
+        "tool_response": {
+            "stdout": "",
+            "stderr": "test_add (tests.test_basket.BasketTests.test_add) ... ok\n",
+        },
+    })
+    .to_string();
+    let captured = exec(&["capture"], Some(&payload));
+    assert!(
+        captured.status.success(),
+        "capture failed: {}",
+        String::from_utf8_lossy(&captured.stderr)
+    );
+    assert!(
+        captured.stdout.is_empty(),
+        "a run that recorded something gets no notice: {}",
+        String::from_utf8_lossy(&captured.stdout)
+    );
+    let shown = run(&["feature", "show", "FEAT-001"]);
+    assert!(
+        shown.contains("- [x] `tests.test_basket.BasketTests.test_add`"),
+        "{shown}"
+    );
+
+    // Without -v unittest prints dots: nothing is recorded, and the hook says so to Claude.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "python3 -m unittest"},
+        "tool_response": {"stdout": "", "stderr": ".\n----\nRan 1 test in 0.001s\n\nOK\n"},
+    })
+    .to_string();
+    let quiet = exec(&["capture"], Some(&payload));
+    assert!(
+        quiet.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&quiet.stderr).contains("recorded"),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    let answer: serde_json::Value = serde_json::from_slice(&quiet.stdout).unwrap_or_else(|e| {
+        panic!("{e}: {}", String::from_utf8_lossy(&quiet.stdout));
+    });
+    assert_eq!(answer["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+    let context = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(context.contains("python -m unittest -v"), "{context}");
+
+    // A command that runs no tests gets nothing.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "tool_response": {"stdout": "", "stderr": ""},
+    })
+    .to_string();
+    let none = exec(&["capture"], Some(&payload));
+    assert!(none.status.success());
+    assert!(
+        none.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&none.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -13,34 +13,125 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Test name -> passed, parsed from a test runner's output. A fixed chain of readers, one per
-/// runner (cargo, then marked lines such as Vitest's); the first reader that owns a line decides
-/// it. Unknown formats yield nothing, which is the right failure: recording a guess would be
-/// worse than recording nothing. A name reported more than once is green only if every line
-/// passed (DEF-061).
+/// runner (unittest, cargo, pytest, Playwright, then marked lines such as Vitest's); the first
+/// reader that owns a line decides it. Unknown formats yield nothing, which is the right failure:
+/// recording a guess would be worse than recording nothing. A name reported more than once is
+/// green only if every line passed (DEF-061). A unittest head line (a docstring follows) is
+/// completed only by the line straight after it (DEF-068).
 pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
     let mut out = BTreeMap::new();
+    let mut head: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
-        let readings = if let Some(r) = read_cargo(line) {
-            vec![r]
-        } else if let Some(r) = read_pytest(line) {
-            vec![r]
-        } else if let Some(rs) = read_playwright(line) {
-            rs
-        } else if let Some(r) = read_marked(line) {
-            vec![r]
-        } else {
+        if let Some(name) = head.take()
+            && let Some((_, verdict)) = line.rsplit_once(" ... ")
+            && let Some(outcome) = unittest_outcome(verdict.trim())
+        {
+            record_outcome(&mut out, Reading { name, outcome });
             continue;
+        }
+        let readings = match read_unittest(line) {
+            Some(Unittest::Result(r)) => vec![r],
+            Some(Unittest::Head(name)) => {
+                head = Some(name);
+                continue;
+            }
+            Some(Unittest::Silent) => continue,
+            None => {
+                if let Some(r) = read_cargo(line) {
+                    vec![r]
+                } else if let Some(r) = read_pytest(line) {
+                    vec![r]
+                } else if let Some(rs) = read_playwright(line) {
+                    rs
+                } else if let Some(r) = read_marked(line) {
+                    vec![r]
+                } else {
+                    continue;
+                }
+            }
         };
         for r in readings {
-            match r.outcome {
-                Outcome::Passed => record(&mut out, r.name, true),
-                Outcome::Failed => record(&mut out, r.name, false),
-                Outcome::Unproven => {}
-            }
+            record_outcome(&mut out, r);
         }
     }
     out
+}
+
+/// Record one reading: `Passed` green, `Failed` red, `Unproven` nothing.
+fn record_outcome(out: &mut BTreeMap<String, bool>, r: Reading) {
+    match r.outcome {
+        Outcome::Passed => record(out, r.name, true),
+        Outcome::Failed => record(out, r.name, false),
+        Outcome::Unproven => {}
+    }
+}
+
+/// The runner forms capture reads, as the hook's notice and the docs name them.
+pub const READABLE_RUNNERS: &str = "cargo test, pytest -v, python -m unittest -v, Vitest with \
+    --reporter=verbose and Playwright with --reporter=list";
+
+/// The test runner one simple command (its words, environment assignments already set aside)
+/// invokes, as a short label such as `python3 -m unittest`; None when it runs no tests. Whole
+/// words only, never substrings (L-23); the first word is read without its directory.
+pub fn test_runner(words: &[String]) -> Option<String> {
+    fn base(w: &str) -> &str {
+        w.rsplit(['/', '\\']).next().unwrap_or(w)
+    }
+    let mut words: Vec<&str> = words.iter().map(String::as_str).collect();
+    if let Some(first) = words.first_mut() {
+        *first = base(first);
+    }
+    // Wrappers that run the command after them.
+    let drop = match words.as_slice() {
+        ["uv" | "poetry" | "pipenv" | "pdm" | "hatch", "run", ..] | ["bundle", "exec", ..] => 2,
+        ["npx" | "pnpx" | "bunx", ..] => 1,
+        _ => 0,
+    };
+    let mut words = words.split_off(drop.min(words.len()));
+    if let Some(first) = words.first_mut() {
+        *first = base(first);
+    }
+    let w0 = *words.first()?;
+    let w1 = words.get(1).copied();
+    let has = |opts: &[&str]| words[1..].iter().find(|w| opts.contains(w)).copied();
+    let label = match (w0, w1) {
+        ("cargo", Some(sub @ ("test" | "nextest"))) => format!("cargo {sub}"),
+        ("pytest" | "py.test" | "vitest" | "jest" | "mocha", _) => w0.to_string(),
+        ("rspec" | "tox" | "nox" | "ctest", _) => w0.to_string(),
+        ("playwright" | "go" | "dotnet", Some("test")) => format!("{w0} test"),
+        ("make", Some(t @ ("test" | "check"))) => format!("make {t}"),
+        ("npm" | "pnpm" | "yarn" | "bun", Some("test")) => format!("{w0} test"),
+        ("npm" | "pnpm" | "yarn" | "bun", Some("run")) => {
+            let script = words.get(2).filter(|w| w.starts_with("test"))?;
+            format!("{w0} run {script}")
+        }
+        ("mvn" | "mvnw", _) => format!("{w0} {}", has(&["test", "verify"])?),
+        ("gradle" | "gradlew", _) => format!("{w0} {}", has(&["test", "check"])?),
+        (py, _) if py.starts_with("python") => {
+            let m = words.iter().position(|w| *w == "-m")?;
+            let module = words
+                .get(m + 1)
+                .filter(|w| matches!(**w, "pytest" | "unittest"))?;
+            format!("{py} -m {module}")
+        }
+        _ => return None,
+    };
+    Some(label)
+}
+
+/// What the capture hook tells Claude after `commands` printed no result it could read: None when
+/// `results_empty` is false or no command runs tests.
+pub fn unread_run_notice(commands: &[Vec<String>], results_empty: bool) -> Option<String> {
+    if !results_empty {
+        return None;
+    }
+    let label = commands.iter().find_map(|c| test_runner(c))?;
+    Some(format!(
+        "kanbanr capture read no test result from this run (`{label}`), so the board recorded \
+         nothing. It reads {READABLE_RUNNERS}. Run the tests in one of those forms and name each \
+         tracked test as that runner prints it; never record a result by hand."
+    ))
 }
 
 /// What one line says, once a reader owns it. `Unproven`: the line is a result that proves
@@ -61,6 +152,74 @@ struct Reading {
 /// One name's result for the run: a name seen more than once is green only if every line passed.
 fn record(out: &mut BTreeMap<String, bool>, name: String, passed: bool) {
     *out.entry(name).or_insert(true) &= passed;
+}
+
+/// What a unittest line is, once read_unittest owns it.
+enum Unittest {
+    /// A result line: the name and its outcome.
+    Result(Reading),
+    /// `<method> (<dotted>)` and nothing else: a docstring's first line follows, the verdict after it.
+    Head(String),
+    /// Owned, says nothing: a subtest header ending ` ...`, or a verdict that is not one of unittest's.
+    Silent,
+}
+
+/// Whether `s` is a Python identifier as unittest prints one: non-empty, every char `_` or
+/// alphanumeric, the first not an ASCII digit.
+fn is_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with(|c: char| c.is_ascii_digit())
+        && s.chars().all(|c| c == '_' || c.is_alphanumeric())
+}
+
+/// unittest -v: `<method> (<module>.<Class>[.<method>])[ (<params>)] ... <verdict>` (DEF-068).
+/// Boundary: the method is the text before the first ` (` and must be an identifier (so cargo's
+/// `test a::b ... ok` and a doctest's `test src/lib.rs - f (line 3) ... ok` are not this
+/// reader's); the dotted name runs to the first `)` and is two or more identifiers joined by `.`.
+/// After it: nothing (a head; the docstring and verdict follow), ` ...` (a subtest header), or an
+/// optional ` (<params>)` then ` ... <verdict>`. The name is `<module>.<Class>.<method>`, from
+/// either 3.11's form or 3.10's `<method> (<module>.<Class>)`.
+fn read_unittest(line: &str) -> Option<Unittest> {
+    let (method, rest) = line.split_once(" (")?;
+    if !is_identifier(method) {
+        return None;
+    }
+    let (dotted, rest) = rest.split_once(')')?;
+    let segments: Vec<&str> = dotted.split('.').collect();
+    if segments.len() < 2 || !segments.iter().all(|s| is_identifier(s)) {
+        return None;
+    }
+    let name = if dotted.ends_with(&format!(".{method}")) {
+        dotted.to_string()
+    } else {
+        format!("{dotted}.{method}")
+    };
+    if rest.is_empty() {
+        return Some(Unittest::Head(name));
+    }
+    if rest == " ..." {
+        return Some(Unittest::Silent);
+    }
+    let (params, verdict) = rest.rsplit_once(" ... ")?;
+    if !(params.is_empty() || (params.starts_with(" (") && params.ends_with(')'))) {
+        return None;
+    }
+    Some(match unittest_outcome(verdict.trim()) {
+        Some(outcome) => Unittest::Result(Reading { name, outcome }),
+        None => Unittest::Silent,
+    })
+}
+
+/// unittest's verdict words: ok → Passed; FAIL, ERROR, unexpected success → Failed;
+/// skipped[ '<why>'], expected failure → Unproven; anything else → None.
+fn unittest_outcome(verdict: &str) -> Option<Outcome> {
+    match verdict {
+        "ok" => Some(Outcome::Passed),
+        "FAIL" | "ERROR" | "unexpected success" => Some(Outcome::Failed),
+        "skipped" | "expected failure" => Some(Outcome::Unproven),
+        v if v.starts_with("skipped '") => Some(Outcome::Unproven),
+        _ => None,
+    }
 }
 
 /// cargo test: `test NAME ... ok|FAILED|ignored`. Boundary: the line starts with `test `; the
@@ -643,6 +802,120 @@ tests/test_repository.py::test_changelog_exists_with_unreleased_section PASSED [
             Some(&true)
         );
         assert!(one("\u{2713}  7 something else").is_empty());
+    }
+
+    /// The real `python3 -m unittest -v` run of the DEF-068 fixture class (Python 3.14.6, 15 Nov
+    /// 2026, stderr), verbatim: the header ending `... ` and the subtest line's two spaces kept.
+    const UNITTEST_3_14: &str = "\
+test_add (tests.test_basket.BasketTests.test_add) ... ok
+test_doc (tests.test_basket.BasketTests.test_doc)
+A basket keeps its items. ... ok
+test_error (tests.test_basket.BasketTests.test_error) ... ERROR
+test_fail (tests.test_basket.BasketTests.test_fail) ... FAIL
+test_prints (tests.test_basket.BasketTests.test_prints) ... ok
+test_skip (tests.test_basket.BasketTests.test_skip) ... skipped 'not yet'
+test_sub (tests.test_basket.BasketTests.test_sub) ...\x20
+\x20 test_sub (tests.test_basket.BasketTests.test_sub) (i=1) ... FAIL
+test_xfail (tests.test_basket.BasketTests.test_xfail) ... expected failure
+test_xpass (tests.test_basket.BasketTests.test_xpass) ... unexpected success
+
+======================================================================
+ERROR: test_error (tests.test_basket.BasketTests.test_error)
+FAIL: test_sub (tests.test_basket.BasketTests.test_sub) (i=1)
+UNEXPECTED SUCCESS: test_xpass (tests.test_basket.BasketTests.test_xpass)
+Ran 9 tests in 0.002s
+FAILED (failures=2, errors=1, skipped=1, expected failures=1, unexpected successes=1)";
+
+    #[test]
+    fn unittest_verbose_lines_are_read_as_dotted_names() {
+        assert!(UNITTEST_3_14.contains("test_sub) ... \n  test_sub"));
+        let r = parse_results(UNITTEST_3_14);
+        let at = |m: &str| {
+            r.get(&format!("tests.test_basket.BasketTests.{m}"))
+                .copied()
+        };
+        for green in ["test_add", "test_doc", "test_prints"] {
+            assert_eq!(at(green), Some(true), "{green}: {r:?}");
+        }
+        for red in ["test_error", "test_fail", "test_xpass", "test_sub"] {
+            assert_eq!(at(red), Some(false), "{red}: {r:?}");
+        }
+        assert_eq!(at("test_skip"), None);
+        assert_eq!(at("test_xfail"), None);
+        assert_eq!(r.len(), 7, "the summary lines add nothing: {r:?}");
+        let one = |t: &str| parse_results(t);
+        // Python 3.10 and earlier print the class only.
+        let r = one("test_add (tests.test_basket.BasketTests) ... ok");
+        assert_eq!(r.get("tests.test_basket.BasketTests.test_add"), Some(&true));
+        assert_eq!(r.len(), 1);
+        // A method named `test` is unittest's, not a cargo name.
+        let r = one("test (m.C.test) ... ok");
+        assert_eq!(r.get("m.C.test"), Some(&true));
+        assert_eq!(r.len(), 1, "{r:?}");
+        // Output written between the header and the verdict: nothing, and the stray verdict neither.
+        assert!(one("test_p (m.C.test_p) ... hello\nok").is_empty());
+        // A head followed by a non-verdict line is dropped; the cargo line after reads as usual.
+        let r = one("test_doc (m.C.test_doc)\nnot a verdict\ntest cart::x ... ok");
+        assert_eq!(r.len(), 1, "{r:?}");
+        assert_eq!(r.get("cart::x"), Some(&true));
+        // The documented cost of the two-line form.
+        let r = one("print (a.b)\nx ... ok");
+        assert_eq!(r.get("a.b.print"), Some(&true));
+        assert_eq!(r.len(), 1);
+        // cargo's lines, a doctest's included, are read as today.
+        assert_eq!(one("test cart::x ... ok").get("cart::x"), Some(&true));
+        let r = one("test src/lib.rs - f (line 3) ... ok");
+        assert_eq!(r.get("src/lib.rs - f (line 3)"), Some(&true));
+        assert_eq!(r.len(), 1);
+        // A long transcript of these lines parses to the same map.
+        let big = format!("{UNITTEST_3_14}\n").repeat(560);
+        assert!(big.lines().count() >= 10_000);
+        let t = std::time::Instant::now();
+        let r = parse_results(&big);
+        eprintln!("10k-line unittest parse: {:?}", t.elapsed());
+        assert_eq!(r, parse_results(UNITTEST_3_14));
+    }
+
+    #[test]
+    fn a_test_run_capture_cannot_read_is_named() {
+        let words = |c: &str| -> Vec<String> { c.split(' ').map(String::from).collect() };
+        let label = |c: &str| test_runner(&words(c));
+        for (cmd, want) in [
+            ("python3 -m unittest", "python3 -m unittest"),
+            ("/usr/bin/python3.12 -m pytest -q", "python3.12 -m pytest"),
+            ("uv run pytest", "pytest"),
+            ("npx vitest run", "vitest"),
+            ("npm run test:unit", "npm run test:unit"),
+            ("cargo nextest run", "cargo nextest"),
+            ("go test ./...", "go test"),
+            ("./gradlew check", "gradlew check"),
+            ("make test", "make test"),
+        ] {
+            assert_eq!(label(cmd).as_deref(), Some(want), "{cmd}");
+        }
+        // A quoted message is one word, as the shell splits it.
+        let commit: Vec<String> = ["git", "commit", "-m", "run pytest"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(test_runner(&commit), None);
+        for cmd in [
+            "python3 script.py",
+            "cargo build",
+            "npm install",
+            "echo go test",
+        ] {
+            assert_eq!(label(cmd), None, "{cmd}");
+        }
+        assert_eq!(
+            unread_run_notice(&[words("python3 -m unittest")], false),
+            None
+        );
+        assert_eq!(unread_run_notice(&[words("ls")], true), None);
+        let notice = unread_run_notice(&[words("cd x"), words("python3 -m unittest")], true)
+            .expect("a test run that recorded nothing is named");
+        assert!(notice.contains("`python3 -m unittest`"), "{notice}");
+        assert!(notice.contains("python -m unittest -v"), "{notice}");
+        assert!(notice.contains(READABLE_RUNNERS), "{notice}");
     }
 
     fn project_with_tests(tests: &str) -> Project {

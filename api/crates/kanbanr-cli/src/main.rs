@@ -6222,7 +6222,25 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     );
     let text = capture_text(&payload);
     if kanbanr_core::evidence::parse_results(&text).is_empty() {
-        return Ok(()); // not a test run, or nothing recognizable: stay quiet
+        // Not a test run, or nothing recognizable: record nothing. A test run that printed
+        // nothing readable is named to Claude in the hook's answer (DEF-068); never blocks.
+        let command = payload["tool_input"]["command"].as_str().unwrap_or("");
+        let commands: Vec<Vec<String>> = simple_commands(&without_heredoc_bodies(command))
+            .into_iter()
+            .map(|(_, rest)| rest)
+            .collect();
+        if require_project_quiet().is_some()
+            && let Some(notice) = kanbanr_core::evidence::unread_run_notice(&commands, true)
+        {
+            println!(
+                "{}",
+                serde_json::json!({"hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": notice,
+                }})
+            );
+        }
+        return Ok(());
     }
 
     let p = require_project(cli)?;
