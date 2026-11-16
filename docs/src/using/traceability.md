@@ -25,7 +25,9 @@ default branch, a branch that names no item, and a message with no reference —
 merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in the message, which
 leaves the reason in git history forever). Setup's own first commit in a repository that already
 has history is let through on the default branch too: only `.kanbanr`, `CLAUDE.md` and
-`.gitignore`, with `[no-ref] <why>`, and only until the marker is committed. If kanbanr is not on PATH the hooks step aside rather
+`.gitignore`, with `[no-ref] <why>`, and only until the marker is committed. So is a refresh of
+the generated block in `CLAUDE.md`, such as after the charter is agreed: only `CLAUDE.md`, changed
+only between the kanbanr markers, with `[no-ref] <why>`. If kanbanr is not on PATH the hooks step aside rather
 than making the repository uncommittable for someone who never installed it.
 
 ### Commits made by an agent
