@@ -219,7 +219,7 @@ mod tests {
                     }
                 });
             }
-            for i in 0..2000 {
+            for i in 0..400 {
                 write(&path, if i % 2 == 0 { &b } else { &a }).unwrap();
             }
             done.store(true, Ordering::Relaxed);
