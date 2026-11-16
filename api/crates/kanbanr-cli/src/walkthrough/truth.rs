@@ -613,6 +613,11 @@ pub fn board_claim(
                 }
             })
         }
+        BoardClaim::ItemExists(item) => Ok(match item_code(&store, project, item) {
+            Err(why) => Err(why),
+            Ok(None) => Err(format!("no item matches {}", item.describe())),
+            Ok(Some(_)) => Ok(()),
+        }),
         BoardClaim::ReleasePrepareConfigured => {
             let p = store.load(project)?;
             Ok(if p.config.cadence.release_prepare.is_empty() {

@@ -622,6 +622,93 @@ const ASKING: &[&str] = &[
     "tell me which",
 ];
 
+/// Openers of a request addressed to the person: a sentence that starts with one asks for an
+/// answer even with no `?` (preview-6: "**Confirm this draft as it is, or tell me what to change
+/// or add.**").
+const REQUESTS: &[&str] = &[
+    "confirm",
+    "tell me",
+    "let me know",
+    "reply with",
+    "reply to",
+    "choose",
+    "pick",
+    "say which",
+    "say whether",
+    "select",
+    "decide",
+    "approve this",
+    "approve the draft",
+    "approve the plan",
+    "approve the charter",
+    "give me",
+    "send me",
+];
+
+/// Is this sentence a request to the person? It opens with one of `REQUESTS` (after an optional
+/// "please"), and is not a conditional offer ("let me know if you want changes", "tell me when
+/// you've decided"), which a settled turn often ends with.
+fn is_request(sentence: &str) -> bool {
+    let s = sentence
+        .trim()
+        .trim_start_matches(['-', '*', ' '])
+        .to_ascii_lowercase();
+    let s = s.strip_prefix("please ").unwrap_or(&s).trim_start();
+    REQUESTS.iter().any(|r| {
+        s.strip_prefix(r).is_some_and(|rest| {
+            // A whole word: "confirmed" is no request.
+            let whole = s
+                .as_bytes()
+                .get(r.len())
+                .is_none_or(|b| !b.is_ascii_alphabetic());
+            let rest = rest.trim_start_matches([',', ' ']);
+            whole && !rest.starts_with("if ") && !rest.starts_with("when ")
+        })
+    })
+}
+
+/// The sentences of `text` (markdown stripped) split at `.`, `!` and line ends.
+fn sentences(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let p = plain(line);
+        let mut start = 0;
+        for (i, c) in p.char_indices() {
+            if matches!(c, '.' | '!') {
+                let s = p[start..=i].trim();
+                if !s.is_empty() {
+                    out.push(s.to_string());
+                }
+                start = i + c.len_utf8();
+            }
+        }
+        let s = p[start..].trim();
+        if !s.is_empty() {
+            out.push(s.to_string());
+        }
+    }
+    out
+}
+
+/// The request a message ends on or puts in bold: the last bold sentence that is a request, else
+/// the message's last sentence when it is one.
+fn request_sentence(text: &str) -> Option<String> {
+    let mut bold: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split("**").collect();
+        // Odd parts sit between a pair of `**`.
+        for (i, part) in parts.iter().enumerate() {
+            if i % 2 == 1 && i + 1 < parts.len() {
+                bold.extend(sentences(part));
+            }
+        }
+    }
+    if let Some(s) = bold.iter().rev().find(|s| is_request(s)) {
+        return Some(s.clone());
+    }
+    sentences(text).into_iter().last().filter(|s| is_request(s))
+}
+
 /// A question asked in a final message (the live path under `-p`, see the module doc). The last
 /// sentence ending in `?` anywhere in the message is the question, bold or not, with or without
 /// prose after it; its options are the numbered or bulleted lines that follow it. A message with
@@ -700,7 +787,12 @@ pub fn parse_text_question(text: &str) -> Option<TextQuestion> {
     let low = text.to_ascii_lowercase();
     let phrase = ASKING.iter().find(|p| low.contains(*p));
     if !recommended && phrase.is_none() {
-        return None;
+        // A request to the person, in bold or as the last sentence, asks too (preview-6).
+        return request_sentence(text).map(|text| TextQuestion {
+            text,
+            options: Vec::new(),
+            context,
+        });
     }
     let sentence = phrase
         .and_then(|p| {

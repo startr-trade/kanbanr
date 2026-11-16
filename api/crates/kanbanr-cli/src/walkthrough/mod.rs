@@ -509,6 +509,8 @@ struct Running {
     last_question: Option<String>,
     /// Setup never made the board: the run stops and prepares no batch.
     setup_failed: bool,
+    /// The names steps bound (`names:`), to the item codes they stand for.
+    names: BTreeMap<String, String>,
     lines: usize,
     stopped: Option<String>,
     pause: bool,
@@ -531,6 +533,103 @@ impl Running {
         eprintln!("finding: {f}");
         let _ = append_finding(&self.dirs, &f);
         self.findings.push(f);
+    }
+
+    /// `approve_waiting` / `signoff_waiting` (preview-7 RC3): every item planned into the release
+    /// that the page offers the decision for gets it, through the page's own route, one by one;
+    /// a `swept-in` finding lists them, so the person sees what came along. An item the page does
+    /// not offer it for is not waiting, and is left alone.
+    fn sweep(
+        &mut self,
+        id: &str,
+        project: &str,
+        sweep: &runbook::Decision,
+        offer: &runbook::Offer,
+        ok: &mut bool,
+        why: &mut Vec<String>,
+    ) {
+        let (release, name) = match sweep {
+            runbook::Decision::ApproveWaiting { release } => (release, None),
+            runbook::Decision::SignoffWaiting { release, name } => (release, Some(name)),
+            _ => return,
+        };
+        let version = release.trim_start_matches('v');
+        let planned: Vec<(String, String)> = kanbanr_core::Store::new(self.dirs.board())
+            .load(project)
+            .map(|p| {
+                let mut f: Vec<_> = p
+                    .features
+                    .iter()
+                    .filter(|f| {
+                        f.release
+                            .as_deref()
+                            .is_some_and(|r| r.trim_start_matches('v') == version)
+                    })
+                    .collect();
+                f.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)));
+                f.into_iter()
+                    .map(|f| (f.code.clone(), f.title.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(m) = self.monitor.as_ref() else {
+            self.finding(
+                id,
+                "offer-missing",
+                format!(
+                    "the guide promises \"{}\" on the {} page",
+                    offer.button, offer.page
+                ),
+                "no monitor".into(),
+            );
+            *ok = false;
+            why.push("no monitor".into());
+            return;
+        };
+        let (taken, failed) = m.sweep(
+            project,
+            &planned,
+            name.map(String::as_str),
+            offer,
+            id,
+            Some(&self.dirs),
+            self.pause,
+        );
+        if !taken.is_empty() {
+            self.finding(
+                id,
+                "swept-in",
+                format!(
+                    "{} for every item in {release} the page offers it for",
+                    offer.button
+                ),
+                format!("taken for {}", taken.join(", ")),
+            );
+        }
+        if !failed.is_empty() {
+            self.finding(
+                id,
+                "decision-failed",
+                format!("{} for the waiting items of {release}", offer.button),
+                failed.join("; "),
+            );
+            *ok = false;
+            why.push(failed.join("; "));
+        }
+    }
+
+    /// The run board's items, code and title, oldest first; none before setup made the board.
+    fn board_items(&mut self) -> Vec<(String, String)> {
+        let project = self.project_name();
+        let Ok(p) = kanbanr_core::Store::new(self.dirs.board()).load(&project) else {
+            return Vec::new();
+        };
+        let mut items: Vec<_> = p.features.iter().collect();
+        items.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)));
+        items
+            .into_iter()
+            .map(|f| (f.code.clone(), f.title.clone()))
+            .collect()
     }
 
     fn project_name(&mut self) -> String {
@@ -707,6 +806,14 @@ impl Running {
         // RC3: a step starts on an idle session — no sub-agent build still running, nothing still
         // arriving — so its say is not answered by a turn about earlier work.
         self.wait_for_agents(&id);
+        // The board's items as the step starts, for the names it binds from what it creates.
+        let items_before = if step.names.is_empty() {
+            Vec::new()
+        } else {
+            self.board_items()
+        };
+        // Answers given in this step, against the step's limit of MAX_ANSWERS_PER_STEP.
+        let mut answered = 0usize;
         if let Some(say) = &step.say {
             let mut resends = 0;
             let mut text = fill(say, &self.vars);
@@ -790,6 +897,7 @@ impl Running {
                     "step {id}: Claude asked \"{}\" -> {} ({})",
                     q.text, picked.pick, picked.policy
                 );
+                answered += 1;
                 text = picked.pick;
             }
         }
@@ -803,8 +911,69 @@ impl Running {
             step_ok = false;
             why.push("no monitor".into());
         }
+        // Names (preview-5 triage): the step's say is done, so bind the names it gives, then read
+        // every `named:` selector of its decision, press, offer and claims as the bound code. A
+        // name never bound leaves those undone: a finding, never a guess.
+        if !step.names.is_empty() {
+            let items_after = self.board_items();
+            for (name, source) in &step.names {
+                let bound = self.names.contains_key(name);
+                match runbook::bind_name(source, &items_before, &items_after, bound) {
+                    None => {}
+                    Some(Ok(code)) => {
+                        eprintln!("step {id}: `{name}` is {code}");
+                        self.names.insert(name.clone(), code);
+                    }
+                    Some(Err(candidates)) => {
+                        self.finding(
+                            &id,
+                            "naming-failed",
+                            format!("the step names one item `{name}`"),
+                            candidates.clone(),
+                        );
+                        step_ok = false;
+                        why.push(format!("`{name}` not bound: {candidates}"));
+                    }
+                }
+            }
+        }
+        let original = step;
+        let resolved = match step.with_names(&self.names) {
+            Ok(s) => s,
+            Err(unbound) => {
+                for n in &unbound {
+                    self.finding(
+                        &id,
+                        "unbound-name",
+                        format!("the step acts on the item named `{n}`"),
+                        format!("no step bound `{n}`; its decision and claims were not taken"),
+                    );
+                    why.push(format!("`{n}` was never bound"));
+                }
+                step_ok = false;
+                let mut s = step.clone();
+                s.decide = None;
+                s.press = None;
+                s.offer = None;
+                s.expect = None;
+                s
+            }
+        };
+        let step = &resolved;
         let project = self.project_name();
-        if let Some(decision) = &step.decide {
+        if let Some(
+            sweep @ (runbook::Decision::ApproveWaiting { .. }
+            | runbook::Decision::SignoffWaiting { .. }),
+        ) = &step.decide
+        {
+            let offer = step
+                .offer
+                .clone()
+                .expect("lint: a decide step has an offer");
+            self.screenshot(&id, &offer.page, "before");
+            self.sweep(&id, &project, sweep, &offer, &mut step_ok, &mut why);
+            self.screenshot(&id, &offer.page, "after");
+        } else if let Some(decision) = &step.decide {
             let offer = step
                 .offer
                 .clone()
@@ -1058,19 +1227,50 @@ impl Running {
             );
         }
         // A board that setup never made fails every later step for the same reason: stop here,
-        // say what Claude last asked, and prepare nothing on the target board.
-        if step
+        // say what Claude last asked, and prepare nothing on the target board. While Claude's last
+        // message still asks something (preview-6: a charter draft ending "Confirm this draft…"),
+        // it is answered again first, within the step's answers.
+        let claims_project = step
             .expect
             .as_ref()
-            .is_some_and(|e| e.board == Some(runbook::BoardClaim::ProjectExists))
-            && truth::board_claim(
-                &self.dirs.board(),
-                &self.project_name(),
+            .is_some_and(|e| e.board == Some(runbook::BoardClaim::ProjectExists));
+        let no_project = |me: &mut Self| {
+            truth::board_claim(
+                &me.dirs.board(),
+                &me.project_name(),
                 &runbook::BoardClaim::ProjectExists,
             )
             .map(|r| r.is_err())
             .unwrap_or(true)
+        };
+        while claims_project
+            && answered < MAX_ANSWERS_PER_STEP
+            && no_project(self)
+            && let Some(q) = driver::parse_text_question(&final_text)
         {
+            asked_here.push(q.text.clone());
+            self.last_question = Some(q.text.clone());
+            let question = Question::from_text(&q);
+            let picked = Policy::new(&self.runbook, Some(&id))
+                .with_vars(self.vars.clone())
+                .answer(&question);
+            answer::log(&self.dirs, &id, &question, &picked)?;
+            eprintln!(
+                "step {id}: setup is not done and Claude still asks \"{}\" -> {} ({})",
+                q.text, picked.pick, picked.policy
+            );
+            answered += 1;
+            let turn = self.session.say(&picked.pick)?;
+            self.lines += turn.lines;
+            final_text = turn.final_text.clone();
+            if turn.stopped.is_some() {
+                break;
+            }
+            if turn.agents_running > 0 || turn.notified {
+                self.wait_for_agents(&id);
+            }
+        }
+        if claims_project && no_project(self) {
             let last = self
                 .last_question
                 .clone()
@@ -1088,10 +1288,12 @@ impl Running {
             return Ok(false);
         }
         if let Some(marker) = &step.check {
-            let measured = step.decide.is_some()
-                || step.press.is_some()
-                || step.push.is_some()
-                || step.expect.as_ref().is_some_and(|e| !e.is_empty());
+            // Measured by what the runbook asked of the step, even when an unbound name left it
+            // undone: that is a failed check, not an unmeasured one.
+            let measured = original.decide.is_some()
+                || original.press.is_some()
+                || original.push.is_some()
+                || original.expect.as_ref().is_some_and(|e| !e.is_empty());
             self.checks.push(CheckResult {
                 marker: marker.clone(),
                 step: id.clone(),
@@ -1445,6 +1647,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         started: Instant::now(),
         last_question: None,
         setup_failed: false,
+        names: BTreeMap::new(),
         lines: 0,
         stopped: None,
         pause: args.pause_at_decisions,

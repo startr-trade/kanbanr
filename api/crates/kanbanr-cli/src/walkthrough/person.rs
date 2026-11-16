@@ -797,6 +797,12 @@ impl Monitor {
                 &format!("/projects/{p}/decisions/mode"),
                 &json!({"mode": mode, "by": by}),
             ),
+            // The run expands a sweep into one Approve or Sign off per item the page offers it
+            // for (`Running::sweep`), each through this same route.
+            Decision::ApproveWaiting { .. } | Decision::SignoffWaiting { .. } => Err(anyhow!(
+                "{} is taken item by item, as the page offers each",
+                decision.kind()
+            )),
             Decision::RecordManual {
                 item: sel,
                 requirement,
@@ -835,6 +841,72 @@ impl Monitor {
                 )
             }
         }
+    }
+
+    /// A sweep (`approve_waiting`, or `signoff_waiting` with `signoff` the sign-off's name): for
+    /// each of `planned` (code and title) the page offers the decision for, take it through the
+    /// page's own route, or with `pause` wait for the person to. Returns the items taken (`CODE
+    /// "title"`) and the failures; an item the page does not offer it for is not waiting.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sweep(
+        &self,
+        project: &str,
+        planned: &[(String, String)],
+        signoff: Option<&str>,
+        offer: &Offer,
+        step: &str,
+        run: Option<&RunDirs>,
+        pause: bool,
+    ) -> (Vec<String>, Vec<String>) {
+        let by = self.approver().unwrap_or_else(|_| "the person".into());
+        let mut taken = Vec::new();
+        let mut failed = Vec::new();
+        for (code, title) in planned {
+            let decision = match signoff {
+                None => Decision::Approve(ItemSel::Code(code.clone())),
+                Some(n) => Decision::Signoff {
+                    item: ItemSel::Code(code.clone()),
+                    name: n.to_string(),
+                },
+            };
+            let item_offer = Offer {
+                page: offer.page.clone(),
+                button: offer.button.clone(),
+                subject: Some(ItemSel::Code(code.clone())),
+            };
+            if !matches!(
+                self.offers(project, &item_offer, Some(&decision)),
+                Ok(Found::Offered)
+            ) {
+                continue;
+            }
+            if pause {
+                println!(
+                    "step {step}: waiting for you to press \"{}\" for {code} on the {} page",
+                    offer.button, offer.page
+                );
+                match self.wait_for_change(
+                    project,
+                    &decision,
+                    Duration::from_secs(5),
+                    Duration::from_secs(60 * 60),
+                ) {
+                    Ok(true) => taken.push(format!("{code} \"{title}\"")),
+                    Ok(false) => failed.push(format!("{code}: nothing changed within an hour")),
+                    Err(e) => failed.push(format!("{code}: {e}")),
+                }
+                continue;
+            }
+            match self.decide(project, &decision, &by, step, run) {
+                Ok(o) if o.ok() => {
+                    eprintln!("step {step}: {} -> {}", o.route, o.status);
+                    taken.push(format!("{code} \"{title}\""));
+                }
+                Ok(o) => failed.push(format!("{code}: {} answered {}", o.route, o.status)),
+                Err(e) => failed.push(format!("{code}: {e}")),
+            }
+        }
+        (taken, failed)
     }
 
     /// Before a sign-off: when the item shows **Approve** on the Review page because its approval
@@ -899,6 +971,10 @@ impl Monitor {
             }
             Decision::ConfirmPrepared { .. } => json!(self.prepared_open(project)?),
             Decision::GrantDelegation(_) | Decision::SetMode(_) => self.decisions(project)?,
+            // A sweep changes the items' definitions and sign-offs.
+            Decision::ApproveWaiting { .. } | Decision::SignoffWaiting { .. } => {
+                self.get_json(&format!("/projects/{p}"))?["features"].clone()
+            }
         };
         Ok(v.to_string())
     }
@@ -1613,6 +1689,61 @@ pub(crate) mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a route"), "{err}");
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Preview-7 triage RC3: `approve_waiting` approves, one by one through the page's own route,
+    /// each planned item whose approval the Review page offers (the follow-ups Claude filed), and
+    /// leaves alone one already approved; a second sweep finds nothing waiting.
+    #[test]
+    fn a_sweep_approves_every_waiting_item_the_page_offers() {
+        let (run, base, monitor) = scratch_board("sweep");
+        let store = kanbanr_core::Store::new(run.board());
+        let f2 = store
+            .add_feature("shop", "Chore: run the formatter", "spec", "MS-1", None)
+            .unwrap();
+        let def: kanbanr_core::models::FeatureDefinition = kanbanr_core::yaml::from_str(
+            "statement: The code is formatted\n\
+             requirements:\n\
+             \x20 - id: R-1\n\
+             \x20   text: THE SYSTEM SHALL pass the formatter check\n\
+             \x20   tests:\n\
+             \x20     - name: fmt_check\n\
+             \x20       kind: unit\n",
+        )
+        .unwrap();
+        store
+            .set_feature_definition("shop", &f2.code, Some(def))
+            .unwrap();
+        let by = monitor.approver().unwrap();
+        let first = monitor
+            .decide(
+                "shop",
+                &Decision::Approve(ItemSel::Code("FEAT-001".into())),
+                &by,
+                "6.3",
+                Some(&run),
+            )
+            .unwrap();
+        assert!(first.ok(), "{first:?}");
+        let planned = vec![
+            ("FEAT-001".to_string(), "Saved basket".to_string()),
+            (f2.code.clone(), f2.title.clone()),
+        ];
+        let offer = Offer {
+            page: "review".into(),
+            button: "Approve".into(),
+            subject: None,
+        };
+        let (taken, failed) =
+            monitor.sweep("shop", &planned, None, &offer, "6.3a", Some(&run), false);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(taken, [format!("{} \"{}\"", f2.code, f2.title)]);
+        let feature = monitor.feature("shop", &f2.code).unwrap();
+        assert_eq!(feature["definition"]["approval"]["origin"], "monitor");
+        let (again, _) = monitor.sweep("shop", &planned, None, &offer, "6.3a", Some(&run), false);
+        assert!(again.is_empty(), "{again:?}");
         monitor.stop();
         let _ = std::fs::remove_dir_all(&base);
     }

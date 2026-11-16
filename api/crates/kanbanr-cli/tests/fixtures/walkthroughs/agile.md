@@ -28,13 +28,15 @@ checks:
   MT-8: {item: DOC-008, requirement: R-3, test: "manual: the agile walkthrough's proposed pipeline has separate rerunnable stages and stack caching"}
 answers:
   - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
+  - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "Nothing yet: finish the setup, and I'll tell you what to build in a later step."}
   - {match: "^where .*\\bboard\\b|\\bboard\\b.*\\b(live|location|folder|path)\\b|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
   - {match: "\\bcode remote\\b|remote .*\\b(code|repository)\\b|^where .*\\bpush", pick: "The code remote is {code_remote}."}
   - {match: "^which process|\\bprocess\\b.*\\b(use|want|follow)\\b", pick: "Agile, with sprints and releases."}
   - {match: "\\bsprints? and releases?\\b|\\breleases? and sprints?\\b|\\bgit model\\b", pick: "Yes: sprints and releases on, and the git model on."}
   - {match: "\\bpurpose\\b|^(question \\d+: )?what is (this|the) (project|shop) for|\\bproject.s goals?\\b", pick: "A small shop where a shopper's basket survives between visits. One goal: a shopper who comes back finds their basket as they left it."}
-  - {match: "\\btechnolog|\\blanguage\\b|\\b(tech )?stack\\b|\\bframework\\b|which database", pick: "Python 3 standard library and SQLite only, one HTML page served by the same program. Yes, it has a screen."}
-  - {match: "\\bscreens?\\b|user interface|\\bui\\b|\\bstyl(e|ing)\\b|look and feel|how should .* look|\\bfonts?\\b", pick: "It has a screen. Plain and simple: one column, system fonts, no images."}
+  - {match: "\\btechnolog|\\blanguage\\b|\\b(tech )?stack\\b|\\bframework\\b|which database|built with|test runner|which runtime", pick: "Python 3 standard library and SQLite only, one HTML page served by the same program, tested with unittest. Yes, it has a screen."}
+  - {match: "\\bstyl(e|ed|es|ing)\\b|look and feel|how should .* look|\\bfonts?\\b|visual direction|\\bcolou?rs?\\b", pick: "Hand-written CSS. Plain and simple: one column, system fonts, no images."}
+  - {match: "\\bscreens?\\b|user interface|\\bui\\b", pick: "It has a screen."}
   - {match: "(does|will) (the|this) project (have|use) ci|\\bci\\b.*\\b(have|run|product)\\b|continuous integration", pick: "CI runs on the remote server. Keep it minimal, as the delivery-pipeline guide says: one job, one platform. Accept the proposal as it stands."}
   - {match: "delegat", pick: "Propose them; I'll grant them on the Review page."}
   - {match: "\\bskills? folder\\b|\\.claude/skills", pick: "Leave .claude/skills untracked."}
@@ -62,15 +64,18 @@ steps:
   - id: "2.1"
     say: "Start a two-week sprint for the saved basket. Put it in, for release 0.1.0."
     expect: {board: {sprint: active}}
+    names: {basket: {new_item: {title_matches: "\\bbasket\\b"}}}
+    answers:
+    - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there."}
   - id: "2.2"
     say: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design."
-    expect: {board: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    expect: {board: {item: {named: basket}}}
   - id: "2.3"
     say: "Add a manual test to the saved basket: open the basket page, add an item, close the browser, reopen the page, and the item is still there."
   # 3 One item, stage by stage
   - id: "3.1"
-    decide: {approve: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
-    offer: {page: review, button: Approve, subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {approve: {item: {named: basket}}}
+    offer: {page: review, button: Approve, subject: {item: {named: basket}}}
   - id: "3.2"
     say: "Build the basket page."
     expect: {talk: {asked: "style|styling|look|feel|screen"}}
@@ -78,46 +83,50 @@ steps:
   - id: "3.3"
     say: "Move the saved basket on to Develop: write the design and its task list, and name a test for each requirement."
   - id: "3.4"
-    decide: {signoff: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, name: design-review}}
-    offer: {page: review, button: "Sign off design-review", subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {signoff: {item: {named: basket}, name: design-review}}
+    offer: {page: review, button: "Sign off design-review", subject: {item: {named: basket}}}
   - id: "3.5"
     say: "Have a sub-agent build these tasks."
   - id: "3.6"
     say: "Move the saved basket on to Test, then to Review. Tell me what waits for me on the Review page."
+  # The manual check comes before docs-folded: Review holds the sign-off until the item's tests,
+  # its manual one included, are green (FEAT-182).
+  - id: "3.6a"
+    decide: {record_manual: {item: {named: basket}, test: "basket", passed: true}}
+    offer: {page: review, button: Passed, subject: {item: {named: basket}}}
+    check: MT-4
   - id: "3.7"
-    decide: {signoff: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
+    decide: {signoff: {item: {named: basket}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: basket}}}
   - id: "3.8"
     say: "Move the saved basket on to Review, if it has not moved already."
-    expect: {board: {item: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, status: Review}}}
-  # 4 A chore, and the manual check
+    expect: {board: {item: {item: {named: basket}, status: Review}}}
+  # 4 A chore (the manual check is 3.6a)
   - id: "4.1"
     say: "Add a README that says how to run the shop, and name the address of the basket page in it: it's a chore. Take it to its last stage and tell me what waits for me on the Review page."
+    names: {readme: new_item}
   - id: "4.2"
-    decide: {approve: {item: {title_contains: README}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: README}}}
+    decide: {approve: {item: {named: readme}}}
+    offer: {page: review, button: Approve, subject: {item: {named: readme}}}
   - id: "4.3"
     say: "Move the README chore on as far as it goes. Tell me what waits for me on the Review page."
-  - id: "4.4"
-    decide: {record_manual: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}, test: "basket", passed: true}}
-    offer: {page: review, button: Passed, subject: {item: {title_matches: "\\bbasket\\b.*\\b(kept|keeps?|survives?|between visits|comes? back|next day|finds?|saved)\\b|\\bsaved basket\\b"}}}
-    check: MT-4
   # 5 A second item, with drifted docs
   - id: "5.1"
     say: "Add an item to rename the basket page address from /basket to /cart. Take it to Design and tell me what waits for me on the Review page."
+    names: {rename: new_item}
   - id: "5.2"
-    decide: {approve: {item: {title_contains: cart}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: cart}}}
+    decide: {approve: {item: {named: rename}}}
+    offer: {page: review, button: Approve, subject: {item: {named: rename}}}
   - id: "5.3"
     say: "Move the rename on to Develop: write its design and task list."
   - id: "5.4"
-    decide: {signoff: {item: {title_contains: cart}, name: design-review}}
-    offer: {page: review, button: "Sign off design-review", subject: {item: {title_contains: cart}}}
+    decide: {signoff: {item: {named: rename}, name: design-review}}
+    offer: {page: review, button: "Sign off design-review", subject: {item: {named: rename}}}
   - id: "5.5"
     say: "Build the rename yourself, then move it on to Test and Review. Check every doc that names the old address. Tell me what waits for me on the Review page."
   - id: "5.6"
-    decide: {signoff: {item: {title_contains: cart}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: cart}}}
+    decide: {signoff: {item: {named: rename}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: rename}}}
     check: MT-3
   - id: "5.7"
     say: "Move the rename on to Review, if it has not moved already."
@@ -126,6 +135,8 @@ steps:
     say: "Design the CI and the release workflow for this project, before the first release. Propose separate stages I can rerun one at a time, with caching for our stack, on one platform to start. Tell me which checks our plan can't run. Use the release notes kanbanr wrote as the release description. Add a manual run that builds everything and publishes nothing."
     expect: {talk: {said: "stage[s]?[^.]*(rerun|re-run|one at a time)|cach"}}
     check: MT-8
+    answers:
+    - {match: "can (your|the|our) (plan|settings|runners?|account)|which of these can|what .*plan (can|can't|cannot) run", pick: "Keep the separate stages, each a job I can rerun on its own, with caching for our stack; run every stage our plan allows."}
   - id: "6.2"
     say: "Build the pipeline as an item for the first release and take it as far as it goes; tell me what waits for me on the Review page."
   - id: "6.3"
@@ -140,8 +151,31 @@ steps:
     offer: {page: review, button: Approve, subject: {item: {title_matches: "pipeline|\\bci\\b|workflow"}}}
   - id: "6.3c"
     say: "Build the CHANGELOG chore and the pipeline item yourself, and take both as far as they go. Tell me what waits for me on the Review page."
+  - id: "6.3d"
+    decide: {signoff: {item: {title_contains: CHANGELOG}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: CHANGELOG}}}
+  - id: "6.3e"
+    decide: {signoff: {item: {title_matches: "pipeline|\\bci\\b|workflow"}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_matches: "pipeline|\\bci\\b|workflow"}}}
   - id: "6.4"
     say: "Take every item in v0.1.0 as far as it goes, and tell me what waits for me on the Review page."
+  # Follow-up items Claude filed into the release on its own recommendation (a docs correction, a
+  # formatter chore): the person approves and signs what the Review page offers for them.
+  - id: "6.4a"
+    decide: {approve_waiting: {release: v0.1.0}}
+    offer: {page: review, button: Approve}
+  - id: "6.4b"
+    say: "Take every item in v0.1.0 as far as it goes again, and tell me what waits for me on the Review page."
+  - id: "6.4c"
+    decide: {signoff_waiting: {release: v0.1.0, name: design-review}}
+    offer: {page: review, button: "Sign off design-review"}
+  - id: "6.4d"
+    say: "Build what is left in v0.1.0 and take it as far as it goes. Tell me what waits for me on the Review page."
+  - id: "6.4e"
+    decide: {signoff_waiting: {release: v0.1.0, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded"}
+  - id: "6.4f"
+    say: "Move every item in v0.1.0 on to Review, if it has not moved already."
   - id: "6.5"
     decide: {promote: {release: v0.1.0, to: candidate}}
     offer: {page: releases, button: "Promote to candidate"}
@@ -152,24 +186,26 @@ steps:
     say: "Run the full checks over the release."
   - id: "6.8"
     say: "While the release is a candidate we found that the basket page's title does not name the shop: it should read \"Your basket - the corner shop\". Add it as a defect with that in its title, and fix it in the release. Take the defect as far as it goes and tell me what waits for me on the Review page."
-    expect: {board: {item: {title_contains: "corner shop"}}}
+    expect: {board: {item: {named: defect}}}
     check: MT-5
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
     answers:
     - {match: "how should i (record|file|track)|record (it|this|the (change|fix))|\\bamend\\b|new item or|defect or", pick: "File it as a defect, with \"corner shop\" in its title."}
+    names: {defect: new_item}
   - id: "6.9"
-    decide: {approve: {item: {title_contains: "corner shop"}}}
-    offer: {page: review, button: Approve, subject: {item: {title_contains: "corner shop"}}}
+    decide: {approve: {item: {named: defect}}}
+    offer: {page: review, button: Approve, subject: {item: {named: defect}}}
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.10"
     say: "Move the defect on as far as it goes. Tell me what waits for me on the Review page."
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.11"
-    decide: {signoff: {item: {title_contains: "corner shop"}, name: docs-folded}}
-    offer: {page: review, button: "Sign off docs-folded", subject: {item: {title_contains: "corner shop"}}}
+    decide: {signoff: {item: {named: defect}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: defect}}}
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.12"
     say: "Move the defect on to Review, if it has not moved already. Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.13"
     decide: {promote: {release: v0.1.0, to: main}}
     offer: {page: releases, button: "Promote to main"}

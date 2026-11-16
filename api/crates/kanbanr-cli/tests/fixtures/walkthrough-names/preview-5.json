@@ -1,0 +1,54 @@
+[
+  {
+    "from": "togaf-v070-preview-5",
+    "step": "2.1",
+    "start": "2026-11-16T08:24:36.378Z",
+    "end": "2026-11-16T08:25:51.081Z",
+    "before": [
+      [
+        "FEAT-001",
+        "A shopper adds an item to their basket and sees it"
+      ]
+    ],
+    "after": [
+      [
+        "FEAT-001",
+        "A shopper adds an item to their basket and sees it"
+      ],
+      [
+        "FEAT-002",
+        "A returning shopper finds their basket as they left it"
+      ],
+      [
+        "FEAT-003",
+        "Chore: a CHANGELOG.md in Keep a Changelog form"
+      ],
+      [
+        "FEAT-004",
+        "Chore: a CI pipeline with one test job"
+      ]
+    ]
+  },
+  {
+    "from": "agile-v070-preview-2",
+    "step": "2.1",
+    "start": "2026-11-16T08:24:18.095Z",
+    "end": "2026-11-16T08:24:46.873Z",
+    "before": [
+      [
+        "FEAT-001",
+        "A visitor adds their name to a greeting list"
+      ]
+    ],
+    "after": [
+      [
+        "FEAT-001",
+        "A visitor adds their name to a greeting list"
+      ],
+      [
+        "FEAT-002",
+        "A returning shopper finds their basket as they left it"
+      ]
+    ]
+  }
+]

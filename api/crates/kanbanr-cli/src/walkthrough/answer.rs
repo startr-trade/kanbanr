@@ -1,7 +1,8 @@
 //! Every question Claude asks during a run is answered, never waited on (FTR-037 W5, R-2): from
-//! the runbook's rules (the current step's first, then the shared table, then the other steps' in
-//! order), else the recommended option, else the first option; a free-text question with no rule
-//! gets "Your call; keep it simple". Each answer is logged to `raw/questions.tsv` with the policy
+//! the runbook's rules (the current step's first, then the shared table; never another step's),
+//! else the recommended option, else a rule matching the whole message (only for a question with
+//! no options), else the first option; a free-text question with no rule gets "Your call; keep it
+//! simple". Each answer is logged to `raw/questions.tsv` with the policy
 //! that chose it.
 //!
 //! Two paths bring a question here. The live one under `-p` (the spike of 15 Nov 2026) is text: the
@@ -153,8 +154,9 @@ impl<'a> Policy<'a> {
         out
     }
 
-    /// The rules in the order they are tried: the current step's, the shared table, every other
-    /// step's in step order.
+    /// The rules in the order they are tried: the current step's, then the shared table. Another
+    /// step's rules never answer (preview-7 RC2: step 6.8's "file it as a defect" answered a
+    /// question at 2.3 and made a defect nobody asked for).
     fn rules(&self) -> Vec<&'a AnswerRule> {
         let mut out: Vec<&AnswerRule> = Vec::new();
         if let Some(step) = &self.current_step
@@ -163,11 +165,6 @@ impl<'a> Policy<'a> {
             out.extend(s.answers.iter());
         }
         out.extend(self.runbook.answers.iter());
-        for s in &self.runbook.steps {
-            if self.current_step.as_deref() != Some(s.id.as_str()) {
-                out.extend(s.answers.iter());
-            }
-        }
         out
     }
 
@@ -386,8 +383,8 @@ mod tests {
         }
     }
 
-    /// FTR-037 R-2: the runbook's rule answers first (the current step's before the shared table
-    /// and the other steps'), then the option marked recommended, then the first option; a free-text
+    /// FTR-037 R-2: the runbook's rule answers first (the current step's before the shared table;
+    /// another step's never), then the option marked recommended, then the first option; a free-text
     /// question with no rule gets the literal pick; every answer names its policy.
     #[test]
     fn runbook_then_recommended_then_first() {
@@ -418,16 +415,13 @@ mod tests {
             (p.policy, p.pick.as_str()),
             ("runbook", "Its remote is /tmp/x/board.git.")
         );
-        // Another step's rule answers too, when the current step has none.
+        // Another step's rule never answers: at 5.8 the question falls through to the first option.
         let p = Policy::new(&rb, Some("5.8")).answer(&question(
             "What is the project for?",
             &["A shop", "A blog"],
             Source::Dialog,
         ));
-        assert_eq!(
-            (p.policy, p.pick.as_str()),
-            ("runbook", "A small web shop.")
-        );
+        assert_eq!((p.policy, p.pick.as_str()), ("first", "A shop"));
         // No rule: the recommended option, wherever it stands.
         let p = policy.answer(&question(
             "Which colour should the basket page use?",
@@ -503,6 +497,192 @@ mod tests {
                     q.options
                 );
             }
+        }
+    }
+
+    /// Preview-5 triage: in both runs Claude asked what to build first during setup, and the run
+    /// took Claude's own suggestion (a greeting list). Each such text of those runs (paths and
+    /// remotes scrubbed) is now answered by rule: during setup the run defers, and in the step
+    /// that says what to build, the step's own rule answers with the guide's words.
+    #[test]
+    fn the_first_build_question_is_answered_with_the_build_steps_words() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/preview-5-first-build.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(texts.len() >= 4);
+        for file in ["togaf.md", "agile.md"] {
+            let rb = Runbook::parse(
+                &std::fs::read_to_string(dir.join("walkthroughs").join(file)).unwrap(),
+            )
+            .unwrap();
+            let build_say = "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.";
+            for t in &texts {
+                let text = t["text"].as_str().unwrap();
+                let q = crate::walkthrough::driver::parse_text_question(text)
+                    .unwrap_or_else(|| panic!("not read as a question: {text}"));
+                let q = Question::from_text(&q);
+                let setup = Policy::new(&rb, Some("1.1")).answer(&q);
+                assert!(
+                    setup.pick.starts_with("Nothing yet"),
+                    "{file} 1.1: {:?} -> {:?} ({})",
+                    q.text,
+                    setup.pick,
+                    setup.policy
+                );
+                let build = Policy::new(&rb, Some("2.1")).answer(&q);
+                assert_eq!(build.pick, build_say, "{file} 2.1: {:?}", q.text);
+            }
+        }
+    }
+
+    /// Preview-7 triage RC2: at agile 2.3 Claude asked "how should I record it?" about the
+    /// manual test, and step 6.8's own rule ("File it as a defect…") answered it, making a defect
+    /// nobody asked for. Now another step's rule never answers: at 2.3 the recommended option
+    /// wins, and at 6.8 its rule still does.
+    #[test]
+    fn another_steps_rule_never_answers_a_question() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/agile-v070-preview-4.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let text = texts[0]["text"].as_str().unwrap();
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/agile.md")).unwrap())
+                .unwrap();
+        let q = crate::walkthrough::driver::parse_text_question(text).unwrap();
+        assert_eq!(q.text, "Question: how should I record it?");
+        let q = Question::from_text(&q);
+        let at_2_3 = Policy::new(&rb, Some("2.3")).answer(&q);
+        assert_eq!(at_2_3.policy, "recommended", "{at_2_3:?}");
+        assert!(
+            at_2_3
+                .pick
+                .starts_with("Your check becomes the item's one manual test"),
+            "{at_2_3:?}"
+        );
+        assert!(!at_2_3.pick.contains("defect"));
+        let defect_step = rb
+            .steps
+            .iter()
+            .find(|s| s.names.contains_key("defect"))
+            .unwrap();
+        let at_defect = Policy::new(&rb, Some(&defect_step.id)).answer(&q);
+        assert!(
+            at_defect.pick.starts_with("File it as a defect"),
+            "{at_defect:?}"
+        );
+    }
+
+    /// Preview-7 triage RC5: the agile run's real wordings ("what is the page built with?", "which
+    /// test runner…") take the stack rule; the UI question gets "It has a screen." and nothing
+    /// about the look, which its own rule answers when asked; and at 6.1 the pipeline-capability
+    /// question keeps the separate, rerunnable stages and caching.
+    #[test]
+    fn the_stack_ui_style_and_pipeline_questions_take_their_rules() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        for file in ["togaf.md", "agile.md"] {
+            let rb = Runbook::parse(
+                &std::fs::read_to_string(dir.join("walkthroughs").join(file)).unwrap(),
+            )
+            .unwrap();
+            let ask = |step: &str, text: &str, options: &[&str]| {
+                Policy::new(&rb, Some(step)).answer(&question(text, options, Source::Text))
+            };
+            for q in [
+                "What is the page built with?",
+                "Which test runner should the end-to-end tests use?",
+                "Which language should the server use?",
+            ] {
+                let p = ask("3.2", q, &["Plain HTML and Node (recommended)", "Python"]);
+                assert!(
+                    p.pick.starts_with("Python 3 standard library"),
+                    "{file} {q}: {p:?}"
+                );
+            }
+            let ui = ask("2.1", "Does the product have a user interface?", &[]);
+            assert_eq!(ui.pick, "It has a screen.", "{file}");
+            let style = ask(
+                "3.2",
+                "How should the basket page be styled?",
+                &[
+                    "A utility-class framework (recommended)",
+                    "Hand-written CSS",
+                ],
+            );
+            assert!(
+                style.pick.starts_with("Hand-written CSS"),
+                "{file}: {style:?}"
+            );
+        }
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/agile.md")).unwrap())
+                .unwrap();
+        let p = Policy::new(&rb, Some("6.1")).answer(&question(
+            "Which of these can your plan and settings run?",
+            &["Format and lint", "Test", "Build"],
+            Source::Text,
+        ));
+        assert!(
+            p.pick.contains("rerun") && p.pick.contains("caching"),
+            "{p:?}"
+        );
+    }
+
+    /// Preview-6 triage: the TOGAF run stopped at setup after 4 turns. Its last message, the
+    /// charter draft, asked "**Confirm this draft as it is, or tell me what to change or add.**"
+    /// with no `?`, so the turn read as settled. Every final text of that run (scrubbed) now reads
+    /// as a question, and the charter draft is answered by the runbook's confirm rule.
+    #[test]
+    fn a_request_without_a_question_mark_is_asked_and_the_charter_draft_confirmed() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let texts: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("walkthrough-texts/togaf-v070-preview-6.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(texts.len(), 4);
+        let rb =
+            Runbook::parse(&std::fs::read_to_string(dir.join("walkthroughs/togaf.md")).unwrap())
+                .unwrap();
+        let policy = Policy::new(&rb, Some("1.1"));
+        for t in &texts {
+            let text = t["text"].as_str().unwrap();
+            assert!(
+                crate::walkthrough::driver::parse_text_question(text).is_some(),
+                "settled, but it asks: {text}"
+            );
+        }
+        let charter = texts.last().unwrap()["text"].as_str().unwrap();
+        assert!(!charter.contains('?'));
+        let q = crate::walkthrough::driver::parse_text_question(charter).unwrap();
+        assert_eq!(
+            q.text,
+            "Confirm this draft as it is, or tell me what to change or add."
+        );
+        let picked = policy.answer(&Question::from_text(&q));
+        assert_eq!(picked.pick, "I confirm it as drafted.", "{picked:?}");
+        assert!(
+            picked
+                .rule
+                .as_deref()
+                .is_some_and(|r| r.starts_with("confirm (this|the)")),
+            "{picked:?}"
+        );
+        // A conditional offer at the end of a settled turn still asks nothing.
+        for settled in [
+            "The board is set up. Let me know if you want changes.",
+            "DLG-001 is proposed on the Review page. Tell me when you've decided.",
+            "The draft is confirmed.",
+        ] {
+            assert!(
+                crate::walkthrough::driver::parse_text_question(settled).is_none(),
+                "{settled}"
+            );
         }
     }
 

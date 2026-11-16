@@ -91,6 +91,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A disabled Approve or Ratify button says what is missing and who provides it": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
+            "The Review page offers one click for a batch": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
             "The monitor shows agent scopes and who made each change": LOCAL,
             "The monitor's types match the published API": LOCAL,

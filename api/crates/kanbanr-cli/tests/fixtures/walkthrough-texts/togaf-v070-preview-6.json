@@ -1,0 +1,22 @@
+[
+  {
+    "from": "togaf-v070-preview-6",
+    "line": 13,
+    "text": "kanbanr 0.6.1 is installed, and this folder isn't tracked yet. I'll set it up one question at a time. Nothing has been written.\n\n**Where should the board live?** The board is its own git repo and should sit outside the project folder.\n\n1. `~/.cache/kanbanr-walkthroughs/togaf-v070-preview-6/project.kanbanr`, a new folder beside the project (recommended)\n2. Another path you give me\n\nNo other boards exist to share."
+  },
+  {
+    "from": "togaf-v070-preview-6",
+    "line": 24,
+    "text": "TOGAF with sprints and releases it is. This is what that means for branching:\n\n- Items branch from `sprint/<SP>`. There's no sprint branch until you start a sprint.\n- kanbanr merges each item into its sprint branch when it reaches the integrate stage. It merges `release/<V>` into `main` at the release's last stage, tagged with the version.\n- `main`, `sprint/*` and `release/*` are protected.\n- Pushing is always yours. kanbanr never pushes the code repo.\n\n**Does the project have CI?**\n\n1. No (recommended)\n2. Yes"
+  },
+  {
+    "from": "togaf-v070-preview-6",
+    "line": 29,
+    "text": "Noted: CI is on. The pipeline will be one job on one platform. I'll file it as an item planned into the first release, and I'll ask which stages to start with when we get there.\n\n**May the board README link the code repository** (`the-remote-server/togaf-v070-preview-6-code`)?\n\n1. Link it (recommended if the repository is public)\n2. Name it without a link (private)\n3. Leave it out"
+  },
+  {
+    "from": "togaf-v070-preview-6",
+    "line": 34,
+    "text": "Git already has an identity (`walkthrough <walkthrough@localhost>`). I'll use it for the board and the repository, so there's nothing to ask there.\n\nThe last piece is the charter. The README gives me only one line, so I've drafted what it supports and left the rest blank rather than invent it.\n\n**Charter (draft)**\n\n- **Purpose:** A scratch project of the walkthrough run togaf-v070-preview-6.\n- **Vision:** blank\n- **Goals:**\n  - G-0, \"The system stays operable and maintainable\". Measure: blank. This is the standing goal for maintenance work.\n  - No other goals yet.\n- **Non-goals:** blank\n- **Stakeholders:** blank\n- **Constraints:** blank. I'd list one, \"Never push; the user reviews and pushes\", if you want it.\n\n**Confirm this draft as it is, or tell me what to change or add.** Goals and non-goals are the useful ones to fill in, if you have any. Once you confirm, I'll show the full setup plan and the commands before anything runs."
+  }
+]
