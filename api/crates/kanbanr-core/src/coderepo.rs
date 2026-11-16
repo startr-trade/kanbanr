@@ -233,7 +233,8 @@ pub fn staged_paths(root: &Path) -> Option<Vec<String>> {
     )
 }
 
-/// Does the repository's CLAUDE.md differ from HEAD's only inside the generated block (DEF-083)?
+/// Does the repository's CLAUDE.md differ from HEAD's only inside generated blocks, kanbanr's or
+/// any other tool's (DEF-083, DEF-092)?
 /// HEAD's copy is `git cat-file blob HEAD:CLAUDE.md`, or "" when HEAD has none. The candidates are
 /// the index's copy (`:CLAUDE.md`, when it has one) and, with `worktree`, `root/CLAUDE.md` on disk.
 /// True when any candidate satisfies `claude::block_only_change(head, candidate)`. Fails safe:
@@ -675,6 +676,56 @@ pub fn changed_files(
         .filter(|p| !p.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+/// The files `branch` changed since it left `line` (DEF-091). For a branch `line` does not contain,
+/// `changed_files(root, line, branch)`. For one it contains, the diff from the merge base of
+/// `branch` and the line as it stood just before the merge commit that brought `branch` in (the
+/// first commit on `line`'s first-parent history that descends from `branch`), so a merged branch
+/// keeps the answer it had. A `line` or `branch` that does not exist is an error. A branch whose
+/// tip is on `line`'s first-parent history (a fast-forward, or a branch with no commits of its
+/// own) changed nothing: empty. A fast-forward cannot be told apart from a branch that changed
+/// nothing; kanbanr itself always merges with `--no-ff` (B-28).
+pub fn changed_since_fork(
+    root: &Path,
+    line: &str,
+    branch: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    if line.is_empty() || branch.is_empty() || line.starts_with('-') || branch.starts_with('-') {
+        return Err(CoreError::Git(format!(
+            "refusing branch name `{branch}` or line `{line}`"
+        )));
+    }
+    for rev in [line, branch] {
+        git(
+            root,
+            &["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")],
+        )
+        .map_err(|_| CoreError::Git(format!("{rev} does not exist")))?;
+    }
+    if !is_ancestor(root, branch, line) {
+        return changed_files(root, line, branch);
+    }
+    let range = format!("{branch}..{line}");
+    let walk = git(
+        root,
+        &[
+            "rev-list",
+            "--first-parent",
+            "--ancestry-path",
+            "--reverse",
+            &range,
+        ],
+    )?;
+    let Some(merge) = walk.lines().next().map(str::trim).filter(|m| !m.is_empty()) else {
+        return Ok(Default::default());
+    };
+    let parents = git(root, &["rev-list", "--parents", "-n1", merge])?;
+    if parents.split_whitespace().count() < 3 {
+        return Ok(Default::default());
+    }
+    let base = git(root, &["merge-base", &format!("{merge}^1"), branch])?;
+    changed_paths(root, &base, branch).map(|paths| paths.into_iter().collect())
 }
 
 /// The worktree that has `branch` checked out, if any. A branch checked out somewhere must be
@@ -1166,6 +1217,32 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&bare);
     }
 
+    /// DEF-092 R-1: a rewrite of katalogr's block beside kanbanr's is a refresh, from the tree
+    /// and from the index; a line outside both blocks is not.
+    #[test]
+    fn a_katalogr_block_refresh_is_read_from_the_index_and_the_tree() {
+        use crate::claude::{BEGIN, END};
+        let file = |k: &str| {
+            format!(
+                "# p\n\n{BEGIN}\n\nA\n\n{END}\n\n<!-- katalogr:begin -->\n{k}\n<!-- katalogr:end -->\n"
+            )
+        };
+        let repo = scratch_repo("katalogr-refresh");
+        commit_file(&repo, "CLAUDE.md", &file("K1"), "claude");
+        assert!(!claude_block_refresh(&repo, true), "nothing changed");
+        std::fs::write(repo.join("CLAUDE.md"), file("K2")).unwrap();
+        assert!(claude_block_refresh(&repo, true), "the tree");
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(claude_block_refresh(&repo, true));
+        assert!(claude_block_refresh(&repo, false), "the index");
+        // A line outside both blocks is the author's: no refresh.
+        std::fs::write(repo.join("CLAUDE.md"), format!("{}mine\n", file("K2"))).unwrap();
+        git(&repo, &["add", "CLAUDE.md"]).unwrap();
+        assert!(!claude_block_refresh(&repo, true));
+        assert!(!claude_block_refresh(&repo, false));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
     /// after the fork.
     #[test]
@@ -1181,6 +1258,48 @@ pub(crate) mod tests {
             vec!["branch.md".to_string()]
         );
         assert!(changed_files(&repo, "nope", "feat/x").is_err());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-091 R-1: a branch merged into its line keeps the files it changed since its fork point,
+    /// through a chain of lines too; a branch with no commits of its own changed nothing.
+    #[test]
+    fn changed_since_fork_reads_a_merged_branch_from_its_fork_point() {
+        let repo = scratch_repo("changed-since-fork");
+        create_branch_from(&repo, "line", "main").unwrap();
+        create_branch_from(&repo, "feat/x", "line").unwrap();
+        git(&repo, &["checkout", "-q", "feat/x"]).unwrap();
+        commit_file(&repo, "a.md", "a\n", "a");
+        commit_file(&repo, "b.rs", "b\n", "b");
+        git(&repo, &["checkout", "-q", "line"]).unwrap();
+        commit_file(&repo, "c.md", "c\n", "c");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        merge_no_ff(&repo, "line", "feat/x", "Merge feat/x").unwrap();
+        git(&repo, &["checkout", "-q", "line"]).unwrap();
+        commit_file(&repo, "d.md", "d\n", "d");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+
+        let want = vec!["a.md".to_string(), "b.rs".to_string()];
+        let got = changed_since_fork(&repo, "line", "feat/x").unwrap();
+        assert_eq!(got.into_iter().collect::<Vec<_>>(), want);
+        // The bug, as a fact: three dots read nothing once the line contains the branch.
+        assert!(changed_files(&repo, "line", "feat/x").unwrap().is_empty());
+
+        // main fast-forwarded to the line, a sprint line made from main.
+        git(&repo, &["merge", "-q", "--ff-only", "line"]).unwrap();
+        create_branch_from(&repo, "sprint", "main").unwrap();
+        let got = changed_since_fork(&repo, "sprint", "feat/x").unwrap();
+        assert_eq!(got.into_iter().collect::<Vec<_>>(), want);
+
+        // A branch with no commits of its own, never merged.
+        create_branch_from(&repo, "feat/empty", "line").unwrap();
+        assert!(
+            changed_since_fork(&repo, "line", "feat/empty")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(changed_since_fork(&repo, "nope", "feat/x").is_err());
+        assert!(changed_since_fork(&repo, "line", "nope").is_err());
         let _ = std::fs::remove_dir_all(&repo);
     }
 

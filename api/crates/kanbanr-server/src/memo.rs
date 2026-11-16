@@ -286,6 +286,14 @@ fn is_event_stream(path: &str) -> bool {
     matches!(segs.as_slice(), ["events"] | ["projects", _, "events"])
 }
 
+/// The latest background drift result (FTR-045), in all its query forms, which is never memoised:
+/// a finished run changes it without moving any part of the stamp, and the route only reads the
+/// in-memory result, so it is cheap and needs no cache (coordinator, 17 Nov 2026).
+fn is_drift_latest(path: &str) -> bool {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    matches!(segs.as_slice(), ["projects", _, "drift", "latest"])
+}
+
 /// A response's media type as a `&'static str`. The server answers with a handful of media types,
 /// so each distinct one is kept once for the life of the process.
 fn static_media(media: &str) -> &'static str {
@@ -335,7 +343,10 @@ fn none_match(req: &Request, etag: &str) -> bool {
 /// during the computation is never hidden. Every 200 or 304 carries `ETag` and
 /// `Cache-Control: no-cache`; anything else passes through untouched and is not kept.
 pub async fn layer(State(st): State<AppState>, req: Request, next: Next) -> Response {
-    if req.method() != Method::GET || is_event_stream(req.uri().path()) {
+    if req.method() != Method::GET
+        || is_event_stream(req.uri().path())
+        || is_drift_latest(req.uri().path())
+    {
         return next.run(req).await;
     }
     let pq = req
@@ -519,6 +530,7 @@ mod tests {
             code_repo: None,
             gens: Arc::new(Generations::default()),
             memo: Arc::new(Memo::new(MEMO_CAP_BYTES)),
+            background: Arc::new(OnceLock::new()),
         };
         (st, dir)
     }
@@ -564,5 +576,54 @@ mod tests {
             assert!(resp.contains("{\"ok\":true}"), "{resp}");
         }
         assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drift_latest_is_never_memoised() {
+        let (st, dir) = scratch_state();
+        let state = Arc::new(AtomicUsize::new(0));
+        let current = Arc::clone(&state);
+        let app = axum::Router::new()
+            .route(
+                "/projects/p/drift/latest",
+                axum::routing::get(move || {
+                    let current = Arc::clone(&current);
+                    async move {
+                        let state = if current.load(Ordering::SeqCst) == 0 {
+                            "computing"
+                        } else {
+                            "fresh"
+                        };
+                        (
+                            [(CONTENT_TYPE, "application/json")],
+                            format!("{{\"state\":\"{state}\"}}"),
+                        )
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(st.clone(), layer))
+            .with_state(st);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let first = get(addr, "/projects/p/drift/latest").await;
+        let first_summary = get(addr, "/projects/p/drift/latest?flags=false").await;
+        // The background run finishes: no board change, so the stamp is the same.
+        state.store(1, Ordering::SeqCst);
+        let second = get(addr, "/projects/p/drift/latest").await;
+        let second_summary = get(addr, "/projects/p/drift/latest?flags=false").await;
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(first.contains("\"state\":\"computing\""), "{first}");
+        assert!(
+            first_summary.contains("\"state\":\"computing\""),
+            "{first_summary}"
+        );
+        assert!(second.contains("\"state\":\"fresh\""), "{second}");
+        assert!(
+            second_summary.contains("\"state\":\"fresh\""),
+            "{second_summary}"
+        );
+        assert!(!second.to_ascii_lowercase().contains("etag:"), "{second}");
     }
 }

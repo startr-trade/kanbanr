@@ -345,9 +345,10 @@ pub struct RepoFacts {
     /// The paths staged for this commit, repository-relative with `/` separators, where the caller
     /// read them (the pre-commit hook); `None` where they are not known (the guard, commit-msg).
     pub staged: Option<Vec<String>>,
-    /// CLAUDE.md differs from HEAD's only inside kanbanr's generated block, in what the caller
-    /// read: the index for pre-commit, the index or the working tree for the guard and
-    /// commit-msg (DEF-083). HEAD with no CLAUDE.md reads as an empty file.
+    /// CLAUDE.md differs from HEAD's only inside generated blocks (kanbanr's or any other tool's,
+    /// `<!-- <tool>:begin -->` … `<!-- <tool>:end -->`), in what the caller read: the index for
+    /// pre-commit, the index or the working tree for the guard and commit-msg (DEF-083, DEF-092).
+    /// HEAD with no CLAUDE.md reads as an empty file.
     pub block_refresh: bool,
 }
 
@@ -401,7 +402,8 @@ pub fn setup_hint(facts: &RepoFacts) -> Option<&'static str> {
 /// The one file a block refresh holds (DEF-083).
 pub const BLOCK_FILE: &str = "CLAUDE.md";
 
-/// Is this a refresh of CLAUDE.md's generated block on the default branch (DEF-083)? True when
+/// Is this a refresh of CLAUDE.md's generated blocks on the default branch (DEF-083, DEF-092)?
+/// Any tool's block counts, kanbanr's or katalogr's alike. True when
 /// all hold: `has_commits`, `block_refresh`, `!merging`, `branch == Some(default_branch)`; the
 /// message, where known, has no reference and has `[no-ref] <why>`; the staged paths, where
 /// known, are exactly `[BLOCK_FILE]`. Pure.
@@ -437,9 +439,9 @@ pub fn block_hint(facts: &RepoFacts) -> Option<&'static str> {
         && !facts.merging
         && facts.branch.as_deref() == Some(facts.default_branch.as_str()))
     .then_some(
-        "A refresh of CLAUDE.md's generated block is let through too: stage only CLAUDE.md, \
-         change nothing outside the kanbanr markers, and commit it with \
-         `[no-ref] refresh the kanbanr block`.",
+        "A refresh of CLAUDE.md's generated blocks is let through too: stage only CLAUDE.md, \
+         change nothing outside the `<!-- <tool>:begin -->` … `<!-- <tool>:end -->` markers, \
+         and commit it with `[no-ref] refresh the generated block`.",
     )
 }
 
@@ -1080,7 +1082,7 @@ mod tests {
 
     // ---- a refresh of CLAUDE.md's generated block (DEF-083) ------------------------------
 
-    const BLOCK_HINT: &str = "A refresh of CLAUDE.md's generated block";
+    const BLOCK_HINT: &str = "A refresh of CLAUDE.md's generated blocks";
 
     /// A block refresh's facts: on main of a repository with history, CLAUDE.md changed only
     /// inside the kanbanr markers.
@@ -1188,9 +1190,10 @@ mod tests {
         assert_eq!(
             refusal(commit_verdict(&block(Some("wip"), None), &p)),
             "This would commit straight to main. Work belongs on a branch for its item: run \
-             `kanbanr start <CODE>` first.\n\nA refresh of CLAUDE.md's generated block is let \
-             through too: stage only CLAUDE.md, change nothing outside the kanbanr markers, and \
-             commit it with `[no-ref] refresh the kanbanr block`."
+             `kanbanr start <CODE>` first.\n\nA refresh of CLAUDE.md's generated blocks is let \
+             through too: stage only CLAUDE.md, change nothing outside the \
+             `<!-- <tool>:begin -->` … `<!-- <tool>:end -->` markers, and commit it with \
+             `[no-ref] refresh the generated block`."
         );
     }
 

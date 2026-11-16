@@ -439,7 +439,7 @@ fn repository_unbuilt(
     };
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for branch in &branches {
-        match crate::coderepo::changed_files(root, &line, branch) {
+        match crate::coderepo::changed_since_fork(root, &line, branch) {
             Ok(files) => changed.extend(files),
             Err(_) => {
                 return held(format!(
@@ -715,6 +715,56 @@ mod tests {
         assert!(got.is_built(), "{got:?}");
         assert!(got.changes_no_documents);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An item naming `CHANGELOG.md` whose branch commits `file`, merged `--no-ff` into main (the
+    /// line `judge` uses without the git model), as what `judge` makes of it.
+    fn merged_item(tag: &str, file: &str) -> DocsBuilt {
+        let (store, dir, repo) = fixture(tag);
+        let code = item(
+            &store,
+            "Merged",
+            "## Design\n\n### Affects docs\nRepository docs: `CHANGELOG.md`.\n",
+            &[],
+        );
+        task(&store, &code, "Build it", TaskState::Completed);
+        let branch = branch_for(&store, &code);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, file, "x\n", "the item");
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        crate::coderepo::merge_no_ff(&repo, "main", &branch, "Merge the item").unwrap();
+        assert!(crate::coderepo::is_ancestor(&repo, &branch, "main"));
+        let got = judge(&store, &code, Some(&repo));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        got
+    }
+
+    /// DEF-091 R-1: once the line contains the branch, the docs it changed still read as built.
+    #[test]
+    fn a_branch_merged_into_its_release_still_reads_its_changed_docs_as_built() {
+        let got = merged_item("merged-built", "CHANGELOG.md");
+        assert!(
+            got.unbuilt.iter().all(|u| u.kind != DocKind::Repository),
+            "{got:?}"
+        );
+    }
+
+    /// DEF-091 R-2: a merged branch that did not change the doc still reads as not built.
+    #[test]
+    fn a_merged_branch_that_changed_nothing_still_reads_as_not_built() {
+        let got = merged_item("merged-unbuilt", "src.rs");
+        let repo: Vec<_> = got
+            .unbuilt
+            .iter()
+            .filter(|u| u.kind == DocKind::Repository)
+            .collect();
+        assert_eq!(repo.len(), 1, "{got:?}");
+        assert_eq!(repo[0].path, "CHANGELOG.md");
+        assert!(
+            repo[0].why.contains("CHANGELOG.md has not changed on"),
+            "{got:?}"
+        );
     }
 
     /// DEF-033 R-5: repository docs that cannot be read hold the sign-off, and say why.

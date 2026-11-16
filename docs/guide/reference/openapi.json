@@ -5047,6 +5047,7 @@
         "type": "object"
       },
       "Sprint": {
+        "additionalProperties": true,
         "properties": {
           "capacity": {
             "description": "What the sprint can take, in the project's estimate unit.",
@@ -5061,6 +5062,10 @@
             "type": "array"
           },
           "closed_at": {
+            "type": "string"
+          },
+          "closed_commit": {
+            "description": "The tip of `sprint/<SP>` when the sprint closed with that branch in the code repository\n(FTR-004); empty otherwise. A position at the sprint never depends on it alone: an older\nbinary that rewrites the file drops it, so the tag and the branch are the fallbacks.",
             "type": "string"
           },
           "code": {
@@ -5112,6 +5117,7 @@
         "type": "object"
       },
       "SprintReport": {
+        "additionalProperties": true,
         "description": "A sprint as a report: its record, what it holds, and how it burned down.",
         "properties": {
           "burndown": {
@@ -5133,6 +5139,10 @@
             "type": "array"
           },
           "closed_at": {
+            "type": "string"
+          },
+          "closed_commit": {
+            "description": "The tip of `sprint/<SP>` when the sprint closed with that branch in the code repository\n(FTR-004); empty otherwise. A position at the sprint never depends on it alone: an older\nbinary that rewrites the file drops it, so the tag and the branch are the fallbacks.",
             "type": "string"
           },
           "code": {
@@ -5489,6 +5499,10 @@
             "type": "string"
           },
           "from": {
+            "type": "string"
+          },
+          "merge_commit": {
+            "description": "The merge commit of the move that integrated the item (FTR-004): what a position at the\nitem resolves to once its branch is gone. Empty on every other transition and on every\nmove before this version.",
             "type": "string"
           },
           "origin": {

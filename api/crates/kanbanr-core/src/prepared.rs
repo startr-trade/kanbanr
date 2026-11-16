@@ -349,6 +349,9 @@ pub const KINDS: &[KindSpec] = &[
                 required: false,
                 editable: false,
             },
+            // The walkthrough check id (MT-6) the result came from, so the Review page can be
+            // matched with the run log (DEF-089).
+            fixed("check", false),
         ],
         rev: RevOf::CheckedRev,
     },
@@ -2835,6 +2838,72 @@ mod tests {
             v.iter().find(|x| x.record.id == again).unwrap().state,
             State::Stale
         );
+    }
+
+    /// DEF-089 R-3: a manual-test record keeps the walkthrough check id it was prepared with; the
+    /// person cannot edit it, and the confirmed verdict carries the checked revision and not the id.
+    #[test]
+    fn a_manual_test_record_carries_its_check_id() {
+        use crate::models::{Requirement, TestRef};
+        let (store, _dir, code) = board_with_item(false);
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![TestRef {
+                            name: "manual: the cart looks right".into(),
+                            kind: "manual".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let id = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "manual-test",
+                "subject": {"item": code, "requirement": "R-1", "test": "manual: the cart looks right"},
+                "fields": {"state": "green", "check": "MT-6", "checked_rev": sha},
+                "sources": [{"label": "walkthrough run b1 step 6.20a, check MT-6"}]}),
+        );
+        let view = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        let rec = &view.iter().find(|v| v.record.id == id).unwrap().record;
+        assert_eq!(rec.fields["check"], Value::String("MT-6".into()));
+        assert_eq!(rec.fields["checked_rev"], Value::String(sha.into()));
+        // The check id is not the person's to change.
+        let refused = expand(
+            &store,
+            "demo",
+            &id,
+            &serde_json::json!({"by": "Ada L", "edits": {"check": "MT-7"}}),
+            crate::origin::Origin::Monitor,
+        )
+        .expect_err("an edit of the check id is refused")
+        .to_string();
+        assert!(
+            refused.contains("'check' is not a field the person can change"),
+            "{refused}"
+        );
+        // The verdict names the revision, not the check id.
+        let e = expand(
+            &store,
+            "demo",
+            &id,
+            &serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(e.body["checked_rev"], Value::String(sha.into()));
+        assert!(e.body.get("check").is_none(), "{}", e.body);
     }
 
     /// FTR-034 R-3: confirming a prepared sign-off, ratification and gate result makes the same
