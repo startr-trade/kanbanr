@@ -2332,6 +2332,7 @@ mod tests {
             message: msg.map(String::from),
             setup_pending: false,
             staged: None,
+            block_refresh: false,
         };
         let on = "feat/FEAT-214-agent-scopes";
         assert!(commit_verdict(&p, &facts(on, None), NOW).is_allowed());

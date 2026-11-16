@@ -345,6 +345,10 @@ pub struct RepoFacts {
     /// The paths staged for this commit, repository-relative with `/` separators, where the caller
     /// read them (the pre-commit hook); `None` where they are not known (the guard, commit-msg).
     pub staged: Option<Vec<String>>,
+    /// CLAUDE.md differs from HEAD's only inside kanbanr's generated block, in what the caller
+    /// read: the index for pre-commit, the index or the working tree for the guard and
+    /// commit-msg (DEF-083). HEAD with no CLAUDE.md reads as an empty file.
+    pub block_refresh: bool,
 }
 
 /// What setup's own first commit holds (DEF-067): the marker, the CLAUDE.md block, the .gitignore.
@@ -394,12 +398,60 @@ pub fn setup_hint(facts: &RepoFacts) -> Option<&'static str> {
     )
 }
 
-/// A refusal with the setup hint after it, where the hint applies (DEF-067).
-fn refuse_with_hint(facts: &RepoFacts, why: String) -> Verdict {
-    match setup_hint(facts) {
-        Some(hint) => Verdict::refuse(format!("{why}\n\n{hint}")),
-        None => Verdict::refuse(why),
+/// The one file a block refresh holds (DEF-083).
+pub const BLOCK_FILE: &str = "CLAUDE.md";
+
+/// Is this a refresh of CLAUDE.md's generated block on the default branch (DEF-083)? True when
+/// all hold: `has_commits`, `block_refresh`, `!merging`, `branch == Some(default_branch)`; the
+/// message, where known, has no reference and has `[no-ref] <why>`; the staged paths, where
+/// known, are exactly `[BLOCK_FILE]`. Pure.
+///
+/// A sibling of setup's commit ([`setup_commit`]): `kanbanr claude sync` rewrites the block on
+/// the default branch whenever the charter or the board's address changes after setup, and
+/// without this the change could never be committed there, leaving the checkout dirty.
+pub fn block_commit(facts: &RepoFacts) -> bool {
+    if !facts.has_commits
+        || !facts.block_refresh
+        || facts.merging
+        || facts.branch.as_deref() != Some(facts.default_branch.as_str())
+    {
+        return false;
     }
+    if let Some(message) = facts.message.as_deref()
+        && !(parse_refs(message).is_empty() && escape_reason(message).is_some())
+    {
+        return false;
+    }
+    if let Some(staged) = &facts.staged
+        && !(staged.len() == 1 && staged[0] == BLOCK_FILE)
+    {
+        return false;
+    }
+    true
+}
+
+/// The sentence added to a default-branch or line refusal while `block_refresh` holds on the
+/// default branch; `None` otherwise.
+pub fn block_hint(facts: &RepoFacts) -> Option<&'static str> {
+    (facts.block_refresh
+        && !facts.merging
+        && facts.branch.as_deref() == Some(facts.default_branch.as_str()))
+    .then_some(
+        "A refresh of CLAUDE.md's generated block is let through too: stage only CLAUDE.md, \
+         change nothing outside the kanbanr markers, and commit it with \
+         `[no-ref] refresh the kanbanr block`.",
+    )
+}
+
+/// A refusal with every hint that applies after it, setup's first and then the block's, each
+/// after a blank line (DEF-067, DEF-083).
+fn refuse_with_hint(facts: &RepoFacts, why: String) -> Verdict {
+    let mut text = why;
+    for hint in [setup_hint(facts), block_hint(facts)].into_iter().flatten() {
+        text.push_str("\n\n");
+        text.push_str(hint);
+    }
+    Verdict::refuse(text)
 }
 
 /// What a commit rule says: whether the commit may happen, and what the person should hear
@@ -482,7 +534,8 @@ pub fn line_model(config: &ProjectConfig, default_branch: &str) -> Option<GitMod
 pub fn commit_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
     // Setup's own first commit (DEF-067). The guard never sees the staged set, so it asks for an
     // inline message: a commit that opens an editor gets no exception here.
-    if facts.message.is_some() && setup_commit(facts) {
+    // So is a refresh of CLAUDE.md's generated block (DEF-083), on the same terms.
+    if facts.message.is_some() && (setup_commit(facts) || block_commit(facts)) {
         return Verdict::allow();
     }
     // A line of integration takes merges only (FEAT-189).
@@ -548,8 +601,9 @@ pub fn message_verdict(facts: &RepoFacts, project: &Project, board: Option<&Boar
     // A merge into a line of integration says which items it brings, generated message or not
     // (FEAT-189): a line is where "which items reached it" is read from.
     // Setup's own first commit is not refused as a line commit (DEF-067): its `[no-ref]` is read
-    // and noted below like any other escape.
+    // and noted below like any other escape. Nor is a refresh of CLAUDE.md's block (DEF-083).
     if !setup_commit(facts)
+        && !block_commit(facts)
         && let Some(model) = line_model(&project.config, &facts.default_branch)
         && let Some(branch) = facts.branch.as_deref()
         && let LineVerdict::Refused(why) =
@@ -667,7 +721,8 @@ pub fn branch_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
     }
     // Setup's own first commit in a repository with history (DEF-067), judged by what is staged.
     // An unknown staged set gives no exception (ADR-0004): the old rule stands.
-    if facts.staged.is_some() && setup_commit(facts) {
+    // So is a refresh of CLAUDE.md's generated block (DEF-083), which stages that file alone.
+    if facts.staged.is_some() && (setup_commit(facts) || block_commit(facts)) {
         return Verdict::allow();
     }
     // A line of integration takes merges only (FEAT-189).
@@ -852,6 +907,7 @@ mod tests {
             message: message.map(String::from),
             setup_pending: false,
             staged: None,
+            block_refresh: false,
         }
     }
 
@@ -1020,6 +1076,122 @@ mod tests {
         facts.setup_pending = true;
         facts.staged = staged.map(|s| s.iter().map(|p| p.to_string()).collect());
         facts
+    }
+
+    // ---- a refresh of CLAUDE.md's generated block (DEF-083) ------------------------------
+
+    const BLOCK_HINT: &str = "A refresh of CLAUDE.md's generated block";
+
+    /// A block refresh's facts: on main of a repository with history, CLAUDE.md changed only
+    /// inside the kanbanr markers.
+    fn block(message: Option<&str>, staged: Option<&[&str]>) -> RepoFacts {
+        let mut facts = on(Some("main"), message);
+        facts.block_refresh = true;
+        facts.staged = staged.map(|s| s.iter().map(|p| p.to_string()).collect());
+        facts
+    }
+
+    /// DEF-083 R-1: the block refresh passes the guard, pre-commit and commit-msg, with the git
+    /// model off and on.
+    #[test]
+    fn a_block_refresh_lands_on_the_default_branch() {
+        let msg = "[no-ref] refresh the kanbanr block";
+        for git_model in [false, true] {
+            let p = board(git_model);
+            assert!(
+                commit_verdict(&block(Some(msg), None), &p).is_allowed(),
+                "guard, git model {git_model}"
+            );
+            assert!(
+                branch_verdict(&block(None, Some(&["CLAUDE.md"])), &p).is_allowed(),
+                "pre-commit, git model {git_model}"
+            );
+            let noted = message_verdict(&block(Some(msg), None), &p, None);
+            assert!(noted.is_allowed(), "commit-msg, git model {git_model}");
+            assert_eq!(
+                noted.notes,
+                vec!["committing with no reference — recorded reason: refresh the kanbanr block"]
+            );
+        }
+    }
+
+    /// DEF-083 R-2: anything but exactly the block refresh is refused as before, with the hint
+    /// saying what the refresh takes; with no refresh pending the refusals are today's.
+    #[test]
+    fn a_block_refresh_takes_only_claude_md() {
+        let msg = "[no-ref] refresh the kanbanr block";
+        for git_model in [false, true] {
+            let p = board(git_model);
+            // pre-commit: another path, or nothing staged.
+            for staged in [&["CLAUDE.md", "src/x.txt"][..], &[][..]] {
+                let facts = block(None, Some(staged));
+                assert!(!block_commit(&facts), "{staged:?}");
+                let why = refusal(branch_verdict(&facts, &p));
+                assert!(
+                    why.contains(BLOCK_HINT),
+                    "{staged:?}, git model {git_model}: {why}"
+                );
+            }
+            // guard and commit-msg: no escape, or a reference.
+            for message in ["wip", "x\n\nRefs: kanbanr:FEAT-001"] {
+                let facts = block(Some(message), None);
+                assert!(!block_commit(&facts), "{message}");
+                let why = refusal(commit_verdict(&facts, &p));
+                assert!(
+                    why.contains(BLOCK_HINT),
+                    "{message}, git model {git_model}: {why}"
+                );
+                if git_model {
+                    // commit-msg refuses it as a line commit, as before.
+                    assert!(
+                        refusal(message_verdict(&facts, &p, None)).contains("line of integration")
+                    );
+                } else if message == "wip" {
+                    assert!(!message_verdict(&facts, &p, None).is_allowed());
+                }
+            }
+            // A merge in progress is not a refresh.
+            let mut merging = block(Some(msg), Some(&["CLAUDE.md"]));
+            merging.merging = true;
+            assert!(!block_commit(&merging));
+            assert_eq!(block_hint(&merging), None);
+            // On an item's branch nothing changes.
+            let mut feat = block(Some("wip"), Some(&["CLAUDE.md"]));
+            feat.branch = Some("feat/FEAT-001-t".into());
+            assert!(!block_commit(&feat));
+            assert_eq!(block_hint(&feat), None);
+            assert!(branch_verdict(&feat, &p).is_allowed());
+            assert!(refusal(commit_verdict(&feat, &p)).contains("Refs: kanbanr:FEAT-001"));
+            // No refresh pending: today's refusals, word for word, with no hint.
+            let mut closed = block(Some(msg), Some(&["CLAUDE.md"]));
+            closed.block_refresh = false;
+            assert_eq!(block_hint(&closed), None);
+            assert_eq!(
+                commit_verdict(&closed, &p),
+                commit_verdict(&on(Some("main"), Some(msg)), &p)
+            );
+            assert_eq!(
+                branch_verdict(&closed, &p),
+                branch_verdict(&on(Some("main"), None), &p)
+            );
+            assert!(!refusal(commit_verdict(&closed, &p)).contains(BLOCK_HINT));
+            assert!(!refusal(branch_verdict(&closed, &p)).contains(BLOCK_HINT));
+            // Setup pending too: both hints, setup's first.
+            let mut both = block(Some("wip"), None);
+            both.setup_pending = true;
+            let why = refusal(commit_verdict(&both, &p));
+            let (s, b) = (why.find(HINT), why.find(BLOCK_HINT));
+            assert!(s.is_some() && b.is_some() && s < b, "{why}");
+        }
+        // The exact wording, git model off.
+        let p = board(false);
+        assert_eq!(
+            refusal(commit_verdict(&block(Some("wip"), None), &p)),
+            "This would commit straight to main. Work belongs on a branch for its item: run \
+             `kanbanr start <CODE>` first.\n\nA refresh of CLAUDE.md's generated block is let \
+             through too: stage only CLAUDE.md, change nothing outside the kanbanr markers, and \
+             commit it with `[no-ref] refresh the kanbanr block`."
+        );
     }
 
     /// DEF-067 R-1, R-3: setup's commit passes the guard, pre-commit and commit-msg, with the git

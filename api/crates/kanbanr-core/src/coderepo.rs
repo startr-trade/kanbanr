@@ -171,6 +171,7 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
         message,
         setup_pending: setup_pending(root),
         staged: None,
+        block_refresh: false,
     }
 }
 
