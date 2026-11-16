@@ -29,6 +29,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- `kanbanr claude permissions` no longer warns that `.claude/settings.local.json` is not ignored
+  when a root-anchored or glob `.gitignore` line ignores it: it asks git (DEF-097).
 - The image's health check names `localhost`, so docker and compose report a serving monitor
   healthy again; it had been refused by the host check since v0.5.0 (DEF-079).
 - The default, design-control, PDCA and scheduled guides now say that a granted delegation does
@@ -42,6 +44,8 @@ All notable changes to kanbanr are documented here. The format follows
 - The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
   what is in progress, what waits for you and the sprint and release, and counts the rest, instead
   of printing every item (DEF-093).
+- The skill no longer reads as ruling out walkthrough and manual tests when it says a test is
+  never a kanbanr command (DEF-086).
 - A refusal on the default branch no longer calls setup's commit the one exception when it also
   names the block refresh (DEF-085).
 - `kanbanr doctor` no longer warns that an item names no docs when its kind's path leaves docs

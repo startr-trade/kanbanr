@@ -132,13 +132,15 @@ fn cargo_target(line: &str) -> Option<Option<String>> {
 pub const READABLE_RUNNERS: &str = "cargo test, cargo nextest, pytest -v, python -m unittest -v, Vitest with \
     --reporter=verbose and Playwright with --reporter=list";
 
-/// The test runner one simple command (its words, environment assignments already set aside)
-/// invokes, as a short label such as `python3 -m unittest`; None when it runs no tests. Whole
+/// The test runner one simple command (its words; leading wrappers and assignments are set aside
+/// here) invokes, as a short label such as `python3 -m unittest`; None when it runs no tests. Whole
 /// words only, never substrings (L-23); the first word is read without its directory.
 pub fn test_runner(words: &[String]) -> Option<String> {
     fn base(w: &str) -> &str {
         w.rsplit(['/', '\\']).next().unwrap_or(w)
     }
+    // Past every known wrapper first (`rtk`, `rtk proxy`, `env`, `sudo`, ...; FTR-059 R-10).
+    let words = &words[crate::shellwrap::command_start(words).0..];
     let mut words: Vec<&str> = words.iter().map(String::as_str).collect();
     if let Some(first) = words.first_mut() {
         *first = base(first);
@@ -181,18 +183,39 @@ pub fn test_runner(words: &[String]) -> Option<String> {
     Some(label)
 }
 
-/// What the capture hook tells Claude after `commands` printed no result it could read: None when
-/// `results_empty` is false or no command runs tests.
-pub fn unread_run_notice(commands: &[Vec<String>], results_empty: bool) -> Option<String> {
-    if !results_empty {
+/// What the capture hook tells Claude about a run of `commands` that yielded `results_read`
+/// results; None when no command runs tests. With `condensed_by` None it is DEF-068's notice,
+/// given only when nothing was read. With `condensed_by` Some(wrapper), a wrapper that rewrites
+/// its command's output (FTR-059 R-10), the notice is always given, because green results may
+/// have been cut silently: DEF-068's text followed by the wrapper sentence when nothing was read,
+/// else the wrapper sentence alone, saying how many were read.
+pub fn unread_run_notice(
+    commands: &[Vec<String>],
+    results_read: usize,
+    condensed_by: Option<&str>,
+) -> Option<String> {
+    if results_read > 0 && condensed_by.is_none() {
         return None;
     }
     let label = commands.iter().find_map(|c| test_runner(c))?;
-    Some(format!(
+    let unread = format!(
         "kanbanr capture read no test result from this run (`{label}`), so the board recorded \
          nothing. It reads {READABLE_RUNNERS}. Run the tests in one of those forms and name each \
          tracked test as that runner prints it; never record a result by hand."
-    ))
+    );
+    let Some(w) = condensed_by else {
+        return Some(unread);
+    };
+    let condensed = format!(
+        "The command ran through `{w}`, which condenses its output, so kanbanr read only \
+         {results_read} result(s) from it and the rest may have been cut: run the tests bare, or \
+         as `{w} proxy <command>`, for kanbanr to read them all."
+    );
+    Some(if results_read == 0 {
+        format!("{unread} {condensed}")
+    } else {
+        condensed
+    })
 }
 
 /// What one line says, once a reader owns it. `Unproven`: the line is a result that proves
@@ -1577,15 +1600,54 @@ test_add (tests.test_basket.BasketTests.test_add) ... ok";
             assert_eq!(label(cmd), None, "{cmd}");
         }
         assert_eq!(
-            unread_run_notice(&[words("python3 -m unittest")], false),
+            unread_run_notice(&[words("python3 -m unittest")], 1, None),
             None
         );
-        assert_eq!(unread_run_notice(&[words("ls")], true), None);
-        let notice = unread_run_notice(&[words("cd x"), words("python3 -m unittest")], true)
+        assert_eq!(unread_run_notice(&[words("ls")], 0, None), None);
+        let notice = unread_run_notice(&[words("cd x"), words("python3 -m unittest")], 0, None)
             .expect("a test run that recorded nothing is named");
         assert!(notice.contains("`python3 -m unittest`"), "{notice}");
         assert!(notice.contains("python -m unittest -v"), "{notice}");
         assert!(notice.contains(READABLE_RUNNERS), "{notice}");
+    }
+
+    #[test]
+    fn test_runner_sees_through_known_wrappers() {
+        let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+        for cmd in [
+            "rtk cargo test",
+            "rtk proxy cargo test",
+            "env RUST_LOG=x cargo test",
+        ] {
+            assert_eq!(
+                test_runner(&words(cmd)).as_deref(),
+                Some("cargo test"),
+                "{cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_condensed_test_run_names_the_wrapper_that_condensed_it() {
+        let words = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
+        let run = [words("cargo test")];
+        let unread = unread_run_notice(&run, 0, None).expect("DEF-068's notice");
+        assert!(unread.contains("read no test result"), "{unread}");
+
+        let both = unread_run_notice(&run, 0, Some("rtk")).expect("nothing read through rtk");
+        assert!(both.starts_with(&unread), "{both}");
+        assert!(both.contains("ran through `rtk`"), "{both}");
+        assert!(both.contains("`rtk proxy <command>`"), "{both}");
+        assert!(both.contains("only 0 result(s)"), "{both}");
+
+        let some = unread_run_notice(&run, 3, Some("rtk")).expect("some read through rtk");
+        assert!(!some.contains("read no test result"), "{some}");
+        assert!(some.contains("ran through `rtk`"), "{some}");
+        assert!(some.contains("only 3 result(s)"), "{some}");
+        assert!(some.contains("`rtk proxy <command>`"), "{some}");
+
+        assert_eq!(unread_run_notice(&run, 3, None), None);
+        assert_eq!(unread_run_notice(&[words("ls")], 0, Some("rtk")), None);
     }
 
     fn project_with_tests(tests: &str) -> Project {

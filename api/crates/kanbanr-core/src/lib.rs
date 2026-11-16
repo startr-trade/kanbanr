@@ -52,6 +52,7 @@ pub mod graph;
 pub mod guards;
 pub mod hash;
 pub mod items;
+pub mod judgement;
 pub mod lessons;
 pub mod library;
 pub mod manual;
@@ -60,6 +61,7 @@ pub mod method;
 pub mod migrate;
 pub mod mirror;
 pub mod models;
+pub mod monitorindex;
 #[cfg(feature = "schema")]
 pub mod openapi;
 pub mod origin;

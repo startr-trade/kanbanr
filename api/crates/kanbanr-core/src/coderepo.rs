@@ -71,6 +71,19 @@ fn git_with(
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Does git ignore `relative` (a `/`-separated path inside `root`)? Runs
+/// `git check-ignore -q -- <relative>` in `root`: exit 0 is `Some(true)`, exit 1 is
+/// `Some(false)`, anything else (git missing, not a repository) is `None` so the caller falls back
+/// (ADR-0004). Default mode, not `--no-index`: a tracked file reads as not ignored (DEF-097).
+pub fn check_ignored(root: &Path, relative: &str) -> Option<bool> {
+    let out = run(root, &["check-ignore", "-q", "--", relative]).ok()?;
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
 /// Run git in `root`, returning its trimmed stdout. A failure carries git's own reason, so the
 /// person sees why git refused rather than that something did.
 pub fn git(root: &Path, args: &[&str]) -> Result<String> {

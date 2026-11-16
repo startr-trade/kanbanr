@@ -1604,6 +1604,32 @@ fn gate_passed(
     version: &str,
     branch: &str,
 ) -> (bool, String, String) {
+    gates_passed(
+        store,
+        id,
+        cadence,
+        repo,
+        tip,
+        prepares,
+        version,
+        branch,
+        &cadence.commit_gates,
+    )
+}
+
+/// [`gate_passed`] for the gates named, rather than `commit_gates`.
+#[allow(clippy::too_many_arguments)]
+fn gates_passed(
+    store: &Store,
+    id: &str,
+    cadence: &Cadence,
+    repo: &Path,
+    tip: Option<&str>,
+    prepares: bool,
+    version: &str,
+    branch: &str,
+    names: &[String],
+) -> (bool, String, String) {
     let fix_for = |sha: &str| {
         format!(
             "look at your CI for {}, then record its verdict: kanbanr gate record <gate> \
@@ -1633,7 +1659,7 @@ fn gate_passed(
     let docs = cadence.gate_docs_patterns();
     let docs_ok = Cadence::validate_gate_docs(&docs).is_ok();
     let mut recorded = Vec::new();
-    for name in &cadence.commit_gates {
+    for name in names {
         match crate::gates::newest(&results, name, tip) {
             // A pass for an earlier commit stands when only documentation changed since (DEF-031).
             None => match crate::gates::carried(&results, name, tip, repo, &docs)
@@ -1675,6 +1701,107 @@ fn gate_passed(
         }
     }
     (true, recorded.join("; "), String::new())
+}
+
+/// A gate the engineering baseline requires at a release stage (FTR-033), judged like
+/// [`gate_passed`] for that one gate. `on_tag`: a stage after the cut, or a last tag stage that
+/// waits for its workflow, reads the tag commit as `tag_passed` does: the newest result of the
+/// gate for the tag commit, recorded since the tag. The fix leads with the refusal: "stage main
+/// requires a passed `sast` result for the release tip (B-007)".
+#[allow(clippy::too_many_arguments)]
+fn stage_gate_condition(
+    store: &Store,
+    id: &str,
+    cadence: &Cadence,
+    repo: Option<&Path>,
+    tip: Option<&str>,
+    prepares: bool,
+    version: &str,
+    branch: &str,
+    release: &Release,
+    gate: &crate::releasegates::StageGate,
+    stage: &str,
+    on_tag: bool,
+) -> PlanCondition {
+    let name = gate.gate.as_str();
+    let (holds, detail, fix) = if on_tag {
+        if release.tagged_at.is_empty() || release.tag_commit.is_empty() {
+            (
+                false,
+                "the release has not been tagged yet".to_string(),
+                "promote the release to the stage that tags it first".to_string(),
+            )
+        } else {
+            let found = crate::gates::results(store, id, Some(name))
+                .unwrap_or_default()
+                .into_iter()
+                .rfind(|r| {
+                    r.name == name
+                        && r.commit == release.tag_commit
+                        && crate::cmp_instants(&r.at, &release.tagged_at)
+                            != std::cmp::Ordering::Less
+                });
+            let sha = short(&release.tag_commit).to_string();
+            let fix = format!(
+                "run it on the tag, then record its verdict: kanbanr gate record {name} --passed \
+                 --commit {sha} [--url <link>]"
+            );
+            match found {
+                Some(r) if r.passed => (
+                    true,
+                    format!("{name} passed on {sha} (recorded by {})", r.by),
+                    String::new(),
+                ),
+                Some(_) => (false, format!("{name} failed on {sha}"), fix),
+                None => (
+                    false,
+                    format!("{name} has no result for the tag since it was made"),
+                    fix,
+                ),
+            }
+        }
+    } else {
+        match repo {
+            None => (
+                false,
+                "needs the code repository, which is not here (the monitor reads it only when \
+                 started in the project folder)"
+                    .to_string(),
+                needs_repo_text(version, stage),
+            ),
+            Some(repo) => gates_passed(
+                store,
+                id,
+                cadence,
+                repo,
+                tip,
+                prepares,
+                version,
+                branch,
+                &[name.to_string()],
+            ),
+        }
+    };
+    let what = if on_tag {
+        "the tag commit"
+    } else {
+        "the release tip"
+    };
+    PlanCondition {
+        check: ReleaseCheck::GatePassed,
+        stage: stage.to_string(),
+        holds,
+        detail,
+        fix: if holds {
+            String::new()
+        } else {
+            format!(
+                "stage {stage} requires a passed `{name}` result for {what} ({}): {fix}",
+                gate.from
+            )
+        },
+        refs: Vec::new(),
+    }
 }
 
 fn today_ymd() -> String {
@@ -1905,6 +2032,26 @@ fn work_out(
             }
         }
     }
+    // The gates the engineering baseline requires at the stages entered (FTR-033): (the gate, its
+    // stage, judged on the tag commit). A last tag stage that waits for its workflow judges them
+    // on the tag while it waits, not at the cut, since the tag does not exist before.
+    let mut stage_gates: Vec<(crate::releasegates::StageGate, String, bool)> = Vec::new();
+    for &i in &entered {
+        let (name, gate) = &gates[i];
+        let waits_at_tag = i == cut_stage && i == last && cadence.tag_waits();
+        if waits_at_tag && !awaiting {
+            continue;
+        }
+        let on_tag = i > cut_stage || waits_at_tag;
+        for g in &gate.gates {
+            if !stage_gates
+                .iter()
+                .any(|(x, s, _)| x.gate == g.gate && s == name)
+            {
+                stage_gates.push((g.clone(), name.clone(), on_tag));
+            }
+        }
+    }
     // A release sent back by a merge is not cut for a commit that main and the gate have not
     // reached, whatever its stages require (DEF-031). The stage's own `requires` stay as they are.
     let returned = open_return(&release, &stages, cut_stage).map(|c| {
@@ -1968,6 +2115,7 @@ fn work_out(
         actions.clear();
         requires.clear();
         afters.clear();
+        stage_gates.clear();
     }
     let has = |a: ReleaseAction| actions.iter().any(|(x, _)| *x == a);
     let stage_holding = |a: ReleaseAction| {
@@ -2075,6 +2223,12 @@ fn work_out(
                     fix,
                     refs: Vec::new(),
                 });
+            }
+            for (g, s, on_tag) in &stage_gates {
+                conditions.push(stage_gate_condition(
+                    store, id, cadence, None, None, false, version, &branch, &release, g, s,
+                    *on_tag,
+                ));
             }
         }
         Some(repo) => {
@@ -2569,6 +2723,22 @@ fn work_out(
                     fix: if holds { String::new() } else { fix },
                     refs: Vec::new(),
                 });
+            }
+            for (g, s, on_tag) in &stage_gates {
+                conditions.push(stage_gate_condition(
+                    store,
+                    id,
+                    cadence,
+                    Some(repo),
+                    tip_before.as_deref(),
+                    prepares,
+                    version,
+                    &branch,
+                    &release,
+                    g,
+                    s,
+                    *on_tag,
+                ));
             }
         }
     }
@@ -7579,6 +7749,48 @@ pub(crate) mod tests {
     pub(crate) fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    // ---- FTR-033: the gates the engineering baseline requires at a stage ----
+
+    /// A gate a baseline entry promised at a stage refuses the stage, naming the gate and the
+    /// entry, until a passed result is recorded for the release tip.
+    #[test]
+    fn a_stage_gate_from_the_baseline_refuses_the_stage_until_it_has_passed() {
+        let (store, dir, repo) = staged("ftr033-stage-gate", THREE);
+        go(&store, &repo, "candidate");
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.add_stage_gate("main", "sast", "B-007").unwrap();
+        store.set_cadence("shop", None, c).unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        let sast = |plan: &super::ReleasePlan| {
+            plan.conditions
+                .iter()
+                .find(|c| c.stage == "main" && c.detail.contains("sast"))
+                .cloned()
+                .expect("main judges the sast gate")
+        };
+        let plan = plan_to(&store, &repo, "main");
+        let c = sast(&plan);
+        assert!(!c.holds);
+        assert!(
+            c.fix.starts_with(
+                "stage main requires a passed `sast` result for the release tip (B-007)"
+            ),
+            "{}",
+            c.fix
+        );
+        assert!(
+            plan.missing.iter().any(|m| m.contains("(B-007)")),
+            "{:?}",
+            plan.missing
+        );
+        assert!(!plan.ready);
+        record_gate(&store, "sast", &tip, true, "2026-11-04T10:00:00Z");
+        let plan = plan_to(&store, &repo, "main");
+        assert!(sast(&plan).holds, "{:?}", sast(&plan));
+        assert!(!plan.missing.iter().any(|m| m.contains("(B-007)")));
+        clean(&dir, &repo);
     }
 
     // ---- DEF-049: a release is shipped only once its tag workflow has passed ----

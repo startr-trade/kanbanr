@@ -515,6 +515,12 @@ pub struct ApprovalEvent {
     /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub delegation: String,
+    /// What an `approved` verdict agreed to, when it was less than the whole definition
+    /// (FTR-039): `tests` when the change since the last decision touched only tests, else empty.
+    /// Declared last, so an older kanbanr keeps it in `extra`; approvals are outside
+    /// `content_rev`, so recording it lapses nothing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -733,6 +739,24 @@ impl FeatureDefinition {
             .collect();
         (!changes.added.is_empty() || !changes.changed.is_empty() || !changes.removed.is_empty())
             .then_some(changes)
+    }
+
+    /// Has the definition changed since the last decision in its tests only (FTR-039)? True when
+    /// [`Self::part_changes`] finds changes and every key added, changed or removed is a test's,
+    /// `requirements/<id>/tests/<name>`. A baseline without parts (FTR-018) is no baseline, so no
+    /// change to it is tests-only.
+    pub fn tests_only_change(&self) -> bool {
+        self.part_changes().is_some_and(|c| {
+            c.added
+                .iter()
+                .chain(&c.changed)
+                .chain(&c.removed)
+                .all(|key| {
+                    key.strip_prefix("requirements/")
+                        .and_then(|rest| rest.split_once("/tests/"))
+                        .is_some_and(|(req, name)| !req.is_empty() && !name.is_empty())
+                })
+        })
     }
 
     /// Whether this definition is approved as it currently stands. The whole-content hash is
@@ -2152,6 +2176,67 @@ mod tests {
         // Nothing is written back: no parts key appears on an unchanged record.
         let yaml = crate::yaml::to_string(d.approval.as_ref().unwrap()).unwrap();
         assert!(!yaml.contains("parts"));
+    }
+
+    /// FTR-039 R-5: adding, renaming, re-kinding or removing tests is a change to tests only; a
+    /// requirement's text edited or a requirement added is not, nor is any change to a baseline
+    /// without parts.
+    #[test]
+    fn a_change_to_tests_only_is_told_apart() {
+        let mut base = full_definition();
+        base.requirements[0].tests.push(TestRef {
+            name: "second".into(),
+            kind: "unit".into(),
+            ..Default::default()
+        });
+        approve(&mut base);
+        assert!(
+            !base.tests_only_change(),
+            "no change is no tests-only change"
+        );
+        let tests_only: Vec<Mutation> = vec![
+            Box::new(|d| {
+                d.requirements[0].tests.push(TestRef {
+                    name: "added".into(),
+                    ..Default::default()
+                })
+            }),
+            Box::new(|d| d.requirements[0].tests[0].name = "renamed".into()),
+            Box::new(|d| d.requirements[0].tests[1].kind = "integration".into()),
+            Box::new(|d| {
+                d.requirements[0].tests.remove(1);
+            }),
+        ];
+        for (i, change) in tests_only.iter().enumerate() {
+            let mut d = base.clone();
+            change(&mut d);
+            assert!(d.part_changes().is_some(), "case {i}");
+            assert!(d.tests_only_change(), "case {i}");
+        }
+        let not_tests_only: Vec<Mutation> = vec![
+            Box::new(|d| d.requirements[0].text.push_str(" and more")),
+            Box::new(|d| {
+                d.requirements.push(Requirement {
+                    id: "R-2".into(),
+                    text: "THE SYSTEM SHALL more".into(),
+                    ..Default::default()
+                })
+            }),
+            Box::new(|d| {
+                d.requirements[0].tests[0].name = "renamed".into();
+                d.statement.push('!');
+            }),
+        ];
+        for (i, change) in not_tests_only.iter().enumerate() {
+            let mut d = base.clone();
+            change(&mut d);
+            assert!(!d.tests_only_change(), "case {i}");
+        }
+        // A baseline without parts (FTR-018) is no baseline.
+        let mut d = base.clone();
+        d.approval.as_mut().unwrap().parts.clear();
+        d.requirements[0].tests[0].name = "renamed".into();
+        assert!(!d.tests_only_change());
     }
 
     /// FTR-018 R-7: a sign-off given on the grown text reviews the additions.

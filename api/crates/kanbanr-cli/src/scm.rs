@@ -21,6 +21,8 @@ const HOOKS: [(&str, &str); 3] = [
     // Nothing is pushed from an agent's worktree (FEAT-214).
     ("pre-push", "check-push"),
 ];
+/// The names of the hooks kanbanr installs, for the hook health check (FTR-059).
+pub(crate) const HOOK_NAMES: [&str; 3] = [HOOKS[0].0, HOOKS[1].0, HOOKS[2].0];
 /// The hooks that check commits: what `hooks_installed` has always meant.
 const COMMIT_HOOKS: [&str; 2] = ["commit-msg", "pre-commit"];
 
@@ -29,7 +31,7 @@ pub fn repo_root() -> Option<PathBuf> {
     coderepo::repo_root_in(&std::env::current_dir().ok()?)
 }
 
-fn hooks_dir(root: &Path) -> Result<PathBuf> {
+pub(crate) fn hooks_dir(root: &Path) -> Result<PathBuf> {
     // Honour an existing core.hooksPath so a repo that already redirects its hooks keeps working.
     if let Ok(path) = git(root, &["config", "--get", "core.hooksPath"])
         && !path.is_empty()
@@ -63,7 +65,7 @@ fn script(command: &str, name: &str) -> String {
     )
 }
 
-fn is_ours(path: &Path) -> bool {
+pub(crate) fn is_ours(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|s| s.contains(MARKER))
 }
 

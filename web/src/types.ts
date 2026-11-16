@@ -167,6 +167,8 @@ export interface ApprovalEvent {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** `tests` when the approval agreed to a change to tests only (FTR-039); absent otherwise. */
+  scope?: string;
 }
 
 export interface FeatureDefinition {
@@ -320,6 +322,8 @@ export interface PendingReview {
   spec?: SpecBrief;
   /** Claude's overrides on the item that wait for the person to ratify, oldest first (DEF-043). */
   overrides?: OverrideView[];
+  /** The change since the last decision touched only tests (FTR-039); absent when false. */
+  tests_only?: boolean;
 }
 
 /** One override Claude made past a gate, as the Review page shows it (DEF-043). */
@@ -1201,4 +1205,100 @@ export interface ModeChanged {
   mode: DecisionMode;
   already_recorded?: boolean;
   waiting: Waiting[];
+}
+
+// ---- the monitor's compact index and live slices (DEF-081) ----------------------------------
+
+/** The index's cadence: which planning the project uses. */
+export interface IndexCadence {
+  sprints: boolean;
+  releases: boolean;
+  git_model: boolean;
+}
+
+/** The configuration the shell, links and cards need; the whole of it is `GET …/config`. */
+export interface IndexConfig {
+  name: string;
+  description: string;
+  statuses?: string[];
+  displayed_states?: string[];
+  no_op_states?: string[];
+  terminal_states?: string[];
+  cadence: IndexCadence;
+  codes: CodesConfig;
+}
+
+/** One item as a card: its fields, no bodies. `done`/`total` count tasks across its todo-lists. */
+export interface IndexItem {
+  code: string;
+  title: string;
+  kind?: string;
+  status: string;
+  milestone: string;
+  sprint?: string;
+  release?: string;
+  priority?: string;
+  assignee?: string;
+  team?: string;
+  labels?: string[];
+  depends_on?: string[];
+  goals?: string[];
+  requirements?: string[];
+  done: number;
+  total: number;
+  updated_at: string;
+}
+
+export interface IndexMilestone {
+  code: string;
+  name: string;
+  depends_on?: string[];
+}
+
+export interface IndexSprint {
+  code: string;
+  name: string;
+  start: string;
+  end: string;
+  state: "planned" | "active" | "closed";
+}
+
+export interface IndexRelease {
+  version: string;
+  name?: string;
+  state: string;
+  stage?: string;
+  target?: string;
+}
+
+export interface IndexAdr {
+  id: string;
+  title: string;
+  status: string;
+  path: string;
+}
+
+export interface IndexGoal {
+  id: string;
+  title: string;
+}
+
+/** `GET /projects/{p}/index`: what the shell, the link index and the item lists read. */
+export interface CompactIndex {
+  project: string;
+  config: IndexConfig;
+  items: IndexItem[];
+  milestones: IndexMilestone[];
+  sprints?: IndexSprint[];
+  releases?: IndexRelease[];
+  adrs?: IndexAdr[];
+  docs: string[];
+  goals: IndexGoal[];
+}
+
+/** The `slices` SSE event: what changed on a project's board, by tag. */
+export interface Slices {
+  project: string;
+  gen: number;
+  tags: string[];
 }

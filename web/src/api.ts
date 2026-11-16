@@ -1,9 +1,12 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
+import { urls } from "./data/urls.ts";
+import type { CompactIndex, Feature, ProjectConfig } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
-async function getJson<T>(url: string): Promise<T> {
+/** GET a JSON read; a non-2xx answer is an error carrying its status and body. */
+export async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`);
@@ -26,6 +29,15 @@ export const api = {
   getPortfolioRollups: () => getJson<RollupReport>(apiUrl("/portfolio/rollups")),
   getPortfolioBoard: () => getJson<BoardReport>(apiUrl("/portfolio/board")),
   getProject: (id: string) => getJson<Project>(apiUrl(`/projects/${encodeURIComponent(id)}`)),
+  // The monitor's slices (DEF-081): pages read these through useQuery and `urls`, not the whole board.
+  /** The compact index: items as cards, milestones, sprints, releases, ADRs, docs and goals. */
+  getIndex: (id: string) => getJson<CompactIndex>(urls.index(id)),
+  /** The project's configuration. */
+  getConfig: (id: string) => getJson<ProjectConfig>(urls.config(id)),
+  /** One item, with its specification. */
+  getFeature: (id: string, code: string) => getJson<Feature>(urls.feature(id, code)),
+  /** Items without specifications, by status and milestone when given. */
+  getFeatures: (id: string, q: { status?: string; milestone?: string }) => getJson<Feature[]>(urls.features(id, q)),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getProcess: (id: string) =>
     getJson<ProcessStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/process`)),

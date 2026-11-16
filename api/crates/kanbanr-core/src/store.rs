@@ -460,6 +460,45 @@ impl Store {
         Err(CoreError::FeatureNotFound(code.to_string()))
     }
 
+    /// One item with its spec, reading only its own two files (DEF-081): the status comes from
+    /// the `index.yaml` cache, falling back to looking for the item's file in each status folder
+    /// when the index is absent or stale. Nothing is written, not even a missing index (ADR-0005).
+    /// FeatureNotFound when absent.
+    pub fn load_feature(&self, id: &str, code: &str) -> Result<FeatureItem> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let not_found = || CoreError::FeatureNotFound(code.to_string());
+        let plain = !code.is_empty()
+            && !code.contains(['/', '\\'])
+            && Path::new(code)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !plain {
+            return Err(not_found());
+        }
+        let config = self.read_config(id)?;
+        let indexed = Self::read_yaml::<Vec<IndexEntry>>(&self.index_path(id))
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|r| r.code == code))
+            .map(|r| r.status)
+            .filter(|s| config.statuses.contains(s));
+        for status in indexed.iter().chain(config.statuses.iter()) {
+            let path = self.feature_path(id, status, code);
+            if !path.is_file() {
+                continue;
+            }
+            let meta: crate::models::FeatureMeta = Self::read_yaml(&path)?;
+            if meta.code != code {
+                continue;
+            }
+            let spec =
+                std::fs::read_to_string(self.spec_path(id, status, code)).unwrap_or_default();
+            return Ok(FeatureItem::from_meta(meta, spec));
+        }
+        Err(not_found())
+    }
+
     // ---- per-project index cache (FEAT-033) ----------------------------------------------
     //
     // `<project>/index.yaml` is a compact, spec-free list of `IndexEntry` rows — one per feature.
@@ -1332,6 +1371,13 @@ impl Store {
         })?;
         let at = now_rfc3339();
         let rev = definition.content_rev();
+        // What this agreement covers (FTR-039), judged against the decision it replaces: a change
+        // to tests only is recorded so, the rest as the whole definition.
+        let scope = if definition.tests_only_change() {
+            "tests"
+        } else {
+            ""
+        };
         definition.approval = Some(crate::models::Approval {
             extra: Default::default(),
             by: by.to_string(),
@@ -1351,6 +1397,7 @@ impl Store {
             reason: String::new(),
             rev,
             status,
+            scope: scope.to_string(),
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1425,6 +1472,7 @@ impl Store {
             reason: reason.trim().to_string(),
             rev,
             status,
+            scope: String::new(),
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1503,6 +1551,7 @@ impl Store {
             reason: reason.trim().to_string(),
             rev,
             status,
+            scope: String::new(),
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -4475,6 +4524,67 @@ mod tests {
                 .set_feature_definition("demo", &f.code, Some(def(at)))
                 .unwrap();
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-039 R-5: approving a change to tests only records `scope: tests` on its event; a later
+    /// change beyond the tests, approved, records no scope.
+    #[test]
+    fn approving_a_tests_only_change_records_its_scope() {
+        let (store, dir) = atomic_board("tests-only-scope");
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let mut def = crate::models::FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![crate::models::Requirement {
+                id: "R-1".into(),
+                text: "THE SYSTEM SHALL run CI".into(),
+                tests: vec![crate::models::TestRef {
+                    name: "ci::runs".into(),
+                    kind: "unit".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .set_feature_definition("demo", &f.code, Some(def.clone()))
+            .unwrap();
+        let first = store.approve_feature("demo", &f.code, "Ada").unwrap();
+        let events = &first.definition.as_ref().unwrap().approvals;
+        assert_eq!(
+            events.last().unwrap().scope,
+            "",
+            "the first approval covers everything"
+        );
+
+        def.requirements[0].tests[0].name = "ci::runs_on_every_push".into();
+        store
+            .set_feature_definition("demo", &f.code, Some(def.clone()))
+            .unwrap();
+        let second = store.approve_feature("demo", &f.code, "Ada").unwrap();
+        let events = &second.definition.as_ref().unwrap().approvals;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].verdict, "approved");
+        assert_eq!(events[1].scope, "tests");
+        // Written to the file, and read back.
+        let read = store.load("demo").unwrap();
+        let def_read = read.feature(&f.code).unwrap().definition.clone().unwrap();
+        assert_eq!(def_read.approvals[1].scope, "tests");
+        // `feature show` says so.
+        let shown = crate::export::to_markdown(&second, None, None);
+        assert!(shown.contains("**Approved** by Ada on "), "{shown}");
+        assert!(shown.contains(" (tests only)"), "{shown}");
+
+        def.requirements[0].text.push_str(" on every push");
+        store
+            .set_feature_definition("demo", &f.code, Some(def.clone()))
+            .unwrap();
+        let third = store.approve_feature("demo", &f.code, "Ada").unwrap();
+        let events = &third.definition.as_ref().unwrap().approvals;
+        assert_eq!(events[2].scope, "");
+        assert!(!crate::export::to_markdown(&third, None, None).contains("(tests only)"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

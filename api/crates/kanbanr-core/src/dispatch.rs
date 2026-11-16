@@ -1017,6 +1017,10 @@ fn dispatch_routes(
             ser(&store.init_project(&name, config)?)
         }
         ("GET", ["projects", p]) => ser(&store.load(p)?),
+        // The monitor's reads (DEF-081): the compact index, the configuration alone, and items
+        // without the whole board.
+        ("GET", ["projects", p, "index"]) => ser(&crate::monitorindex::compact(store, p)?),
+        ("GET", ["projects", p, "config"]) => ser(&store.load_meta(p)?.config),
 
         // ---- derived dependency state (FEAT-027) ----
         ("GET", ["projects", p, "ready"]) => {
@@ -1142,6 +1146,22 @@ fn dispatch_routes(
             };
             with_diagram_warnings(body, &warnings)
         }
+        // Items without their specs, by status and milestone when given (DEF-081).
+        ("GET", ["projects", p, "features"]) => {
+            only_params(query, &["status", "milestone"])?;
+            let status = query_param(query, "status").filter(|s| !s.is_empty());
+            let milestone = query_param(query, "milestone").filter(|s| !s.is_empty());
+            let items: Vec<crate::models::FeatureItem> = store
+                .load_meta(p)?
+                .features
+                .into_iter()
+                .filter(|f| status.as_ref().is_none_or(|s| &f.status == s))
+                .filter(|f| milestone.as_ref().is_none_or(|m| &f.milestone == m))
+                .collect();
+            ser(&items)
+        }
+        // One item with its spec, reading only its own files (DEF-081).
+        ("GET", ["projects", p, "features", code]) => ser(&store.load_feature(p, code)?),
         ("PATCH", ["projects", p, "features", code]) => {
             let milestone = if bool_field(b, "clear_milestone").unwrap_or(false) {
                 Some(None)
