@@ -409,7 +409,7 @@ fn resolve_latest() -> Result<String> {
             .filter(|n| n.starts_with('v'))
             .collect();
         // Newest first, so the first tag that actually carries a release wins.
-        tags.sort_by_key(|t| std::cmp::Reverse(version_key(t)));
+        tags.sort_by_key(|t| std::cmp::Reverse(kanbanr_core::releases::version_key(t)));
         if let Some(t) = tags.into_iter().next() {
             return Ok(t);
         }
@@ -419,15 +419,6 @@ fn resolve_latest() -> Result<String> {
          Pin one instead: `kanbanr self-update --version v0.1.0`, and set GH_TOKEN to lift the \
          API rate limit if you are retrying."
     )
-}
-
-/// A sortable key for a `v`-prefixed tag: numeric segments compare as numbers, so v0.10.0 sorts
-/// above v0.9.0 where a plain string compare would not.
-fn version_key(tag: &str) -> Vec<u64> {
-    normalize(tag)
-        .split(['.', '-'])
-        .map(|seg| seg.parse::<u64>().unwrap_or(0))
-        .collect()
 }
 
 /// `kanbanr self-update`. Returns the decision so the caller can report it in whatever format.
