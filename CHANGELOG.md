@@ -143,6 +143,10 @@ All notable changes to kanbanr are documented here. The format follows
   repeat only when no override waits, so the second one is recorded, closes the override, and the
   page stops asking. A disabled Approve or Ratify button on the Review page now says beneath it
   what is missing and who provides it, instead of only in a tooltip.
+### Fixed
+
+- The Claude docs guard judges a file in a linked worktree by its own repository's path, so the
+  book, the changelog and the skill are no longer refused there (DEF-065).
 
 ## [0.6.0] - 2026-11-14
 
