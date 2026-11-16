@@ -500,6 +500,10 @@ jobs:
       - name: The guides cover the pipeline and a product people use
         run: python3 -m unittest -q scripts/tests/test_guides.py
 
+      # The privacy scan lists what a public board would show (MNT-012).
+      - name: The privacy scan's own tests pass
+        run: python3 -m unittest -q scripts/tests/test_privacy_scan.py
+
       # The guide is docs/guide, the system representation docs/system, and the move from the old
       # source folder left no live reference behind (MNT-002).
       - name: The docs layout holds
