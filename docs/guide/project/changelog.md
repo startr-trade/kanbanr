@@ -10,6 +10,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
   representation; published pages keep their URLs (MNT-002).
+- ISO 25010 tags, Zachman columns and layers have one spelling: `feature define` and `adr new`
+  store the canonical one and refuse an unknown one, ADRs are read in canonical form, and the
+  doctor counts a quality once whatever its case (MNT-009).
 
 ### Fixed
 
