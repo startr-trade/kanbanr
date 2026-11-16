@@ -287,6 +287,12 @@ pub struct FeatureDefinition {
     /// after it, so an older binary keeps it in `extra` and writes it back in the same place.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub affects_no_docs: String,
+    /// Catalog rows this item's design changes (FTR-006), by id (`kanbanr catalog` lists them):
+    /// the generated rows the change affects, beside those its Affects docs already name. Design,
+    /// like `affects_docs`, so outside the agreed content; declared after it, so an older binary
+    /// keeps it in `extra` and writes it back in the same place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affects_views: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -589,6 +595,8 @@ impl FeatureDefinition {
         bare.affects_docs = Vec::new();
         // Nor does recording that it changes none (DEF-075).
         bare.affects_no_docs = String::new();
+        // Nor does naming the catalog rows the design changes (FTR-006, as FEAT-180 Q1).
+        bare.affects_views = Vec::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -1425,6 +1433,8 @@ zachman:
 affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
                       # design stage; a `docs_updated` gate checks each changed before moving on
 affects_no_docs: \"\"   # only if the person confirms it changes no doc: their reason
+affects_views: []     # catalog rows the design changes (kanbanr catalog lists them), named
+                      # in the Design's Views changed: the generated ones Affects docs does not cover
 ";
     let requirements = match kind.trim().to_ascii_lowercase().as_str() {
         "defect" | "bug" => {
@@ -1957,6 +1967,43 @@ mod tests {
         assert!(definition_template("chore").contains("affects_no_docs:"));
         assert!(template.affects_no_docs.is_empty());
         assert!(!template.extra.contains_key("affects_no_docs"));
+    }
+
+    /// FTR-006 R-8: `affects_views` reads and writes back, is absent when empty, is design rather
+    /// than agreed content (naming rows lapses no approval), and a record written before it reads
+    /// back without it.
+    #[test]
+    fn affects_views_round_trips_and_does_not_lapse_approval() {
+        let mut d = full_definition();
+        approve(&mut d);
+        let before = d.content_rev();
+        let older = crate::yaml::to_string(&d).unwrap();
+        assert!(!older.contains("affects_views"), "{older}");
+
+        d.affects_views = vec!["context".into(), "code-structure".into()];
+        assert_eq!(d.content_rev(), before);
+        assert_eq!(d.approval_state(), ApprovalState::Current);
+
+        let text = crate::yaml::to_string(&d).unwrap();
+        assert!(text.contains("affects_views:"), "{text}");
+        assert!(text.contains("- code-structure"), "{text}");
+        let back: FeatureDefinition = crate::yaml::from_str(&text).unwrap();
+        assert_eq!(back.affects_views, ["context", "code-structure"]);
+        assert!(!back.extra.contains_key("affects_views"));
+        assert_eq!(back, d);
+        assert_eq!(back.approval_state(), ApprovalState::Current);
+
+        // An older-shaped record reads back without it.
+        let old: FeatureDefinition = crate::yaml::from_str(&older).unwrap();
+        assert!(old.affects_views.is_empty());
+        assert_eq!(old.content_rev(), before);
+
+        // The template carries the field, and it parses as an empty list.
+        assert!(definition_template("feature").contains("affects_views: []"));
+        let template: FeatureDefinition =
+            crate::yaml::from_str(&definition_template("defect")).unwrap();
+        assert!(template.affects_views.is_empty());
+        assert!(!template.extra.contains_key("affects_views"));
     }
 
     /// FTR-018 R-2: a goal, a Zachman answer, a requirement or a test added keeps the approval.
