@@ -3,7 +3,8 @@
 // FEAT-177: the monitor's idea of the read API is the published one.
 //
 // Reads the OpenAPI document the daemon serves (docs/guide/reference/openapi.json, generated from the
-// Rust response types), finds every JSON read in src/api.ts — `getJson<T>(apiUrl(`...`))` — and
+// Rust response types), finds every JSON read in src/api.ts — `getJson<T>(apiUrl(`...`))`, or
+// `getJson<T>(urls.name(...))` through the URL table in src/data/urls.ts (DEF-081) — and
 // compares the TypeScript type T, field by field and through every type it names, with the schema
 // of the route it calls:
 //   - every field the monitor reads must be one the route sends;
@@ -21,6 +22,7 @@ import ts from "typescript";
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const doc = JSON.parse(readFileSync(here("../../docs/guide/reference/openapi.json"), "utf8"));
 const apiFile = here("../src/api.ts");
+const urlsFile = here("../src/data/urls.ts");
 
 const program = ts.createProgram([apiFile], {
   strict: true,
@@ -52,14 +54,62 @@ function docPath(template) {
   return "/api/" + out.join("/");
 }
 
-/** The text of an `apiUrl(...)` argument with every substitution written `${}`. */
-function templateText(node) {
+/**
+ * The text of an `apiUrl(...)` argument with every substitution written `${}`. A substitution that
+ * calls one of `helpers` (a local function returning a template, e.g. urls.ts's `project(p)`) is
+ * written as that helper's own text.
+ */
+function templateText(node, helpers = new Map()) {
   if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isStringLiteral(node)) return node.text;
   if (ts.isTemplateExpression(node)) {
-    return node.head.text + node.templateSpans.map((s) => "${}" + s.literal.text).join("");
+    const sub = (e) =>
+      ts.isCallExpression(e) && ts.isIdentifier(e.expression) && helpers.has(e.expression.text)
+        ? helpers.get(e.expression.text)
+        : "${}";
+    return node.head.text + node.templateSpans.map((s) => sub(s.expression) + s.literal.text).join("");
   }
   return null;
 }
+
+/** An arrow function's returned expression, whether it has an expression body or `{ return … }`. */
+function returned(fn) {
+  if (!ts.isBlock(fn.body)) return fn.body;
+  const ret = fn.body.statements.find(ts.isReturnStatement);
+  return ret?.expression ?? null;
+}
+
+/**
+ * The path template of every entry of the `urls` table in src/data/urls.ts (DEF-081), by name:
+ * `index: (p) => apiUrl(`${project(p)}/index`)` gives `index` → `/projects/${}/index`. Pages read
+ * through this table, so a read made with `urls.name(...)` is checked like one spelled in api.ts.
+ */
+function urlTemplates(file) {
+  const helpers = new Map();
+  const out = new Map();
+  if (!file) return out;
+  for (const stmt of file.statements) {
+    if (!ts.isVariableStatement(stmt)) continue;
+    for (const d of stmt.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+      const init = d.initializer;
+      if (ts.isArrowFunction(init)) {
+        const body = returned(init);
+        const text = body && templateText(body, helpers);
+        if (text !== null && text !== undefined) helpers.set(d.name.text, text);
+      } else if (d.name.text === "urls" && ts.isObjectLiteralExpression(init)) {
+        for (const prop of init.properties) {
+          if (!ts.isPropertyAssignment(prop) || !ts.isArrowFunction(prop.initializer)) continue;
+          const body = returned(prop.initializer);
+          const arg = body && ts.isCallExpression(body) && body.arguments[0];
+          const text = arg && templateText(arg, helpers);
+          if (text) out.set(prop.name.getText(file), text);
+        }
+      }
+    }
+  }
+  return out;
+}
+const urlTable = urlTemplates(program.getSourceFile(urlsFile));
 
 function resolve(schema) {
   // The schema `true` is any JSON value, as a serde_json::Value is described (FTR-034).
@@ -225,8 +275,22 @@ function visit(node) {
     node.typeArguments?.length === 1
   ) {
     const arg = node.arguments[0];
-    const inner = arg && ts.isCallExpression(arg) && arg.arguments[0];
-    const text = inner && templateText(inner);
+    let text = null;
+    if (
+      arg &&
+      ts.isCallExpression(arg) &&
+      ts.isPropertyAccessExpression(arg.expression) &&
+      ts.isIdentifier(arg.expression.expression) &&
+      arg.expression.expression.text === "urls"
+    ) {
+      // A read through the URL table: a name the table does not spell is a problem, never a skip.
+      const name = arg.expression.name.text;
+      text = urlTable.get(name) ?? null;
+      if (!text) problems.push(`urls.${name}: no path template for it in src/data/urls.ts, so its read is not checked`);
+    } else {
+      const inner = arg && ts.isCallExpression(arg) && arg.arguments[0];
+      text = inner && templateText(inner);
+    }
     if (text) {
       const path = docPath(text);
       const route = doc.paths[path];

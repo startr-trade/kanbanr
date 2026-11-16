@@ -18,7 +18,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["fs", "trace"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "compression-gzip", "set-header"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 notify = "6"

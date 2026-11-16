@@ -2,6 +2,9 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { ThemeToggle } from "./components/bits";
 import { api } from "./api";
 import { useAsync } from "./live";
+import { useQuery } from "./data/useQuery";
+import { TAGS, urls } from "./data/urls";
+import type { CompactIndex } from "./types";
 import { behindWarning, buildLabel } from "./buildInfo";
 
 /** Persistent shell: a simple breadcrumb + within-project tab bar that keeps navigation
@@ -12,12 +15,10 @@ export default function App() {
   const inProject = segs[0] === "p" && segs.length >= 2;
   const project = inProject ? decodeURIComponent(segs[1]) : null;
   // The Releases tab only where the project uses releases (FEAT-123): a tab for data a project
-  // does not have is a door into an empty room.
-  const config = useAsync(
-    () => (project ? api.getProject(project).then((p) => p.config) : Promise.resolve(null)),
-    [project],
-  );
-  const usesReleases = config.data?.cadence?.releases === true;
+  // does not have is a door into an empty room. Read from the compact index, never the whole
+  // board (DEF-081); a failed read hides the tab, as before.
+  const index = useQuery<CompactIndex>(project, project ? urls.index(project) : null, TAGS.index);
+  const usesReleases = index.data?.config.cadence.releases === true;
   // Which kanbanr this monitor is, and whether the board has moved on past it (FTR-036). A failed
   // call shows nothing: the pages already say when the daemon is down.
   const meta = useAsync(() => api.getMeta().catch(() => null), []);
