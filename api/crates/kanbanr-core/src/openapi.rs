@@ -161,6 +161,47 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::store::Project>),
         },
+        // The monitor's reads (DEF-081): a page reads the index and its own slice, not the board.
+        RouteDoc {
+            path: "/api/projects/{project}/index",
+            summary: "The project's compact index",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::monitorindex::CompactIndex>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/config",
+            summary: "The project's configuration",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::config::ProjectConfig>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/features/{code}",
+            summary: "One item, with its specification",
+            params: &[PROJECT, CODE],
+            response: Response::Json(schema_of::<crate::models::FeatureItem>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/features",
+            summary: "Items, without specifications",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "status",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only the items in this status.",
+                },
+                Param {
+                    name: "milestone",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only the items in this milestone.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::models::FeatureItem>>),
+        },
         // ---- project views ----
         RouteDoc {
             path: "/api/projects/{project}/charter",
@@ -936,6 +977,30 @@ pub fn with_route_table(page: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEF-081 R-12: the monitor's four reads are public, each with a response schema; `/config`
+    /// answers the whole `ProjectConfig`, so its shape is under the stability promise.
+    #[test]
+    fn the_monitor_read_routes_are_public_and_described() {
+        let doc: Value = serde_json::from_str(&document_text()).unwrap();
+        let want = [
+            ("/api/projects/{project}/index", "CompactIndex"),
+            ("/api/projects/{project}/config", "ProjectConfig"),
+            ("/api/projects/{project}/features/{code}", "FeatureItem"),
+            ("/api/projects/{project}/features", "FeatureItem[]"),
+        ];
+        let routes = public_routes();
+        for (path, schema) in want {
+            assert!(
+                routes.iter().any(|r| r.path == path),
+                "{path} is not a public route"
+            );
+            let ok = &doc["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+                ["schema"];
+            assert!(ok.is_object(), "{path} has no JSON response schema");
+            assert_eq!(schema_label(ok), schema, "{path}'s response schema");
+        }
+    }
 
     /// The committed copy is compared byte for byte, so two builds must produce the same bytes.
     #[test]
