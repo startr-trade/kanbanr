@@ -271,6 +271,8 @@ function ReleaseButton({
   const action = releaseAction(plan.data, writable);
   // Ticking the acceptance is the one thing the cut still waits for (DEF-043).
   const enabled = action.enabled || (action.accept != null && action.button && accepted);
+  // Why the button is disabled, beside it and as its title (DEF-071); none once the acceptance is ticked.
+  const why = enabled ? "" : action.disabledWhy;
   if (action.note) {
     return (
       <p className="muted small">
@@ -374,7 +376,7 @@ function ReleaseButton({
             className="btn btn-primary"
             onClick={() => setAsking(true)}
             disabled={!enabled || busy != null}
-            title={enabled ? action.does.join("; ") : "not ready: see what is missing"}
+            title={why || action.does.join("; ")}
           >
             {busy === release.version ? "promoting…" : action.label}
           </button>
@@ -386,11 +388,16 @@ function ReleaseButton({
             ask={action.ask ?? `${action.label}?`}
             onConfirm={() => onPromote(release, promoteTo, plan.data!.release_tip, "", accepted ? action.accept : undefined)}
             disabled={!enabled || busy != null}
-            disabledWhy="not ready: see what is missing"
+            disabledWhy={why}
           />
         ) : (
           <code>{action.command}</code>
         )}
+        {why && action.button && !preparedPromotion ? (
+          <span className="small release-why" role="note">
+            <Inline text={why} />
+          </span>
+        ) : null}
         {outcome && !hideOutcome ? (
           <span className={`chip ${outcome.startsWith("promoted") ? "done" : "warn"}`}>
             <Inline text={outcome} />
@@ -406,8 +413,16 @@ function ReleaseButton({
               ask={action.again.ask}
               onConfirm={() => onPromote(release, action.again!.stage, plan.data!.release_tip)}
               disabled={!action.again.enabled || busy != null}
-              disabledWhy={action.again.missing.map((m) => m.text).join("; ") || "not ready"}
+              disabledWhy={action.again.disabledWhy}
             />
+          ) : null}
+          {writable && action.again.disabledWhy ? (
+            <>
+              {" "}
+              <span className="small release-why" role="note">
+                <Inline text={action.again.disabledWhy} />
+              </span>
+            </>
           ) : null}
           {action.again.does[0] ? (
             <>

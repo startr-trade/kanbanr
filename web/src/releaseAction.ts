@@ -18,6 +18,12 @@ export interface ReleaseAction {
   ask?: string;
   /** The button can be pressed: writable, the daemon has the repository, and the plan is ready. */
   enabled: boolean;
+  /**
+   * Why the button is disabled, shown beside it and as its title (DEF-071): "" when it is enabled
+   * or there is no button; else the first missing thing (with its fix), the tag's sentence, the
+   * untested acceptance, or a pointer to the list below.
+   */
+  disabledWhy: string;
   /** What the step will do, one sentence each. */
   does: string[];
   /** The cut only: the commit it tags, what ships, what carries over. */
@@ -53,10 +59,38 @@ export interface ReleaseAction {
     /** The question its first press asks (DEF-034): its own label with a question mark. */
     ask: string;
     enabled: boolean;
+    /** Why it is disabled, by the same rule as the primary button's (DEF-071). */
+    disabledWhy: string;
     does: string[];
     missing: { text: string; fix: string }[];
     command: string;
   };
+}
+
+/** The last resort for a disabled button whose plan names nothing more specific (DEF-071). */
+export const NOT_READY = "not ready: see what is missing below";
+
+/** The sentence beside a cut that waits only for the untested acceptance (DEF-071). */
+export const TICK_UNTESTED = "Tick 'Ship these unverified' below to cut";
+
+/**
+ * Why a release button is disabled (DEF-071), in this order: the first missing thing (with its fix
+ * after " — "), the tag's sentence, the untested acceptance, else a pointer to the list below.
+ * "" when the button is enabled or there is none.
+ */
+function whyDisabled(
+  button: boolean,
+  enabled: boolean,
+  missing: { text: string; fix: string }[],
+  tagSentence?: string,
+  untestedOnly = false,
+): string {
+  if (!button || enabled) return "";
+  const first = missing[0];
+  if (first) return first.fix ? `${first.text} — ${first.fix}` : first.text;
+  if (tagSentence) return tagSentence;
+  if (untestedOnly) return TICK_UNTESTED;
+  return NOT_READY;
 }
 
 /** When the daemon was not started in the project folder, it cannot read the code repository. */
@@ -71,6 +105,7 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       button: false,
       label: "",
       enabled: false,
+      disabledWhy: "",
       does: [],
       missing: [{ text, fix: "" }],
       command: `kanbanr release plan ${plan.version} <CODE>…`,
@@ -120,11 +155,13 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
   const judged = plan.confirm && plan.tag != null && plan.tag.gate !== "";
   const tagBlocked = judged && plan.tag?.state !== "passed";
   if (plan.ready && plan.repo) missing = [];
+  const tagSentence = tagBlocked
+    ? plan.tag?.state === "failed"
+      ? `the tag's ${plan.tag.gate} result is failed`
+      : "no result recorded for the tag since it was made"
+    : undefined;
   if (tagBlocked && !missing.some((m) => m.text.startsWith("tag_passed"))) {
-    missing.push({
-      text: plan.tag?.state === "failed" ? `the tag's ${plan.tag.gate} result is failed` : "no result recorded for the tag since it was made",
-      fix: "run your CI on the tag, then record its verdict",
-    });
+    missing.push({ text: tagSentence ?? "", fix: "run your CI on the tag, then record its verdict" });
   }
   const preview = plan.ships
     ? {
@@ -151,6 +188,9 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     !plan.steps.some((s) => s.blocked) &&
     (untested.refs ?? []).length > 0;
   const offer = plan.again;
+  const enabled = writable && plan.ready && plan.repo && !tagBlocked;
+  const againEnabled = offer ? writable && offer.ready && plan.repo : false;
+  const againMissing = offer && !offer.ready ? offer.missing.map((text) => ({ text, fix: "" })) : [];
   return {
     ...(offer
       ? {
@@ -158,9 +198,10 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
             stage: offer.stage,
             label: offer.button,
             ask: `${offer.button}?`,
-            enabled: writable && offer.ready && plan.repo,
+            enabled: againEnabled,
+            disabledWhy: whyDisabled(writable, againEnabled, againMissing),
             does: offer.does,
-            missing: offer.ready ? [] : offer.missing.map((text) => ({ text, fix: "" })),
+            missing: againMissing,
             command: `kanbanr release promote ${plan.version} ${offer.stage}`,
           },
         }
@@ -171,7 +212,8 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     button: writable,
     label: plan.button,
     ...(writable ? { ask: `${plan.button}?` } : {}),
-    enabled: writable && plan.ready && plan.repo && !tagBlocked,
+    enabled,
+    disabledWhy: whyDisabled(writable, enabled, missing, tagSentence, acceptOnly),
     does,
     preview,
     missing,
