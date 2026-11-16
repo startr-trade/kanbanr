@@ -12,22 +12,53 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Test name -> passed, parsed from a test runner's output. A fixed chain of readers, one per
-/// runner (unittest, cargo, pytest, Playwright, then marked lines such as Vitest's); the first
-/// reader that owns a line decides it. Unknown formats yield nothing, which is the right failure:
-/// recording a guess would be worse than recording nothing. A name reported more than once is
-/// green only if every line passed (DEF-061). A unittest head line (a docstring follows) is
-/// completed only by the line straight after it (DEF-068).
+/// A test's result in one run: whether it passed and, when the runner printed one, how long it
+/// took in whole milliseconds (FTR-058).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timed {
+    pub passed: bool,
+    pub ms: Option<u64>,
+}
+
+/// Test name -> passed, parsed from a test runner's output: [`parse_timed_results`] without the
+/// durations, so every caller that needs only results is unchanged.
 pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
+    parse_timed_results(text)
+        .into_iter()
+        .map(|(name, t)| (name, t.passed))
+        .collect()
+}
+
+/// Test name -> result and duration, parsed from a test runner's output. A fixed chain of readers,
+/// one per runner (unittest, cargo-nextest, cargo, pytest, Playwright, then marked lines such as
+/// Vitest's); the first reader that owns a line decides it. Unknown formats yield nothing, which is
+/// the right failure: recording a guess would be worse than recording nothing. A name reported more
+/// than once is green only if every line passed (DEF-061), and keeps the last duration seen. A
+/// unittest head line (a docstring follows) is completed only by the line straight after it
+/// (DEF-068). cargo's `Running tests/<file>.rs (…)` line names the integration test file its
+/// results belong to, until `Running unittests …` or `Doc-tests …` (MNT-007 R-4).
+pub fn parse_timed_results(text: &str) -> BTreeMap<String, Timed> {
     let mut out = BTreeMap::new();
     let mut head: Option<String> = None;
+    let mut prefix: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if let Some(name) = head.take()
             && let Some((_, verdict)) = line.rsplit_once(" ... ")
             && let Some(outcome) = unittest_outcome(verdict.trim())
         {
-            record_outcome(&mut out, Reading { name, outcome });
+            record_outcome(
+                &mut out,
+                Reading {
+                    name,
+                    outcome,
+                    ms: None,
+                },
+            );
+            continue;
+        }
+        if let Some(target) = cargo_target(line) {
+            prefix = target;
             continue;
         }
         let readings = match read_unittest(line) {
@@ -38,7 +69,14 @@ pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
             }
             Some(Unittest::Silent) => continue,
             None => {
-                if let Some(r) = read_cargo(line) {
+                if let Some(r) = read_nextest(line) {
+                    vec![r]
+                } else if let Some(mut r) = read_cargo(line) {
+                    if let Some(file) = &prefix
+                        && !r.name.contains("::")
+                    {
+                        r.name = format!("{file}::{}", r.name);
+                    }
                     vec![r]
                 } else if let Some(r) = read_pytest(line) {
                     vec![r]
@@ -59,16 +97,39 @@ pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
 }
 
 /// Record one reading: `Passed` green, `Failed` red, `Unproven` nothing.
-fn record_outcome(out: &mut BTreeMap<String, bool>, r: Reading) {
-    match r.outcome {
-        Outcome::Passed => record(out, r.name, true),
-        Outcome::Failed => record(out, r.name, false),
-        Outcome::Unproven => {}
+fn record_outcome(out: &mut BTreeMap<String, Timed>, r: Reading) {
+    let passed = match r.outcome {
+        Outcome::Passed => true,
+        Outcome::Failed => false,
+        Outcome::Unproven => return,
+    };
+    let t = out.entry(r.name).or_insert(Timed {
+        passed: true,
+        ms: None,
+    });
+    t.passed &= passed;
+    if r.ms.is_some() {
+        t.ms = r.ms;
     }
 }
 
+/// What a cargo `Running` or `Doc-tests` line says about the lines after it: `Some(Some(file))`
+/// for `Running tests/<file>.rs (<path>)`, `Some(None)` for `Running unittests …` and
+/// `Doc-tests …`, and `None` for any other line.
+fn cargo_target(line: &str) -> Option<Option<String>> {
+    if line.starts_with("Doc-tests ") {
+        return Some(None);
+    }
+    let rest = line.strip_prefix("Running ")?;
+    if rest.starts_with("unittests ") {
+        return Some(None);
+    }
+    let (file, path) = rest.strip_prefix("tests/")?.split_once(".rs (")?;
+    (!file.is_empty() && path.ends_with(')')).then(|| Some(file.to_string()))
+}
+
 /// The runner forms capture reads, as the hook's notice and the docs name them.
-pub const READABLE_RUNNERS: &str = "cargo test, pytest -v, python -m unittest -v, Vitest with \
+pub const READABLE_RUNNERS: &str = "cargo test, cargo nextest, pytest -v, python -m unittest -v, Vitest with \
     --reporter=verbose and Playwright with --reporter=list";
 
 /// The test runner one simple command (its words, environment assignments already set aside)
@@ -147,11 +208,8 @@ enum Outcome {
 struct Reading {
     name: String,
     outcome: Outcome,
-}
-
-/// One name's result for the run: a name seen more than once is green only if every line passed.
-fn record(out: &mut BTreeMap<String, bool>, name: String, passed: bool) {
-    *out.entry(name).or_insert(true) &= passed;
+    /// The duration the line printed, in whole milliseconds; `None` when it printed none.
+    ms: Option<u64>,
 }
 
 /// What a unittest line is, once read_unittest owns it.
@@ -205,7 +263,11 @@ fn read_unittest(line: &str) -> Option<Unittest> {
         return None;
     }
     Some(match unittest_outcome(verdict.trim()) {
-        Some(outcome) => Unittest::Result(Reading { name, outcome }),
+        Some(outcome) => Unittest::Result(Reading {
+            name,
+            outcome,
+            ms: None,
+        }),
         None => Unittest::Silent,
     })
 }
@@ -222,6 +284,93 @@ fn unittest_outcome(verdict: &str) -> Option<Outcome> {
     }
 }
 
+/// cargo-nextest: `<status> [<duration>] [(<i>/<n>)|(───)] <binary-id> <test>` (FTR-058).
+/// Boundary: the text before the first `[` is one of nextest's status words, the text up to the
+/// first `]` a duration `<s>.<ddd>s` padded with spaces (or `>`-prefixed on a SLOW line), then one
+/// space, an optional parenthesised counter, the binary id and the test's name. PASS, LEAK and
+/// FLAKY pass; FAIL, LEAK-FAIL, TIMEOUT, ABORT and any SIG<NAME> fail; SLOW, TRY, RETRY, START,
+/// TERMINATING and SETUP are owned and prove nothing, so no later reader takes them.
+fn read_nextest(line: &str) -> Option<Reading> {
+    let (status, rest) = line.split_once('[')?;
+    let (duration, rest) = rest.split_once(']')?;
+    let rest = rest.strip_prefix(' ')?;
+    let words: Vec<&str> = status.split_whitespace().collect();
+    let mut outcome = nextest_status(&words)?;
+    let duration = duration.trim();
+    let ms = match duration.strip_prefix('>') {
+        Some(d) => {
+            nextest_ms(d.trim())?;
+            outcome = Outcome::Unproven;
+            None
+        }
+        None => Some(nextest_ms(duration)?),
+    };
+    let rest = rest.trim_start();
+    let rest = match rest.strip_prefix('(') {
+        Some(r) => r.split_once(')')?.1.trim_start(),
+        None => rest,
+    };
+    let (binary_id, test) = rest.split_once(' ')?;
+    let test = test.trim();
+    if binary_id.is_empty() || test.is_empty() {
+        return None;
+    }
+    let ms = if matches!(outcome, Outcome::Unproven) {
+        None
+    } else {
+        ms
+    };
+    Some(Reading {
+        name: board_name(binary_id, test),
+        outcome,
+        ms,
+    })
+}
+
+/// What nextest's status words say, or `None` when they are not nextest's.
+fn nextest_status(words: &[&str]) -> Option<Outcome> {
+    let k_of_n = |s: &str| {
+        s.split_once('/')
+            .is_some_and(|(k, n)| all_digits(k) && all_digits(n))
+    };
+    let signal = |s: &str| {
+        s.strip_prefix("SIG")
+            .is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_uppercase()))
+    };
+    Some(match words {
+        ["PASS" | "LEAK"] => Outcome::Passed,
+        ["FLAKY", kn] if k_of_n(kn) => Outcome::Passed,
+        ["FAIL" | "LEAK-FAIL" | "TIMEOUT" | "ABORT"] => Outcome::Failed,
+        [s] if signal(s) => Outcome::Failed,
+        ["SLOW" | "RETRY" | "START" | "TERMINATING" | "SETUP"] => Outcome::Unproven,
+        ["TRY", k, "PASS" | "FAIL"] if all_digits(k) => Outcome::Unproven,
+        _ => return None,
+    })
+}
+
+/// nextest's `<s>.<ddd>s` in whole milliseconds, exact.
+fn nextest_ms(d: &str) -> Option<u64> {
+    let (secs, frac) = d.strip_suffix('s')?.split_once('.')?;
+    if !all_digits(secs) || frac.len() != 3 || !all_digits(frac) {
+        return None;
+    }
+    secs.parse::<u64>()
+        .ok()?
+        .checked_mul(1000)?
+        .checked_add(frac.parse().ok()?)
+}
+
+/// The board's name for a test nextest printed as `<binary_id> <test>`: an integration test
+/// binary's id `<crate>::<file>` (a part after `::` with no `/`) gives `<file>::<test>`, as cargo
+/// test's names are read (MNT-007 R-4); a library's (`kanbanr-core`) or a binary's
+/// (`kanbanr-cli::bin/kanbanr`) id gives `test` as printed.
+pub fn board_name(binary_id: &str, test: &str) -> String {
+    match binary_id.split_once("::") {
+        Some((_, part)) if !part.is_empty() && !part.contains('/') => format!("{part}::{test}"),
+        _ => test.to_string(),
+    }
+}
+
 /// cargo test: `test NAME ... ok|FAILED|ignored`. Boundary: the line starts with `test `; the
 /// name ends at the last ` ... `.
 fn read_cargo(line: &str) -> Option<Reading> {
@@ -235,6 +384,7 @@ fn read_cargo(line: &str) -> Option<Reading> {
     Some(Reading {
         name: name.trim().to_string(),
         outcome,
+        ms: None,
     })
 }
 
@@ -268,6 +418,7 @@ fn read_pytest(line: &str) -> Option<Reading> {
             return Some(Reading {
                 name: node.to_string(),
                 outcome,
+                ms: None,
             });
         }
     }
@@ -312,42 +463,54 @@ fn read_playwright(line: &str) -> Option<Vec<Reading>> {
     if file.is_empty() || !all_digits(row) || !all_digits(col) {
         return None;
     }
-    let titles = without_playwright_suffix(titles);
+    let (titles, ms) = without_playwright_suffix(titles);
     if titles.is_empty() {
         return None;
     }
-    let mk = |name: String| Reading { name, outcome };
+    let mk = |name: String| Reading { name, outcome, ms };
     Some(vec![
         mk(format!("{file}{SEP}{titles}")),
         mk(titles.to_string()),
     ])
 }
 
-/// Whether `d` is a Playwright duration: `<N>ms`, `<N>.<d>s`, `<N>.<d>m` or `<N>.<d>h`.
-fn is_playwright_duration(d: &str) -> bool {
+/// A Playwright duration in whole milliseconds: `<N>ms` as N; `<N>.<d>s`, `<N>.<d>m` and
+/// `<N>.<d>h` as N units and d tenths of one. `None` when `d` is not one.
+fn playwright_ms(d: &str) -> Option<u64> {
     if let Some(n) = d.strip_suffix("ms") {
-        return all_digits(n);
+        return if all_digits(n) { n.parse().ok() } else { None };
     }
-    let Some(n) = d
-        .strip_suffix('s')
-        .or_else(|| d.strip_suffix('m'))
-        .or_else(|| d.strip_suffix('h'))
-    else {
-        return false;
+    let (n, unit) = if let Some(n) = d.strip_suffix('s') {
+        (n, 1000)
+    } else if let Some(n) = d.strip_suffix('m') {
+        (n, 60_000)
+    } else {
+        (d.strip_suffix('h')?, 3_600_000)
     };
-    n.split_once('.')
-        .is_some_and(|(a, b)| all_digits(a) && b.len() == 1 && all_digits(b))
+    let (whole, tenth) = n.split_once('.')?;
+    if !all_digits(whole) || tenth.len() != 1 || !all_digits(tenth) {
+        return None;
+    }
+    let tenth: u64 = tenth.parse().ok()?;
+    whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(unit)?
+        .checked_add(tenth * unit / 10)
 }
 
-/// A Playwright title without its trailing ` (<duration>)` and then ` (retry #<N>)`.
-fn without_playwright_suffix(title: &str) -> &str {
+/// A Playwright title without its trailing ` (<duration>)` and then ` (retry #<N>)`, and the
+/// duration it dropped.
+fn without_playwright_suffix(title: &str) -> (&str, Option<u64>) {
     let mut s = title.trim();
+    let mut ms = None;
     if let Some(h) = s.strip_suffix(')')
         && let Some(i) = h.rfind(" (")
-        && is_playwright_duration(&h[i + 2..])
+        && let Some(d) = playwright_ms(&h[i + 2..])
         && !h[..i].trim_end().is_empty()
     {
         s = h[..i].trim_end();
+        ms = Some(d);
     }
     if let Some(h) = s.strip_suffix(')')
         && let Some(i) = h.rfind(" (retry #")
@@ -356,12 +519,13 @@ fn without_playwright_suffix(title: &str) -> &str {
     {
         s = h[..i].trim_end();
     }
-    s
+    (s, ms)
 }
 
 /// A marked line: `✓|×|✗|↓|□|PASS|FAIL <name>`, Vitest's suffix removed. Boundary: the mark is
 /// followed by exactly one ASCII space and then a non-space (so Playwright's `✓  1 ...` and
-/// nextest's `PASS [` are not this reader's lines).
+/// nextest's `PASS [` are not this reader's lines). The name keeps Vitest's `<N>ms` as the
+/// reading's duration.
 fn read_marked(line: &str) -> Option<Reading> {
     const MARKS: [(&str, Outcome); 7] = [
         ("\u{2713}", Outcome::Passed),
@@ -376,12 +540,17 @@ fn read_marked(line: &str) -> Option<Reading> {
         let Some(rest) = line.strip_prefix(mark).and_then(|r| r.strip_prefix(' ')) else {
             continue;
         };
-        if rest.is_empty() || rest.starts_with(' ') {
+        if rest.is_empty()
+            || rest.starts_with(' ')
+            || (matches!(mark, "PASS" | "FAIL") && rest.starts_with('['))
+        {
             return None;
         }
+        let (name, ms) = without_vitest_suffix(rest);
         return Some(Reading {
-            name: without_vitest_suffix(rest).to_string(),
+            name: name.to_string(),
             outcome,
+            ms,
         });
     }
     None
@@ -400,8 +569,8 @@ fn all_digits(s: &str) -> bool {
 
 /// `name` without Vitest's trailing suffix, from the end and in this order, each at most once and
 /// only while something would remain: a `[note]`, ` <N> MB heap used`, ` (repeat x<N>)`,
-/// ` (retry x<N>)`, then a token `<N>ms`.
-fn without_vitest_suffix(name: &str) -> &str {
+/// ` (retry x<N>)`, then a token `<N>ms`, which is returned as the duration.
+fn without_vitest_suffix(name: &str) -> (&str, Option<u64>) {
     let mut s = name.trim();
     // `[note]`: the last token begins with `[` and ends the line with `]`.
     if s.ends_with(']')
@@ -423,10 +592,15 @@ fn without_vitest_suffix(name: &str) -> &str {
             }
         }
     }
+    let mut ms = None;
     if let Some(h) = drop_last_token(s, |t| t.strip_suffix("ms").is_some_and(all_digits)) {
+        ms = s[h.len()..]
+            .trim()
+            .strip_suffix("ms")
+            .and_then(|n| n.parse().ok());
         s = h;
     }
-    s.trim()
+    (s.trim(), ms)
 }
 
 /// The `test.state` operations a run's `results` call for, stamped with the project revision the
@@ -888,6 +1062,244 @@ FAILED (failures=2, errors=1, skipped=1, expected failures=1, unexpected success
         let r = parse_results(&big);
         eprintln!("10k-line unittest parse: {:?}", t.elapsed());
         assert_eq!(r, parse_results(UNITTEST_3_14));
+    }
+
+    /// cargo-nextest 0.9.151's lines from the 16 Nov 2026 scratch-crate probe, verbatim (FTR-058).
+    const NEXTEST_0_9_151: &str = "\
+PASS [   0.006s] (2/4) nxprobe::cli_flow integration_ok
+FAIL [   0.004s] (1/4) nxprobe tests::fails
+SLOW [>  1.000s] (───) nxprobe tests::slowish";
+
+    /// The probe's lines among the other forms nextest prints, indented as nextest indents them: a
+    /// kanbanr integration test, unit test and binary test, then FLAKY, LEAK, LEAK-FAIL, TIMEOUT,
+    /// SIGSEGV, TRY and SLOW lines, the captured libtest line of the failure and the summary that
+    /// repeats its FAIL line.
+    fn nextest_transcript() -> String {
+        format!(
+            "{NEXTEST_0_9_151}
+    Starting 14 tests across 4 binaries
+        PASS [   0.012s] (3/14) kanbanr-cli::local_mode capture_records_x
+        PASS [   2.504s] (4/14) kanbanr-core evidence::tests::y
+        PASS [   0.020s] (5/14) kanbanr-cli::bin/kanbanr tests::z
+       FLAKY 2/3 [   0.100s] (6/14) kanbanr-core flaky::a
+        LEAK [   0.030s] (7/14) kanbanr-core leak::a
+   LEAK-FAIL [   0.031s] (8/14) kanbanr-core leakfail::a
+     TIMEOUT [  60.000s] (9/14) kanbanr-core timeout::a
+     SIGSEGV [   0.001s] (10/14) kanbanr-core seg::a
+  TRY 2 PASS [   0.050s] (11/14) kanbanr-core retried::a
+  TRY 1 FAIL [   0.040s] (12/14) kanbanr-core retried::b
+        SLOW [>  1.000s] (───) kanbanr-core slow::a
+        PASS [   1.234s] (13/14) nxprobe tests::slowish
+        PASS [   0.007s] nxprobe tests::uncounted
+--- STDOUT:              nxprobe tests::fails ---
+test tests::fails ... FAILED
+------------
+     Summary [   3.000s] 14 tests run: 10 passed, 4 failed, 0 skipped
+        FAIL [   0.004s] (1/4) nxprobe tests::fails"
+        )
+    }
+
+    /// FTR-058 R-1 (MNT-007's old R-4 name): nextest's lines are read, and each name is the
+    /// board's: an integration test binary's file joins the test's name, a library's or a
+    /// `bin/` binary's test keeps the name nextest prints.
+    #[test]
+    fn nextest_output_is_read_as_the_boards_test_names() {
+        let r = parse_results(&nextest_transcript());
+        for green in [
+            "cli_flow::integration_ok",
+            "local_mode::capture_records_x",
+            "evidence::tests::y",
+            "tests::z",
+            "flaky::a",
+            "leak::a",
+            "tests::slowish",
+            "tests::uncounted",
+        ] {
+            assert_eq!(r.get(green), Some(&true), "{green}: {r:?}");
+        }
+        for red in ["tests::fails", "leakfail::a", "timeout::a", "seg::a"] {
+            assert_eq!(r.get(red), Some(&false), "{red}: {r:?}");
+        }
+        // SLOW, TRY and summary lines add nothing.
+        for none in ["retried::a", "retried::b", "slow::a"] {
+            assert_eq!(r.get(none), None, "{none}: {r:?}");
+        }
+        assert_eq!(r.len(), 12, "{r:?}");
+        assert!(
+            r.keys()
+                .all(|k| !k.starts_with('[') && !k.contains("Summary")),
+            "no nextest line is read as a marked one: {r:?}"
+        );
+        // The probe alone: the SLOW line of a test with no later result proves nothing.
+        let r = parse_results(NEXTEST_0_9_151);
+        assert_eq!(r.get("cli_flow::integration_ok"), Some(&true));
+        assert_eq!(r.get("tests::fails"), Some(&false));
+        assert_eq!(r.len(), 2, "{r:?}");
+        // The summary's repeated FAIL keeps a test red, whatever came before.
+        let r = parse_results(
+            "PASS [   0.004s] (1/1) nxprobe tests::fails\nFAIL [   0.004s] (1/4) nxprobe tests::fails",
+        );
+        assert_eq!(r.get("tests::fails"), Some(&false));
+        // read_marked no longer owns a `PASS [` line.
+        assert!(read_marked("PASS [   0.006s] (2/4) nxprobe tests::x").is_none());
+        assert!(read_marked("FAIL [   0.006s] (2/4) nxprobe tests::x").is_none());
+        assert!(read_marked("PASS src/cart.test.ts").is_some());
+        // Not nextest lines: an unknown status word, a malformed duration.
+        assert!(parse_results("NOPE [   0.006s] (2/4) nxprobe tests::x").is_empty());
+        assert!(read_nextest("PASS [ abc ] (2/4) nxprobe tests::x").is_none());
+        assert!(read_nextest("PASS [   0.006s] (2/4) nxprobe").is_none());
+        assert_eq!(
+            board_name("kanbanr-cli::local_mode", "capture_x"),
+            "local_mode::capture_x"
+        );
+        assert_eq!(
+            board_name("kanbanr-core", "evidence::tests::y"),
+            "evidence::tests::y"
+        );
+        assert_eq!(
+            board_name("kanbanr-cli::bin/kanbanr", "tests::z"),
+            "tests::z"
+        );
+    }
+
+    /// FTR-058 R-1: nextest's durations are kept in whole milliseconds; a SLOW or TRY line keeps
+    /// none, and a name read twice keeps the last duration seen.
+    #[test]
+    fn nextest_lines_keep_their_durations() {
+        let r = parse_timed_results(&nextest_transcript());
+        let ms = |n: &str| r.get(n).and_then(|t| t.ms);
+        assert_eq!(ms("cli_flow::integration_ok"), Some(6));
+        assert_eq!(ms("evidence::tests::y"), Some(2504));
+        assert_eq!(ms("local_mode::capture_records_x"), Some(12));
+        assert_eq!(ms("tests::z"), Some(20));
+        assert_eq!(ms("flaky::a"), Some(100));
+        assert_eq!(ms("leak::a"), Some(30));
+        assert_eq!(ms("leakfail::a"), Some(31));
+        assert_eq!(ms("timeout::a"), Some(60_000));
+        assert_eq!(ms("seg::a"), Some(1));
+        assert_eq!(ms("tests::uncounted"), Some(7));
+        // SLOW then PASS: the PASS line's time.
+        assert_eq!(ms("tests::slowish"), Some(1234));
+        // FAIL, the captured libtest line (no time) and the summary's FAIL: still 4 ms, still red.
+        assert_eq!(
+            r.get("tests::fails"),
+            Some(&Timed {
+                passed: false,
+                ms: Some(4)
+            })
+        );
+        assert_eq!(r.get("slow::a"), None);
+        assert_eq!(r.get("retried::a"), None);
+    }
+
+    /// FTR-058 R-2: Vitest 5's and Playwright's durations are kept; a line with none keeps none.
+    #[test]
+    fn vitest_and_playwright_lines_keep_their_durations() {
+        let r = parse_timed_results(VITEST_5_1);
+        let ms = |r: &BTreeMap<String, Timed>, n: &str| r.get(n).and_then(|t| t.ms);
+        for (name, want) in [
+            ("src/App.test.tsx > title shows the basket item count", 41),
+            (
+                "src/App.test.tsx > title updates when the basket changes",
+                5,
+            ),
+            (
+                "src/components/BasketView.test.tsx > changes a line's quantity",
+                67,
+            ),
+            ("src/components/BasketView.test.tsx > removes a line", 12),
+            ("src/components/BasketView.test.tsx > shows the total", 9),
+            ("src/money.test.ts > formats paise as rupees", 2),
+            ("src/money.test.ts > rounds half up", 1),
+            ("src/money.test.ts > formats zero", 3),
+            ("src/money.test.ts > rejects negatives", 4),
+            ("built in", 163),
+        ] {
+            assert_eq!(ms(&r, name), Some(want), "{name}: {r:?}");
+        }
+        let one = |t: &str| parse_timed_results(t);
+        let r = one(" \u{2713} src/a.test.ts > flaky 12ms (retry x1)");
+        assert_eq!(ms(&r, "src/a.test.ts > flaky"), Some(12));
+        let r = one(" \u{2713} src/a.test.ts > big 13ms 34 MB heap used");
+        assert_eq!(ms(&r, "src/a.test.ts > big"), Some(13));
+        let r = one("\u{2713} cart retains items for 7 days");
+        assert_eq!(
+            r.get("cart retains items for 7 days"),
+            Some(&Timed {
+                passed: true,
+                ms: None
+            })
+        );
+        let r = one(PLAYWRIGHT_1_65);
+        assert_eq!(r.len(), 2);
+        assert!(r.values().all(|t| t.ms == Some(701)), "{r:?}");
+        let r = one(
+            "  \u{2713}  4 [firefox] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (retry #1) (1.0s)",
+        );
+        assert_eq!(ms(&r, "removes a line"), Some(1000));
+        let r = one("  \u{2713}  5 e2e/basket.spec.ts:30:1 \u{203a} no project (1.2m)");
+        assert_eq!(ms(&r, "no project"), Some(72_000));
+        let r = one("  \u{2713}  6 e2e/basket.spec.ts:30:1 \u{203a} long (1.5h)");
+        assert_eq!(ms(&r, "long"), Some(5_400_000));
+        let r = one("  \u{2713}  7 e2e/basket.spec.ts:30:1 \u{203a} quick (2.3s)");
+        assert_eq!(ms(&r, "quick"), Some(2300));
+        let r = one("  \u{2713}  8 e2e/basket.spec.ts:30:1 \u{203a} no time");
+        assert_eq!(
+            r.get("no time"),
+            Some(&Timed {
+                passed: true,
+                ms: None
+            })
+        );
+    }
+
+    /// FTR-058 R-3 (MNT-007's old R-4 name): cargo test's integration test results are named as
+    /// the board names them, `<file>::<test>`, from the `Running tests/<file>.rs` line until the
+    /// next target; a unit test, a nested module test and a doctest keep the name cargo prints.
+    #[test]
+    fn cargo_test_integration_output_is_read_as_the_boards_test_names() {
+        let text = "\
+     Running unittests src/lib.rs (target/debug/deps/kanbanr_core-1a2b3c)
+test evidence::tests::y ... ok
+     Running tests/local_mode.rs (target/debug/deps/local_mode-4d5e6f)
+test capture_x ... ok
+test capture_fails ... FAILED
+test nested::case ... ok
+     Running unittests src/main.rs (target/debug/deps/kanbanr-7a8b9c)
+test plain ... ok
+     Running tests/view_daemon.rs (target/debug/deps/view_daemon-0d1e2f)
+test routes_answer ... ok
+   Doc-tests kanbanr_core
+test src/lib.rs - f (line 3) ... ok";
+        let r = parse_results(text);
+        assert_eq!(r.get("evidence::tests::y"), Some(&true), "{r:?}");
+        assert_eq!(r.get("local_mode::capture_x"), Some(&true), "{r:?}");
+        assert_eq!(r.get("local_mode::capture_fails"), Some(&false), "{r:?}");
+        assert_eq!(r.get("nested::case"), Some(&true), "{r:?}");
+        assert_eq!(r.get("plain"), Some(&true), "{r:?}");
+        assert_eq!(r.get("view_daemon::routes_answer"), Some(&true), "{r:?}");
+        assert_eq!(r.get("src/lib.rs - f (line 3)"), Some(&true), "{r:?}");
+        assert_eq!(r.len(), 7, "the Running lines add nothing: {r:?}");
+    }
+
+    /// FTR-058 R-5: a run whose runner prints no duration records its results and no timing.
+    #[test]
+    fn a_run_without_durations_records_results_and_no_timing() {
+        let text = "\
+running 3 tests
+test hooks::tests::install_merges ... ok
+test report::tests::cycle_time ... FAILED
+test slow::case ... ignored
+tests/x.py::test_p PASSED [ 50%]
+test_add (tests.test_basket.BasketTests.test_add) ... ok";
+        let r = parse_timed_results(text);
+        assert_eq!(r.len(), 4, "{r:?}");
+        assert!(r.values().all(|t| t.ms.is_none()), "{r:?}");
+        assert!(r["hooks::tests::install_merges"].passed);
+        assert!(!r["report::tests::cycle_time"].passed);
+        assert!(r["tests/x.py::test_p"].passed);
+        assert!(r["tests.test_basket.BasketTests.test_add"].passed);
+        assert_eq!(parse_results(text).len(), 4);
     }
 
     #[test]
