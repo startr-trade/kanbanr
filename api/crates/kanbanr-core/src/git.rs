@@ -826,7 +826,7 @@ impl DocHistory {
         if state.repo.is_none() {
             state.stats.opens += 1;
             state.repo = Some(match Repository::discover(path.parent()?) {
-                Ok(repo) => match repo.workdir().and_then(|w| w.canonicalize().ok()) {
+                Ok(repo) => match repo.workdir().and_then(resolved) {
                     Some(workdir) => {
                         state.stats.walks += 1;
                         let commits = walk_commits(&repo);
@@ -849,7 +849,7 @@ impl DocHistory {
         else {
             return None;
         };
-        let full = path.parent()?.canonicalize().ok()?.join(path.file_name()?);
+        let full = resolved_file(path)?;
         let Ok(rel) = full.strip_prefix(workdir) else {
             // Outside the repository this history opened: not a board doc, judge it alone.
             drop(guard);
@@ -857,6 +857,7 @@ impl DocHistory {
                 .then(|| DocHistory::default().judge(path, t, false))
                 .flatten();
         };
+        let rel = std::path::PathBuf::from(slash_joined(rel));
         if commits.is_empty() {
             // No commits at all: anything on disk is new.
             return Some(full.exists());
@@ -869,16 +870,13 @@ impl DocHistory {
                 .map(|(_, tree)| *tree)
         });
         let then = match tree {
-            Some(tree) => *state
-                .then
-                .entry((tree, rel.to_path_buf()))
-                .or_insert_with(|| {
-                    repo.find_tree(tree)
-                        .ok()?
-                        .get_path(rel)
-                        .ok()
-                        .map(|entry| entry.id())
-                }),
+            Some(tree) => *state.then.entry((tree, rel.clone())).or_insert_with(|| {
+                repo.find_tree(tree)
+                    .ok()?
+                    .get_path(&rel)
+                    .ok()
+                    .map(|entry| entry.id())
+            }),
             None => None,
         };
         let now = *state.now.entry(full.clone()).or_insert_with(|| {
@@ -888,6 +886,27 @@ impl DocHistory {
         });
         Some(then != now)
     }
+}
+
+/// `path` resolved through `canonicalize`, without Windows' verbatim prefix (`\\?\`), so it joins
+/// and compares with the other resolved paths (MNT-007).
+fn resolved(path: &Path) -> Option<std::path::PathBuf> {
+    path.canonicalize()
+        .ok()
+        .map(crate::project::without_verbatim_prefix)
+}
+
+/// A file's path with its folder resolved; the file itself need not exist.
+fn resolved_file(path: &Path) -> Option<std::path::PathBuf> {
+    Some(resolved(path.parent()?)?.join(path.file_name()?))
+}
+
+/// A path inside the workdir as git names it: its components joined with `/` on every system.
+fn slash_joined(rel: &Path) -> String {
+    rel.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// The history from HEAD as `(commit time, tree)`, newest first by commit time. Of commits made in
@@ -1015,9 +1034,9 @@ pub(crate) fn doc_changed_since_single_walk(path: &Path, t: &str) -> Option<bool
         .ok()?
         .unix_timestamp();
     let repo = Repository::discover(path.parent()?).ok()?;
-    let workdir = repo.workdir()?.canonicalize().ok()?;
-    let full = path.parent()?.canonicalize().ok()?.join(path.file_name()?);
-    let rel = full.strip_prefix(&workdir).ok()?;
+    let workdir = resolved(repo.workdir()?)?;
+    let full = resolved_file(path)?;
+    let rel = std::path::PathBuf::from(slash_joined(full.strip_prefix(&workdir).ok()?));
 
     // The baseline: the newest commit at or before `t`. None before the first commit.
     let mut walk = repo.revwalk().ok()?;
@@ -1031,7 +1050,7 @@ pub(crate) fn doc_changed_since_single_walk(path: &Path, t: &str) -> Option<bool
         .flatten()
         .filter_map(|oid| repo.find_commit(oid).ok())
         .find(|c| c.time().seconds() <= since);
-    let then = baseline.and_then(|c| c.tree().ok()?.get_path(rel).ok().map(|entry| entry.id()));
+    let then = baseline.and_then(|c| c.tree().ok()?.get_path(&rel).ok().map(|entry| entry.id()));
     let now = full
         .is_file()
         .then(|| git2::Oid::hash_file(git2::ObjectType::Blob, &full).ok())
@@ -1455,6 +1474,32 @@ mod tests {
         );
         let ignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert!(ignore.lines().any(|l| l.trim() == "*.tmp"), "{ignore}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MNT-007 R-8: a file two levels into the workdir is named relative to it, `/`-joined, and
+    /// neither resolved side carries Windows' verbatim prefix (`\\?\`), which would make every
+    /// board doc look outside its repository.
+    #[test]
+    fn a_path_inside_the_workdir_is_relative_and_slash_joined_without_a_verbatim_prefix() {
+        let dir = temp("slash-joined");
+        let repo = Repository::init(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        let file = dir.join("a").join("b.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let workdir = resolved(repo.workdir().unwrap()).unwrap();
+        let full = resolved_file(&file).unwrap();
+        for p in [&workdir, &full] {
+            assert!(!p.to_string_lossy().starts_with(r"\\?\"), "{}", p.display());
+        }
+        assert_eq!(slash_joined(full.strip_prefix(&workdir).unwrap()), "a/b.rs");
+        // On every system: the prefix a Windows canonicalize adds is what `resolved` strips.
+        assert_eq!(
+            crate::project::without_verbatim_prefix(PathBuf::from(r"\\?\C:\w\a\b.rs")),
+            PathBuf::from(r"C:\w\a\b.rs")
+        );
+        #[cfg(windows)]
+        assert_eq!(slash_joined(Path::new(r"a\b.rs")), "a/b.rs");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

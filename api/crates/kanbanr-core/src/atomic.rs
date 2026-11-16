@@ -34,10 +34,7 @@ pub(crate) fn write_with(
     bytes: &[u8],
     before_rename: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let target = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
-        _ => path.to_path_buf(),
-    };
+    let target = target_of(path)?;
     let folder = match target.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
@@ -147,6 +144,18 @@ fn is_temp_name(name: &str) -> bool {
     let digits =
         |s: Option<&str>| s.is_some_and(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()));
     digits(n) && digits(pid) && base.is_some_and(|b| !b.is_empty())
+}
+
+/// The file a write replaces: `path`, or the file a symbolic link at `path` points to, resolved
+/// without Windows' verbatim prefix (`\\?\`) so the temporary file's name and the errors read as
+/// ordinary paths (MNT-007).
+fn target_of(path: &Path) -> std::io::Result<PathBuf> {
+    Ok(match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            crate::project::without_verbatim_prefix(std::fs::canonicalize(path)?)
+        }
+        _ => path.to_path_buf(),
+    })
 }
 
 #[cfg(test)]
@@ -274,6 +283,31 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MNT-007 R-8: a link's target is resolved with no verbatim prefix. The prefix rule is checked
+    /// on every system; a real link only under unix, where tests may make one (L-46).
+    #[test]
+    fn a_symlinked_target_is_resolved_without_a_verbatim_prefix() {
+        assert_eq!(
+            crate::project::without_verbatim_prefix(PathBuf::from(r"\\?\C:\board\real.yaml")),
+            PathBuf::from(r"C:\board\real.yaml")
+        );
+        let dir = scratch("verbatim");
+        let plain = dir.join("plain.yaml");
+        std::fs::write(&plain, "x").unwrap();
+        assert_eq!(target_of(&plain).unwrap(), plain);
+        #[cfg(unix)]
+        {
+            let real = dir.join("real.yaml");
+            let link = dir.join("link.yaml");
+            std::fs::write(&real, "old").unwrap();
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let target = target_of(&link).unwrap();
+            assert!(!target.to_string_lossy().starts_with(r"\\?\"));
+            assert_eq!(target, std::fs::canonicalize(&real).unwrap());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
