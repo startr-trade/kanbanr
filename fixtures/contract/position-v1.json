@@ -124,8 +124,8 @@
       "config": {
         "core.autocrlf": "true"
       },
-      "expected": "24decf6736b06f0cc4316d60422201b95902e9be+3323e56b80880664fc6ed84e5adf81db2f5bf5a9400eb3998e66dde99b3e2432",
-      "note": "git status reports this clean, because it applies filters; a position compares raw bytes, so it is dirty"
+      "expected": "24decf6736b06f0cc4316d60422201b95902e9be",
+      "note": "clean, as git status reports it: a position compares each file in its repository form, after git's to-git conversion (core.autocrlf, core.eol, text/eol/crlf attributes), so CRLF line endings git would normalise are no change (FEAT-141)"
     }
   ]
 }

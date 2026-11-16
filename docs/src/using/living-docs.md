@@ -169,9 +169,9 @@ ID you saw last week names the same picture today, and a different ID means some
 view that could not be read consistently (a file changed under it) has no ID and a warning.
 
 Two things to know. A submodule's own state does not move the position (a committed change to the
-submodule's pointer does). And a checkout whose filters change bytes (`core.autocrlf`,
-`text=auto`) reads as changed where `git status` says it is clean, so there a view is exact only
-at the live position, never at the commit.
+submodule's pointer does). And a checkout whose line endings git converts on checkout
+(`core.autocrlf`, `.gitattributes` `eol=crlf`) reads as clean, as `git status` and katalogr read it,
+so a view there is exact at the commit too.
 
 ### Drift as work lands
 

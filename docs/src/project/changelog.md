@@ -148,6 +148,14 @@ All notable changes to kanbanr are documented here. The format follows
 - The Claude docs guard judges a file in a linked worktree by its own repository's path, so the
   book, the changelog and the skill are no longer refused there (DEF-065).
 
+### Fixed
+
+- **A checkout with line-ending conversion reads clean (DEF-066).** A position compares each
+  working file as git would store it (`core.autocrlf`, `core.eol`, the `text`, `eol`, `crlf` and
+  `ident` attributes), so a Windows or `core.autocrlf` checkout no longer reads as changed and
+  kanbanr and katalogr give it the same position and view ID. Driver filters such as LFS are never
+  run.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added

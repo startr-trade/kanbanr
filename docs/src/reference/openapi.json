@@ -623,7 +623,7 @@
         "type": "object"
       },
       "ChangedPath": {
-        "description": "One uncommitted path: its raw blob id, absent for a deleted path.",
+        "description": "One uncommitted path: its repository-form blob id (what `git add` would store), absent for a\ndeleted path.",
         "properties": {
           "blob": {
             "type": "string"

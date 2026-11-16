@@ -4,9 +4,15 @@
 //!
 //! FTR-003 took this over from SPK-001: `kanbanr position`, `kanbanr view` and the daemon's
 //! position and view routes read it.
+//!
+//! Each working file is compared in its repository form, after git's to-git conversion
+//! (`core.autocrlf`, `core.eol`, the `text`, `eol`, `crlf` and `ident` attributes), and the dirty
+//! part carries repository-form blob ids: the ids `git add` would store (DEF-066, katalogr
+//! FEAT-141). Driver filters are never run.
 
 use crate::coderepo::{git_raw, rev_parse};
 use crate::error::{CoreError, Result};
+use crate::repoform::RepoForm;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -177,7 +183,7 @@ pub fn view_id(positions: &[PositionRef], facts: &str, q: &ViewQuery) -> String 
 }
 
 /// A checkout's position and the paths that make its dirty part, sorted by path; the blob id is
-/// None for a deleted path. Paths are the repo-relative, '/'-separated bytes git prints, lossy
+/// the repository-form blob id (what `git add` would store), None for a deleted path. Paths are the repo-relative, '/'-separated bytes git prints, lossy
 /// UTF-8.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkingState {
@@ -196,9 +202,9 @@ fn path_of(root: &Path, path: &[u8]) -> PathBuf {
     root.join(String::from_utf8_lossy(path).as_ref())
 }
 
-/// What git would hash for `path` with no filter applied: a symbolic link's target, a regular
-/// file's bytes; None for anything else (missing, a directory).
-fn raw_bytes(root: &Path, path: &[u8]) -> Option<Vec<u8>> {
+/// What is at `path` with no filter applied: a symbolic link's target, a regular file's bytes; None
+/// for anything else (missing, a directory). The flag says whether the path is a symbolic link.
+fn raw_bytes(root: &Path, path: &[u8]) -> Option<(Vec<u8>, bool)> {
     let full = path_of(root, path);
     let meta = std::fs::symlink_metadata(&full).ok()?;
     if meta.file_type().is_symlink() {
@@ -206,15 +212,42 @@ fn raw_bytes(root: &Path, path: &[u8]) -> Option<Vec<u8>> {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
-            return Some(target.as_os_str().as_bytes().to_vec());
+            return Some((target.as_os_str().as_bytes().to_vec(), true));
         }
         #[cfg(not(unix))]
-        return Some(target.to_string_lossy().replace('\\', "/").into_bytes());
+        return Some((
+            target.to_string_lossy().replace('\\', "/").into_bytes(),
+            true,
+        ));
     }
     if meta.is_file() {
-        return std::fs::read(&full).ok();
+        return std::fs::read(&full).ok().map(|b| (b, false));
     }
     None
+}
+
+/// What git would store at `path` (DEF-066): None when nothing regular is there; else the blob id
+/// and the bytes it hashes. `known` is the id to try first (the HEAD blob, or the id a position
+/// recorded): raw bytes that hash to it are returned unconverted. A symbolic link's target and a
+/// path that is not UTF-8 are taken raw; any other regular file is taken in its repository form.
+fn stored_id(
+    form: &mut RepoForm,
+    root: &Path,
+    path: &[u8],
+    known: Option<&str>,
+) -> Option<(String, Vec<u8>)> {
+    let (raw, is_link) = raw_bytes(root, path)?;
+    let raw_id = blob_id(&raw);
+    if is_link || known == Some(raw_id.as_str()) {
+        return Some((raw_id, raw));
+    }
+    let Ok(rela) = std::str::from_utf8(path) else {
+        return Some((raw_id, raw));
+    };
+    match form.convert(rela, &raw) {
+        std::borrow::Cow::Borrowed(_) => Some((raw_id, raw)),
+        std::borrow::Cow::Owned(stored) => Some((blob_id(&stored), stored)),
+    }
 }
 
 /// The blobs of `ls-tree -r -z <commit> [-- prefix]`: path bytes to blob id; gitlinks skipped.
@@ -254,25 +287,99 @@ fn nul_list(bytes: Vec<u8>) -> Vec<Vec<u8>> {
 /// An unborn HEAD gives commit None with every untracked, not ignored file counted. Reads only;
 /// no cache (katalogr's stat cache is not copied: see the SPK-001 result).
 pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
+    let (commit, head) = head_of_checkout(root)?;
+    let workers = workers_for(head.len());
+    read_from(root, repo, commit, head, workers).map(|(s, _)| s)
+}
+
+/// The most threads that read a checkout's tracked files (DEF-066: four took about 3.5 times less
+/// time than one over 10,000 CRLF files, eight only 12-20 % less than four).
+const MAX_WORKERS: usize = 4;
+
+/// The worker count for `n` tracked paths: min(MAX_WORKERS, available_parallelism, ceil(n / 512)),
+/// at least 1. Below about 512 files a thread and a repository open are not worth it.
+fn workers_for(n: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    MAX_WORKERS.min(cores).min(n.div_ceil(512)).max(1)
+}
+
+/// HEAD's blobs: path bytes to blob id.
+type HeadBlobs = BTreeMap<Vec<u8>, String>;
+
+/// Tracked paths whose stored id differs from HEAD's (None when deleted), in path order.
+type TrackedLines = Vec<(Vec<u8>, Option<String>)>;
+
+/// HEAD's commit, None when unborn, and its blobs.
+fn head_of_checkout(root: &Path) -> Result<(Option<String>, HeadBlobs)> {
     let commit = rev_parse(root, "HEAD").ok();
     let head = match &commit {
         Some(c) => head_blobs(root, c, "")?,
         None => BTreeMap::new(),
     };
-    let mut lines: BTreeMap<Vec<u8>, Option<String>> = BTreeMap::new();
-    for (path, oid) in &head {
-        match raw_bytes(root, path) {
-            Some(bytes) => {
-                let id = blob_id(&bytes);
-                if &id != oid {
-                    lines.insert(path.clone(), Some(id));
-                }
-            }
-            None => {
-                lines.insert(path.clone(), None);
-            }
+    Ok((commit, head))
+}
+
+/// read_position's body: the state, and how many files it converted. `workers` is the number of
+/// threads that read the tracked files (1 reads on the calling thread). read_position lists HEAD
+/// once and calls [`read_from`] with `workers_for` of its length; this entry point, with the count
+/// given, is what the tests use.
+#[cfg(test)]
+pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(WorkingState, usize)> {
+    let (commit, head) = head_of_checkout(root)?;
+    read_from(root, repo, commit, head, workers)
+}
+
+/// The tracked paths of `part` whose stored id differs from HEAD's, or that are deleted (None), in
+/// order, and how many files the read converted.
+fn read_tracked(root: &Path, part: &[(&[u8], &str)]) -> (TrackedLines, usize) {
+    let mut form = RepoForm::new(root);
+    let mut out = Vec::new();
+    for (path, oid) in part {
+        match stored_id(&mut form, root, path, Some(oid)) {
+            Some((id, _)) if id == *oid => {}
+            Some((id, _)) => out.push((path.to_vec(), Some(id))),
+            None => out.push((path.to_vec(), None)),
         }
     }
+    (out, form.converted())
+}
+
+/// read_state with HEAD already listed: the tracked files on `workers` threads in contiguous
+/// chunks, joined in chunk order; untracked and staged-new paths on the calling thread.
+fn read_from(
+    root: &Path,
+    repo: &str,
+    commit: Option<String>,
+    head: HeadBlobs,
+    workers: usize,
+) -> Result<(WorkingState, usize)> {
+    let tracked: Vec<(&[u8], &str)> = head
+        .iter()
+        .map(|(p, o)| (p.as_slice(), o.as_str()))
+        .collect();
+    let workers = workers.max(1);
+    let parts: Vec<(TrackedLines, usize)> = if workers == 1 || tracked.len() < 2 {
+        vec![read_tracked(root, &tracked)]
+    } else {
+        let chunk = tracked.len().div_ceil(workers);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = tracked
+                .chunks(chunk)
+                .map(|part| s.spawn(move || read_tracked(root, part)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        })
+    };
+    let mut lines: BTreeMap<Vec<u8>, Option<String>> = BTreeMap::new();
+    let mut converted = 0;
+    for (found, n) in parts {
+        converted += n;
+        lines.extend(found);
+    }
+    let mut form = RepoForm::new(root);
     let others = nul_list(git_raw(
         root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
@@ -295,8 +402,8 @@ pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
         if head.contains_key(&path) || lines.contains_key(&path) {
             continue;
         }
-        if let Some(bytes) = raw_bytes(root, &path) {
-            lines.insert(path, Some(blob_id(&bytes)));
+        if let Some((id, _)) = stored_id(&mut form, root, &path, None) {
+            lines.insert(path, Some(id));
         }
     }
     let dirty = dirty_hash(lines.iter().map(|(p, id)| (p.as_slice(), id.as_deref())));
@@ -304,19 +411,23 @@ pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
         .into_iter()
         .map(|(p, id)| (String::from_utf8_lossy(&p).into_owned(), id))
         .collect();
-    Ok(WorkingState {
-        position: PositionRef {
-            repo: repo.to_string(),
-            commit,
-            dirty,
+    Ok((
+        WorkingState {
+            position: PositionRef {
+                repo: repo.to_string(),
+                commit,
+                dirty,
+            },
+            changed,
         },
-        changed,
-    })
+        converted + form.converted(),
+    ))
 }
 
 /// The bytes of `path` at the position `state` describes, with nothing checked out. None when the
-/// path is absent there. Err when an uncommitted path's bytes no longer hash to what the position
-/// recorded ("position moved").
+/// path is absent there. An uncommitted path is served in its repository form (DEF-066 R-3): the
+/// raw bytes when they already hash to the recorded id, else the bytes git would store, which do.
+/// Err when neither hashes to what the position recorded ("position moved").
 pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<Vec<u8>>> {
     if let Ok(i) = state
         .changed
@@ -325,8 +436,9 @@ pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<V
         let Some(want) = &state.changed[i].1 else {
             return Ok(None);
         };
-        return match raw_bytes(root, path.as_bytes()) {
-            Some(bytes) if &blob_id(&bytes) == want => Ok(Some(bytes)),
+        let mut form = RepoForm::new(root);
+        return match stored_id(&mut form, root, path.as_bytes(), Some(want)) {
+            Some((id, bytes)) if &id == want => Ok(Some(bytes)),
             _ => Err(CoreError::Git(format!(
                 "position moved: {path} changed since the position was read"
             ))),
@@ -388,7 +500,8 @@ pub struct PositionAnswer {
     pub changed: Vec<ChangedPath>,
 }
 
-/// One uncommitted path: its raw blob id, absent for a deleted path.
+/// One uncommitted path: its repository-form blob id (what `git add` would store), absent for a
+/// deleted path.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChangedPath {
@@ -574,8 +687,9 @@ mod tests {
 
     use crate::coderepo::{git, tests::commit_file, tests::scratch_repo};
 
-    /// A scratch repository that no global git setting can bend: no line-ending conversion and an
-    /// empty global ignore file. Removes itself with `gone`.
+    /// A scratch repository that no global git setting can bend: no line-ending conversion, an
+    /// empty global ignore file and an empty global attributes file, pinned in its own config
+    /// (libgit2 does not honour GIT_CONFIG_GLOBAL). Removes itself with `gone`.
     fn repo(name: &str) -> PathBuf {
         let dir = scratch_repo(&format!("pos-{name}"));
         let empty = dir.join(".git/empty-excludes");
@@ -586,6 +700,19 @@ mod tests {
             &["config", "core.excludesFile", empty.to_str().unwrap()],
         )
         .unwrap();
+        let attrs = dir.join(".git/empty-attributes");
+        std::fs::write(&attrs, "").unwrap();
+        git(
+            &dir,
+            &["config", "core.attributesFile", attrs.to_str().unwrap()],
+        )
+        .unwrap();
+        assert!(
+            dir.canonicalize()
+                .unwrap()
+                .starts_with(std::env::temp_dir().canonicalize().unwrap()),
+            "the scratch repository is the test's own"
+        );
         dir
     }
 
@@ -712,11 +839,24 @@ mod tests {
 
     // ---- the shared file (R-1) ----
 
-    fn contract() -> serde_json::Value {
+    fn contract_bytes() -> Vec<u8> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../fixtures/contract/position-v1.json");
-        serde_json::from_slice(&std::fs::read(path).expect("read position-v1.json"))
-            .expect("parse position-v1.json")
+        std::fs::read(path).expect("read position-v1.json")
+    }
+
+    fn contract() -> serde_json::Value {
+        serde_json::from_slice(&contract_bytes()).expect("parse position-v1.json")
+    }
+
+    /// DEF-066 R-1: the shared file is katalogr's copy at 04fe2e7 (its v0.2.0) byte for byte, so a
+    /// hand edit or a stale copy fails.
+    #[test]
+    fn shared_file_is_katalogrs_copy() {
+        assert_eq!(
+            blob_id(&contract_bytes()),
+            "3cd6f5d073717aa8142533f53819459f9258e29d"
+        );
     }
 
     fn files(v: &serde_json::Value) -> BTreeMap<String, String> {
@@ -814,6 +954,7 @@ mod tests {
             let empty_s = empty.to_str().unwrap();
             git(&r, &["config", "core.autocrlf", "false"]).unwrap();
             git(&r, &["config", "core.excludesFile", empty_s]).unwrap();
+            git(&r, &["config", "core.attributesFile", empty_s]).unwrap();
             for (path, text) in files(&c["head"]) {
                 put(&r, &path, &text);
             }
@@ -976,6 +1117,296 @@ mod tests {
         gone(&d);
     }
 
+    // ---- the repository form (DEF-066) ----
+
+    /// How a CRLF checkout gets its CRLF: `core.autocrlf=true`, or a committed `.gitattributes`.
+    #[derive(Clone, Copy, Debug)]
+    enum Eol {
+        AutoCrlf,
+        Attributes,
+    }
+
+    const BIN: &[u8] = b"\0\x01bin\r\nary\r\n\x02";
+
+    /// DEF-066: a checkout whose text files git checked out with CRLF over LF blobs. Commits
+    /// `a.txt`, `src/lib.rs`, `docs/guide.md` (LF) and `bin.dat` (binary with CRLF), configures the
+    /// conversion, deletes the files and checks them out again.
+    fn crlf_checkout(name: &str, eol: Eol) -> PathBuf {
+        let d = repo(name);
+        put(&d, "a.txt", "alpha\nbeta\n");
+        put(&d, "src/lib.rs", "fn a() {}\nfn b() {}\n");
+        put(&d, "docs/guide.md", "# Guide\n\nText.\n");
+        std::fs::write(d.join("bin.dat"), BIN).unwrap();
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "lf"]).unwrap();
+        match eol {
+            Eol::AutoCrlf => {
+                git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+            }
+            Eol::Attributes => commit_file(&d, ".gitattributes", "* text=auto eol=crlf\n", "eol"),
+        }
+        for f in ["a.txt", "src/lib.rs", "docs/guide.md", "bin.dat"] {
+            std::fs::remove_file(d.join(f)).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        assert_eq!(
+            std::fs::read(d.join("a.txt")).unwrap(),
+            b"alpha\r\nbeta\r\n"
+        );
+        assert_eq!(
+            std::fs::read(d.join("src/lib.rs")).unwrap(),
+            b"fn a() {}\r\nfn b() {}\r\n"
+        );
+        assert_eq!(
+            std::fs::read(d.join("docs/guide.md")).unwrap(),
+            b"# Guide\r\n\r\nText.\r\n"
+        );
+        assert_eq!(std::fs::read(d.join("bin.dat")).unwrap(), BIN);
+        d
+    }
+
+    /// What `git add <file>` then `git ls-files -s <file>` stores for `file`.
+    fn added_id(d: &Path, file: &str) -> String {
+        git(d, &["add", file]).unwrap();
+        let line = git(d, &["ls-files", "-s", "--", file]).unwrap();
+        line.split_whitespace().nth(1).unwrap().to_string()
+    }
+
+    fn id_of<'a>(st: &'a WorkingState, path: &str) -> Option<&'a str> {
+        st.changed
+            .iter()
+            .find(|(p, _)| p == path)
+            .and_then(|(_, id)| id.as_deref())
+    }
+
+    /// DEF-066 R-2: a CRLF checkout of LF blobs reads clean, by either way of getting CRLF; the
+    /// binary file counts as unchanged.
+    #[test]
+    fn crlf_checkout_is_clean() {
+        for (name, eol) in [
+            ("clean-auto", Eol::AutoCrlf),
+            ("clean-attr", Eol::Attributes),
+        ] {
+            let d = crlf_checkout(name, eol);
+            let head = git(&d, &["rev-parse", "HEAD"]).unwrap();
+            for _ in 0..2 {
+                let st = pos(&d);
+                assert_eq!(st.position.dirty, None, "{eol:?}: {:?}", st.changed);
+                assert_eq!(st.position.commit.as_deref(), Some(head.as_str()));
+                assert!(st.changed.is_empty(), "{eol:?}: {:?}", st.changed);
+            }
+            gone(&d);
+        }
+    }
+
+    /// DEF-066 R-2: a real edit in a CRLF checkout, and an untracked CRLF file, carry the ids
+    /// `git add` stores, the LF form's.
+    #[test]
+    fn real_edit_in_a_crlf_checkout_has_the_stored_id() {
+        let d = crlf_checkout("edit-crlf", Eol::AutoCrlf);
+        std::fs::write(d.join("src/lib.rs"), "fn a() {}\r\nfn c() {}\r\n").unwrap();
+        std::fs::write(d.join("new.txt"), "x\r\ny\r\n").unwrap();
+        let st = pos(&d);
+        let paths: Vec<&str> = st.changed.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(paths, vec!["new.txt", "src/lib.rs"]);
+        let lib = blob_id(b"fn a() {}\nfn c() {}\n");
+        assert_eq!(id_of(&st, "src/lib.rs"), Some(lib.as_str()));
+        let new = blob_id(b"x\ny\n");
+        assert_eq!(id_of(&st, "new.txt"), Some(new.as_str()));
+        assert_eq!(added_id(&d, "src/lib.rs"), lib);
+        assert_eq!(added_id(&d, "new.txt"), new);
+        assert_eq!(pos(&d), st, "staging changed the position");
+        gone(&d);
+    }
+
+    /// DEF-066 R-2: a binary file with CRLF, tracked or untracked, keeps its raw-bytes id.
+    #[test]
+    fn binary_with_crlf_is_not_converted() {
+        let d = crlf_checkout("bin-crlf", Eol::AutoCrlf);
+        let edited: &[u8] = b"\0\x02bin\r\nedited\r\n";
+        let new: &[u8] = b"\0new\r\nbin\r\n";
+        std::fs::write(d.join("bin.dat"), edited).unwrap();
+        std::fs::write(d.join("new.bin"), new).unwrap();
+        let st = pos(&d);
+        assert_eq!(id_of(&st, "bin.dat"), Some(blob_id(edited).as_str()));
+        assert_eq!(id_of(&st, "new.bin"), Some(blob_id(new).as_str()));
+        assert_eq!(st.changed.len(), 2, "{:?}", st.changed);
+        gone(&d);
+    }
+
+    /// DEF-066 R-2: a blob committed with CRLF is not normalised later ("safer autocrlf"): a CRLF
+    /// edit keeps its raw id.
+    #[test]
+    fn crlf_in_the_index_is_not_normalised() {
+        let d = repo("crlf-index");
+        std::fs::write(d.join("c.txt"), "a\r\nb\r\n").unwrap();
+        git(&d, &["add", "c.txt"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "crlf blob"]).unwrap();
+        commit_file(&d, ".gitattributes", "* text=auto\n", "auto");
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        assert!(pos(&d).position.is_clean());
+        let edit: &[u8] = b"a\r\nb\r\nc\r\n";
+        std::fs::write(d.join("c.txt"), edit).unwrap();
+        let st = pos(&d);
+        assert_eq!(id_of(&st, "c.txt"), Some(blob_id(edit).as_str()));
+        assert_eq!(added_id(&d, "c.txt"), blob_id(edit));
+        gone(&d);
+    }
+
+    /// DEF-066 R-2: under each attribute that converts, an untracked file's id is what `git add`
+    /// stores, and staging it changes no position.
+    #[test]
+    fn repository_form_ids_match_what_git_add_stores() {
+        let d = repo("attrs");
+        // A person's global core.safecrlf=true would make `git add` refuse a mixed file.
+        git(&d, &["config", "core.safecrlf", "false"]).unwrap();
+        commit_file(
+            &d,
+            ".gitattributes",
+            "*.bat -text\n*.t text\n*.old crlf\n*.lf eol=lf\n*.c ident\n",
+            "attributes",
+        );
+        let cases: [(&str, &[u8]); 5] = [
+            ("r.bat", b"a\r\n"),
+            ("m.t", b"a\rb\r\nc\r\n"),
+            ("x.old", b"q\r\n"),
+            ("y.lf", b"q\r\nw\n"),
+            ("a.c", b"$Id: 1234567890 $\nint x;\n"),
+        ];
+        let second = repo("attrs-input");
+        git(&second, &["config", "core.autocrlf", "input"]).unwrap();
+        std::fs::write(second.join("a.txt"), b"a\r\n").unwrap();
+        for (f, bytes) in cases {
+            std::fs::write(d.join(f), bytes).unwrap();
+        }
+        for (root, names) in [
+            (&d, cases.iter().map(|(f, _)| *f).collect::<Vec<_>>()),
+            (&second, vec!["a.txt"]),
+        ] {
+            let st = pos(root);
+            for f in &names {
+                let id = id_of(&st, f)
+                    .unwrap_or_else(|| panic!("{f} not changed"))
+                    .to_string();
+                assert_eq!(added_id(root, f), id, "{f}");
+            }
+            assert_eq!(pos(root), st, "staging changed the position");
+        }
+        // The conversions are real ones, not the identity.
+        let st = pos(&d);
+        assert_eq!(id_of(&st, "r.bat"), Some(blob_id(b"a\r\n").as_str()));
+        assert_eq!(id_of(&st, "x.old"), Some(blob_id(b"q\n").as_str()));
+        assert_eq!(id_of(&st, "a.c"), Some(blob_id(b"$Id$\nint x;\n").as_str()));
+        let st = pos(&second);
+        assert_eq!(id_of(&st, "a.txt"), Some(blob_id(b"a\n").as_str()));
+        gone(&d);
+        gone(&second);
+    }
+
+    /// DEF-066 R-2: `core.safecrlf=true` never fails a read; a mixed file converts.
+    #[test]
+    fn safecrlf_does_not_fail_a_read() {
+        let d = repo("safecrlf");
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        git(&d, &["config", "core.safecrlf", "true"]).unwrap();
+        std::fs::write(d.join("m.txt"), b"a\r\nb\n").unwrap();
+        let st = read_position(&d, "r").expect("the read succeeds");
+        assert_eq!(id_of(&st, "m.txt"), Some(blob_id(b"a\nb\n").as_str()));
+        gone(&d);
+    }
+
+    /// DEF-066 R-4: with no conversion configured, CR bytes stay in the ids.
+    #[test]
+    fn lf_checkout_ids_are_raw_bytes_ids() {
+        let d = repo("lf-raw");
+        let edit: &[u8] = b"one\r\nmore\r\n";
+        std::fs::write(d.join("README"), edit).unwrap();
+        std::fs::write(d.join("b.txt"), b"b\r\n").unwrap();
+        let st = pos(&d);
+        assert_eq!(id_of(&st, "README"), Some(blob_id(edit).as_str()));
+        assert_eq!(id_of(&st, "b.txt"), Some(blob_id(b"b\r\n").as_str()));
+        gone(&d);
+    }
+
+    /// DEF-066 R-3: an uncommitted CRLF file is served as the LF bytes git would store, which hash
+    /// to the recorded id; a later edit is still "position moved".
+    #[test]
+    fn read_at_serves_the_repository_form_of_a_crlf_file() {
+        let d = crlf_checkout("readat-crlf", Eol::AutoCrlf);
+        std::fs::write(d.join("docs/guide.md"), "# Guide\r\n\r\nEdited.\r\n").unwrap();
+        let st = pos(&d);
+        let lf: &[u8] = b"# Guide\n\nEdited.\n";
+        assert_eq!(id_of(&st, "docs/guide.md"), Some(blob_id(lf).as_str()));
+        let got = read_at(&d, &st, "docs/guide.md").unwrap().unwrap();
+        assert_eq!(got, lf);
+        assert_eq!(Some(blob_id(&got).as_str()), id_of(&st, "docs/guide.md"));
+        std::fs::write(d.join("docs/guide.md"), "# Guide\r\n\r\nAgain.\r\n").unwrap();
+        let err = read_at(&d, &st, "docs/guide.md").unwrap_err().to_string();
+        assert!(err.contains("position moved"), "{err}");
+        gone(&d);
+    }
+
+    /// DEF-066 R-4: one thread or four read the same position from a CRLF checkout with edits, a
+    /// deletion and untracked files.
+    #[test]
+    fn workers_do_not_change_the_position() {
+        let d = repo("workers");
+        for dir in 0..20 {
+            let folder = d.join(format!("d{dir:02}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for f in 0..100 {
+                std::fs::write(
+                    folder.join(format!("f{f:03}.txt")),
+                    format!("file {dir} {f}\nsecond line\n"),
+                )
+                .unwrap();
+            }
+        }
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "2k"]).unwrap();
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        for dir in 0..20 {
+            std::fs::remove_dir_all(d.join(format!("d{dir:02}"))).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        assert_eq!(
+            std::fs::read(d.join("d07/f042.txt")).unwrap(),
+            b"file 7 42\r\nsecond line\r\n"
+        );
+        let (clean1, _) = read_state(&d, "r", 1).unwrap();
+        let (clean4, _) = read_state(&d, "r", 4).unwrap();
+        assert!(clean1.position.is_clean());
+        assert_eq!(clean1, clean4);
+        std::fs::write(d.join("d00/f000.txt"), "edited\r\n").unwrap();
+        std::fs::write(d.join("d10/f050.txt"), "edited\n").unwrap();
+        std::fs::write(d.join("d19/f099.txt"), "edited\r\nagain\r\n").unwrap();
+        std::fs::remove_file(d.join("d13/f013.txt")).unwrap();
+        std::fs::write(d.join("d05/new.txt"), "new\r\n").unwrap();
+        std::fs::write(d.join("top.txt"), "top\n").unwrap();
+        let (one, _) = read_state(&d, "r", 1).unwrap();
+        let (four, _) = read_state(&d, "r", 4).unwrap();
+        assert_eq!(one.changed.len(), 6, "{:?}", one.changed);
+        assert_eq!(one, four);
+        assert_eq!(pos(&d), one);
+        gone(&d);
+    }
+
+    /// DEF-066 R-4: a clean LF checkout converts nothing; one edit converts that file alone.
+    #[test]
+    fn an_lf_checkout_converts_nothing() {
+        let d = repo("lf-none");
+        commit_file(&d, "a.txt", "a\n", "a");
+        commit_file(&d, "b.txt", "b\n", "b");
+        let (st, converted) = read_state(&d, "r", 1).unwrap();
+        assert!(st.position.is_clean());
+        assert_eq!(converted, 0);
+        std::fs::write(d.join("a.txt"), "a edited\n").unwrap();
+        let (st, converted) = read_state(&d, "r", 1).unwrap();
+        assert_eq!(st.changed.len(), 1);
+        assert_eq!(converted, 1);
+        gone(&d);
+    }
+
     // ---- the measurement (R-6) ----
 
     fn median_ms(root: &Path) -> (f64, Vec<f64>) {
@@ -1060,6 +1491,84 @@ mod tests {
                 t.elapsed().as_secs_f64() * 1000.0
             );
         }
+        gone(&d);
+    }
+
+    /// The decided budget (DEF-066 Q2) for one position read of a clean 10,000-file checkout that
+    /// `core.autocrlf=true` checked out with CRLF, warm (probe: about 180 ms at load 3).
+    const CRLF_BUDGET_MS: f64 = 300.0;
+
+    /// DEF-066 R-5: as R-10's test, but every file has a newline every 60 characters, is committed
+    /// LF and checked out again under `core.autocrlf=true`, so every file holds CRLF and converts.
+    /// A release-build figure: `cargo test --release -p kanbanr-core --lib
+    /// position::tests::read_position_10k -- --nocapture`.
+    #[test]
+    fn read_position_10k_crlf_files_within_budget() {
+        let d = repo("tenk-crlf");
+        let mut n = 0u32;
+        for dir in 0..100 {
+            let folder = d.join(format!("d{dir:03}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for f in 0..100 {
+                // 200 to 2,000 bytes, deterministic, a newline after every 60 characters.
+                let len = 200 + (n as usize * 37) % 1801;
+                let body: String = (0..len)
+                    .map(|i| {
+                        if i % 61 == 60 {
+                            '\n'
+                        } else {
+                            char::from(b'a' + ((i as u32 + n) % 26) as u8)
+                        }
+                    })
+                    .collect();
+                std::fs::write(folder.join(format!("f{f:03}.txt")), body).unwrap();
+                n += 1;
+            }
+        }
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "10k"]).unwrap();
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        for dir in 0..100 {
+            std::fs::remove_dir_all(d.join(format!("d{dir:03}"))).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        let sample = std::fs::read(d.join("d042/f017.txt")).unwrap();
+        assert!(
+            sample.windows(2).any(|w| w == b"\r\n"),
+            "no CRLF checked out"
+        );
+        // Warm the file cache, then time three reads.
+        let first = pos(&d);
+        assert!(
+            first.position.is_clean(),
+            "{:?}",
+            &first.changed[..1.min(first.changed.len())]
+        );
+        let (median, all) = median_ms(&d);
+        let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_else(|_| "n/a".into());
+        let tracked = git(&d, &["ls-files"]).unwrap().lines().count();
+        println!(
+            "DEF-066 R-5: {tracked} tracked CRLF files, median {median:.1} ms of {all:?} ms, load {}",
+            load.trim()
+        );
+        assert_eq!(tracked, 10_001);
+        let load1: f64 = load
+            .split_whitespace()
+            .next()
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0.0);
+        #[allow(unused_variables)]
+        let budget = if load1 > 4.0 {
+            CRLF_BUDGET_MS * 2.0
+        } else {
+            CRLF_BUDGET_MS
+        };
+        #[cfg(not(debug_assertions))]
+        assert!(
+            median <= budget,
+            "median {median:.1} ms over the {budget} ms budget (load {load1})"
+        );
+        assert_eq!(pos(&d), first, "repeats");
         gone(&d);
     }
 

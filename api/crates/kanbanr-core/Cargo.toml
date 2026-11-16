@@ -25,6 +25,8 @@ sha2 = "0.10"
 # vendored-openssl compile the C deps from source and link them statically, so neither the build
 # host nor the runtime needs git/libgit2 installed.
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl", "ssh", "https"] }
+# libgit2's filter list for a working file's repository form (DEF-066): already built through git2, named here for its types
+libgit2-sys = { version = "0.18", default-features = false }
 # The published read-API description (FEAT-177): response types derive their JSON Schema only when
 # asked, so the binary carries none of it. The OpenAPI document is generated with
 # `cargo run -p kanbanr-core --features schema --example openapi`, committed, and served as bytes.
