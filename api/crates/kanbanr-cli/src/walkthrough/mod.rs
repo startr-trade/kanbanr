@@ -65,6 +65,16 @@ pub enum WalkthroughCmd {
         /// The run folder.
         run: PathBuf,
     },
+    /// Prepare one batch on this board from several runs of one build (DEF-089, for FTR-054):
+    /// their checks merged one per marker, every result at the runs' shared evidence revision.
+    Prepare {
+        /// The run folders (`walkthrough run --no-batch`), read from their `raw/` files only.
+        #[arg(required = true)]
+        runs: Vec<PathBuf>,
+        /// The batch's name on this board.
+        #[arg(long)]
+        batch: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -347,6 +357,7 @@ pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
             );
             Ok(())
         }
+        WalkthroughCmd::Prepare { runs, batch } => prepare_runs(cli, runs, batch),
         WalkthroughCmd::Remotes(RemotesCmd::List { runs }) => {
             let dir = runs.clone().unwrap_or_else(default_runs_dir);
             let list = remotes::list(&dir);
@@ -442,6 +453,135 @@ fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
     }
     kanbanr_core::atomic::write(run.raw().join("checks.tsv"), text)?;
     Ok(())
+}
+
+/// Read `raw/checks.tsv` back: one result per marker, as the run wrote it.
+fn read_checks(run: &RunDirs) -> Result<Vec<CheckResult>> {
+    let path = run.raw().join("checks.tsv");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("no checks in {}", path.display()))?;
+    Ok(text
+        .lines()
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut cols = l.splitn(4, '\t');
+            let marker = cols.next().unwrap_or("").to_string();
+            let step = cols.next().unwrap_or("").to_string();
+            let passed = cols.next().unwrap_or("");
+            let why = cols.next().unwrap_or("").to_string();
+            CheckResult {
+                marker,
+                step,
+                passed: passed == "true",
+                why,
+                measured: passed != "not-measured",
+            }
+        })
+        .collect())
+}
+
+/// `kanbanr walkthrough prepare --batch <name> <run>…` (DEF-089 R-4, for FTR-054): one batch on
+/// this board from several runs of one build. Each run's setup must have completed, its manifest
+/// verify, and its `evidence_rev` be every other run's; a marker must mean the same check in
+/// every runbook. Reads only the runs' files, so the batch is derived and repeatable; a record
+/// already open in the batch is not prepared again.
+fn prepare_runs(cli: &crate::Cli, runs: &[PathBuf], batch: &str) -> Result<()> {
+    let mut rev: Option<(String, String)> = None;
+    let mut defs: BTreeMap<String, (runbook::CheckRef, String)> = BTreeMap::new();
+    let mut all: Vec<(String, Vec<CheckResult>)> = Vec::new();
+    for run in runs {
+        let dirs = RunDirs::new(run);
+        let shown = run.display().to_string();
+        let log = SetupLog::read(&dirs)
+            .with_context(|| format!("{shown}: no raw/setup.log, so it is not a run folder"))?;
+        if log.get("setup_failed").is_some() {
+            bail!("{shown}: the run's setup did not complete, so it says nothing about the guide");
+        }
+        let Some(r) = log.get("evidence_rev") else {
+            bail!(
+                "{shown}: raw/setup.log names no evidence_rev (a run from before DEF-089), so its \
+                 results could not say what they proved: run it again"
+            );
+        };
+        match &rev {
+            Some((a, at)) if a != r => {
+                bail!("two builds are not one release's evidence: {a} ({at}) and {r} ({shown})")
+            }
+            Some(_) => {}
+            None => rev = Some((r.to_string(), shown.clone())),
+        }
+        capture::verify(&dirs)
+            .with_context(|| format!("{shown}: raw/MANIFEST.sha256 does not verify"))?;
+        if let Some(s) = log.get("stopped") {
+            println!("note: {shown} stopped early ({s}); what it did not reach is not measured");
+        }
+        let copy = dirs.root.join(answer::RUNBOOK_FILE);
+        let (text, _) = read_runbook(cli, &copy.display().to_string())?;
+        let rb = Runbook::parse(&text).with_context(|| format!("{shown}: its runbook"))?;
+        for (marker, def) in &rb.checks {
+            match defs.get(marker) {
+                Some((prev, at)) if prev != def => bail!(
+                    "{marker} is defined differently in {at} ({} {} \"{}\") and {shown} ({} {} \"{}\")",
+                    prev.item,
+                    prev.requirement,
+                    prev.test,
+                    def.item,
+                    def.requirement,
+                    def.test
+                ),
+                Some(_) => {}
+                None => {
+                    defs.insert(marker.clone(), (def.clone(), shown.clone()));
+                }
+            }
+        }
+        let name = log.get("run_name").map(str::to_string).unwrap_or_else(|| {
+            run.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| shown.clone())
+        });
+        all.push((name, read_checks(&dirs)?));
+    }
+    let Some((rev, _)) = rev else {
+        bail!("no run folder given");
+    };
+    let merged = checks_across(&all);
+    let defs: BTreeMap<String, runbook::CheckRef> =
+        defs.into_iter().map(|(m, (d, _))| (m, d)).collect();
+    let target_board = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
+    let target_project = kanbanr_core::project::resolve_project(cli.project.as_deref());
+    let o = prepare_batch(cli, &merged, &defs, batch, &target_board, &rev)?;
+    println!(
+        "{} run(s), {} check(s) ({} passed), evidence at {rev}",
+        all.len(),
+        merged.len(),
+        merged.iter().filter(|c| c.passed).count()
+    );
+    print_batch(&o, batch, target_project.as_deref());
+    Ok(())
+}
+
+/// The lines that say what a batch put on the target board.
+fn print_batch(o: &BatchOutcome, batch: &str, target_project: Option<&str>) {
+    if !o.prepared.is_empty() {
+        println!(
+            "prepared {} result(s) as batch {batch} on {}: confirm them at {}/p/{}/review",
+            o.prepared.len(),
+            target_project.unwrap_or("the board"),
+            crate::monitor_url(),
+            target_project.unwrap_or("<project>")
+        );
+    }
+    for r in &o.recorded {
+        println!("recorded walkthrough test: {r}");
+    }
+    for k in &o.skipped {
+        println!("not put on the board: {k}");
+    }
+    if o.prepared.is_empty() && o.recorded.is_empty() {
+        println!("no check to prepare on the target board");
+    }
 }
 
 /// The run project's Claude Code configuration: a copy of the person's rules file and its imports,
@@ -1748,6 +1888,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     if let Some(s) = &running.stopped {
         log.push("stopped", s.clone());
     }
+    // `walkthrough prepare` refuses a run whose setup failed (DEF-089).
+    if running.setup_failed {
+        log.push("setup_failed", "true");
+    }
     log.write(&dirs)?;
     if let Some(m) = running.monitor.take() {
         m.stop();
@@ -1794,26 +1938,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
                 "no batch prepared (--no-batch): prepare it with `kanbanr walkthrough prepare`"
             )
         }
-        Ok(o) => {
-            if !o.prepared.is_empty() {
-                println!(
-                    "prepared {} result(s) as batch {name} on {}: confirm them at {}/p/{}/review",
-                    o.prepared.len(),
-                    target_project.as_deref().unwrap_or("the board"),
-                    crate::monitor_url(),
-                    target_project.as_deref().unwrap_or("<project>")
-                );
-            }
-            for r in &o.recorded {
-                println!("recorded walkthrough test: {r}");
-            }
-            for k in &o.skipped {
-                println!("not put on the board: {k}");
-            }
-            if o.prepared.is_empty() && o.recorded.is_empty() {
-                println!("no check to prepare on the target board");
-            }
-        }
+        Ok(o) => print_batch(&o, &name, target_project.as_deref()),
         Err(e) => println!("the batch could not be prepared on the target board: {e}"),
     }
     println!("run folder: {}", dirs.root.display());
@@ -1911,6 +2036,14 @@ fn prepare_batch(
             .map(|t| t.kind.trim().to_lowercase())
     };
     let repo = crate::scm::repo_root();
+    // What this batch already holds: a record open for the same subject is not prepared twice.
+    let open = kanbanr_core::prepared::open_in_batch(
+        &kanbanr_core::Store::new(target_board),
+        &project,
+        batch,
+        repo.as_deref(),
+    )
+    .unwrap_or_default();
     for c in &checks {
         let Some(def) = defs.get(&c.marker) else {
             out.skipped
@@ -1954,6 +2087,18 @@ fn prepare_batch(
                     .skipped
                     .push(format!("{}: could not record: {e}", c.marker)),
             }
+            continue;
+        }
+        if let Some(v) = open.iter().find(|v| {
+            v.record.kind == "manual-test"
+                && v.record.subject.item == def.item
+                && v.record.subject.requirement == def.requirement
+                && v.record.subject.test == def.test
+        }) {
+            out.skipped.push(format!(
+                "{}: already prepared in batch {batch} ({})",
+                c.marker, v.record.id
+            ));
             continue;
         }
         let body = serde_json::json!({
