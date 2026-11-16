@@ -64,6 +64,20 @@ pub struct Sprint {
     /// What left unfinished, and where it went — the record a retro reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carried: Vec<Carry>,
+    /// The tip of `sprint/<SP>` when the sprint closed with that branch in the code repository
+    /// (FTR-004); empty otherwise. A position at the sprint never depends on it alone: an older
+    /// binary that rewrites the file drops it, so the tag and the branch are the fallbacks.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub closed_commit: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
 }
 
 fn path(store: &Store, id: &str) -> PathBuf {
@@ -476,6 +490,18 @@ pub(crate) fn start_on(store: &Store, id: &str, code: &str, today: time::Date) -
 /// Close a sprint. Its unfinished items move to `carry_to` (another sprint's code) or back to the
 /// backlog, and each move is recorded on the sprint, so a retro can say what did not fit.
 pub fn close(store: &Store, id: &str, code: &str, carry_to: Option<&str>) -> Result<Sprint> {
+    close_at(store, id, code, carry_to, None)
+}
+
+/// As [`close`], also recording `closed_commit`, the tip of `sprint/<SP>` when it closed
+/// (FTR-004). `None`, or an empty commit, records nothing.
+pub fn close_at(
+    store: &Store,
+    id: &str,
+    code: &str,
+    carry_to: Option<&str>,
+    closed_commit: Option<&str>,
+) -> Result<Sprint> {
     cadence_on(store, id)?;
     let mut sprints = load(store, id)?;
     let target = match carry_to.map(str::trim) {
@@ -506,6 +532,9 @@ pub fn close(store: &Store, id: &str, code: &str, carry_to: Option<&str>) -> Res
     let sprint = find(&mut sprints, code)?;
     sprint.state = SprintState::Closed;
     sprint.closed_at = crate::now_rfc3339();
+    if let Some(commit) = closed_commit.map(str::trim).filter(|c| !c.is_empty()) {
+        sprint.closed_commit = commit.to_string();
+    }
     sprint.carried.extend(unfinished.into_iter().map(|c| Carry {
         code: c,
         to: target.clone().unwrap_or_else(|| "backlog".to_string()),

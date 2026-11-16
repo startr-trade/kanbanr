@@ -2111,6 +2111,7 @@ impl Store {
                 to: to.to_string(),
                 override_reason: None,
                 origin: String::new(),
+                merge_commit: String::new(),
             });
         }
         feature.status = to.to_string();
@@ -2418,6 +2419,7 @@ impl Store {
                 to: to.clone(),
                 override_reason: None,
                 origin: String::new(),
+                merge_commit: String::new(),
             });
             f.status = to;
         }
@@ -3509,6 +3511,38 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         self.flush(id, &project, &pending)?;
         Ok(updated)
+    }
+
+    /// Record the merge commit of the move that integrated an item (FTR-004): `sha` goes on the
+    /// newest transition when it moved the item into `to` and carries no merge commit yet.
+    /// Anything else is refused, so a later move or a second call never rewrites what was
+    /// recorded. One board write.
+    pub fn record_merge_commit(&self, id: &str, code: &str, to: &str, sha: &str) -> Result<()> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let key = feature.code.clone();
+        let Some(last) = feature.history.last_mut() else {
+            return Err(CoreError::Unsupported(format!(
+                "{code} has no move to record a merge commit on"
+            )));
+        };
+        if last.to != to {
+            return Err(CoreError::Unsupported(format!(
+                "{code}'s newest move went to {}, not {to}: the merge commit was not recorded",
+                last.to
+            )));
+        }
+        if !last.merge_commit.is_empty() {
+            return Err(CoreError::Unsupported(format!(
+                "{code}'s move to {to} already records the merge commit {}",
+                last.merge_commit
+            )));
+        }
+        last.merge_commit = sha.to_string();
+        pending.persist_features.insert(key);
+        self.flush(id, &project, &pending)?;
+        Ok(())
     }
 
     /// Set an item's story-point estimate (FEAT-121); `0` or less clears it.
