@@ -2718,6 +2718,201 @@ fn setup_commits_its_marker_in_a_repository_with_history() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-083 R-1, R-2: the walkthrough's case end to end. The charter is agreed after setup's
+/// commit, with the git model on, and `claude sync` rewrites CLAUDE.md's block on main: the
+/// guard, pre-commit and commit-msg take one `[no-ref]` commit of CLAUDE.md alone, which leaves
+/// the checkout clean for Promote to main; another path staged, or a change outside the markers,
+/// is refused as before.
+#[test]
+fn the_charter_agreed_after_setup_commits_its_block_on_main() {
+    let base = std::env::temp_dir().join(format!("kanbanr-block-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("app");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    // The Claude Code guard, as the coordinator: the payload's cwd and the process's are the repo.
+    let guard = |command: &str| -> String {
+        let mut c = Command::new(cli());
+        c.args(["git", "guard"])
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                serde_json::json!({"tool_input": {"command": command}, "cwd": work})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    let msg = base.join("msg.txt");
+    let check_msg = |text: &str| -> Output {
+        std::fs::write(&msg, text).unwrap();
+        exec(&["git", "check-msg", msg.to_str().unwrap()])
+    };
+    let porcelain = |args: &[&str]| -> String {
+        let mut all = vec!["status", "--porcelain"];
+        all.extend_from_slice(args);
+        String::from_utf8_lossy(&git(&all).stdout).to_string()
+    };
+
+    // A project with history before kanbanr came.
+    assert!(
+        git(&["init", "-q", "--initial-branch=main"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "--allow-empty", "-m", "the project"])
+            .status
+            .success()
+    );
+    run(&[
+        "init",
+        "app",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    // L-41: the board is this test's own, beside the scratch repository, before any write to it.
+    let board = kanbanr_core::project::normalize(&base.join("code").join("app.kanbanr"));
+    assert_eq!(run(&["where"]).trim(), board.display().to_string());
+    run(&["config", "workflow", "--preset", "togaf"]);
+    let c1 = base.join("c1.yaml");
+    std::fs::write(
+        &c1,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", c1.to_str().unwrap()]);
+    std::fs::write(work.join("CLAUDE.md"), "# app\n").unwrap();
+    run(&["claude", "sync"]);
+    std::fs::write(work.join(".gitignore"), ".claude/settings.local.json\n").unwrap();
+    // Setup's commit, then the process's cadence switches the git model on.
+    assert!(
+        git(&["add", ".kanbanr", "CLAUDE.md", ".gitignore"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] initial setup"])
+            .status
+            .success()
+    );
+    run(&["config", "cadence", "--sprints", "on", "--releases", "on"]);
+    let model = run(&["git", "model"]);
+    assert!(model.contains("automation: on"), "{model}");
+
+    // The charter agreed after setup's commit: one more goal, and the block is rewritten.
+    let c2 = base.join("c2.yaml");
+    std::fs::write(
+        &c2,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes\n\
+         \x20 - id: G-2\n    statement: A shared cart stays in step\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", c2.to_str().unwrap()]);
+    run(&["claude", "sync"]);
+    assert_eq!(porcelain(&[]), " M CLAUDE.md\n");
+
+    // R-1: the guard lets the refresh through.
+    let refresh = "git add CLAUDE.md && git commit -q -m \"[no-ref] refresh the kanbanr block\"";
+    let said = guard(refresh);
+    assert!(!said.contains("deny"), "{said}");
+
+    // R-2: with anything else staged, pre-commit refuses and says what the refresh takes.
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("src/x.txt"), "x\n").unwrap();
+    assert!(git(&["add", "CLAUDE.md", "src/x.txt"]).status.success());
+    let extra = exec(&["git", "check-branch"]);
+    assert!(!extra.status.success());
+    let why = String::from_utf8_lossy(&extra.stderr);
+    assert!(why.contains("A refresh of CLAUDE.md's generated block"), "{why}");
+    assert!(git(&["reset", "-q", "--", "src/x.txt"]).status.success());
+
+    // R-1: CLAUDE.md alone passes pre-commit and commit-msg, and the checkout ends clean.
+    let started = std::time::Instant::now();
+    let branch = exec(&["git", "check-branch"]);
+    eprintln!("check-branch took {:?}", started.elapsed());
+    assert!(
+        branch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&branch.stderr)
+    );
+    let noted = check_msg("[no-ref] refresh the kanbanr block\n");
+    assert!(
+        noted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&noted.stderr)
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] refresh the kanbanr block"])
+            .status
+            .success()
+    );
+    // What Promote to main asks (coderepo::is_clean).
+    assert_eq!(porcelain(&["--untracked-files=no"]), "");
+
+    // R-2: a change outside the markers is the author's, and main does not take it.
+    let text = std::fs::read_to_string(work.join("CLAUDE.md")).unwrap();
+    std::fs::write(work.join("CLAUDE.md"), format!("Mine.\n\n{text}")).unwrap();
+    assert!(git(&["add", "CLAUDE.md"]).status.success());
+    let outside = exec(&["git", "check-branch"]);
+    assert!(!outside.status.success());
+    let said = guard("git commit -q -m \"[no-ref] mine\"");
+    assert!(said.contains("deny"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-103: in a folder nothing has set up, looking must not create a board. Every read used to
 /// leave `./data/projects` behind — one did so in a project during its read-only setup interview.
 /// Hook commands stay silent there, and an existing legacy `./data` board keeps working.
