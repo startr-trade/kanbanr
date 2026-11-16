@@ -12857,3 +12857,96 @@ fn cli_position_and_view_docs_repeat_at_main_a_branch_and_uncommitted() {
     assert!(table.ok, "{}", table.render());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A scratch board under `temp_dir` (never the repository, L-41) with MS-001, MS-002, MS-010.
+fn milestone_order_board(tag: &str) -> (PathBuf, PathBuf) {
+    let base = std::env::temp_dir().join(format!("kanbanr-msorder-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(["--project", "ord"])
+            .args(args)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .env_remove("KANBANR_LOCAL")
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["project", "init", "ord", "--description", "order"]);
+    for code in ["MS-001", "MS-002", "MS-010"] {
+        run(&["milestone", "add", "--name", "M", "--code", code]);
+    }
+    (data, home)
+}
+
+fn milestone_list_codes(data: &Path, home: &Path, extra: &[&str], json: bool) -> Vec<String> {
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the board must be the test's own"
+    );
+    let mut args = vec!["--project", "ord"];
+    if json {
+        args.push("--json");
+    }
+    args.extend(["milestone", "list"]);
+    args.extend(extra);
+    let o = Command::new(cli())
+        .args(&args)
+        .env("HOME", home)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env("KANBANR_DATA_DIR", data)
+        .env_remove("KANBANR_SERVER_URL")
+        .env_remove("KANBANR_LOCAL")
+        .output()
+        .expect("run kanbanr CLI");
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    if json {
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["code"].as_str().unwrap().to_string())
+            .collect()
+    } else {
+        out.lines()
+            .map(|l| l.split_whitespace().next().unwrap().to_string())
+            .collect()
+    }
+}
+
+/// FTR-031 R-1.
+#[test]
+fn milestone_list_is_newest_first_in_text_and_json() {
+    let (data, home) = milestone_order_board("new");
+    let want = ["MS-010", "MS-002", "MS-001"];
+    assert_eq!(milestone_list_codes(&data, &home, &[], false), want);
+    assert_eq!(milestone_list_codes(&data, &home, &[], true), want);
+}
+
+/// FTR-031 R-2.
+#[test]
+fn milestone_list_oldest_first_gives_the_old_order() {
+    let (data, home) = milestone_order_board("old");
+    let want = ["MS-001", "MS-002", "MS-010"];
+    assert_eq!(
+        milestone_list_codes(&data, &home, &["--oldest-first"], false),
+        want
+    );
+    assert_eq!(
+        milestone_list_codes(&data, &home, &["--oldest-first"], true),
+        want
+    );
+}

@@ -34,7 +34,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr board` / `kanbanr feature list / show / add / edit` | the kanban and its items |
 | `kanbanr move <CODE> <STATUS> [--override "…"]` | a status change, validated against the workflow and the stage's gate; `--override` passes a gate and records why. Merging an item into a release past its first stage sends the release back to that stage and prints the steps from there; a release tagged and not shipped refuses the merge |
 | `kanbanr start <CODE>` / `kanbanr finish <CODE>` | begin (branch, active stage) and end an item, each through its gate |
-| `kanbanr milestone add / list / edit / delete` | milestones (a dependency DAG; cycles rejected) |
+| `kanbanr milestone add / list / edit / delete` | milestones (a dependency DAG; cycles rejected); list prints newest first; `--oldest-first` gives creation order |
 | `kanbanr todo add / list`, `kanbanr task add / state / list` | persistent todo-lists on an item |
 | `kanbanr export <CODE> --format md\|json` | one item, rendered for a human or a machine |
 | `kanbanr query "text" [--goal G-1] [--gap …] [--all-projects]` | rich filters plus full text, across projects |

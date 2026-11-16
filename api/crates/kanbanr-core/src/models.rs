@@ -1337,6 +1337,29 @@ pub struct Milestone {
     pub extra: crate::models::Extra,
 }
 
+impl Milestone {
+    /// The milestones newest first: the highest code first, the input untouched (FTR-031).
+    /// Codes compare by the number after their last `-` (`MS-10` above `MS-9`), equal numbers by
+    /// the whole code as text; a code with no number comes last, among themselves by text; all
+    /// descending. The twin of `newestFirst` in the monitor's `milestoneOrder.ts`.
+    pub fn newest_first(list: &[Milestone]) -> Vec<&Milestone> {
+        let mut out: Vec<&Milestone> = list.iter().collect();
+        out.sort_by(|a, b| Self::code_rank(&b.code).cmp(&Self::code_rank(&a.code)));
+        out
+    }
+
+    /// `(number after the last dash, code)`; `None` sorts below every number.
+    fn code_rank(code: &str) -> (Option<u64>, &str) {
+        let tail = code.rsplit_once('-').map(|(_, t)| t).unwrap_or("");
+        let number = if !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) {
+            tail.parse::<u64>().ok()
+        } else {
+            None
+        };
+        (number, code)
+    }
+}
+
 // NOTE: There is no `Schedule` entity. A "schedule" is a *derived view*: for a given feature
 // status, the milestones that contain feature items in that status (ordered by their dependency
 // DAG). The UI computes this from features + milestones; nothing is stored on disk.
@@ -1444,6 +1467,41 @@ requirements:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FTR-031 R-1: milestones list newest first, by the number after the last dash.
+    #[test]
+    fn milestones_list_newest_first_by_code() {
+        let ms = |codes: &[&str]| -> Vec<Milestone> {
+            codes
+                .iter()
+                .map(|c| Milestone {
+                    code: c.to_string(),
+                    name: String::new(),
+                    description: String::new(),
+                    depends_on: vec![],
+                    extra: Default::default(),
+                })
+                .collect()
+        };
+        let order = |codes: &[&str]| -> Vec<String> {
+            Milestone::newest_first(&ms(codes))
+                .iter()
+                .map(|m| m.code.clone())
+                .collect()
+        };
+        assert_eq!(
+            order(&["MS-001", "MS-002", "MS-010"]),
+            ["MS-010", "MS-002", "MS-001"]
+        );
+        assert_eq!(order(&["MS-9", "MS-10"]), ["MS-10", "MS-9"]);
+        assert_eq!(order(&["REL-2", "MS-3"]), ["MS-3", "REL-2"]);
+        assert_eq!(order(&["MS-3", "REL-3"]), ["REL-3", "MS-3"]);
+        assert_eq!(order(&["ALPHA", "MS-1", "BETA"]), ["MS-1", "BETA", "ALPHA"]);
+        assert!(order(&[]).is_empty());
+        let input = ms(&["MS-1", "MS-2"]);
+        let _ = Milestone::newest_first(&input);
+        assert_eq!(input[0].code, "MS-1");
+    }
 
     type Mutation = Box<dyn Fn(&mut FeatureDefinition)>;
 

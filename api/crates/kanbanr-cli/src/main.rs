@@ -1048,7 +1048,11 @@ enum MilestoneCmd {
         #[arg(long)]
         code: Option<String>,
     },
-    List,
+    List {
+        /// List in creation order, lowest code first, the order before v0.7.0
+        #[arg(long)]
+        oldest_first: bool,
+    },
     Edit {
         code: String,
         #[arg(long)]
@@ -9755,12 +9759,17 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
             );
             Ok(())
         }
-        MilestoneCmd::List => {
+        MilestoneCmd::List { oldest_first } => {
             let project = get_project(client, &p)?;
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&project.milestones)?);
+            let listed: Vec<&kanbanr_core::models::Milestone> = if *oldest_first {
+                project.milestones.iter().collect()
             } else {
-                for m in &project.milestones {
+                kanbanr_core::models::Milestone::newest_first(&project.milestones)
+            };
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&listed)?);
+            } else {
+                for m in listed {
                     let deps = if m.depends_on.is_empty() {
                         String::new()
                     } else {

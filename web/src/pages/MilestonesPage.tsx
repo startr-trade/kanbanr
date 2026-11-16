@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
+import { newestFirst } from "../milestoneOrder";
 
 export default function MilestonesPage() {
   const { project = "" } = useParams();
@@ -20,7 +21,7 @@ export default function MilestonesPage() {
       </div>
       {data.milestones.length === 0 && <p className="muted">No milestones.</p>}
       <div className="ms-list">
-        {data.milestones.map((m) => {
+        {newestFirst(data.milestones).map((m) => {
           const features = data.features.filter((f) => f.milestone === m.code);
           return (
             <section className="ms-card" key={m.code}>

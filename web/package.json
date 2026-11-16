@@ -17,6 +17,7 @@
     "check:release-again": "node scripts/check-release-again.mjs",
     "check:release-notes": "node scripts/check-release-notes.mjs",
     "check:release-line": "node scripts/check-release-line.mjs",
+    "check:milestone-order": "node scripts/check-milestone-order.mjs",
     "check:sprint-filter": "node scripts/check-sprint-filter.mjs",
     "check:prepared": "node scripts/check-prepared.mjs",
     "check:texts-to-check": "node scripts/check-texts-to-check.mjs",

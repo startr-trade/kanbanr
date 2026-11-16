@@ -125,6 +125,12 @@ All notable changes to kanbanr are documented here. The format follows
   the position, the board and the question repeat. `--at` answers a clean commit from the
   repository with nothing checked out (exit 6, HTTP 409, for a position no checkout holds). The
   daemon serves `GET /projects/{p}/position` and `GET /projects/{p}/views/docs`.
+### Changed
+
+- **Milestones are listed newest first (FTR-031).** `kanbanr milestone list` (text and `--json`) and
+  the monitor's Milestones page put the highest code first, so the milestone being worked on is at
+  the top; `--oldest-first` gives the creation order. The Schedule view and a milestone's
+  dependencies keep their dependency order.
 
 ## [0.6.0] - 2026-11-14
 

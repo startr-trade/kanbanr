@@ -85,6 +85,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A release's notes show and are edited from the Releases page": LOCAL,
             "An item says which release it shipped in": LOCAL,
             "The board can show the items in no sprint": LOCAL,
+            "Milestones are listed newest first": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
