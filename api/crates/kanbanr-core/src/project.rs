@@ -625,8 +625,11 @@ fn canonical_ish(dir: &Path) -> PathBuf {
 
 /// Is `dir` inside `fence`? The reason, naming both, when it is not.
 pub fn check_fence(dir: &Path, fence: &Path) -> std::result::Result<(), String> {
-    let real = canonical_ish(dir);
-    if real.starts_with(fence) {
+    // Canonicalising gives Windows' verbatim `\\?\C:\…` form, while a fence is often written
+    // plainly: compare both without that prefix, by component (DEF-094). A no-op elsewhere.
+    let real = without_verbatim_prefix(canonical_ish(dir));
+    let fence = without_verbatim_prefix(fence.to_path_buf());
+    if real.starts_with(&fence) {
         Ok(())
     } else {
         Err(format!(
@@ -652,6 +655,35 @@ pub fn assert_inside_fence(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEF-094 R-1: a folder in Windows' verbatim form is inside a fence in the plain form, and
+    /// the other way round; a sibling whose name only starts like the fence is still outside.
+    #[cfg(windows)]
+    #[test]
+    fn the_fence_check_ignores_the_windows_verbatim_prefix() {
+        let base = std::env::temp_dir().join(format!("kanbanr-fence-094-{}", std::process::id()));
+        let inside = base.join("runs").join("x");
+        std::fs::create_dir_all(&inside).unwrap();
+        let plain = normalize(&base);
+        let verbatim = base.canonicalize().unwrap();
+        assert!(
+            verbatim.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            verbatim.display()
+        );
+        assert_eq!(check_fence(&inside, &plain), Ok(()));
+        assert_eq!(check_fence(&inside, &verbatim), Ok(()));
+        let sibling = std::path::PathBuf::from(format!("{}ab", plain.display()));
+        assert!(check_fence(&sibling, &plain).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// DEF-094: stripping the prefix is a no-op for a path without it, on every system.
+    #[test]
+    fn a_path_without_the_verbatim_prefix_is_compared_as_it_is() {
+        let p = std::path::PathBuf::from("/tmp/a/b");
+        assert_eq!(without_verbatim_prefix(p.clone()), p);
+    }
 
     #[test]
     fn fence_unset_or_blank_is_none() {
