@@ -598,9 +598,9 @@ mod tests {
                 .map(|r| r.code)
                 .collect()
         };
-        assert_eq!(at(Some("head")), [behind.clone()]);
+        assert_eq!(at(Some("head")), [behind.as_str()]);
         // At the older revision, the item tested at `head` is the one behind it.
-        assert_eq!(at(Some("older")), [current.clone()]);
+        assert_eq!(at(Some("older")), [current.as_str()]);
         // No code repository: stale is never true.
         assert!(at(None).is_empty());
 
