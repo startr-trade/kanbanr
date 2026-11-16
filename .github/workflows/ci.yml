@@ -27,10 +27,20 @@ concurrency:
 permissions:
   contents: read
 
+# The CI build environment (MNT-007): no incremental files and no debug info, so links are faster,
+# the cache is smaller and a cold build never fills the runner's disk. A local `make ci` reads it too.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
 jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A hung test fails within the hour (MNT-007); the cold build with vendored C takes about 25
+    # minutes on Windows.
+    timeout-minutes: 60
     strategy:
       # Don't cancel the whole matrix if one OS fails — we want to see all of them.
       fail-fast: false
@@ -48,6 +58,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          # rust-toolchain.toml's channel, named here too (test_pipeline_practices.Toolchain).
+          toolchain: "1.98.1"
           components: rustfmt, clippy
 
       - name: Cache cargo registry / build artifacts
@@ -55,6 +67,10 @@ jobs:
         with:
           # The workspace lives in api/, not at the repo root.
           workspaces: "api"
+          # One cache per runner image, saved only from main: a pull request restores main's cache
+          # and never saves its own (MNT-007).
+          shared-key: ci-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The tests run through cargo-nextest (MNT-010), pinned: FTR-058's reader parses its lines,
       # so an upgrade is a deliberate bump, not a surprise.
@@ -160,6 +176,7 @@ jobs:
   definition:
     name: definition
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -185,6 +202,7 @@ jobs:
   web:
     name: web
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     defaults:
       run:
@@ -307,6 +325,7 @@ jobs:
   vscode:
     name: VS Code extension
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: editor/vscode
@@ -340,6 +359,7 @@ jobs:
   installers:
     name: installers
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -481,6 +501,7 @@ jobs:
   workflows:
     name: workflows
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -590,9 +611,12 @@ jobs:
   supply-chain:
     name: supply chain
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.98.1"
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-deny,cargo-audit,cargo-cyclonedx@0.5.10

@@ -24,6 +24,17 @@ permissions:
   contents: write   # create the GitHub Release + upload assets
   packages: write   # push to GHCR
 
+# A release is never cancelled by another run: one half-published is worse than two queued (MNT-007).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The CI build environment (MNT-007): no incremental files and no debug info in what is compiled.
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
 jobs:
   # ---- 0. The tag is the release's only input, so check it before anything runs ----
   #
@@ -33,6 +44,7 @@ jobs:
   tag:
     name: check the tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     # Reading CI's runs needs `actions: read` (FEAT-163); job-level permissions replace the
     # workflow's, so the checkout's `contents: read` is restated.
     permissions:
@@ -120,6 +132,7 @@ jobs:
     needs: tag
     name: binary (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -151,11 +164,16 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          # rust-toolchain.toml's channel, named here too (test_pipeline_practices.Toolchain).
+          toolchain: "1.98.1"
           targets: ${{ matrix.target }}
 
+      # The release builds on older images in the release profile, so CI's cache is not its cache:
+      # a key of its own per target, saving as before (MNT-007, Q2).
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "api"
+          shared-key: release-${{ matrix.target }}
 
       # Vendored libgit2 + OpenSSL build deps (compiled from source).
       - name: Install build deps (Linux)
@@ -266,6 +284,7 @@ jobs:
     name: VS Code extension
     needs: tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: editor/vscode
@@ -296,6 +315,7 @@ jobs:
     name: monitor bundle
     needs: tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -322,6 +342,7 @@ jobs:
     name: publish the release
     needs: [binaries, vscode, monitor]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Narrower than the workflow's, plus what an attestation needs: the OIDC token the build
     # identity is signed with, and the right to store the attestation (MNT-004).
     permissions:
@@ -342,6 +363,8 @@ jobs:
       # What is inside the release, from the lockfiles (MNT-004). Built before SHA256SUMS so the
       # checksums list the SBOMs, and before the attestation so that covers them.
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.98.1"
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-cyclonedx@0.5.10
@@ -418,6 +441,7 @@ jobs:
     needs: [tag, release]
     if: ${{ vars.PUBLISH_OPENVSX == 'true' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: editor/vscode
@@ -450,6 +474,7 @@ jobs:
     name: verify the installer (${{ matrix.image }})
     needs: release
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -489,6 +514,7 @@ jobs:
     name: verify the installer (${{ matrix.os }})
     needs: release
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -534,6 +560,7 @@ jobs:
     name: docker image (GHCR)
     needs: tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -567,6 +594,10 @@ jobs:
           push: false
           load: true
           tags: kanbanr:scan
+          # The cooked dependency layer is reused across releases; MNT-006's package-layer refresh
+          # still applies, because its build argument changes that layer (MNT-007).
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
           build-args: |
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
@@ -601,6 +632,8 @@ jobs:
           push: true
           sbom: true
           provenance: mode=max
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,scope=image,mode=max
           build-args: |
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
@@ -623,6 +656,7 @@ jobs:
     name: publish the standalone libraries to crates.io
     needs: tag
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Only runs once the repo variable PUBLISH_CRATES is `true`; it then needs the
     # CARGO_REGISTRY_TOKEN secret, or Trusted Publishing (OIDC), which needs no secret.
     if: ${{ vars.PUBLISH_CRATES == 'true' }}
@@ -632,6 +666,8 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: "1.98.1"
       # ears-classifier has one dependency and no C in its tree, so none of the vendored-libgit2
       # build toolchain the other crates need applies here.
 
