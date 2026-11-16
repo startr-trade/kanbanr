@@ -1901,7 +1901,7 @@ enum AdrCmd {
         /// ISO/IEC 25010 characteristics at stake.
         #[arg(long, value_delimiter = ',')]
         quality: Vec<String>,
-        /// Zachman columns it answers.
+        /// Zachman columns it answers (What, How, Where, Who, When, Why).
         #[arg(long, value_delimiter = ',')]
         zachman: Vec<String>,
         /// conceptual | logical | physical.

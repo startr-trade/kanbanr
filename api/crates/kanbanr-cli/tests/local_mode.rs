@@ -14054,3 +14054,166 @@ fn release_undo_steps_a_mistaken_candidate_back_from_the_cli() {
     assert!(err.contains("already an undo"), "{err}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---- one spelling for tags (MNT-009) ----
+
+/// The board file of `code`, wherever its status folder is.
+fn mnt009_feature_file(base: &std::path::Path, code: &str) -> std::path::PathBuf {
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(found) = find(&p, name) {
+                    return Some(found);
+                }
+            } else if p.file_name().is_some_and(|n| n == name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    find(&base.join("code"), &format!("{code}.yaml")).expect("the item's board file")
+}
+
+/// MNT-009 R-1: a tag added through `feature define` is stored in its canonical spelling; a tag
+/// carried unchanged from the stored definition is kept as stored, and the approval stays current.
+#[test]
+fn feature_define_stores_the_canonical_iso_spelling() {
+    let (base, work) = togaf_scratch("mnt009-iso");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert_board_is_scratch(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    for title in ["Fast cart", "Old cart"] {
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "add", "--title", title, "--milestone", "MS-001"],
+        ));
+    }
+    let definition = |tag: &str, other: &str| {
+        format!(
+            "statement: Answer quickly\n\
+             requirements:\n  - kind: nfr\n    text: \"THE SYSTEM SHALL answer in 100 ms.\"\n\
+             \x20   iso25010: [{tag}]\n\
+             \x20   tests:\n      - name: cart::answers_fast\n        kind: unit\n        state: planned\n\
+             \x20 - kind: functional\n    text: \"THE SYSTEM SHALL {other}.\"\n\
+             \x20   tests:\n      - name: cart::keeps\n        kind: unit\n        state: planned\n"
+        )
+    };
+    let file = base.join("def.yaml");
+    let define = |code: &str, text: String| {
+        std::fs::write(&file, text).unwrap();
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "define", code, "--file", file.to_str().unwrap()],
+        ))
+    };
+    let approval = |code: &str| -> String {
+        let out = ok(run_in(&base, &work, &["--json", "review", code]));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let entry = if v.is_array() { v[0].clone() } else { v };
+        entry["approval"].as_str().unwrap_or_default().to_string()
+    };
+
+    // A new tag, in any spelling, is stored canonical.
+    define(
+        "FEAT-001",
+        definition("performance-efficiency", "keep a cart"),
+    );
+    let stored = std::fs::read_to_string(mnt009_feature_file(&base, "FEAT-001")).unwrap();
+    assert!(stored.contains("Performance Efficiency"), "{stored}");
+    assert!(!stored.contains("performance-efficiency"), "{stored}");
+    ok(run_in(&base, &work, &["approve", "FEAT-001"]));
+    // Redefined with an unrelated change on another requirement: the tag is unchanged.
+    define(
+        "FEAT-001",
+        definition("Performance Efficiency", "keep a cart for a week"),
+    );
+    let stored = std::fs::read_to_string(mnt009_feature_file(&base, "FEAT-001")).unwrap();
+    assert!(stored.contains("Performance Efficiency"), "{stored}");
+
+    // A tag stored in the other spelling before MNT-009 is kept when carried unchanged, and the
+    // item's approval does not lapse over it (Q1, ADR-0015).
+    define(
+        "FEAT-002",
+        definition("Performance Efficiency", "keep a cart"),
+    );
+    let path = mnt009_feature_file(&base, "FEAT-002");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replace("Performance Efficiency", "Performance efficiency"),
+    )
+    .unwrap();
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    assert_eq!(approval("FEAT-002"), "current");
+    define(
+        "FEAT-002",
+        definition("Performance efficiency", "keep a cart"),
+    );
+    let stored = std::fs::read_to_string(&path).unwrap();
+    assert!(stored.contains("Performance efficiency"), "{stored}");
+    assert!(!stored.contains("Performance Efficiency"), "{stored}");
+    assert_eq!(approval("FEAT-002"), "current");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// MNT-009 R-3: `adr new` refuses a column outside the Zachman six, naming them, and writes
+/// nothing.
+#[test]
+fn adr_new_refuses_an_unknown_zachman_column() {
+    let (base, work) = togaf_scratch("mnt009-adr");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert_board_is_scratch(&base, &work);
+    let refused = run_in(&base, &work, &["adr", "new", "X", "--zachman", "Data"]);
+    assert!(!refused.status.success(), "an unknown column is refused");
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("What, How, Where, Who, When, Why"), "{err}");
+    let listed = ok(run_in(&base, &work, &["adr", "list"]));
+    assert!(!listed.contains("ADR-0001"), "nothing written: {listed}");
+    // A known column in another case is accepted and stored canonical.
+    let made = ok(run_in(
+        &base,
+        &work,
+        &["adr", "new", "Y", "--zachman", "how"],
+    ));
+    assert!(made.contains("ADR-0001"), "{made}");
+    let _ = std::fs::remove_dir_all(&base);
+}

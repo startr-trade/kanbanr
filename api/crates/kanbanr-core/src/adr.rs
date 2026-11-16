@@ -192,6 +192,9 @@ pub fn parse(path: &str, text: &str) -> Option<Adr> {
     if adr.id.trim().is_empty() {
         return None;
     }
+    // One spelling in memory (MNT-009, ADR-0005): an unknown value is kept as written, so the
+    // board still loads and the doctor can name it. Not strict, so this cannot fail.
+    let _ = crate::vocab::canonicalise_adr(&mut adr, false);
     adr.title = body
         .lines()
         .find_map(|l| l.strip_prefix("# "))
@@ -287,6 +290,8 @@ fn scaffold(title: &str) -> String {
 
 /// Scaffold a new decision and write it into the board's doc tree.
 pub fn create(store: &Store, project: &str, title: &str, mut adr: Adr) -> Result<Adr> {
+    // A new decision names known values only, in their one spelling (MNT-009).
+    crate::vocab::canonicalise_adr(&mut adr, true)?;
     let existing = list(store, project)?;
     adr.id = next_id(store, project, &existing);
     if adr.status.trim().is_empty() {
@@ -798,5 +803,72 @@ mod tests {
         assert_eq!(ids(Some("FEAT-002")), vec!["ADR-0002"]);
         assert!(ids(Some("FEAT-00")).is_empty());
         assert_eq!(ids(None).len(), 2);
+    }
+
+    /// MNT-009 R-3: a new decision is written in one spelling, and an unknown column, quality or
+    /// layer is refused with the known values.
+    #[test]
+    fn adr_new_writes_one_spelling_and_refuses_an_unknown_value() {
+        let (store, dir) = fixture();
+        let adr = create(
+            &store,
+            "demo",
+            "Keep it",
+            Adr {
+                zachman: vec!["how".into(), "Where".into(), "where".into()],
+                quality: vec!["performance efficiency".into()],
+                layer: "Logical".into(),
+                ..Adr::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(adr.zachman, vec!["How", "Where"]);
+        let stored = store.read_doc("demo", &adr.path).unwrap();
+        let read = parse(&adr.path, &stored).unwrap();
+        assert_eq!(read.zachman, vec!["How", "Where"]);
+        assert_eq!(read.quality, vec!["Performance Efficiency"]);
+        assert_eq!(read.layer, "logical");
+        assert!(stored.contains("- How"), "{stored}");
+        assert!(!stored.contains("- how"), "{stored}");
+
+        let before = store.list_docs("demo").unwrap().len();
+        let refused = |adr: Adr| create(&store, "demo", "Bad", adr).unwrap_err().to_string();
+        let err = refused(Adr {
+            zachman: vec!["Data".into()],
+            ..Adr::default()
+        });
+        assert!(err.contains("'Data'"), "{err}");
+        assert!(err.contains("What, How, Where, Who, When, Why"), "{err}");
+        let err = refused(Adr {
+            quality: vec!["Speed".into()],
+            ..Adr::default()
+        });
+        assert!(err.contains("'Speed'"), "{err}");
+        assert!(err.contains("Performance Efficiency"), "{err}");
+        let err = refused(Adr {
+            layer: "strategic".into(),
+            ..Adr::default()
+        });
+        assert!(err.contains("'strategic'"), "{err}");
+        assert!(err.contains("conceptual | logical | physical"), "{err}");
+        assert_eq!(
+            store.list_docs("demo").unwrap().len(),
+            before,
+            "nothing written"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-009 R-4: a decision on disk in any case is read in canonical form; an unknown column is
+    /// kept as written, so the board still loads.
+    #[test]
+    fn an_adr_is_read_in_canonical_form_whatever_its_case() {
+        let text = "---\nid: ADR-0001\nstatus: accepted\nzachman: [who, How, how, Data]\n\
+                    quality: [reliability]\nlayer: Logical\n---\n# Keep it\n\nBody.\n";
+        let adr = parse("decisions/0001-keep-it.md", text).unwrap();
+        assert_eq!(adr.zachman, vec!["Who", "How", "Data"]);
+        assert_eq!(adr.quality, vec!["Reliability"]);
+        assert_eq!(adr.layer, "logical");
+        assert_eq!(adr.title, "Keep it");
     }
 }
