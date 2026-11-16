@@ -1,6 +1,6 @@
 /**
  * What a release's one button says and does (FEAT-212), decided from the daemon's plan: the label
- * names the next step ("Promote to main", "Cut v0.2.1"), the lines beside it say what the step
+ * names the next step ("Promote v0.2.0 to main", "Cut v0.2.1"), the lines beside it say what the step
  * will do, the cut shows its preview inline, and until the plan is ready the button is disabled
  * and the page says what is missing and how to fix it. A pure function, so the check script can
  * hold it to each case.
@@ -11,6 +11,11 @@ export interface ReleaseAction {
   /** Whether a button is offered at all: never on a read-only monitor or for an empty release. */
   button: boolean;
   label: string;
+  /**
+   * The question a direct press asks before it acts (DEF-034): the label with a question mark,
+   * present exactly when `button` is. The first press shows it beside the same button and Cancel.
+   */
+  ask?: string;
   /** The button can be pressed: writable, the daemon has the repository, and the plan is ready. */
   enabled: boolean;
   /** What the step will do, one sentence each. */
@@ -45,6 +50,8 @@ export interface ReleaseAction {
   again?: {
     stage: string;
     label: string;
+    /** The question its first press asks (DEF-034): its own label with a question mark. */
+    ask: string;
     enabled: boolean;
     does: string[];
     missing: { text: string; fix: string }[];
@@ -150,6 +157,7 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
           again: {
             stage: offer.stage,
             label: offer.button,
+            ask: `${offer.button}?`,
             enabled: writable && offer.ready && plan.repo,
             does: offer.does,
             missing: offer.ready ? [] : offer.missing.map((text) => ({ text, fix: "" })),
@@ -162,6 +170,7 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     returned: plan.returned,
     button: writable,
     label: plan.button,
+    ...(writable ? { ask: `${plan.button}?` } : {}),
     enabled: writable && plan.ready && plan.repo && !tagBlocked,
     does,
     preview,

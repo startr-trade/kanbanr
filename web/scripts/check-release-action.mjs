@@ -18,7 +18,7 @@ const base = {
   cut: false,
   confirm: false,
   ships: false,
-  button: "Promote to main",
+  button: "Promote v0.3.0 to main",
   conditions: [{ check: "items_finished", stage: "main", holds: true, detail: "2 planned item(s), all finished" }],
   steps: [{ action: "move_main", stage: "main", does: "fast-forwards main to release/v0.3.0 (abc1234)", noop: false }],
   release_tip: "abc1234def",
@@ -75,7 +75,7 @@ const empty = {
   ...base,
   from: "",
   to: "candidate",
-  button: "Promote to candidate",
+  button: "Promote v0.3.0 to candidate",
   conditions: [],
   steps: [],
   ready: false,
@@ -89,7 +89,7 @@ const expect = (name, cond, got) => {
 };
 
 let a = releaseAction(base, true);
-expect("middle stage: one button named for the step", a.button && a.label === "Promote to main" && a.enabled, a);
+expect("middle stage: one button named for the step", a.button && a.label === "Promote v0.3.0 to main" && a.enabled, a);
 expect("middle stage: says what it does", a.does.join() === "fast-forwards main to release/v0.3.0 (abc1234)", a);
 expect("middle stage: no preview, nothing missing", !a.preview && a.missing.length === 0, a);
 
@@ -174,7 +174,7 @@ expect("confirm with no result: not enabled even if the plan has no condition", 
 a = releaseAction({ ...none, tag: { commit: "abc1234def5678", gate: "", state: "none" } }, true);
 expect("confirm with no gate to judge by: enabled", a.enabled, a);
 
-const inert = { ...base, to: "test", button: "Promote to test", conditions: [], steps: [] };
+const inert = { ...base, to: "test", button: "Promote v0.3.0 to test", conditions: [], steps: [] };
 a = releaseAction(inert, true);
 expect(
   "a promotion to an inert stage says nothing happens",
@@ -220,7 +220,7 @@ const returned = {
   by: "Ada L",
   at: "2026-11-07T10:00:00Z",
   from: "main",
-  steps: ["Update the release notes", "Promote to main", "Push main and wait for CI", "Cut v0.3.0"],
+  steps: ["Update the release notes", "Promote v0.3.0 to main", "Push main and wait for CI", "Cut v0.3.0"],
 };
 a = releaseAction({ ...base, from: "candidate", returned }, true);
 expect(
@@ -228,7 +228,7 @@ expect(
   a.returned?.item === "DEF-030" && a.returned.from === "main" && a.returned.steps.join("|") === returned.steps.join("|"),
   a,
 );
-expect("web::release_returned_banner: the button stays the ordinary next step", a.label === "Promote to main" && a.enabled, a);
+expect("web::release_returned_banner: the button stays the ordinary next step", a.label === "Promote v0.3.0 to main" && a.enabled, a);
 a = releaseAction(base, true);
 expect("web::release_returned_banner: no banner for a release that was not sent back", a.returned === undefined, a);
 a = releaseAction({ ...base, returned }, false);
@@ -240,7 +240,7 @@ const delegated = "DEF-9: the design-review sign-off Claude took under DLG-001 i
 a = releaseAction({ ...base, warnings: [delegated] }, true);
 expect(
   "web::release_warns_of_unreviewed_delegated_decisions: the button stays enabled",
-  a.button && a.enabled && a.label === "Promote to main" && !a.missing.some((m) => m.text.includes("DLG-001")),
+  a.button && a.enabled && a.label === "Promote v0.3.0 to main" && !a.missing.some((m) => m.text.includes("DLG-001")),
   a,
 );
 

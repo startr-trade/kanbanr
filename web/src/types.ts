@@ -787,7 +787,7 @@ export interface ReleasePlan {
   tag?: TagResult;
   /** The merge that sent the release back and the steps from there, until it is cut (DEF-031). */
   returned?: { item: string; by: string; at: string; from: string; steps: string[] };
-  /** What the one button says: "Promote to main", "Cut v0.2.1". */
+  /** What the one button says: "Promote v0.2.0 to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];
   steps: PlanStep[];

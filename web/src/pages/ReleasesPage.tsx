@@ -9,6 +9,7 @@ import { notesSection } from "../releaseNotes";
 import Markdown from "../components/Markdown";
 import type { PreparedView, Release, TagResult } from "../types";
 import { PreparedPanel } from "../components/PreparedPanel";
+import { AskFirst } from "../components/AskFirst";
 import { openFor } from "../prepared";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
@@ -75,7 +76,10 @@ export default function ReleasesPage() {
       const done = (await api.promoteRelease(project, r.version, who, to, expect, note, acceptUntested)) as {
         next?: string;
       };
-      setOutcome((o) => ({ ...o, [r.version]: `${to ? `promoted to ${to}` : `promoted: ${r.version} shipped`}${done?.next ? ` — ${done.next}` : ""}` }));
+      // A stage taken by mistake is stepped back from the CLI, by the person (DEF-034): the page
+      // offers no Undo button, so the chip names the command.
+      const undo = to ? ` — undo with \`kanbanr release undo ${r.version} --reason …\` while nothing is pushed` : "";
+      setOutcome((o) => ({ ...o, [r.version]: `${to ? `promoted to ${to}` : `promoted: ${r.version} shipped`}${done?.next ? ` — ${done.next}` : ""}${undo}` }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setOutcome((o) => ({
@@ -284,6 +288,9 @@ function ReleaseButton({
     ? openFor(prepared, "promotion", { release: release.version, stage: plan.data.to })
     : undefined;
   const tip = plan.data.release_tip;
+  // A direct press asks first (DEF-034); the question is dropped when an outcome arrives or the plan
+  // names another stage or another again offer, and kept across live ticks.
+  const askKey = `${outcome ?? ""}|${plan.data.to}|${plan.data.again?.stage ?? ""}|${plan.data.again?.button ?? ""}`;
   // The release waiting at its last stage is shipped with no stage named (DEF-049).
   const promoteTo = plan.data.awaiting ? "" : plan.data.to;
   const confirmPromotion = async (view: PreparedView, edits: Record<string, unknown>) => {
@@ -362,19 +369,25 @@ function ReleaseButton({
         </p>
       ) : null}
       <div className="review-actions">
-        {preparedPromotion && action.button ? null : action.button ? (
+        {preparedPromotion && action.button ? null : action.button && action.confirm ? (
           <button
             className="btn btn-primary"
-            onClick={() =>
-              action.confirm
-                ? setAsking(true)
-                : onPromote(release, promoteTo, plan.data!.release_tip, "", accepted ? action.accept : undefined)
-            }
+            onClick={() => setAsking(true)}
             disabled={!enabled || busy != null}
             title={enabled ? action.does.join("; ") : "not ready: see what is missing"}
           >
             {busy === release.version ? "promoting…" : action.label}
           </button>
+        ) : action.button ? (
+          <AskFirst
+            key={`primary|${askKey}`}
+            className="btn btn-primary"
+            label={busy === release.version ? "promoting…" : action.label}
+            ask={action.ask ?? `${action.label}?`}
+            onConfirm={() => onPromote(release, promoteTo, plan.data!.release_tip, "", accepted ? action.accept : undefined)}
+            disabled={!enabled || busy != null}
+            disabledWhy="not ready: see what is missing"
+          />
         ) : (
           <code>{action.command}</code>
         )}
@@ -387,14 +400,14 @@ function ReleaseButton({
       {action.again ? (
         <div className="small release-again">
           {writable ? (
-            <button
-              className="btn"
-              onClick={() => onPromote(release, action.again!.stage, plan.data!.release_tip)}
+            <AskFirst
+              key={`again|${askKey}`}
+              label={action.again.label}
+              ask={action.again.ask}
+              onConfirm={() => onPromote(release, action.again!.stage, plan.data!.release_tip)}
               disabled={!action.again.enabled || busy != null}
-              title={action.again.does.join("; ")}
-            >
-              {action.again.label}
-            </button>
+              disabledWhy={action.again.missing.map((m) => m.text).join("; ") || "not ready"}
+            />
           ) : null}
           {action.again.does[0] ? (
             <>

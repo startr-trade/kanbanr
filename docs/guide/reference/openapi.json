@@ -202,7 +202,7 @@
         "description": "Entering the stage the release is at again, when that would redo something (DEF-057): what the\nsecond button says, what it would do, and whether it can go. Derived, never stored.",
         "properties": {
           "button": {
-            "description": "What the button says: the Again plan's `button`, \"Promote to candidate again\".",
+            "description": "What the button says: the Again plan's `button`, \"Promote v0.2.0 to candidate again\".",
             "type": "string"
           },
           "does": {
@@ -4318,7 +4318,7 @@
             "type": "boolean"
           },
           "button": {
-            "description": "What the one button says: \"Promote to main\", \"Cut v0.2.1\", \"Promote to main again\".",
+            "description": "What the one button says: \"Promote v0.2.0 to main\", \"Cut v0.2.1\", \"Promote v0.2.0 to main again\".",
             "type": "string"
           },
           "conditions": {
