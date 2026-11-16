@@ -41,6 +41,9 @@ pub struct SessionCfg {
     /// `PATH` for the session and its hooks: the run's own `bin/` first, so `kanbanr` is the run's
     /// binary (G-6). None keeps this process's `PATH`.
     pub path: Option<std::ffi::OsString>,
+    /// `CLAUDE_CODE_OAUTH_TOKEN` for the session, from the run's token file; never written to a
+    /// file or a log. None leaves the session to the run's config copy.
+    pub oauth_token: Option<super::credentials::Secret>,
     /// How long one turn may take before the session is given up as stalled.
     pub turn_timeout: Duration,
     /// How long the stream must stay quiet, with no agent running, for the session to be idle.
@@ -61,6 +64,7 @@ impl SessionCfg {
             max_turns: None,
             persona_file: None,
             path: None,
+            oauth_token: None,
             turn_timeout: Duration::from_secs(30 * 60),
             quiet: Duration::from_secs(5),
         }
@@ -74,6 +78,9 @@ pub enum StopReason {
     Budget,
     /// `--max-turns` was reached.
     MaxTurns,
+    /// The session could not sign in (a 401, "Failed to authenticate", "Not logged in"): a
+    /// harness stop, never a product finding.
+    Auth(String),
     /// The result line was an error of another kind.
     Error(String),
     /// The process ended (stdout closed) before a result line.
@@ -87,6 +94,7 @@ impl std::fmt::Display for StopReason {
         match self {
             StopReason::Budget => f.write_str("the session reached its budget"),
             StopReason::MaxTurns => f.write_str("the session reached its turn limit"),
+            StopReason::Auth(why) => write!(f, "the session could not sign in: {why}"),
             StopReason::Error(why) => write!(f, "the session ended in error: {why}"),
             StopReason::Exited => f.write_str("the session ended before answering"),
             StopReason::Timeout => {
@@ -200,6 +208,8 @@ impl Session {
             if (key.starts_with("KANBANR_") && !key.starts_with("KANBANR_WALKTHROUGH_"))
                 || key == "CLAUDECODE"
                 || key == "CLAUDE_CONFIG_DIR"
+                || key == super::credentials::SESSION_TOKEN_VAR
+                || key == super::credentials::TOKEN_FILE_VAR
             {
                 continue;
             }
@@ -207,6 +217,9 @@ impl Session {
         }
         if let Some(path) = &cfg.path {
             cmd.env("PATH", path);
+        }
+        if let Some(token) = &cfg.oauth_token {
+            cmd.env(super::credentials::SESSION_TOKEN_VAR, token.expose());
         }
         cmd.env("CLAUDE_CONFIG_DIR", &cfg.config_dir)
             .env(kanbanr_core::project::FENCE_VAR, &cfg.fence)
@@ -528,6 +541,8 @@ fn stop_of(subtype: &str, text: &str) -> StopReason {
         StopReason::Budget
     } else if s.contains("max_turns") || t.contains("max_turns") {
         StopReason::MaxTurns
+    } else if super::credentials::is_auth_failure(text) {
+        StopReason::Auth(text.to_string())
     } else {
         StopReason::Error(if subtype.is_empty() {
             text.to_string()
@@ -762,6 +777,56 @@ pub(crate) mod tests {
         c.budget_usd = 2.0;
         c.turn_timeout = Duration::from_secs(20);
         c
+    }
+
+    /// RC2: the session gets the token file's token as `CLAUDE_CODE_OAUTH_TOKEN`, the token is in
+    /// no transcript line, and a sign-in failure is the harness stop `Auth`.
+    #[cfg(unix)]
+    #[test]
+    fn the_token_reaches_the_session_and_never_the_stream() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("token");
+        let path = dir.join("claude");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\n\
+             while IFS= read -r line; do\n\
+               if [ \"$CLAUDE_CODE_OAUTH_TOKEN\" = \"tok-not-a-real-one\" ]; then\n\
+                 printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"total_cost_usd\":0.1,\"num_turns\":1,\"result\":\"signed in\"}'\n\
+               else\n\
+                 printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"total_cost_usd\":0.1,\"num_turns\":1,\"result\":\"Failed to authenticate. API Error: 401 OAuth access token is invalid\"}'\n\
+               fi\n\
+             done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut c = cfg(&dir, &path);
+        c.oauth_token = Some(
+            super::super::credentials::read_token_file(
+                &{
+                    let f = dir.join("walkthrough-token");
+                    std::fs::write(&f, "tok-not-a-real-one\n").unwrap();
+                    std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+                    f
+                },
+                &dir.join("project"),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        assert!(!format!("{c:?}").contains("tok-not"));
+        let mut s = Session::start(&c).unwrap();
+        let t = s.say("Hello.").unwrap();
+        assert_eq!(t.final_text, "signed in", "{t:?}");
+        s.end();
+        let transcript = std::fs::read_to_string(dir.join("raw/transcripts/stream.jsonl")).unwrap();
+        assert!(!transcript.contains("tok-not"), "{transcript}");
+        // Without the token the fake fails to sign in: a harness stop.
+        c.oauth_token = None;
+        let mut s = Session::start(&c).unwrap();
+        let t = s.say("Hello.").unwrap();
+        assert!(matches!(t.stopped, Some(StopReason::Auth(_))), "{t:?}");
+        s.end();
     }
 
     /// FTR-037 W1: a turn is one stdin envelope and every stdout line up to and including the

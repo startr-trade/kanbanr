@@ -284,6 +284,11 @@ fn run_walkthrough(w: &World, runbook: &Path, name: &str) -> Output {
         // The person's Claude Code folder is a stand-in under the temporary directory: a test run
         // never copies anyone's rules or credentials.
         .env("CLAUDE_CONFIG_DIR", w.root.join("person-claude"))
+        // Nor anyone's walkthrough token: the token file is a path that does not exist.
+        .env(
+            "KANBANR_WALKTHROUGH_TOKEN_FILE",
+            w.root.parent().unwrap().join("no-walkthrough-token"),
+        )
         .env(
             "PATH",
             format!(

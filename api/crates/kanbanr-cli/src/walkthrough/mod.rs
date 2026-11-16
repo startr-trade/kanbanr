@@ -11,6 +11,7 @@
 
 pub mod answer;
 pub mod capture;
+pub mod credentials;
 pub mod derive;
 pub mod driver;
 pub mod guard;
@@ -416,8 +417,14 @@ fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
 }
 
 /// The run project's Claude Code configuration: a copy of the person's rules file and its imports,
-/// their `settings.json` and credentials, and the kanbanr skill linked — nothing else of theirs.
-fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
+/// their `settings.json`, the sign-in `creds` names (an access-only credentials file, or none: a
+/// token reaches the session through its environment), and the skill this binary carries —
+/// nothing else of theirs.
+fn make_claude_config(
+    run: &RunDirs,
+    creds: &credentials::Credentials,
+    log: &mut Vec<String>,
+) -> Result<()> {
     let dst = run.claude_config();
     std::fs::create_dir_all(&dst)?;
     let Some(src) = crate::hooks::claude_dir() else {
@@ -427,7 +434,9 @@ fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
         return Ok(());
     };
     let mut copied = Vec::new();
-    for name in ["CLAUDE.md", "settings.json", ".credentials.json"] {
+    // The person's credentials file is never copied whole: its refresh token rotates (RC2).
+    credentials::install(&dst, creds)?;
+    for name in ["CLAUDE.md", "settings.json"] {
         let from = src.join(name);
         if from.is_file() {
             std::fs::copy(&from, dst.join(name))?;
@@ -441,14 +450,6 @@ fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
                 std::fs::copy(&from, dst.join(&import))?;
                 copied.push(import);
             }
-        }
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let creds = dst.join(".credentials.json");
-        if creds.exists() {
-            let _ = std::fs::set_permissions(&creds, std::fs::Permissions::from_mode(0o600));
         }
     }
     log.push(install_run_skill(run)?);
@@ -720,8 +721,14 @@ impl Running {
                 if let Some(stop) = &turn.stopped {
                     let kind = match stop {
                         StopReason::Budget => "budget-stop",
+                        StopReason::Auth(_) => "harness-auth",
                         _ => "session-stop",
                     };
+                    // A sign-in failure is the harness's, never the product's: the run snapshots
+                    // and prepares nothing on the target board.
+                    if matches!(stop, StopReason::Auth(_)) {
+                        self.setup_failed = true;
+                    }
                     self.finding(
                         &id,
                         kind,
@@ -1355,7 +1362,14 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         git(&["commit", "-qm", "walkthrough: the scratch project"])?;
     }
     crate::hooks::write_walkthrough_settings(&project_dir)?;
-    make_claude_config(&dirs, &mut setup_notes)?;
+    // How the session signs in (RC2): the token file, else an access-only copy that outlives the
+    // run, else none; refused before anything starts.
+    let creds = credentials::resolve(
+        &fence,
+        crate::hooks::claude_dir().as_deref(),
+        Duration::from_secs(args.max_minutes.unwrap_or(runbook.max_minutes) * 60),
+    )?;
+    make_claude_config(&dirs, &creds, &mut setup_notes)?;
     // Preflight and setup.log.
     let model = args.model.clone().unwrap_or_else(|| runbook.model.clone());
     let target_board = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
@@ -1376,6 +1390,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let mut log = guard::preflight(&dirs, &env)?;
     log.push("runbook", shown.clone());
     log.push("run_name", name.clone());
+    log.push("credentials", creds.mode());
     if let Some(p) = &target_project {
         log.push("target_project", p.clone());
     }
@@ -1394,6 +1409,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     cfg.persona_file = Some(persona_file);
     // The session and every hook it runs resolve `kanbanr` to this binary (G-6).
     cfg.path = env.session_path.clone();
+    cfg.oauth_token = creds.session_token();
     // The allowed remotes reach the session's hooks (`kanbanr git guard`) through the environment
     // every child of this process inherits, so they are exported before the session starts.
     // SAFETY: this process is single-threaded here, before the session's reader thread exists.
