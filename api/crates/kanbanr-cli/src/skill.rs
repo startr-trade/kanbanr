@@ -370,6 +370,21 @@ mod tests {
         }
     }
 
+    /// DEF-086 R-1: the runner rule sets the manual and walkthrough tests apart, ahead of the
+    /// "never a kanbanr command" sentence.
+    #[test]
+    fn skill_sets_manual_and_walkthrough_tests_apart_from_the_runner_rule() {
+        let flat = skill_flat();
+        let section = tests_section(&flat);
+        let exempt = section
+            .find("Apart from the item's one manual test and a `walkthrough:` test, a test is something the project's runner runs")
+            .expect("the exemption");
+        let never = section
+            .find("It is never a kanbanr command")
+            .expect("the never-a-command sentence");
+        assert!(exempt < never, "the exemption must come first");
+    }
+
     /// DEF-056 R-1: the first release proposes release-prepare and the pipeline before Promote.
     #[test]
     fn the_first_release_proposes_release_prepare_and_the_pipeline() {

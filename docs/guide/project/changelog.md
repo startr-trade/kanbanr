@@ -44,6 +44,8 @@ All notable changes to kanbanr are documented here. The format follows
 - The session start's recovered summary is sized to fit (8000 bytes by default): it leads with
   what is in progress, what waits for you and the sprint and release, and counts the rest, instead
   of printing every item (DEF-093).
+- The skill no longer reads as ruling out walkthrough and manual tests when it says a test is
+  never a kanbanr command (DEF-086).
 - A refusal on the default branch no longer calls setup's commit the one exception when it also
   names the block refresh (DEF-085).
 - `kanbanr doctor` no longer warns that an item names no docs when its kind's path leaves docs
