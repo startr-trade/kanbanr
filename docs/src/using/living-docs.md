@@ -68,6 +68,9 @@ that is not on the board is an error. A doc the Design only reads is marked on i
 the word `unchanged` (or `not changed`) and needs no change. An item with no `Affects docs` links
 is judged by `affects_docs` alone.
 
+After the move, doctor re-judges the gate over the same window the move used, from when the item
+entered the stage it moved from, so a doc folded just before the move is not reported.
+
 ### Coverage rules: keeping the views whole
 
 `docs_updated` checks the docs an item names. The views that span every item — a Zachman matrix,

@@ -6,6 +6,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- doctor no longer warns that a doc folded just before a move has not changed: it re-judges the
+  `docs_updated` gate an item has passed from when the item entered the stage it moved from, as the
+  move did (DEF-074).
+
 ## [0.6.1] - 2026-11-16
 
 ### Fixed
