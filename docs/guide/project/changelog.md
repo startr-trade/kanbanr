@@ -35,6 +35,8 @@ All notable changes to kanbanr are documented here. The format follows
   of printing every item (DEF-093).
 - A refusal on the default branch no longer calls setup's commit the one exception when it also
   names the block refresh (DEF-085).
+- A docs-folded sign-off, and an item's text flags, no longer lapse on a commit that changes only
+  tests or docs the item does not name (DEF-072).
 
 ## [0.7.0] - 2026-11-16
 

@@ -884,8 +884,9 @@ Before the move:
   linked under `Affects docs`, and the repository docs its Design lists there. **docs-folded** is
   offered only once every task is complete and every doc linked under `Affects docs` (board or
   repository) has changed; until then the Review page does not offer it and `kanbanr check` names
-  what is missing. A commit on the item's branch after the sign-off lapses it, so fold first and
-  commit nothing to the branch after asking;
+  what is missing. A later commit on the item's branch that changes shipped code or a doc the item
+  names lapses the sign-off; one that changes only tests, or docs the item does not name, leaves it
+  standing. So fold first and commit no shipped code to the branch after asking;
 - settle the **texts to check** before docs-folded is offered. They are the docs and items that name
   a flag, route, setting, stage, status or file the item changed and have not changed since
   (`kanbanr check` lists those left under "Texts to settle"; `kanbanr drift` lists them for the
