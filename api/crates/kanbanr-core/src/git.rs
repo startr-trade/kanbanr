@@ -951,29 +951,153 @@ fn walk_commits(repo: &Repository) -> Vec<(i64, git2::Oid)> {
         .collect()
 }
 
-/// Each distinct content `rel` has had in the board repository's history from HEAD, newest first,
-/// deduplicated by blob (DEF-036). An unreadable repository or path gives an empty list.
-pub fn file_versions(dir: &Path, rel: &str) -> Vec<String> {
-    let Ok(repo) = Repository::discover(dir) else {
-        return Vec::new();
-    };
-    let Ok(mut walk) = repo.revwalk() else {
-        return Vec::new();
-    };
-    if walk.push_head().is_err()
-        || walk
-            .set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
-            .is_err()
-    {
-        return Vec::new();
+/// Why a board's git history could not be read (DEF-080).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryReason {
+    NotARepository,
+    OwnedByAnotherUser,
+    /// libgit2's message for the commit it could not read.
+    Incomplete(String),
+    /// libgit2's message.
+    Other(String),
+}
+
+/// A history read that failed: the repository (its workdir when it opened, else the folder
+/// given) and why (DEF-080).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryError {
+    pub repo: std::path::PathBuf,
+    pub reason: HistoryReason,
+}
+
+impl HistoryError {
+    /// The reason alone, without the path, for pages served to others (DEF-080).
+    pub fn reason_text(&self) -> String {
+        match &self.reason {
+            HistoryReason::NotARepository => "it is not a git repository".to_string(),
+            HistoryReason::OwnedByAnotherUser => format!(
+                "it is owned by another user, and git refuses such a repository (its \
+                 safe.directory rule); run kanbanr as the folder's owner, or trust it with git \
+                 config --global --add safe.directory {}",
+                self.repo.display()
+            ),
+            HistoryReason::Incomplete(m) => {
+                format!("its history is incomplete (a shallow or partial clone?): {m}")
+            }
+            HistoryReason::Other(m) => m.clone(),
+        }
     }
+}
+
+impl std::fmt::Display for HistoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot read the git history of {}: {}",
+            self.repo.display(),
+            self.reason_text()
+        )
+    }
+}
+
+impl std::error::Error for HistoryError {}
+
+/// The reason a libgit2 error gives for a history that cannot be read (DEF-080).
+pub fn reason_of(e: &git2::Error) -> HistoryReason {
+    match (e.code(), e.class()) {
+        (git2::ErrorCode::Owner, _) => HistoryReason::OwnedByAnotherUser,
+        (git2::ErrorCode::NotFound, git2::ErrorClass::Repository) => HistoryReason::NotARepository,
+        _ => HistoryReason::Other(e.message().to_string()),
+    }
+}
+
+/// Open the repository holding `dir` for a history read; the one place a failure to open it is
+/// classified (DEF-080).
+pub fn open_history(dir: &Path) -> Result<Repository, HistoryError> {
+    Repository::discover(dir).map_err(|e| HistoryError {
+        repo: dir.to_path_buf(),
+        reason: reason_of(&e),
+    })
+}
+
+/// Write `note: <text>` to stderr once per `key` per process (DEF-080).
+pub fn warn_once(key: &str, text: &str) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    let first = match seen.lock() {
+        Ok(mut s) => s.insert(key.to_string()),
+        // A poisoned lock still prints.
+        Err(_) => true,
+    };
+    if first {
+        eprintln!("note: {text}");
+    }
+}
+
+/// A revwalk from HEAD, newest first, for a history read. `None` when HEAD is unborn (no commits
+/// yet): an empty history (DEF-080).
+fn history_walk<'r>(
+    repo: &'r Repository,
+    err: &dyn Fn(HistoryReason) -> HistoryError,
+) -> Result<Option<git2::Revwalk<'r>>, HistoryError> {
+    let other = |e: git2::Error| err(HistoryReason::Other(e.message().to_string()));
+    let mut walk = repo.revwalk().map_err(other)?;
+    match walk.push_head() {
+        Ok(()) => {}
+        // libgit2 reports an unborn HEAD to push_head as a missing reference; HEAD itself
+        // says UnbornBranch.
+        Err(e)
+            if e.code() == git2::ErrorCode::UnbornBranch
+                || repo
+                    .head()
+                    .is_err_and(|h| h.code() == git2::ErrorCode::UnbornBranch) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(other(e)),
+    }
+    walk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
+        .map_err(other)?;
+    Ok(Some(walk))
+}
+
+/// The commit `item` names, or the walk stops as incomplete (DEF-080).
+fn walked_commit<'r>(
+    repo: &'r Repository,
+    item: Result<git2::Oid, git2::Error>,
+    err: &dyn Fn(HistoryReason) -> HistoryError,
+) -> Result<git2::Commit<'r>, HistoryError> {
+    item.and_then(|oid| repo.find_commit(oid))
+        .map_err(|e| err(HistoryReason::Incomplete(e.message().to_string())))
+}
+
+/// The `HistoryError` maker for an opened repository: its workdir, else `dir` (DEF-080).
+fn history_err(repo: &Repository, dir: &Path) -> impl Fn(HistoryReason) -> HistoryError {
+    let at = repo.workdir().unwrap_or(dir).to_path_buf();
+    move |reason| HistoryError {
+        repo: at.clone(),
+        reason,
+    }
+}
+
+/// Each distinct content `rel` has had in the board repository's history from HEAD, newest first,
+/// deduplicated by blob (DEF-036). A path absent from the history gives an empty list; a
+/// repository that cannot be read, or whose history cannot be walked, is an error naming it and
+/// why (DEF-080).
+pub fn file_versions(dir: &Path, rel: &str) -> Result<Vec<String>, HistoryError> {
+    let repo = open_history(dir)?;
+    let err = history_err(&repo, dir);
+    let Some(walk) = history_walk(&repo, &err)? else {
+        return Ok(Vec::new());
+    };
     let mut seen: Vec<git2::Oid> = Vec::new();
     let mut out = Vec::new();
-    for oid in walk.flatten() {
-        let Some(entry) = repo
-            .find_commit(oid)
+    for item in walk {
+        let commit = walked_commit(&repo, item, &err)?;
+        let Some(entry) = commit
+            .tree()
             .ok()
-            .and_then(|c| c.tree().ok())
             .and_then(|t| t.get_path(Path::new(rel)).ok())
         else {
             continue;
@@ -988,7 +1112,7 @@ pub fn file_versions(dir: &Path, rel: &str) -> Vec<String> {
             out.push(text.to_string());
         }
     }
-    out
+    Ok(out)
 }
 
 /// One commit that changed a file, and the file as that commit left it (FTR-028).
@@ -1001,21 +1125,14 @@ pub struct FileVersion {
 
 /// Each commit from HEAD that changed `rel` (added it, or left it different from its first
 /// parent), newest first, with its message and the file's text. A commit that removed it is not
-/// listed. An unreadable repository or path gives an empty list.
-pub fn file_history(dir: &Path, rel: &str) -> Vec<FileVersion> {
-    let Ok(repo) = Repository::discover(dir) else {
-        return Vec::new();
+/// listed. A path absent from the history gives an empty list; a repository that cannot be read,
+/// or whose history cannot be walked, is an error naming it and why (DEF-080).
+pub fn file_history(dir: &Path, rel: &str) -> Result<Vec<FileVersion>, HistoryError> {
+    let repo = open_history(dir)?;
+    let err = history_err(&repo, dir);
+    let Some(walk) = history_walk(&repo, &err)? else {
+        return Ok(Vec::new());
     };
-    let Ok(mut walk) = repo.revwalk() else {
-        return Vec::new();
-    };
-    if walk.push_head().is_err()
-        || walk
-            .set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
-            .is_err()
-    {
-        return Vec::new();
-    }
     let blob_in = |c: &git2::Commit| {
         c.tree()
             .ok()
@@ -1023,10 +1140,9 @@ pub fn file_history(dir: &Path, rel: &str) -> Vec<FileVersion> {
             .map(|e| e.id())
     };
     let mut out = Vec::new();
-    for oid in walk.flatten() {
-        let Ok(commit) = repo.find_commit(oid) else {
-            continue;
-        };
+    for item in walk {
+        let commit = walked_commit(&repo, item, &err)?;
+        let oid = commit.id();
         let Some(id) = blob_in(&commit) else {
             continue;
         };
@@ -1044,7 +1160,7 @@ pub fn file_history(dir: &Path, rel: &str) -> Vec<FileVersion> {
             });
         }
     }
-    out
+    Ok(out)
 }
 
 /// The one-doc walk `DocHistory` replaced, kept as the reference its answers are checked against
@@ -1183,7 +1299,8 @@ mod tests {
     }
 
     /// DEF-036: each distinct content of a file in the history, newest first; a content that came
-    /// back is listed once, where it was last; a missing path or repository gives nothing.
+    /// back is listed once, where it was last; a missing path gives nothing, a missing repository
+    /// an error (DEF-080).
     #[test]
     fn file_versions_lists_each_distinct_content_newest_first() {
         let dir = temp("fileversions");
@@ -1192,9 +1309,9 @@ mod tests {
             std::fs::write(dir.join("f.txt"), text).unwrap();
             commit_at(&repo, &["f.txt"], &[], T0 + i as i64);
         }
-        assert_eq!(file_versions(&dir, "f.txt"), ["c", "a", "b"]);
-        assert!(file_versions(&dir, "nope.txt").is_empty());
-        assert!(file_versions(&temp("fileversions-none"), "f.txt").is_empty());
+        assert_eq!(file_versions(&dir, "f.txt").unwrap(), ["c", "a", "b"]);
+        assert!(file_versions(&dir, "nope.txt").unwrap().is_empty());
+        assert!(file_versions(&temp("fileversions-none"), "f.txt").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1210,14 +1327,89 @@ mod tests {
         // A commit that leaves the file alone is not part of its history.
         std::fs::write(dir.join("g.txt"), "other").unwrap();
         assert!(commit(&dir, "Ada", "ada@example.com", "other file"));
-        let h = file_history(&dir, "f.txt");
+        let h = file_history(&dir, "f.txt").unwrap();
         let got: Vec<(&str, &str)> = h
             .iter()
             .map(|v| (v.content.as_str(), v.message.trim()))
             .collect();
         assert_eq!(got, [("c", "three"), ("b", "two"), ("a", "one")]);
         assert!(h.iter().all(|v| v.sha.len() == 40));
-        assert!(file_history(&dir, "nope.txt").is_empty());
+        assert!(file_history(&dir, "nope.txt").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-080 R-1: a folder that is no repository is named, and so is the reason.
+    #[test]
+    fn file_history_names_the_folder_and_says_it_is_not_a_repository() {
+        let dir = temp("history-notrepo");
+        assert!(dir.starts_with(std::env::temp_dir()));
+        for e in [
+            file_history(&dir, "f.txt").unwrap_err(),
+            file_versions(&dir, "f.txt").unwrap_err(),
+        ] {
+            assert_eq!(e.repo, dir);
+            assert_eq!(e.reason, HistoryReason::NotARepository);
+            let text = e.to_string();
+            assert!(text.contains("is not a git repository"), "{text}");
+            assert!(text.contains(&dir.display().to_string()), "{text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-080 R-1: git's owner check reads as another user's repository, with the fix.
+    #[test]
+    fn an_owner_refusal_is_named_as_another_users_repository() {
+        let e = git2::Error::new(git2::ErrorCode::Owner, git2::ErrorClass::Config, "x");
+        assert_eq!(reason_of(&e), HistoryReason::OwnedByAnotherUser);
+        let err = HistoryError {
+            repo: PathBuf::from("/srv/board"),
+            reason: reason_of(&e),
+        };
+        let text = err.to_string();
+        assert!(text.contains("safe.directory"), "{text}");
+        assert!(text.contains("/srv/board"), "{text}");
+        assert!(err.reason_text().contains("owned by another user"));
+    }
+
+    /// DEF-080 R-1 (L-29): a repository with no commits has an empty history, not an error.
+    #[test]
+    fn a_repository_with_no_commits_has_an_empty_history() {
+        let dir = temp("history-unborn");
+        Repository::init(&dir).unwrap();
+        assert_eq!(file_history(&dir, "f.txt"), Ok(vec![]));
+        assert_eq!(file_versions(&dir, "f.txt"), Ok(vec![]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-080 R-1: a commit the walk cannot read makes the history incomplete, not shorter.
+    #[test]
+    fn a_walk_that_cannot_read_a_commit_is_reported_incomplete() {
+        let dir = temp("history-incomplete");
+        let repo = Repository::init(&dir).unwrap();
+        std::fs::write(dir.join("f.txt"), "a").unwrap();
+        commit_at(&repo, &["f.txt"], &[], T0);
+        let first = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+        std::fs::write(dir.join("f.txt"), "b").unwrap();
+        commit_at(&repo, &["f.txt"], &[], T0 + 1);
+        let loose = dir.join(".git/objects").join(&first[..2]).join(&first[2..]);
+        std::fs::remove_file(&loose).unwrap();
+        assert!(
+            matches!(
+                file_history(&dir, "f.txt"),
+                Err(HistoryError {
+                    reason: HistoryReason::Incomplete(_),
+                    ..
+                })
+            ),
+            "{:?}",
+            file_history(&dir, "f.txt")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

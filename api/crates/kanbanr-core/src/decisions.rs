@@ -810,7 +810,7 @@ pub fn granted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
     {
         return false;
     }
-    let history = crate::git::file_history(dir, &rel);
+    let history = crate::git::file_history(dir, &rel).unwrap_or_default();
     let Some(first) = history.iter().rev().find(|v| {
         crate::yaml::from_str::<Decisions>(&v.content)
             .ok()

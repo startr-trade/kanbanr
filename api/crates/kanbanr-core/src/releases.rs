@@ -4474,7 +4474,7 @@ fn notes_templates(store: &Store, id: &str, project: &Project) -> Vec<String> {
     };
     let mut out = vec![current];
     let rel = format!("projects/{id}/config.yaml");
-    for text in crate::git::file_versions(store.data_dir(), &rel) {
+    for text in crate::git::file_versions(store.data_dir(), &rel).unwrap_or_default() {
         let past = crate::yaml::from_str::<crate::ProjectConfig>(&text)
             .ok()
             .and_then(|c| c.cadence.release_prepare.notes);
