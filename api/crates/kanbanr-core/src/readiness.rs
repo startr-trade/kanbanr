@@ -3422,7 +3422,7 @@ mod tests {
     /// FEAT-168: the guide's table of checks says what `process checks` says, row for row.
     #[test]
     fn the_guides_check_table_matches_process_checks() {
-        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let guide = include_str!("../../../../docs/guide/using/processes.md");
         let section = guide
             .split("### The checks")
             .nth(1)

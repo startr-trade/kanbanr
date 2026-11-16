@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy the root files the book also publishes into docs/src, so there is ONE source for each.
+# Copy the root files the book also publishes into docs/guide, so there is ONE source for each.
 #
 # The changelog is canonically at the repository root (where every tool and every reader expects
 # it) and is also a chapter of the book. Rather than maintain two, this copies it in — and CI runs
@@ -8,5 +8,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-cp CHANGELOG.md docs/src/project/changelog.md
-echo "synced: CHANGELOG.md -> docs/src/project/changelog.md"
+cp CHANGELOG.md docs/guide/project/changelog.md
+echo "synced: CHANGELOG.md -> docs/guide/project/changelog.md"

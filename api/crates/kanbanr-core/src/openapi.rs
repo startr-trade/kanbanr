@@ -4,12 +4,12 @@
 //! The public set is the routes the monitor uses, plus the obvious reads. Every other read route
 //! the daemon answers is **internal**: served, but not covered, and free to change. Write routes
 //! are never part of it. A breaking change to a public route means a v2, under `/api/v2/`, with v1
-//! kept for a deprecation period (`docs/src/project/stability.md`).
+//! kept for a deprecation period (`docs/guide/project/stability.md`).
 //!
 //! The response schemas are derived from the Rust types the routes serialize (feature `schema`),
 //! so a field cannot change without the description changing with it. [`document`] is
 //! deterministic: `cargo run -p kanbanr-core --features schema --example openapi` writes it to
-//! `docs/src/reference/openapi.json`, the daemon serves those bytes, and the contract test fails
+//! `docs/guide/reference/openapi.json`, the daemon serves those bytes, and the contract test fails
 //! when the committed copy and the code disagree.
 
 use schemars::generate::SchemaSettings;
@@ -779,7 +779,7 @@ pub fn document_text() -> String {
     text
 }
 
-/// Where the route table goes in `docs/src/reference/http-api.md`: between these two lines.
+/// Where the route table goes in `docs/guide/reference/http-api.md`: between these two lines.
 pub const TABLE_START: &str = "<!-- generated from openapi.json: start -->";
 pub const TABLE_END: &str = "<!-- generated from openapi.json: end -->";
 

@@ -159,7 +159,7 @@ content** and your **publish credentials**:
       "is this for me?" (personal, git-backed, Claude-driven).
 - [ ] Badges: CI status, license, latest release.
 - [ ] A `docs/` index linking USER_GUIDE, DESIGN, ROADMAP, this file.
-- [ ] Capture screenshots in `docs/src/images/` (`make screenshots`) (board, feature page, status page, milestones, docs).
+- [ ] Capture screenshots in `docs/guide/images/` (`make screenshots`) (board, feature page, status page, milestones, docs).
       A reproducible **Selenium-Grid-in-Docker screenshot tool** lives in
       [`../tools/screenshots/`](https://github.com/startr-trade/kanbanr/tree/main/tools/screenshots) — `make screenshots` regenerates them all
       against a locally-running `kanbanr serve`. (No more "login" screen to capture — the monitor has

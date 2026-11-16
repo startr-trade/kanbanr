@@ -145,7 +145,7 @@
     },
     {
       "name": "explicit links are read by their target, once",
-      "markdown": "[the cart](/p/shop/feature/FEAT-012#R-1), [data](architecture/data.md), [gone](/p/shop/docs/file/missing.md), [web](https://example.com/FEAT-999), [goal](/p/shop/charter#G-1), [other](/p/other/feature/FEAT-1), [repo](/p/shop/docs/file/docs/src/guide.md)",
+      "markdown": "[the cart](/p/shop/feature/FEAT-012#R-1), [data](architecture/data.md), [gone](/p/shop/docs/file/missing.md), [web](https://example.com/FEAT-999), [goal](/p/shop/charter#G-1), [other](/p/other/feature/FEAT-1), [repo](/p/shop/docs/file/docs/guide/guide.md)",
       "expect": [
         [
           "item",
@@ -177,7 +177,7 @@
         ],
         [
           "doc",
-          "docs/src/guide.md",
+          "docs/guide/guide.md",
           1,
           true,
           true

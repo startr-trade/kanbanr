@@ -470,6 +470,11 @@ jobs:
       - name: The guides cover the pipeline and a product people use
         run: python3 -m unittest -q scripts/tests/test_guides.py
 
+      # The guide is docs/guide, the system representation docs/system, and the move from the old
+      # source folder left no live reference behind (MNT-002).
+      - name: The docs layout holds
+        run: python3 -m unittest -v scripts/tests/test_docs_layout.py
+
       # Every check a gate can ask for has its behaviour described in the Working with Claude
       # chapter (FEAT-159): a new check cannot ship with nothing saying what Claude does about it.
       - name: Every gate check is described in Working with Claude
@@ -482,10 +487,10 @@ jobs:
           body = body[:body.index("\n}")]
           names = [re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower()
                    for v in re.findall(r"^\s{4}([A-Z][A-Za-z]+),", body, re.M)]
-          chapter = open("docs/src/using/with-claude.md").read()
+          chapter = open("docs/guide/using/with-claude.md").read()
           missing = [n for n in names if f"| `{n}` |" not in chapter]
           if missing:
-              print("::error::docs/src/using/with-claude.md does not describe: " + ", ".join(missing))
+              print("::error::docs/guide/using/with-claude.md does not describe: " + ", ".join(missing))
               sys.exit(1)
           print(f"all {len(names)} gate checks are described")
           PY
@@ -496,10 +501,10 @@ jobs:
         run: |
           set -eu
           v="$(sed -n 's/^version = "\(.*\)"$/\1/p' api/Cargo.toml | head -n1)"
-          test -s "docs/src/releases/v$v.md" \
-            || { echo "::error::no release notes for $v: write docs/src/releases/v$v.md" >&2; exit 1; }
-          grep -q "(v$v.md)" docs/src/releases/index.md \
-            || { echo "::error::docs/src/releases/index.md does not list v$v" >&2; exit 1; }
+          test -s "docs/guide/releases/v$v.md" \
+            || { echo "::error::no release notes for $v: write docs/guide/releases/v$v.md" >&2; exit 1; }
+          grep -q "(v$v.md)" docs/guide/releases/index.md \
+            || { echo "::error::docs/guide/releases/index.md does not list v$v" >&2; exit 1; }
 
       - name: Every third-party action is pinned to a commit
         run: |

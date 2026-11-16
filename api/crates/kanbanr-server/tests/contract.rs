@@ -384,17 +384,17 @@ mod server {
     #[test]
     fn contract_matches_openapi() {
         // The committed document is what the code describes, and what the daemon serves.
-        let committed = include_str!("../../../../docs/src/reference/openapi.json");
+        let committed = include_str!("../../../../docs/guide/reference/openapi.json");
         assert!(
             committed == kanbanr_core::openapi::document_text(),
-            "docs/src/reference/openapi.json is out of date: run \
+            "docs/guide/reference/openapi.json is out of date: run \
              `cargo run -p kanbanr-core --features schema --example openapi`"
         );
         // And so is the route table the HTTP API page shows.
-        let page = include_str!("../../../../docs/src/reference/http-api.md");
+        let page = include_str!("../../../../docs/guide/reference/http-api.md");
         assert!(
             kanbanr_core::openapi::with_route_table(page).as_deref() == Some(page),
-            "the route table in docs/src/reference/http-api.md is out of date: run \
+            "the route table in docs/guide/reference/http-api.md is out of date: run \
              `cargo run -p kanbanr-core --features schema --example openapi`"
         );
         let doc: Value = serde_json::from_str(committed).unwrap();

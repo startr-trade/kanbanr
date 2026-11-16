@@ -105,6 +105,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "No tracked merge leftovers (*.orig, *.rej)": LOCAL,
             "The version being built has release notes": LOCAL,
             "The guides cover the pipeline and a product people use": LOCAL,
+            "The docs layout holds": LOCAL,
             "Every gate check is described in Working with Claude": LOCAL,
             "Every third-party action is pinned to a commit": LOCAL,
             "Every scanner suppression has a reason and an expiry": LOCAL,

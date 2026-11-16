@@ -2,7 +2,7 @@
 //
 // FEAT-177: the monitor's idea of the read API is the published one.
 //
-// Reads the OpenAPI document the daemon serves (docs/src/reference/openapi.json, generated from the
+// Reads the OpenAPI document the daemon serves (docs/guide/reference/openapi.json, generated from the
 // Rust response types), finds every JSON read in src/api.ts — `getJson<T>(apiUrl(`...`))` — and
 // compares the TypeScript type T, field by field and through every type it names, with the schema
 // of the route it calls:
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
-const doc = JSON.parse(readFileSync(here("../../docs/src/reference/openapi.json"), "utf8"));
+const doc = JSON.parse(readFileSync(here("../../docs/guide/reference/openapi.json"), "utf8"));
 const apiFile = here("../src/api.ts");
 
 const program = ts.createProgram([apiFile], {

@@ -208,7 +208,7 @@ def check(root: Path) -> list[str]:
             problems += check_npm(rel, text)
         if path.name == "Dockerfile":
             problems += [f"{rel}:{p.split(':', 1)[1]}" for p in check_dockerfile(text)]
-    for doc in ("docs/src/getting-started/installation.md", "docs/src/project/contributing.md"):
+    for doc in ("docs/guide/getting-started/installation.md", "docs/guide/project/contributing.md"):
         path = root / doc
         if path.is_file():
             text = fenced_blocks(path.read_text(encoding="utf-8"))

@@ -4274,7 +4274,7 @@
             "type": "array"
           },
           "notes": {
-            "description": "A path template naming `{version}` or `{number}`, e.g. `docs/src/releases/{version}.md`.",
+            "description": "A path template naming `{version}` or `{number}`, e.g. `docs/guide/releases/{version}.md`.",
             "type": "string"
           },
           "notes_listings": {

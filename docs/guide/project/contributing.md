@@ -18,6 +18,15 @@ accounts) over the same folder. Sharing is delegated to git remotes. Keep this s
 
 See [Architecture overview](../architecture/overview.md) for the full architecture.
 
+## Layout
+
+`api/` is the Rust workspace (crates under `api/crates/`), `web/` the monitor, and
+`skill/kanbanr/SKILL.md` the skill. The docs have two folders. `docs/guide` is the product guide:
+the mdBook source this site is built from (`docs/book.toml`), with every page listed in
+`docs/guide/SUMMARY.md`. `docs/system` is the system representation: component docs as built and
+views, which branch with the code and are read at a position. It is not a chapter of the book and
+is not published here; its markdown and diagrams are linted like the guide's.
+
 ## Prerequisites
 
 - **Rust** stable (`rustup`), with `rustfmt` and `clippy`.

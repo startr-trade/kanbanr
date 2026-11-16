@@ -5,7 +5,7 @@ and method it refers to:
 
 **<https://kanbanr.startr.trade/project/contributing.html>**
 
-or, in this repository: **[docs/src/project/contributing.md](docs/src/project/contributing.md)**.
+or, in this repository: **[docs/guide/project/contributing.md](docs/guide/project/contributing.md)**.
 
 In short — the bar is the same for everyone, including the maintainer:
 

@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
+  representation; published pages keep their URLs (MNT-002).
+
 ## [0.7.0] - 2026-11-16
 
 ### Added

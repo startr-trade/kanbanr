@@ -1,6 +1,6 @@
 # Runbook: the TOGAF guide, run headlessly
 
-This runbook drives the guide *TOGAF, sprints and releases with Claude* (`docs/src/guides/togaf-with-claude.md`) from an empty folder to a cut release, with no person present. `kanbanr walkthrough run walkthroughs/togaf.md` reads the fenced `yaml` block below; the prose is for the person who reviews it.
+This runbook drives the guide *TOGAF, sprints and releases with Claude* (`docs/guide/guides/togaf-with-claude.md`) from an empty folder to a cut release, with no person present. `kanbanr walkthrough run walkthroughs/togaf.md` reads the fenced `yaml` block below; the prose is for the person who reviews it.
 
 How it is used:
 

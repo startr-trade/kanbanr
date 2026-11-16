@@ -20,7 +20,7 @@
 
 > **Status: features frozen until 1.0.** The 0.1.x releases take fixes, documentation and the
 > [1.0 readiness work](https://github.com/startr-trade/kanbanr-board/blob/main/projects/kanbanr/milestones/MS-009.yaml)
-> — no new features. What 1.0 keeps compatible: [Stability](docs/src/project/stability.md).
+> — no new features. What 1.0 keeps compatible: [Stability](docs/guide/project/stability.md).
 
 ## Why
 
@@ -32,33 +32,33 @@ keep them current as part of doing the work, not as an afterthought.
 ## What you get
 
 - **A board Claude recovers from.** Every session starts from the board, not from memory: scope,
-  progress and decisions are where it left them. ([Everyday use](docs/src/using/everyday.md))
+  progress and decisions are where it left them. ([Everyday use](docs/guide/using/everyday.md))
 - **Work that says why it exists.** Each item carries a definition — a statement, the goals it
   serves, the Zachman questions, and [EARS](https://alistairmavin.com/ears/) requirements each
   named with the test that proves it — and is approved before work starts. Edit the definition and
-  the approval lapses. ([The method](docs/src/using/the-method.md))
+  the approval lapses. ([The method](docs/guide/using/the-method.md))
 - **Your process, as configuration.** Default kanban, Scrum, agile, TOGAF, PDCA, a design-control
   flow, or your own file: each stage declares what an item needs to enter it, which named people
   sign off, and whether a gap blocks or warns. `kanbanr check` says what the next stage needs.
-  ([Processes, gates and sign-offs](docs/src/using/processes.md))
+  ([Processes, gates and sign-offs](docs/guide/using/processes.md))
 - **Sprints and releases, when you want them.** Points, capacity, a burndown derived from what
   actually moved, release notes cut from finished work — off unless a project turns them on.
-  ([Sprints and releases](docs/src/using/processes.md#sprints-and-releases))
+  ([Sprints and releases](docs/guide/using/processes.md#sprints-and-releases))
 - **Code traced to its reason.** Commits carry `Refs: kanbanr:FEAT-…`, the git and Claude Code
   guards refuse ones that don't, and `kanbanr why <file>:<line>` names the requirement and goal
-  behind any line. ([Traceability](docs/src/using/traceability.md))
+  behind any line. ([Traceability](docs/guide/using/traceability.md))
 - **A live, read-only monitor.** The board, items, review queue, sprints, Gantt, workflow and
-  docs, updating as Claude works. ([The monitor](docs/src/using/the-monitor.md))
+  docs, updating as Claude works. ([The monitor](docs/guide/using/the-monitor.md))
 - **Local-first, one binary.** Plain YAML and markdown in a git repository: no database, no
-  accounts, no server. Share through a git remote. ([How the pieces fit](docs/src/getting-started/how-it-fits.md))
+  accounts, no server. Share through a git remote. ([How the pieces fit](docs/guide/getting-started/how-it-fits.md))
 
-<p align="center"><img src="docs/src/images/board.png" alt="kanbanr's own board in the monitor" width="860"></p>
+<p align="center"><img src="docs/guide/images/board.png" alt="kanbanr's own board in the monitor" width="860"></p>
 
 <table>
   <tr>
-    <td><img src="docs/src/images/feature.png" alt="An item: its definition, requirements and tests" width="260"></td>
-    <td><img src="docs/src/images/review.png" alt="The review queue" width="260"></td>
-    <td><img src="docs/src/images/workflow.png" alt="The workflow and its gates" width="260"></td>
+    <td><img src="docs/guide/images/feature.png" alt="An item: its definition, requirements and tests" width="260"></td>
+    <td><img src="docs/guide/images/review.png" alt="The review queue" width="260"></td>
+    <td><img src="docs/guide/images/workflow.png" alt="The workflow and its gates" width="260"></td>
   </tr>
   <tr>
     <td align="center"><sub>An item: why it exists, and what proves it</sub></td>
@@ -66,9 +66,9 @@ keep them current as part of doing the work, not as an afterthought.
     <td align="center"><sub>The workflow and its gates</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/src/images/sprint.png" alt="A running sprint and its burndown" width="260"></td>
-    <td><img src="docs/src/images/releases.png" alt="Releases" width="260"></td>
-    <td><img src="docs/src/images/charter.png" alt="The charter and lessons" width="260"></td>
+    <td><img src="docs/guide/images/sprint.png" alt="A running sprint and its burndown" width="260"></td>
+    <td><img src="docs/guide/images/releases.png" alt="Releases" width="260"></td>
+    <td><img src="docs/guide/images/charter.png" alt="The charter and lessons" width="260"></td>
   </tr>
   <tr>
     <td align="center"><sub>A running sprint and its burndown</sub></td>
@@ -78,7 +78,7 @@ keep them current as part of doing the work, not as an afterthought.
 </table>
 
 <sub>More views — milestones, the schedule, the Gantt, docs with Mermaid diagrams, the portfolio and
-dark mode — are in [the monitor chapter](docs/src/using/the-monitor.md). Screenshots are generated by
+dark mode — are in [the monitor chapter](docs/guide/using/the-monitor.md). Screenshots are generated by
 <code>make screenshots</code>.</sub>
 
 ## Quick start
@@ -92,12 +92,12 @@ irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1
 
 One binary, checked against the release's `SHA256SUMS`, with the monitor **and the Claude Code
 skill** inside it: when Claude Code is installed, the installer puts the matching skill in place
-too (`--no-skill` to skip; [other ways](docs/src/getting-started/installation.md#install-the-skill)). Add
-`--vscode` to install the [VS Code extension](docs/src/getting-started/installation.md#the-vs-code-extension) as well.
+too (`--no-skill` to skip; [other ways](docs/guide/getting-started/installation.md#install-the-skill)). Add
+`--vscode` to install the [VS Code extension](docs/guide/getting-started/installation.md#the-vs-code-extension) as well.
 Then, in your project, ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
 where the board lives, your identity, a charter drafted from your repository, and the process —
 and sets everything up when you approve the plan. From then on you scope, decide and move work by
-talking to Claude — plans to accept, one question per decision ([Working with Claude](docs/src/using/with-claude.md)).
+talking to Claude — plans to accept, one question per decision ([Working with Claude](docs/guide/using/with-claude.md)).
 Or from a terminal:
 
 ```bash
@@ -105,8 +105,8 @@ kanbanr init my-app --author "You" --email you@example.com   # a board beside th
 kanbanr serve                                                # the live monitor
 ```
 
-[Installation](docs/src/getting-started/installation.md) covers pinning a version, building from
-source and Docker; [Set up in 60 seconds](docs/src/getting-started/quickstart.md) walks through the
+[Installation](docs/guide/getting-started/installation.md) covers pinning a version, building from
+source and Docker; [Set up in 60 seconds](docs/guide/getting-started/quickstart.md) walks through the
 first board.
 
 ## Developed with kanbanr
@@ -163,19 +163,19 @@ flowchart LR
   through hooks: the session starts from the board, a turn that changed code is reminded to record
   it, commits must name their item, and notes go to the board, not the code repository.
 
-More in [the architecture chapter](docs/src/architecture/overview.md).
+More in [the architecture chapter](docs/guide/architecture/overview.md).
 
 ## Documentation
 
-**<https://kanbanr.startr.trade>** — or [`docs/src/`](docs/src/SUMMARY.md) in this repository,
+**<https://kanbanr.startr.trade>** — or [`docs/guide/`](docs/guide/SUMMARY.md) in this repository,
 `mdbook serve docs` to build it locally. What stays compatible from 1.0 — the board format, the
-CLI and its `--json`, the monitor's API — is in [Stability](docs/src/project/stability.md).
+CLI and its `--json`, the monitor's API — is in [Stability](docs/guide/project/stability.md).
 
 ## Contributing
 
 The bar is the same for everyone, the maintainer included: say why the change exists, and prove
 each requirement with a test that passed. `make ci` runs every CI check locally. See
-[Contributing](docs/src/project/contributing.md).
+[Contributing](docs/guide/project/contributing.md).
 
 ## Licence
 
