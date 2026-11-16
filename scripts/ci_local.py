@@ -102,6 +102,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A prepared answer shows its outcome once": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
             "The monitor shows agent scopes and who made each change": LOCAL,
+            "The Review page says a grant cannot be checked and why": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

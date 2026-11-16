@@ -32,6 +32,7 @@
     "check:diagram-review": "node scripts/check-diagram-review.mjs",
     "check:agent-scopes": "node scripts/check-agent-scopes.mjs",
     "check:live-settle": "node scripts/check-live-settle.mjs",
+    "check:grant-unverifiable": "node scripts/check-grant-unverifiable.mjs",
     "check:build-info": "node scripts/check-build-info.mjs"
   },
   "dependencies": {

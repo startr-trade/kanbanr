@@ -322,6 +322,10 @@ jobs:
       # no action offered: scopes are issued and revoked from the CLI (FEAT-214).
       - name: The monitor shows agent scopes and who made each change
         run: npm run check:agent-scopes
+      # A delegation whose grant cannot be checked, because the board's history cannot be read,
+      # says so and why on the Review page, not "not granted through kanbanr" (DEF-080).
+      - name: The Review page says a grant cannot be checked and why
+        run: npm run check:grant-unverifiable
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

@@ -1156,6 +1156,9 @@ export interface DelegationView extends Delegation {
   rev: string;
   /** Granted, but not through kanbanr: Claude's verdicts under it are refused. */
   not_granted_through_kanbanr?: boolean;
+  /** Granted, but the board's history cannot be read, so the grant cannot be checked: why,
+   * naming the repository (DEF-080). Claude's verdicts under it are refused. */
+  grant_unverifiable?: string;
   /** The Claude Code allow rules the delegation's verdicts need to run in auto mode (DEF-060). */
   permission_rules?: string[];
   /** The monitor knows the repository and the mode is delegated: the next field is meaningful. */
