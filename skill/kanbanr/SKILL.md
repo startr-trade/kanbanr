@@ -534,6 +534,8 @@ informed. Never leave them as "for you to decide" after the approval is given.
 When one request spans several stages ("take it to business architecture, then design it"), say at
 the top of the brief which stages it covers.
 
+Before you ask for approval, settle what would otherwise change after it: each test's kind (a
+test the person named keeps theirs) and its name in the runner's form (see Tests are evidence).
 Then write the definition to the board (`kanbanr feature define`), show its brief in a few lines,
 and say it is waiting for their approval on the Review page, with the link. Choices you had to
 make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
@@ -902,6 +904,20 @@ branches; fix it before going on.
   `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
   stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
+- **Before a candidate's release sign-off, run the walkthroughs** (FTR-037):
+  `kanbanr walkthrough run walkthroughs/<process>.md` drives the guide headlessly on a scratch
+  project inside a fence, takes each decision on the scratch board as the scripted person, and
+  prepares its checks on this board as one batch. Tell the person the batch waits on the Review page
+  (**Confirm all N**) and read `findings.md` with them; file items from findings only when they
+  agree. A runbook is a board doc under `walkthroughs/` whose first fenced yaml block holds the
+  steps. Draft one from a guide: each "you say" becomes a `say` step in the guide's words; each
+  monitor decision a `decide` with the `offer` the guide names (page and button); each push a `push`
+  to `code` or `board`; each manual check a `check: MT-n` defined under `checks` with its item,
+  requirement and exact test name; the setup interview's answers go under `answers` as
+  `{match, pick}` rules, `{board_remote}`, `{code_remote}`, `{monitor_url}` and `{today}` filled in
+  by the run. `kanbanr walkthrough lint <doc>` before the first run. A run acts only on a board
+  inside a fence and copies nothing of the person's configuration beyond their rules, settings and
+  credentials into its own folder.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
   make a feature item to prepare a release. When the release-prepare configuration changes after
@@ -1080,7 +1096,7 @@ project revision it was observed at. So:
   `e2e/basket.spec.ts › kept basket › basket is kept after the browser is closed and reopened`
   (project, location and duration dropped; the titles alone also match). Vitest's default
   reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
-  them records nothing.
+  them records nothing. Settle that form before you ask for approval (below).
 - At Design, check each tracked test name against the runner the project uses and one of these
   forms. A runner outside them (go test, Jest, Maven, nextest until MNT-007) records nothing. Say
   so in the Design and ask before choosing it. When the hook says it read no test result from a
@@ -1103,6 +1119,30 @@ refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
 said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
 user whether to file a defect, and file one only when they say so.
+
+**At most one manual test per item, and only for a person's judgement** (does this read well, is
+this confusing). A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
+the board, the monitor or the remote: a button the monitor offers, a decision taken with nothing
+typed, a question Claude asked or did not ask, a board claim, a tag on the remote. Name it
+`walkthrough: <what the run shows>`: automated evidence, proved by
+`kanbanr walkthrough run <runbook doc>`, never asked of the person, and never searched for in the
+repository (FTR-037). `kanbanr check` says so for one not yet green. **The product's own behaviour
+is never a walkthrough test.** A runbook drives kanbanr, not the project's app, so a page, an API
+or a stored value of the project is proved by a test in the project's own runner (unit,
+integration or end-to-end), or, when only a person can judge it, by the item's one manual test.
+
+**A test the person named keeps its kind and its name.** When the person asks for a test (a
+manual check of the basket page, a test with this wording), record it with the kind and the words
+they gave. If you think another kind fits better, say why in a question before you record it, and
+record what they choose. Never change it afterwards on your own: after approval a change of kind
+or name lapses the approval, so propose it and make it only when the person agrees.
+
+**Settle test names before asking for approval.** Name every test in the form the project's
+runner prints and capture reads (the forms above), with the runner and its reporter chosen. If
+the project has not chosen its test runner yet, ask that (one AskUserQuestion, the option capture
+reads recommended first) while you draft the definition, before the approval request, never after
+it. A test named in another form is renamed before you ask: the same rename after approval lapses
+it, on every item that holds such a name.
 
 ## Every change points back at the reason for it
 
@@ -1419,6 +1459,9 @@ kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the d
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
+kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click
+kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions]   # a guide's run, headless; its checks prepared as one batch
+kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
@@ -1525,7 +1568,8 @@ Under a phased process, grow an item's definition stage by stage.
 - **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
   standing, to be reviewed at the next decision (before build) or at once (from build on, when the
   Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
-  to approve again before the move.
+  to approve again before the move. So settle test kinds and runner-form names before the first
+  approval, not after it.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the

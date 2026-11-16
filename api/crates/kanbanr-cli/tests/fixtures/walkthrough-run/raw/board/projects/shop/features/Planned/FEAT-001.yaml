@@ -1,0 +1,55 @@
+code: FEAT-001
+title: Saved basket
+status: Planned
+milestone: MS-1
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+release: v0.1.0
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: A shopper's basket survives between visits
+  goals: []
+  zachman:
+    what: ""
+    how: ""
+    where: ""
+    when: ""
+    who: ""
+    why: ""
+  requirements:
+  - id: R-1
+    kind: functional
+    text: WHEN a shopper returns THE SYSTEM SHALL show the basket they left
+    tests:
+    - name: "manual: open the basket page, add an item, reopen it and the item is still there"
+      kind: manual
+      state: green
+      checked_rev: 9f078bd0c1e2aaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  approval:
+    by: Tester
+    at: 2026-11-15T10:00:30Z
+    rev: 0123456789abcdef
+    origin: monitor
+  approvals:
+  - at: 2026-11-15T10:00:30Z
+    by: Tester
+    verdict: approved
+    rev: 0123456789abcdef
+    status: Planned
+    origin: monitor
+  signoffs:
+  - id: design-review
+    by: Tester
+    at: 2026-11-15T10:01:00Z
+    rev: 0123456789abcdef
+    status: Planned
+    origin: monitor
+created_at: 2026-11-15T08:02:38.2216992Z
+updated_at: 2026-11-15T08:03:30.318670436Z

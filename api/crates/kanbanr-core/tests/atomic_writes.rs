@@ -39,6 +39,11 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
         "replaces the running binary by staging and renaming it, keeping the old one aside; the executable bit is set before the rename",
     ),
     (
+        "kanbanr-cli/src/walkthrough/guard.rs",
+        "std::fs::copy(binary, &link)?;",
+        "where links are not available (Windows), copies the run's own kanbanr executable into the run's bin/, outside any board, keeping its mode; a link elsewhere",
+    ),
+    (
         "kanbanr-cli/src/skill.rs",
         "std::fs::write(&path, bytes)",
         "writes a whole folder into a staging folder, then renames the folder",
@@ -62,6 +67,31 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
         "kanbanr-cli/src/main.rs",
         "std::fs::write(&copy, text)",
         "a scratch copy under the system temporary folder",
+    ),
+    (
+        "kanbanr-cli/src/walkthrough/mod.rs",
+        "let mut options = std::fs::OpenOptions::new();",
+        "the walkthrough run folder's append-only logs (TSVs, transcript stream, serve log, findings): rows are added as the run goes, never rewritten; not a board file",
+    ),
+    (
+        "kanbanr-cli/src/walkthrough/mod.rs",
+        "let lock = std::fs::OpenOptions::new()",
+        "the walkthrough run's lock file holds no content and is opened, not written",
+    ),
+    (
+        "kanbanr-cli/src/walkthrough/mod.rs",
+        "std::fs::copy(&from, dst.join(",
+        "copies the person's Claude Code files into the run's own config folder, outside any board; fs::copy keeps the source's permissions, so .credentials.json stays owner-only",
+    ),
+    (
+        "kanbanr-cli/src/walkthrough/capture.rs",
+        "std::fs::copy(&src, &dst)",
+        "a raw capture: the run board's files copied byte for byte into the run folder's raw/, not a board write",
+    ),
+    (
+        "kanbanr-cli/src/walkthrough/capture.rs",
+        "std::fs::copy(&p, transcripts.join(e.file_name()))",
+        "a raw capture: the session transcripts copied byte for byte into the run folder's raw/",
     ),
     (
         "kanbanr-cli/build.rs",

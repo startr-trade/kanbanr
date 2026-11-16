@@ -102,8 +102,12 @@ duration dropped), pytest (`-v`: `tests/test_x.py::test_y`), unittest (`-v`:
 `e2e/basket.spec.ts › kept basket › basket is kept`, or the titles alone; project, location and
 duration dropped). Vitest's default reporter and Playwright's `line` and `dot` reporters print no
 per-test pass line, so a run under them records nothing. When a test run prints nothing capture
-can read, the hook tells Claude so and names these forms. A name reported more than once in a run
-is green only if every line passed. A green recorded at
+can read, the hook tells Claude so and names these forms. Claude settles each test's name in that
+form, and its kind, before it asks you to approve the definition, because renaming or re-kinding
+an approved test lapses the approval. A test you name keeps the kind and the wording you gave. A
+`walkthrough:` test is only for what a kanbanr run can see on the board, the monitor or the
+remote; your product's own pages and behaviour are proved by your project's own tests. A name
+reported more than once in a run is green only if every line passed. A green recorded at
 an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
 it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
 only when a person really did it.

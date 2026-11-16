@@ -1,0 +1,8 @@
+at	kind	subject	name	by	origin	asked_by	where	truth
+2026-11-15T10:00:30Z	approve	FEAT-001		Tester	monitor	runbook	monitor	-
+2026-11-15T10:01:00Z	signoff	FEAT-001	design-review	Tester	monitor	runbook	monitor	-
+2026-11-15T10:05:00Z	manual-test	FEAT-001	R-1 manual: open the basket page, add an item, reopen it and the item is still there green	Tester	monitor	Claude (prepared 20261115T100400Z-manual-test)	monitor	-
+2026-11-15T10:10:00Z	promote	v0.1.0	candidate	Tester	monitor	runbook	monitor	OK
+2026-11-15T10:15:00Z	promote	v0.1.0	main	Tester	monitor	runbook	monitor	OK
+2026-11-15T10:17:00Z	gate-result	9f078bd	ci passed	Tester	monitor	Claude (prepared 20261115T101600Z-gate-result)	monitor	-
+2026-11-15T10:20:00Z	cut	v0.1.0	tag	Tester	monitor	runbook	monitor	OK

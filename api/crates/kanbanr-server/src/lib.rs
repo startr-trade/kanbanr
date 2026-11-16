@@ -148,6 +148,14 @@ pub async fn run_with(
     // fell through to the SPA index.html — which broke the web Gantt page.)
     let api = api.fallback(routes::read_passthrough).with_state(state);
 
+    // Bound before the guard is built and the start line printed, so `--bind 127.0.0.1:0` (an
+    // ephemeral port, as a walkthrough's scratch monitor asks for; FTR-037) answers for the port it
+    // got and names it, not the `:0` it was asked for.
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let bound = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| bind.clone());
     // Who this monitor answers, and the token its own page is given at this start (DEF-024).
     // Read once, here (factor 3).
     let allowed: Vec<String> = std::env::var("KANBANR_ALLOWED_HOSTS")
@@ -156,7 +164,7 @@ pub async fn run_with(
         .map(|h| h.trim().to_string())
         .filter(|h| !h.is_empty())
         .collect();
-    let guard = Arc::new(origin::Guard::new(&bind, &allowed).with_origins(origins));
+    let guard = Arc::new(origin::Guard::new(&bound, &allowed).with_origins(origins));
     let token = guard.token().to_string();
 
     let meta_dir = data_dir.clone();
@@ -303,11 +311,10 @@ pub async fn run_with(
         String::new()
     };
     eprintln!(
-        "kanbanr view daemon on http://{bind}  (data: {})\nanswering for: {}{accepted_from}",
+        "kanbanr view daemon on http://{bound}  (data: {})\nanswering for: {}{accepted_from}",
         data_dir.display(),
         guard.hosts().join(", ")
     );
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }

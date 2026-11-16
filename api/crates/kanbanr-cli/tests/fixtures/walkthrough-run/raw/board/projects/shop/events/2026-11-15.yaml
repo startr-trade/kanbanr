@@ -1,0 +1,7 @@
+- time: 2026-11-15T08:02:38.22239882Z
+  project: shop
+  kind: feature_added
+  feature: FEAT-001
+  message: feature FEAT-001 added
+  detail:
+    status: Planned

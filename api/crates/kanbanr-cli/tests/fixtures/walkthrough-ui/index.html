@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>walkthrough test monitor</title>
+</head>
+<body>
+  <!-- A stand-in for the monitor's Review page (FTR-037 W4b tests): the daemon injects its page
+       token into this file as it does into the real one, and the page renders each entry of the
+       review listing as a card with the buttons the real page offers, posting the same route with
+       the same body on a click. Nothing here is shipped; the real monitor is in web/. -->
+  <h1>Review</h1>
+  <div id="root">loading</div>
+  <script>
+    (async function () {
+      const seg = location.pathname.split("/").filter(Boolean);
+      const project = decodeURIComponent(seg[1] || "");
+      const page = seg[2] || "review";
+      const token = document.querySelector('meta[name="kanbanr-token"]')?.content || "";
+      const root = document.getElementById("root");
+      const meta = await (await fetch("/api/meta")).json();
+      const who = (meta.identity && meta.identity.name) || "";
+      if (page !== "review") {
+        root.textContent = "page " + page;
+        return;
+      }
+      const entries = await (await fetch("/api/projects/" + encodeURIComponent(project) + "/review")).json();
+      root.innerHTML = "";
+      for (const e of entries) {
+        const div = document.createElement("div");
+        div.className = "review-item";
+        const code = document.createElement("code");
+        code.textContent = e.code;
+        div.appendChild(code);
+        div.appendChild(document.createTextNode(" " + e.title + " "));
+        if (["missing", "lapsed", "added"].includes(e.approval)) {
+          const b = document.createElement("button");
+          b.textContent = "Approve " + e.code;
+          b.onclick = async () => {
+            await fetch(
+              "/api/write/projects/" + encodeURIComponent(project) + "/features/" + encodeURIComponent(e.code) + "/approve",
+              {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-kanbanr-token": token },
+                body: JSON.stringify({ by: who, rev: e.rev || "" }),
+              },
+            );
+            b.textContent = "approved";
+          };
+          div.appendChild(b);
+        }
+        for (const name of e.signoffs_needed || []) {
+          const b = document.createElement("button");
+          b.textContent = "Sign off " + name;
+          div.appendChild(b);
+        }
+        root.appendChild(div);
+      }
+      if (!entries.length) root.textContent = "Nothing waits for a decision.";
+    })();
+  </script>
+</body>
+</html>

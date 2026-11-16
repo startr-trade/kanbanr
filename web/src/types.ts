@@ -662,6 +662,8 @@ export interface Prepared {
   origin?: string;
   at?: string;
   rev?: string;
+  /** The batch it was prepared in (FTR-037): a walkthrough run's checks, confirmed with one click. */
+  batch?: string;
 }
 
 /** One field the person changed before confirming. */

@@ -3466,6 +3466,10 @@
             "description": "RFC 3339, UTC.",
             "type": "string"
           },
+          "batch": {
+            "description": "The batch it belongs to (FTR-037): a walkthrough run prepares its checks as one batch, named\nfor the run, which the Review page confirms or rejects with one click. None for a record\nprepared alone; an older kanbanr keeps the key through `extra`.",
+            "type": "string"
+          },
           "by": {
             "description": "`Claude` when prepared in the conversation; else the preparer's name.",
             "type": "string"

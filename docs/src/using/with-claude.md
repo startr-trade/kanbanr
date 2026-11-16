@@ -342,6 +342,11 @@ For a whole project on TOGAF with sprints and releases, from setup to a shipped 
 
 ## What it looked like in practice
 
+The guides are checked on every release by walkthroughs that run themselves: `kanbanr walkthrough
+run` drives a Claude Code session through a guide's runbook on a scratch project, takes each
+decision on the scratch board as the person would, and leaves you one batch of results to confirm
+with one click. See [Walkthroughs that run themselves](../project/walkthrough.md).
+
 These are from the walkthroughs that tested this flow before it shipped, on a TOGAF project and on
 a project with its own process file:
 

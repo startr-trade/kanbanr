@@ -1,0 +1,13 @@
+started 2026-11-15T10:00:00Z
+run /scratch/runs/togaf
+fence /scratch
+kanbanr kanbanr 0.7.0 (0000000000000000000000000000000000000000, built 2026-11-15)
+kanbanr_path /scratch/bin/kanbanr
+skill_sha256 1111111111111111111111111111111111111111111111111111111111111111
+claude 2.1.325 (Claude Code)
+model sonnet
+rules_sha256(CLAUDE.md) 2222222222222222222222222222222222222222222222222222222222222222
+code_remote /scratch/runs/togaf/remotes/code.git
+board_remote /scratch/runs/togaf/remotes/board.git
+project shop
+ended 2026-11-15T10:25:00Z

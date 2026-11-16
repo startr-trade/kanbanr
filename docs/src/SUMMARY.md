@@ -63,6 +63,7 @@
 - [Roadmap](project/roadmap.md)
 - [Stability: what 1.0 promises](project/stability.md)
 - [Open-sourcing guide](project/open-sourcing.md)
+- [Walkthroughs that run themselves](project/walkthrough.md)
 - [Release notes](releases/index.md)
   - [0.7.0](releases/v0.7.0.md)
   - [0.6.1](releases/v0.6.1.md)
