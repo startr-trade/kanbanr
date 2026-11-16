@@ -81,6 +81,7 @@ pub mod scm;
 pub mod server;
 pub mod sprints;
 pub mod store;
+pub mod systembaseline;
 pub mod trace;
 pub mod validate;
 pub mod views;
