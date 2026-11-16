@@ -706,7 +706,7 @@ fn decide_group(
              spec_rev, …}}]}}: {e}"
         )))
     })?;
-    let ops = reviewgroups::ops(store, project, &d, origin).map_err(WriteError::Core)?;
+    let ops = reviewgroups::ops(store, project, &d, origin, repo).map_err(WriteError::Core)?;
     let keys: Vec<String> = ops.iter().map(|op| op.key.clone()).collect();
     let (group, action) = (d.group.clone(), d.action.trim().to_string());
     apply_verdict_ops(

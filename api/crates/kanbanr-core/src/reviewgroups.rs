@@ -899,12 +899,15 @@ fn refuse(why: String) -> CoreError {
 /// A prepared row expands through [`crate::prepared::expand`], so its record resolves; any other
 /// row posts the single route the page posts today. Refused, with nothing to write, when there
 /// are no items (or more than [`MAX_DECISION_ITEMS`]), when a row is no longer in the group or
-/// cannot be decided, or when two rows would make different verdicts.
+/// cannot be decided, or when two rows would make different verdicts. `repo` is the code
+/// repository the page judges blocks with (a docs-folded row's texts left), so a row the page
+/// shows blocked is refused here too.
 pub fn ops(
     store: &Store,
     p: &str,
     d: &GroupDecision,
     origin: crate::origin::Origin,
+    repo: Option<&Path>,
 ) -> Result<Vec<VerdictOp>> {
     use serde_json::{Value, json};
     if d.items.is_empty() {
@@ -929,7 +932,7 @@ pub fn ops(
     if !is_known(&d.group) {
         return Err(refuse(format!("there is no review group '{}'", d.group)));
     }
-    let group = slice(store, p, &d.group, None)?;
+    let group = slice(store, p, &d.group, repo)?;
     let action = d.action.trim().to_ascii_lowercase();
     let own = group.action.to_ascii_lowercase();
     let undo = action == "undo" && d.group == DELEGATED;
@@ -1407,5 +1410,56 @@ mod tests {
             "an empty group is absent: {groups:#?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-038 R-3: a group decision judges blocks exactly as the page does, against the code
+    /// repository: a docs-folded row with a text left is blocked on the page and refused by the
+    /// decision, with nothing to write; read without the repository the row would look ready.
+    #[test]
+    fn a_row_the_page_blocks_on_drift_is_refused_by_the_decision() {
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let key = crate::method::DOCS_FOLDED;
+        let page = slice(&store, "demo", key, Some(&repo)).unwrap();
+        let row = page
+            .rows
+            .iter()
+            .find(|r| r.code == code)
+            .unwrap_or_else(|| panic!("{code} waits in {key}: {page:?}"))
+            .clone();
+        assert!(
+            row.blocked.contains("settles 1 text"),
+            "the page blocks the row on its drift: {row:?}"
+        );
+        let decision = GroupDecision {
+            group: key.into(),
+            action: page.action.clone(),
+            by: "Ada L".into(),
+            items: vec![DecisionItem {
+                key: row.key.clone(),
+                code: row.code.clone(),
+                rev: row.rev.clone(),
+                spec_rev: row.spec_rev.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let e = ops(
+            &store,
+            "demo",
+            &decision,
+            crate::origin::Origin::Monitor,
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains(&code), "{e}");
+        assert!(e.contains("cannot be decided here"), "{e}");
+        assert!(e.contains(&row.blocked), "{e}");
+        // Without the repository the drift is not read, so the same row is not blocked: the
+        // decide route must pass the repository for the refusal above to hold.
+        let blind = slice(&store, "demo", key, None).unwrap();
+        let unread = blind.rows.iter().find(|r| r.code == code).unwrap();
+        assert!(unread.blocked.is_empty(), "{unread:?}");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
