@@ -2,15 +2,24 @@
 //
 // A prepared answer shows its outcome once (DEF-090).
 //
+// web::check_review_page_shows_a_rejected_outcome_and_hides_the_form (R-1): once a call on the
+// Review page returns, any outcome, a rejection or an error included, replaces the form; a failed
+// call offers "Try again", which brings the form back.
+//
 // web::check_prepared_panel_sends_one_request_per_click_until_it_returns (R-2): a press while a
 // call is in flight is dropped, never queued, so a second click sends no second request.
+//
+// The rendered case (a ManualCheck with a rejected outcome has no Reject button) joins R-1 once
+// scripts/render.mjs exists; until then the page's source is read.
 //
 // Usage: npm run check:review-outcome
 import { readFileSync } from "node:fs";
 import { guardInFlight } from "../src/inFlight.ts";
+import { outcomeLine } from "../src/manualTests.ts";
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
+const R1 = "web::check_review_page_shows_a_rejected_outcome_and_hides_the_form";
 const R2 = "web::check_prepared_panel_sends_one_request_per_click_until_it_returns";
 
 const expect = (problems, name, got, want) => {
@@ -83,7 +92,82 @@ async function checkInFlight() {
   return problems;
 }
 
+// R-1: the outcome's line, and the page's source.
+function checkOutcome() {
+  const problems = [];
+  expect(
+    problems,
+    "a rejection's line",
+    outcomeLine({ ok: true, text: "Rejected" }),
+    "Rejected — it leaves this list on the next refresh",
+  );
+  expect(problems, "an error's line is the error alone", outcomeLine({ ok: false, text: "409 Conflict: already answered" }), "409 Conflict: already answered");
+
+  const page = read("../src/pages/ReviewPage.tsx");
+  const part = (from, to) => {
+    const a = page.indexOf(from);
+    const b = page.indexOf(to, a);
+    if (a < 0 || b < 0) {
+      problems.push(`ReviewPage.tsx: no ${from.trim()} section`);
+      return "";
+    }
+    return page.slice(a, b);
+  };
+  const parts = {
+    ManualCheck: part("function ManualCheck(", "/** One proposed decision"),
+    DecisionBrief: part("function DecisionBrief(", "function useDiagramCheck("),
+    Brief: part("function Brief(", "function partText("),
+  };
+  const finishedBy = { ManualCheck: "finished", DecisionBrief: "decided", Brief: "approved" };
+  for (const [name, src] of Object.entries(parts)) {
+    if (!new RegExp(`const ${finishedBy[name]} = outcome != null;`).test(src)) {
+      problems.push(`ReviewPage.tsx: ${name} does not decide finished as outcome != null`);
+    }
+    if (/startsWith\(/.test(src) || /(?<![.\w])outcome === "/.test(src) || /\(outcome \?\? ""\)/.test(src)) {
+      problems.push(`ReviewPage.tsx: ${name} still decides finished by the outcome's words`);
+    }
+    if (!/<OutcomeChip outcome=\{outcome\} onRetry=\{onRetry\} \/>/.test(src)) {
+      problems.push(`ReviewPage.tsx: ${name} does not show the outcome where the form was`);
+    }
+  }
+  if (!/outcome\?: Outcome;[\s\S]*outcome\?: Outcome;[\s\S]*outcome\?: Outcome;/.test(page)) {
+    problems.push("ReviewPage.tsx: the outcome is not an Outcome in ManualCheck, DecisionBrief and Brief");
+  }
+  if (!/useState<Record<string, Outcome>>\(\{\}\)/.test(page)) problems.push("ReviewPage.tsx: done is not a Record<string, Outcome>");
+
+  const handler = (name) => part(`const ${name} = async`, "};\n");
+  if (!/\{ ok: true, text: "Rejected" \}/.test(handler("rejectManual"))) {
+    problems.push('ReviewPage.tsx: rejectManual does not write {ok: true, text: "Rejected"}');
+  }
+  if (!/\{ ok: true, text: "Rejected what Claude prepared; ask Claude to prepare it again" \}/.test(handler("rejectPrepared"))) {
+    problems.push("ReviewPage.tsx: rejectPrepared does not write its rejected outcome");
+  }
+  if (/setDone\(\(d\) => \(\{ \.\.\.d, \[[^\]]+\]: (e instanceof|"|`|alreadyOr|plannedText)/.test(page)) {
+    problems.push("ReviewPage.tsx: a setDone still writes a bare string");
+  }
+
+  // The outcome and "Try again": the chip is done or warn by ok, and the link clears the key.
+  const chip = part("function OutcomeChip(", "\n}\n");
+  if (!/chip \$\{outcome\.ok \? "done" : "warn"\}/.test(chip) || !/outcomeLine\(outcome\)/.test(chip)) {
+    problems.push("ReviewPage.tsx: OutcomeChip does not show outcomeLine as a done or warn chip");
+  }
+  if (!/outcome\.ok \? null : [\s\S]*onRetry\(\)[\s\S]*Try again/.test(chip)) {
+    problems.push('ReviewPage.tsx: a failed outcome offers no "Try again"');
+  }
+  if (!/const retry = \(key: string\) =>\s*setDone\(\(d\) => \{[\s\S]*?delete rest\[key\];/.test(page)) {
+    problems.push('ReviewPage.tsx: "Try again" does not clear the outcome, so the form would not return');
+  }
+  return problems;
+}
+
 const failures = [];
+const r1 = checkOutcome();
+if (r1.length) {
+  for (const p of r1) console.error(`${R1} — ${p}`);
+  failures.push(R1);
+} else {
+  console.log(`${R1} — any outcome, a rejection included, replaces the form; a failed call offers Try again.`);
+}
 const r2 = await checkInFlight();
 if (r2.length) {
   for (const p of r2) console.error(`${R2} — ${p}`);

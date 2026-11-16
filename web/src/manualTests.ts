@@ -35,3 +35,17 @@ export function lastResultLine(last: ManualResult | null | undefined): string {
     : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
   return `${last.state === "green" ? "passed" : "failed"} by ${last.by || "someone"} on ${day}`;
 }
+
+/**
+ * What a decision on the Review page came to once its call returned (DEF-090): `ok` for a verdict
+ * recorded, a rejection included, and the error text otherwise. Any outcome hides the form.
+ */
+export interface Outcome {
+  ok: boolean;
+  text: string;
+}
+
+/** The line shown where the form was: "Rejected — it leaves this list on the next refresh", or the error. */
+export function outcomeLine(o: Outcome): string {
+  return o.ok ? `${o.text} — it leaves this list on the next refresh` : o.text;
+}
