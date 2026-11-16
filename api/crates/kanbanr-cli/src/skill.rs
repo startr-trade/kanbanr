@@ -282,6 +282,94 @@ mod tests {
         }
     }
 
+    /// DEF-084 R-1: the skill still asks the styling approach when the person has described only
+    /// the look, and records as the person's decision only what they said.
+    #[test]
+    fn skill_asks_the_styling_approach_even_when_the_look_is_given() {
+        let flat = skill_flat();
+        for needle in [
+            "Ask how a screen should look before designing it",
+            "If the person has already described the look",
+            "still ask the styling approach",
+            "Record as the person's decision only what they said",
+            "Anything you chose is your recommendation until they agree",
+        ] {
+            assert!(flat.contains(needle), "the skill lacks: {needle}");
+        }
+    }
+
+    /// DEF-084 R-2: the coordinator tells each build agent to run the project's formatter and
+    /// linter before each commit.
+    #[test]
+    fn skill_has_build_agents_format_and_lint_before_each_commit() {
+        let flat = skill_flat();
+        let duties = flat
+            .split("As the coordinator you:")
+            .nth(1)
+            .and_then(|r| r.split("**report changes, not events.**").next())
+            .expect("the coordinator's duties");
+        for needle in [
+            "run the project's formatter and linter",
+            "before each commit",
+        ] {
+            assert!(
+                duties.contains(needle),
+                "the coordinator's duties lack: {needle}"
+            );
+        }
+    }
+
+    /// DEF-084 R-3: the skill reads the queue and `kanbanr check` before saying what waits, names a
+    /// sign-off only when offered, and never lists a recorded decision or check as waiting.
+    #[test]
+    fn skill_reads_the_queue_before_saying_what_waits() {
+        let flat = skill_flat();
+        let section = flat
+            .split("### Waiting decisions")
+            .nth(1)
+            .and_then(|r| r.split("### Designing a process with the user").next())
+            .expect("waiting decisions section");
+        for needle in [
+            "Read before you report what waits",
+            "`kanbanr check <CODE> --json`",
+            "Name a sign-off only when the queue offers it now",
+            "never \"you can do both now\"",
+            "a manual check is waiting only while its test is not green",
+        ] {
+            assert!(
+                section.contains(needle),
+                "the waiting decisions section lacks: {needle}"
+            );
+        }
+    }
+
+    /// DEF-084 R-4: the skill gives a monitor page's address with the `/p/<project>/` prefix.
+    #[test]
+    fn skill_links_pages_with_the_project_prefix() {
+        let flat = skill_flat();
+        for needle in [
+            "`<monitor>/p/<project>/review`",
+            "Never shorten it to `<monitor>/review`",
+        ] {
+            assert!(flat.contains(needle), "the skill lacks: {needle}");
+        }
+    }
+
+    /// DEF-084 R-5: the skill never names a kanbanr command or a shell line as a test, a chore's
+    /// check included.
+    #[test]
+    fn skill_names_no_kanbanr_command_as_a_test() {
+        let flat = skill_flat();
+        let section = tests_section(&flat);
+        for needle in [
+            "a chore's check included",
+            "It is never a kanbanr command (`kanbanr doctor`, `kanbanr check`) or a shell line",
+            "capture records nothing",
+        ] {
+            assert!(section.contains(needle), "the skill lacks: {needle}");
+        }
+    }
+
     /// DEF-056 R-1: the first release proposes release-prepare and the pipeline before Promote.
     #[test]
     fn the_first_release_proposes_release_prepare_and_the_pipeline() {
