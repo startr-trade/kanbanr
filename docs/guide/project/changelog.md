@@ -10,6 +10,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 - `kanbanr prepare signoff`, `promotion`, `gate` and `ratify` take `--batch`, so the person
   confirms several prepared decisions in one action (FTR-055).
+- The monitor computes docs drift in the background after each board or code change and serves the
+  latest result at once, with the revisions and the time it was computed at (FTR-045).
 
 ### Changed
 

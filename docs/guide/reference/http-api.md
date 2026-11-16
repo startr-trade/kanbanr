@@ -100,6 +100,29 @@ changed, or `*` for a change to the board as a whole (a project added or removed
 project stream sends only that project's events and `*`. The daemon sends a keep-alive comment
 now and then; a client re-reads what it shows when an event arrives.
 
+## Background drift
+
+`GET /api/projects/{project}/drift/latest` never computes drift. The daemon started in a code
+repository computes the project's docs drift in the background, a couple of seconds after the
+board's files change or within 30 seconds of a new commit in the code repository, one run at a time,
+and keeps the latest result in memory. The route answers that result at once:
+
+- `state` is `fresh` when the result is at the board's and the code repository's current commits,
+  `stale` when a change came after it, `computing` before the first run has finished, `failed` when
+  the run failed and there is no result yet, and `unavailable` when the daemon has no code
+  repository (`reason` says so; no run is ever started);
+- `as_of` names the board and code commits the result was computed at, when it finished
+  (`finished_at`) and how long it took (`took_ms`); `recomputing` is `true` while a newer run goes;
+- `count` is the number of flags, and `report` the flags themselves, as `/drift` gives them;
+  `?flags=false` leaves `report` out;
+- after a failed run the previous result is kept, and `reason` and `failed_at` name the error and
+  when it happened.
+
+Nothing is written to the board or anywhere else: a restarted daemon answers `computing` until its
+first run finishes. When a run finishes, the `slices` stream names the `drift` tag, so a page
+re-reads the route. `kanbanr drift` still computes on demand, and `GET /api/projects/{project}/drift`
+is unchanged.
+
 ## CORS and access
 
 The daemon sends no cross-origin headers, so a page from another origin cannot read the API or its
