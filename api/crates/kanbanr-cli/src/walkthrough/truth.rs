@@ -283,28 +283,7 @@ pub fn check(
         }),
     }
     match doctor_json(kanbanr, run, project, &["doctor"]) {
-        Ok(issues) if issues.is_empty() => lines.push(TruthLine {
-            verdict: Verdict::Ok,
-            check: "doctor".into(),
-            board: "no problem".into(),
-            truth: "no problem".into(),
-        }),
-        Ok(issues) => lines.push(TruthLine {
-            verdict: Verdict::Mismatch,
-            check: "doctor".into(),
-            board: format!("{} problem(s)", issues.len()),
-            truth: issues
-                .iter()
-                .map(|i| {
-                    i["message"]
-                        .as_str()
-                        .or_else(|| i["detail"].as_str())
-                        .unwrap_or("?")
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join("; "),
-        }),
+        Ok(issues) => lines.push(doctor_line(&issues, "no error")),
         Err(why) => lines.push(TruthLine {
             verdict: Verdict::Unknown,
             check: "doctor".into(),
@@ -316,6 +295,59 @@ pub fn check(
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
     kanbanr_core::atomic::write(run.raw().join("truth.txt"), text)?;
     Ok(lines)
+}
+
+/// The doctor's verdict as a truth line (RC5 of the fourth real run): its errors are a mismatch;
+/// its warnings — advice such as `git tidy` notes, or a doc to fold in later — are listed as
+/// information beside an OK, as the git-doctor line already treats them.
+pub fn doctor_line(issues: &[Value], board: &str) -> TruthLine {
+    let text = |i: &Value| {
+        format!(
+            "{}{}",
+            i["code"]
+                .as_str()
+                .map(|c| format!("{c}: "))
+                .unwrap_or_default(),
+            i["message"]
+                .as_str()
+                .or_else(|| i["detail"].as_str())
+                .unwrap_or("?")
+        )
+    };
+    let errors: Vec<String> = issues
+        .iter()
+        .filter(|i| i["severity"].as_str().is_none_or(|s| s == "error"))
+        .map(text)
+        .collect();
+    let warnings: Vec<String> = issues
+        .iter()
+        .filter(|i| i["severity"] == "warning")
+        .map(text)
+        .collect();
+    let notes = if warnings.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {} warning(s), for information: {}",
+            warnings.len(),
+            warnings.join("; ")
+        )
+    };
+    if errors.is_empty() {
+        TruthLine {
+            verdict: Verdict::Ok,
+            check: "doctor".into(),
+            board: board.into(),
+            truth: format!("no error{notes}"),
+        }
+    } else {
+        TruthLine {
+            verdict: Verdict::Mismatch,
+            check: "doctor".into(),
+            board: board.into(),
+            truth: format!("{} error(s): {}{notes}", errors.len(), errors.join("; ")),
+        }
+    }
 }
 
 fn ci_line(version: &str, tag_commit: &str, board: &str, ci: Option<&CiRuns>) -> TruthLine {
@@ -457,20 +489,7 @@ pub fn claim(
             }
         }
         TruthClaim::DoctorClean => match doctor_json(kanbanr, run, project, &["doctor"]) {
-            Ok(issues) => TruthLine {
-                verdict: if issues.is_empty() {
-                    Verdict::Ok
-                } else {
-                    Verdict::Mismatch
-                },
-                check: "doctor".into(),
-                board: "clean".into(),
-                truth: if issues.is_empty() {
-                    "no problem".into()
-                } else {
-                    format!("{} problem(s)", issues.len())
-                },
-            },
+            Ok(issues) => doctor_line(&issues, "clean"),
             Err(why) => TruthLine {
                 verdict: Verdict::Unknown,
                 check: "doctor".into(),
@@ -768,6 +787,27 @@ mod tests {
         );
         assert_eq!(t.verdict, Verdict::Ok, "{t}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// RC5: the doctor's warnings are information, its errors a mismatch.
+    #[test]
+    fn doctor_warnings_are_information_and_errors_a_mismatch() {
+        let warn = serde_json::json!({"severity": "warning", "code": "FEAT-002", "message": "fold the design into ci-pipeline.md"});
+        let err = serde_json::json!({"severity": "error", "code": "FEAT-003", "message": "depends on a missing item"});
+        let ok = doctor_line(std::slice::from_ref(&warn), "clean");
+        assert_eq!(ok.verdict, Verdict::Ok, "{ok}");
+        assert!(
+            ok.truth
+                .contains("1 warning(s), for information: FEAT-002: fold the design"),
+            "{ok}"
+        );
+        let bad = doctor_line(&[warn, err], "clean");
+        assert_eq!(bad.verdict, Verdict::Mismatch, "{bad}");
+        assert!(
+            bad.truth.starts_with("1 error(s): FEAT-003: depends"),
+            "{bad}"
+        );
+        assert_eq!(doctor_line(&[], "clean").truth, "no error");
     }
 
     /// The board claims a runbook makes are read from the board's files, each saying what the
