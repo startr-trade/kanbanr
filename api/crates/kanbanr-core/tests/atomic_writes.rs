@@ -345,7 +345,18 @@ fn a_save_leaves_no_temporary_file_behind() {
         .unwrap();
     let item = store.add_feature("shop", "A", "spec", "M", None).unwrap();
     store.write_doc("shop", "notes/a.md", "a note").unwrap();
-    kanbanr_core::sprints::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
+    kanbanr_core::sprints::add(
+        &store,
+        "shop",
+        "2026-10-05",
+        Some(5),
+        "",
+        None,
+        "",
+        None,
+        None,
+    )
+    .unwrap();
     kanbanr_core::dispatch::dispatch(
         &store,
         "PUT",

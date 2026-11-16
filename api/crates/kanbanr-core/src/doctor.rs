@@ -1856,7 +1856,18 @@ mod tests {
     fn doctor_names_a_release_item_missing_from_the_running_sprint() {
         let (store, dir) = release_board();
         let code = item_in(&store, "v1", false);
-        crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        crate::sprints::add(
+            &store,
+            "demo",
+            "2026-10-05",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         crate::sprints::start(&store, "demo", "SP-001").unwrap();
         let found = said(&store, "into no sprint");
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1905,7 +1916,18 @@ mod tests {
         let (store, dir) = release_board();
         item_in(&store, "v1", false);
         assert!(said(&store, "into no sprint").is_empty());
-        crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        crate::sprints::add(
+            &store,
+            "demo",
+            "2026-10-05",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         assert!(
             said(&store, "into no sprint").is_empty(),
             "planned, not started"

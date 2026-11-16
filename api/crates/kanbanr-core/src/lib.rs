@@ -3634,6 +3634,8 @@ requirements:
             "Ship cart",
             Some(10.0),
             "",
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -3667,8 +3669,10 @@ requirements:
     #[test]
     fn closing_a_sprint_carries_unfinished_work() {
         let (store, _d, codes) = sprint_board();
-        let one = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
-        let two = crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "").unwrap();
+        let one = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "", None, None)
+            .unwrap();
+        let two = crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "", None, None)
+            .unwrap();
         crate::sprints::plan(&store, "demo", &one.code, &codes).unwrap();
         crate::sprints::start(&store, "demo", &one.code).unwrap();
         // Only one sprint runs at a time.
@@ -3712,7 +3716,18 @@ requirements:
     #[test]
     fn burndown_is_derived_from_history() {
         let (store, _d, codes) = sprint_board();
-        let sp = crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        let sp = crate::sprints::add(
+            &store,
+            "demo",
+            "2026-10-05",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         crate::sprints::plan(&store, "demo", &sp.code, &codes).unwrap();
         crate::sprints::start(&store, "demo", &sp.code).unwrap();
         // Record two finishes on known days, as the move history would.
@@ -3751,13 +3766,24 @@ requirements:
         let json = serde_json::to_string(&plain).unwrap();
         assert!(!json.contains("velocity"), "{json}");
         // And a sprint of any kind is refused there, with the switch named.
-        let err = crate::sprints::add(&store, "plain", "2026-10-05", None, "", None, "")
-            .unwrap_err()
-            .to_string();
+        let err = crate::sprints::add(
+            &store,
+            "plain",
+            "2026-10-05",
+            None,
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("--sprints on"), "{err}");
 
         let (store, _d, codes) = sprint_board();
-        let sp = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
+        let sp = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "", None, None)
+            .unwrap();
         crate::sprints::plan(&store, "demo", &sp.code, &codes[..1]).unwrap();
         store.move_feature("demo", &codes[0], "Scheduled").unwrap();
         store.move_feature("demo", &codes[0], "Completed").unwrap();
@@ -4237,7 +4263,8 @@ requirements:
             .unwrap_err()
             .to_string();
         assert!(err.contains("no sprint is active"), "{err}");
-        let sp = crate::sprints::add(&store, "team", "2026-10-05", None, "", None, "").unwrap();
+        let sp = crate::sprints::add(&store, "team", "2026-10-05", None, "", None, "", None, None)
+            .unwrap();
         crate::sprints::start(&store, "team", &sp.code).unwrap();
         let err = store
             .move_feature_approved("team", &f.code, "In Progress", None)
@@ -8551,7 +8578,9 @@ requirements:
             Some(&json!({"sprints": true})),
         )
         .unwrap();
-        let sprint = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
+        let sprint =
+            crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "", None, None)
+                .unwrap();
         crate::sprints::start(&store, "demo", &sprint.code).unwrap();
         let closed = call(
             &format!("/projects/demo/sprints/{}/close", sprint.code),
@@ -8575,7 +8604,9 @@ requirements:
                 "- [store](components/store.md)\n",
             )
             .unwrap();
-        let next = crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "").unwrap();
+        let next =
+            crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "", None, None)
+                .unwrap();
         crate::sprints::start(&store, "demo", &next.code).unwrap();
         let closed = call(
             &format!("/projects/demo/sprints/{}/close", next.code),
@@ -8866,7 +8897,8 @@ requirements:
         };
         let err = go().unwrap_err();
         assert!(err.contains("no sprint is active"), "{err}");
-        let sp = crate::sprints::add(&store, "shop", "2099-01-05", None, "", None, "").unwrap();
+        let sp = crate::sprints::add(&store, "shop", "2099-01-05", None, "", None, "", None, None)
+            .unwrap();
         crate::sprints::plan(&store, "shop", &sp.code, std::slice::from_ref(&f.code)).unwrap();
         let err = go().unwrap_err();
         assert!(err.contains("has not started"), "{err}");

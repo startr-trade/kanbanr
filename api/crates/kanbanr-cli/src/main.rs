@@ -1701,6 +1701,12 @@ enum SprintCmd {
         capacity: Option<f64>,
         #[arg(long)]
         name: Option<String>,
+        /// How many agent lanes can work at once: capacity for agent-built work (FTR-061).
+        #[arg(long)]
+        lanes: Option<u32>,
+        /// How many builds can run at once (FTR-061).
+        #[arg(long)]
+        build_slots: Option<u32>,
     },
     /// List the project's sprints.
     List,
@@ -1738,6 +1744,12 @@ enum SprintCmd {
         /// What it can take, in the project's estimate unit; 0 clears it.
         #[arg(long)]
         capacity: Option<f64>,
+        /// How many agent lanes can work at once; 0 clears it (FTR-061).
+        #[arg(long)]
+        lanes: Option<u32>,
+        /// How many builds can run at once; 0 clears it (FTR-061).
+        #[arg(long)]
+        build_slots: Option<u32>,
     },
     /// Remove a sprint that holds no item and has not started. A sprint with items is refused.
     Remove { code: String },
@@ -12444,6 +12456,8 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             goal,
             capacity,
             name,
+            lanes,
+            build_slots,
         } => {
             let length = length.as_deref().map(parse_length).transpose()?;
             let resp = client.write(
@@ -12455,6 +12469,8 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                     ("goal", goal.clone().map(|g| json!(g))),
                     ("capacity", capacity.map(|c| json!(c))),
                     ("name", name.clone().map(|n| json!(n))),
+                    ("lanes", lanes.map(|n| json!(n))),
+                    ("build_slots", build_slots.map(|n| json!(n))),
                 ])),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
@@ -12477,8 +12493,11 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             length,
             end,
             capacity,
+            lanes,
+            build_slots,
         } => {
             let length = length.as_deref().map(parse_length).transpose()?;
+            let count = |n: &Option<u32>| n.map(|n| if n == 0 { Value::Null } else { json!(n) });
             let resp = client.write(
                 Method::Patch,
                 &format!("/projects/{p}/sprints/{code}"),
@@ -12492,6 +12511,8 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                         "capacity",
                         capacity.map(|c| if c == 0.0 { Value::Null } else { json!(c) }),
                     ),
+                    ("lanes", count(lanes)),
+                    ("build_slots", count(build_slots)),
                 ])),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
@@ -12553,6 +12574,19 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             );
             if let Some(goal) = r["goal"].as_str().filter(|g| !g.is_empty()) {
                 println!("goal: {goal}");
+            }
+            // Capacity for agent-built work (FTR-061); the day capacity, when set, stays on the
+            // line below.
+            let agent: Vec<String> = [("lane", "lanes"), ("build slot", "build_slots")]
+                .iter()
+                .filter_map(|(word, key)| {
+                    r[*key]
+                        .as_u64()
+                        .map(|n| format!("{n} {word}{}", if n == 1 { "" } else { "s" }))
+                })
+                .collect();
+            if !agent.is_empty() {
+                println!("Capacity: {}", agent.join(", "));
             }
             println!(
                 "{} of {} {unit} done · {} day(s) left{}",

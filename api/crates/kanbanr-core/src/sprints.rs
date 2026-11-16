@@ -57,6 +57,13 @@ pub struct Sprint {
     /// What the sprint can take, in the project's estimate unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capacity: Option<f64>,
+    /// How many agent lanes can work at once, for agent-built work: capacity stated as lanes
+    /// and build slots instead of days (FTR-061). None when not stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lanes: Option<u32>,
+    /// How many builds can run at once beside those lanes (FTR-061). None when not stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_slots: Option<u32>,
     #[serde(default)]
     pub state: SprintState,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -158,7 +165,9 @@ fn cadence_on(store: &Store, id: &str) -> Result<Project> {
 }
 
 /// Add a sprint starting on `start`, `length_days` long (the project's default when not given,
-/// else fourteen).
+/// else fourteen). `lanes` and `build_slots` state its capacity for agent-built work (FTR-061);
+/// zero is the same as not stated.
+#[allow(clippy::too_many_arguments)]
 pub fn add(
     store: &Store,
     id: &str,
@@ -167,6 +176,8 @@ pub fn add(
     goal: &str,
     capacity: Option<f64>,
     name: &str,
+    lanes: Option<u32>,
+    build_slots: Option<u32>,
 ) -> Result<Sprint> {
     let project = cadence_on(store, id)?;
     let first = first_day(start).ok_or_else(|| {
@@ -200,6 +211,8 @@ pub fn add(
         start: crate::gantt::fmt_date(first),
         end: crate::gantt::fmt_date(last),
         capacity: capacity.filter(|c| *c > 0.0),
+        lanes: lanes.filter(|n| *n > 0),
+        build_slots: build_slots.filter(|n| *n > 0),
         ..Sprint::default()
     };
     sprints.push(sprint.clone());
@@ -217,6 +230,10 @@ pub struct SprintEdit {
     pub end: Option<String>,
     /// `Some(None)` clears the capacity.
     pub capacity: Option<Option<f64>>,
+    /// `Some(None)` or `Some(Some(0))` clears the lanes (FTR-061).
+    pub lanes: Option<Option<u32>>,
+    /// `Some(None)` or `Some(Some(0))` clears the build slots (FTR-061).
+    pub build_slots: Option<Option<u32>>,
 }
 
 /// Change a sprint that has not started: its plan is the planner's to reshape. Once started its
@@ -301,6 +318,12 @@ pub fn edit(store: &Store, id: &str, code: &str, edit: &SprintEdit) -> Result<Sp
     sprint.end = crate::gantt::fmt_date(new_end);
     if let Some(c) = edit.capacity {
         sprint.capacity = c;
+    }
+    if let Some(n) = edit.lanes {
+        sprint.lanes = n.filter(|n| *n > 0);
+    }
+    if let Some(n) = edit.build_slots {
+        sprint.build_slots = n.filter(|n| *n > 0);
     }
     let edited = sprint.clone();
     save(store, id, &sprints)?;
@@ -808,7 +831,18 @@ mod tests {
             store.set_feature_points("shop", &f.code, points).unwrap();
             codes.push(f.code);
         }
-        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
+        let sp = super::add(
+            &store,
+            "shop",
+            "2026-10-05",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         super::plan(&store, "shop", &sp.code, &codes).unwrap();
         (store, codes, dir)
     }
@@ -852,7 +886,18 @@ mod tests {
         let gates = crate::config::preset("scrum").unwrap().gates;
         let (store, codes, dir) = board("def018-r3", gates);
         // Finish A so closing SP-001 leaves it in the closed sprint; B and C are carried to SP-002.
-        let sp2 = super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        let sp2 = super::add(
+            &store,
+            "shop",
+            "2026-10-12",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         arrive(&store, &codes[0], "Done", "2026-10-06T10:00:00Z");
         super::close(&store, "shop", "SP-001", Some(&sp2.code)).unwrap();
         let err = super::unplan(&store, "shop", &codes[..1])
@@ -1048,7 +1093,18 @@ mod tests {
         f.status = "Migration".into();
         store.persist_feature_for_test("shop", &f).unwrap();
         std::fs::remove_file(old).unwrap();
-        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
+        let sp = super::add(
+            &store,
+            "shop",
+            "2026-10-05",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let codes = vec![early.code.clone(), late.code.clone()];
         super::plan(&store, "shop", &sp.code, &codes).unwrap();
         let closed = super::close(&store, "shop", "SP-001", Some("backlog")).unwrap();
@@ -1064,7 +1120,18 @@ mod tests {
     #[test]
     fn a_planned_sprint_can_be_edited() {
         let (store, _codes, dir) = board("edit", Default::default());
-        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "old", Some(10.0), "").unwrap();
+        let sp = super::add(
+            &store,
+            "shop",
+            "2026-10-05",
+            Some(5),
+            "old",
+            Some(10.0),
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let e = super::SprintEdit {
             name: Some(" Alpha ".into()),
             goal: Some("ship it".into()),
@@ -1129,7 +1196,18 @@ mod tests {
     #[test]
     fn an_edit_with_bad_dates_changes_nothing() {
         let (store, _codes, dir) = board("baddates", Default::default());
-        super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        super::add(
+            &store,
+            "shop",
+            "2026-10-12",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let before = sprint_bytes(&store);
         for e in [
             super::SprintEdit {
@@ -1153,7 +1231,18 @@ mod tests {
     #[test]
     fn an_edit_keeps_unknown_fields_and_other_sprints() {
         let (store, _codes, dir) = board("keeps", Default::default());
-        super::add(&store, "shop", "2026-10-12", Some(5), "g", Some(4.0), "").unwrap();
+        super::add(
+            &store,
+            "shop",
+            "2026-10-12",
+            Some(5),
+            "g",
+            Some(4.0),
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let before = super::load(&store, "shop").unwrap();
         let e = super::SprintEdit {
             goal: Some("new".into()),
@@ -1168,11 +1257,127 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FTR-061 R-8: a sprint states its capacity as lanes and build slots, set on add, changed and
+    /// cleared (0) on edit, refused once started; the day capacity is untouched and a key this
+    /// version does not know is kept.
+    #[test]
+    fn a_sprint_can_state_lanes_and_build_slots_and_day_capacity_still_works() {
+        let (store, _codes, dir) = board("ftr061-lanes", Default::default());
+        let sp = super::add(
+            &store,
+            "shop",
+            "2026-10-12",
+            Some(5),
+            "",
+            Some(12.0),
+            "",
+            Some(4),
+            Some(2),
+        )
+        .unwrap();
+        assert_eq!((sp.lanes, sp.build_slots), (Some(4), Some(2)));
+        assert_eq!(sp.capacity, Some(12.0));
+        // Zero on add is the same as not stated.
+        let zero = super::add(
+            &store,
+            "shop",
+            "2026-10-19",
+            Some(5),
+            "",
+            None,
+            "",
+            Some(0),
+            None,
+        )
+        .unwrap();
+        assert_eq!((zero.lanes, zero.build_slots), (None, None));
+        let stored = super::load(&store, "shop").unwrap();
+        assert_eq!(stored[1].lanes, Some(4));
+        assert_eq!(stored[1].build_slots, Some(2));
+        let yaml = std::fs::read_to_string(store.project_dir("shop").join("sprints.yaml")).unwrap();
+        assert!(
+            yaml.contains("lanes: 4") && yaml.contains("build_slots: 2"),
+            "{yaml}"
+        );
+
+        // Edit: change lanes, leave slots; then clear both with 0 and None.
+        let e = super::SprintEdit {
+            lanes: Some(Some(8)),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!(
+            (got.lanes, got.build_slots, got.capacity),
+            (Some(8), Some(2), Some(12.0))
+        );
+        let e = super::SprintEdit {
+            lanes: Some(Some(0)),
+            build_slots: Some(None),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!(
+            (got.lanes, got.build_slots, got.capacity),
+            (None, None, Some(12.0))
+        );
+
+        // Day capacity alone still works, and lanes stay as they are when only it changes.
+        let e = super::SprintEdit {
+            lanes: Some(Some(3)),
+            capacity: Some(Some(20.0)),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!((got.lanes, got.capacity), (Some(3), Some(20.0)));
+
+        // A key this version does not know is kept in `extra` through an edit.
+        let path = store.project_dir("shop").join("sprints.yaml");
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        let yaml = yaml.replacen("lanes: 3", "lanes: 3\n  later_field: kept", 1);
+        std::fs::write(&path, yaml).unwrap();
+        let e = super::SprintEdit {
+            goal: Some("g".into()),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert!(got.extra.contains_key("later_field"), "{:?}", got.extra);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("later_field: kept")
+        );
+
+        // A started sprint refuses a lanes edit, and nothing moves.
+        super::start(&store, "shop", "SP-001").unwrap();
+        let before = sprint_bytes(&store);
+        let e = super::SprintEdit {
+            lanes: Some(Some(6)),
+            ..Default::default()
+        };
+        let err = super::edit(&store, "shop", "SP-001", &e)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has started"), "{err}");
+        assert_eq!(sprint_bytes(&store), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FTR-022 R-9: an empty planned sprint can go.
     #[test]
     fn an_empty_planned_sprint_can_be_removed() {
         let (store, _codes, dir) = board("rm", Default::default());
-        super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        super::add(
+            &store,
+            "shop",
+            "2026-10-12",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let removed = super::remove(&store, "shop", "SP-002").unwrap();
         assert_eq!(removed.code, "SP-002");
         let left = super::load(&store, "shop").unwrap();
@@ -1249,7 +1454,18 @@ mod tests {
             store.set_feature_sprint("shop", c, None).unwrap();
         }
         super::close(&store, "shop", "SP-001", None).unwrap();
-        let sp = super::add(&store, "shop", "2026-10-10", Some(5), "", None, "").unwrap();
+        let sp = super::add(
+            &store,
+            "shop",
+            "2026-10-10",
+            Some(5),
+            "",
+            None,
+            "",
+            None,
+            None,
+        )
+        .unwrap();
         let late = super::start_on(&store, "shop", &sp.code, day(10, 12)).unwrap();
         assert_eq!(
             (late.start.as_str(), late.end.as_str()),
@@ -1263,7 +1479,8 @@ mod tests {
     fn a_sprint_can_start_today() {
         let (store, _codes, dir) = board("def041-today", Default::default());
         let today = crate::gantt::fmt_date(super::today());
-        let added = super::add(&store, "shop", " Today ", Some(5), "", None, "").unwrap();
+        let added =
+            super::add(&store, "shop", " Today ", Some(5), "", None, "", None, None).unwrap();
         assert_eq!(added.start, today);
         let edit = super::SprintEdit {
             start: Some("Today".into()),

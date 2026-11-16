@@ -1794,7 +1794,9 @@ mod tests {
         cadence.releases = false;
         store.set_cadence("demo", None, cadence).unwrap();
         let today = crate::gantt::fmt_date(crate::sprints::today());
-        let sprint = crate::sprints::add(&store, "demo", &today, Some(14), "g", None, "").unwrap();
+        let sprint =
+            crate::sprints::add(&store, "demo", &today, Some(14), "g", None, "", None, None)
+                .unwrap();
         assert_eq!(sprint.code, "SP-001");
         crate::sprints::start(&store, "demo", "SP-001").unwrap();
         let repo = crate::coderepo::tests::scratch_repo(tag);

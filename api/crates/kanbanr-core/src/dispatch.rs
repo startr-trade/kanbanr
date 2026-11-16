@@ -2003,10 +2003,31 @@ fn dispatch_routes(
             &str_field(b, "goal").unwrap_or_default(),
             b.get("capacity").and_then(Value::as_f64),
             &str_field(b, "name").unwrap_or_default(),
+            b.get("lanes").and_then(Value::as_u64).map(|n| n as u32),
+            b.get("build_slots")
+                .and_then(Value::as_u64)
+                .map(|n| n as u32),
         )?),
-        // `{name?, goal?, start?, length_days?, end?, capacity?}`: reshape a sprint that has not
-        // started; `capacity: null` clears it (FTR-022).
+        // `{name?, goal?, start?, length_days?, end?, capacity?, lanes?, build_slots?}`: reshape a
+        // sprint that has not started; `capacity: null` clears it (FTR-022), as `lanes: null` and
+        // `build_slots: null` do (FTR-061).
         ("PATCH", ["projects", p, "sprints", code]) => {
+            // `lanes` and `build_slots` (FTR-061): a count, or null or 0 to clear.
+            let count = |k: &str| -> Result<Option<Option<u32>>> {
+                match b.get(k) {
+                    None => Ok(None),
+                    Some(Value::Null) => Ok(Some(None)),
+                    Some(v) => Ok(Some(Some(
+                        v.as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .ok_or_else(|| {
+                                CoreError::Unsupported(format!(
+                                    "{k} must be a whole number or null"
+                                ))
+                            })?,
+                    ))),
+                }
+            };
             let edit = crate::sprints::SprintEdit {
                 name: str_field(b, "name"),
                 goal: str_field(b, "goal"),
@@ -2023,6 +2044,8 @@ fn dispatch_routes(
                         CoreError::Unsupported("capacity must be a number or null".into())
                     })?)),
                 },
+                lanes: count("lanes")?,
+                build_slots: count("build_slots")?,
             };
             ser(&crate::sprints::edit(store, p, code, &edit)?)
         }
