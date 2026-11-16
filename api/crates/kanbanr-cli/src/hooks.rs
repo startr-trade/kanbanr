@@ -203,8 +203,6 @@ pub fn missing(settings: &Value) -> Vec<&'static str> {
 /// `settings.json` together can carry the set. Each file is read as JSON; one that is missing or
 /// unreadable counts as empty. A registration whose script is gone counts as missing, as in
 /// [`missing`]. In the order [`missing`] reports them, each event once.
-// Called by the hook health check (FTR-059 T5), which lands after this.
-#[allow(dead_code)]
 pub fn missing_across(files: &[PathBuf]) -> Vec<&'static str> {
     let all: Vec<Value> = files
         .iter()

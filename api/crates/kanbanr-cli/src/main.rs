@@ -4,6 +4,7 @@
 
 mod backend;
 mod editor;
+mod hookhealth;
 mod hooks;
 mod mirror;
 mod recover;
