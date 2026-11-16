@@ -277,10 +277,76 @@ expect("web::release_action untested: nothing untested, nothing to accept", a.ac
   );
 }
 
-if (problems.length) {
+// DEF-071 R-1 (web::release_disabled_button_says_why): a disabled button says why beside it and in
+// its title: the first missing thing with its fix, the tag's sentence, or the repository line; an
+// enabled button says nothing of the kind.
+const why = [];
+const expectWhy = (name, cond, got) => {
+  if (!cond) why.push(`${name}: ${JSON.stringify(got)}`);
+};
+{
+  const reason = "release/v0.2.0 already exists in /work/katalogr — nothing was changed";
+  const branchBlocked = {
+    ...base,
+    from: "",
+    to: "candidate",
+    button: "Promote v0.3.0 to candidate",
+    conditions: [],
+    steps: [{ action: "branch", stage: "candidate", does: "makes release/v0.2.0", noop: false, blocked: reason }],
+    missing: [reason],
+    ready: false,
+  };
+  a = releaseAction(branchBlocked, true);
+  expectWhy("a blocked branch step: disabled, says its reason", !a.enabled && a.disabledWhy === reason, a);
+  a = releaseAction(none, true);
+  expectWhy(
+    "a tag-blocked plan: its sentence",
+    !a.enabled && a.disabledWhy.startsWith("no result recorded for the tag since it was made"),
+    a,
+  );
+  a = releaseAction(red, true);
+  expectWhy("a failed tag: the first missing thing with its fix", a.disabledWhy === "tag_passed: ci failed on abc1234 — start a patch release", a);
+  a = releaseAction(noRepo, true);
+  expectWhy(
+    "no repo: the repository line with its fix",
+    a.disabledWhy === `${NO_REPO} — run \`kanbanr release promote v0.3.0 production\` from the project folder`,
+    a,
+  );
+  a = releaseAction(base, true);
+  expectWhy("a ready plan: nothing", a.enabled && a.disabledWhy === "", a);
+  a = releaseAction(branchBlocked, false);
+  expectWhy("read-only: no button, nothing", !a.button && a.disabledWhy === "", a);
+  a = releaseAction(empty, true);
+  expectWhy("empty release: no button, nothing", a.disabledWhy === "", a);
+  a = releaseAction({ ...base, ready: false, missing: [] }, true);
+  expectWhy("nothing named: points to the list below", a.disabledWhy === "not ready: see what is missing below", a);
+  const offer = { stage: "candidate", button: "Promote v0.3.0 to candidate again", does: ["commits the version"], ready: false, missing: [reason] };
+  a = releaseAction({ ...base, again: offer }, true);
+  expectWhy("the again button: its first missing thing", a.again?.disabledWhy === reason, a);
+  a = releaseAction({ ...base, again: { ...offer, ready: true, missing: [] } }, true);
+  expectWhy("the again button enabled: nothing", a.again?.enabled && a.again.disabledWhy === "", a);
+  const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
+  expectWhy("the page: the primary button's title is the reason, else what it does", page.includes('title={why || action.does.join("; ")}'), {});
+  expectWhy("the page: the ask-first primary button carries it", page.includes("disabledWhy={why}"), {});
+  expectWhy("the page: the again button carries its own", page.includes("disabledWhy={action.again.disabledWhy}"), {});
+  expectWhy(
+    "the page: the reason sits beside both buttons",
+    (page.match(/className="small release-why" role="note"/g) ?? []).length === 2 &&
+      page.includes("<Inline text={why} />") &&
+      page.includes("<Inline text={action.again.disabledWhy} />"),
+    {},
+  );
+  expectWhy("the page: the old title is gone", !page.includes("not ready: see what is missing"), {});
+}
+
+if (problems.length || why.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
+  for (const p of why) console.error(`web::release_disabled_button_says_why — ${p}`);
   process.exit(1);
 }
 console.log(
   "web::release_button_says_what_it_does — one button per release, named for its step, enabled only when ready, saying what is missing otherwise; none for an empty release.",
+);
+console.log(
+  "web::release_disabled_button_says_why — a disabled release button says why beside it and in its title; an enabled one says nothing of the kind.",
 );
