@@ -322,6 +322,10 @@ pub struct ReleaseStageView {
     /// passed it (FTR-020).
     #[serde(default)]
     pub inert: bool,
+    /// Checks kanbanr asks of this stage beyond its own `requires` (DEF-077): see
+    /// [`Cadence::implied_requires`]. Derived from the cadence, never written into config.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implied: Vec<ReleaseCheck>,
 }
 
 impl ReleaseGate {
@@ -352,8 +356,35 @@ impl Cadence {
                 on_enter: g.on_enter,
                 cut: i == cut,
                 after_cut: i > cut,
+                implied: self.implied_requires(i),
             })
             .collect()
+    }
+
+    /// The checks kanbanr asks of stage `index` beyond its own `requires` (DEF-077): `ItemsMerged`
+    /// on the first stage whose `on_enter` holds `MoveMain`, or on the cut stage when no stage moves
+    /// main, when the project uses the git model and that stage, or an earlier one, does not already
+    /// require it. Empty otherwise, and for every stage when `git_model` is off.
+    pub fn implied_requires(&self, index: usize) -> Vec<ReleaseCheck> {
+        if !self.git_model {
+            return vec![];
+        }
+        let gates = self.effective_release_gates();
+        let target = gates
+            .iter()
+            .position(|(_, g)| g.on_enter.contains(&ReleaseAction::MoveMain))
+            .unwrap_or_else(|| self.cut_index());
+        if index != target || target >= gates.len() {
+            return vec![];
+        }
+        let declared_by_then = gates[..=target]
+            .iter()
+            .any(|(_, g)| g.requires.contains(&ReleaseCheck::ItemsMerged));
+        if declared_by_then {
+            vec![]
+        } else {
+            vec![ReleaseCheck::ItemsMerged]
+        }
     }
 
     /// The stages, gates and commit gates a project gets when it turns releases on and names none
@@ -1166,6 +1197,83 @@ mod tests {
                 ..ReleaseGate::default()
             }
             .is_inert()
+        );
+    }
+
+    /// DEF-077 R-1: under the git model the stage that moves main (or the cut, where none does)
+    /// implies `items_merged` unless it or an earlier stage already requires it.
+    #[test]
+    fn the_stage_that_moves_main_implies_items_merged() {
+        // This board's shape: candidate asks nothing, main moves main, production tags.
+        let board = cadence(
+            "git_model: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { on_enter: [tag] }\n",
+        )
+        .unwrap();
+        assert!(board.git_model);
+        assert_eq!(board.implied_requires(0), Vec::<ReleaseCheck>::new());
+        assert_eq!(board.implied_requires(1), vec![ReleaseCheck::ItemsMerged]);
+        assert_eq!(board.implied_requires(2), Vec::<ReleaseCheck>::new());
+        let implied: Vec<_> = board
+            .release_stage_views()
+            .into_iter()
+            .map(|v| v.implied)
+            .collect();
+        assert_eq!(implied, [vec![], vec![ReleaseCheck::ItemsMerged], vec![]]);
+        // The view carries `implied` only where it is not empty.
+        let json = serde_json::to_value(board.release_stage_views()).unwrap();
+        assert!(json[0].get("implied").is_none(), "{json}");
+        assert_eq!(json[1]["implied"], serde_json::json!(["items_merged"]));
+
+        // The recommended stages ask it at candidate, before main: nothing is implied.
+        let (stages, gates, _) = Cadence::recommended(false);
+        let rec = Cadence {
+            release_stages: stages,
+            release_gates: gates,
+            git_model: true,
+            ..Cadence::default()
+        };
+        for i in 0..rec.stages().len() {
+            assert!(rec.implied_requires(i).is_empty(), "stage {i}");
+        }
+
+        // A stage already asking it is not asked twice.
+        let declared = cadence(
+            "git_model: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             main: { requires: [items_finished, items_merged], on_enter: [move_main] }\n  \
+             production: { on_enter: [tag] }\n",
+        )
+        .unwrap();
+        assert!(declared.implied_requires(1).is_empty());
+
+        // With no stage moving main, the cut implies it.
+        let no_main =
+            cadence("git_model: true\nrelease_stages: [a, b, c]\nrelease_gates: { b: { on_enter: [tag] } }\n")
+                .unwrap();
+        assert!(
+            !no_main
+                .effective_release_gates()
+                .iter()
+                .any(|(_, g)| g.on_enter.contains(&ReleaseAction::MoveMain))
+        );
+        assert_eq!(no_main.cut_index(), 1);
+        assert_eq!(no_main.implied_requires(1), vec![ReleaseCheck::ItemsMerged]);
+        assert!(no_main.implied_requires(0).is_empty());
+        assert!(no_main.implied_requires(2).is_empty());
+
+        // Without the git model nothing is implied anywhere.
+        let off = Cadence {
+            git_model: false,
+            ..board.clone()
+        };
+        for i in 0..off.stages().len() {
+            assert!(off.implied_requires(i).is_empty(), "stage {i}");
+        }
+        assert!(
+            off.release_stage_views()
+                .iter()
+                .all(|v| v.implied.is_empty())
         );
     }
 }
