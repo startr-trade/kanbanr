@@ -753,7 +753,8 @@ Then:
   table;
 - when the agent's work has been reviewed, revoke the scope: `kanbanr scope revoke SC-… --reason
   done`. `kanbanr scope list` shows what is in force; `kanbanr scope renew SC-… --for 4h` extends
-  one. Revoking a scope stops the agent on its next tool call and never restricts you;
+  one. Revoking a scope stops the agent on its next tool call and never restricts you, and deletes the
+  agent's `worktree-agent-*` branch when it is merged;
 - never issue scopes from inside an agent: an agent's worktree refuses it;
 - put your own worktree, for a merge or a finished item, under `.claude/worktrees/` too, with a
   name that does not start `agent-`: only `agent-*` worktrees are refused without a scope.
@@ -903,6 +904,11 @@ branches; fix it before going on.
   to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
+- **Closing the sprint: leftover branches.** After `kanbanr sprint close` (and after a cut), run
+  `kanbanr git tidy`. If it lists branches, ask once with AskUserQuestion: one question, "Delete
+  these N merged branches?", the list in the preview, options Delete / Keep. On Delete run
+  `kanbanr git tidy --yes` and report what went, with each tip. Never ask per branch, and never
+  delete a branch by hand with `git branch`. It is local only; the user prunes remotes.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
   `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: propose
   separate stages (lint, test, build, then scan and publish in the release workflow), each a job
@@ -1343,6 +1349,7 @@ kanbanr git model [--json]                       # main, the line, item branches
 kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
 kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line (yours, never the user's)
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
+kanbanr git tidy [--yes]                         # list merged branches that can go; --yes deletes them locally (ask once first)
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when Claude runs it

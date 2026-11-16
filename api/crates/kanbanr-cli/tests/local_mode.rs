@@ -11883,3 +11883,225 @@ fn prepare_text_check_reads_the_code_repository() {
     assert_eq!(v[0]["state"], "open", "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-051: the board of a tidy test is the test's own, under the temporary directory (L-41).
+fn assert_board_is_scratch(base: &std::path::Path, work: &std::path::Path) {
+    let v: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(
+        &run_in(base, work, &["--json", "where"]).stdout,
+    ))
+    .unwrap();
+    let data = std::path::PathBuf::from(v["data_dir"].as_str().unwrap())
+        .canonicalize()
+        .unwrap();
+    let tmp = std::env::temp_dir().canonicalize().unwrap();
+    assert!(data.starts_with(&tmp), "{data:?} is not under {tmp:?}");
+    assert!(
+        !data.starts_with(env!("CARGO_MANIFEST_DIR")),
+        "{data:?} is inside the repository"
+    );
+}
+
+/// DEF-051 R-1: `git tidy` lists the finished item's merged branch and a merged agent branch,
+/// deletes nothing without `--yes`, deletes exactly those with it (printing each tip), keeps the
+/// unmerged and checked-out branches, lists nothing the second time and leaves the remote alone.
+#[test]
+fn git_tidy_deletes_merged_branches_after_one_confirmation_and_keeps_unmerged_ones() {
+    let (base, work) = togaf_scratch("def051-tidy");
+    git_model_board(&base, &work, false, false);
+    assert_board_is_scratch(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // FEAT-001: finished and merged. FEAT-002: on the board, its branch unmerged.
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "add",
+            "--title",
+            "Later",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["branch", "feat/FEAT-002-later", "main"],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "feat/FEAT-002-later"],
+    ));
+    commit_file_in(
+        &base,
+        &work,
+        "later.txt",
+        "l\n",
+        "x\n\n[no-ref] unmerged work",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    // Agent branches: one merged, one with work main lacks, one a worktree has checked out.
+    ok(git_in(
+        &base,
+        &work,
+        &["branch", "worktree-agent-a", "main"],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["branch", "worktree-agent-b", "main"],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "worktree-agent-b"],
+    ));
+    commit_file_in(&base, &work, "b.txt", "b\n", "x\n\n[no-ref] agent work");
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let wt = base.join("agent-c");
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "worktree-agent-c",
+            wt.to_str().unwrap(),
+            "main",
+        ],
+    ));
+    // A bare remote that holds every branch.
+    let remote = base.join("remote.git");
+    ok(git_in(
+        &base,
+        &work,
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &["push", "-q", "--no-verify", "origin", "--all"],
+    ));
+    let remote_refs = || ok(git_in(&base, &work, &["ls-remote", "origin"]));
+    let before = remote_refs();
+    let branches = || {
+        ok(git_in(
+            &base,
+            &work,
+            &["branch", "--format=%(refname:short)"],
+        ))
+    };
+    let tip_a = tip(&base, &work, "worktree-agent-a");
+
+    let listed = ok(run_in(&base, &work, &["git", "tidy"]));
+    assert!(listed.contains("feat/FEAT-001-cart"), "{listed}");
+    assert!(listed.contains("worktree-agent-a"), "{listed}");
+    for kept in ["FEAT-002", "worktree-agent-b", "worktree-agent-c"] {
+        assert!(!listed.contains(kept), "{kept} listed: {listed}");
+    }
+    assert!(listed.contains("nothing deleted; run `kanbanr git tidy --yes` to delete these 2"));
+    let all = branches();
+    assert!(
+        all.contains("feat/FEAT-001-cart") && all.contains("worktree-agent-a"),
+        "{all}"
+    );
+
+    let done = ok(run_in(&base, &work, &["git", "tidy", "--yes"]));
+    assert!(
+        done.contains(&format!("deleted worktree-agent-a (was {})", &tip_a[..7])),
+        "{done}"
+    );
+    assert!(done.contains("deleted feat/FEAT-001-cart (was "), "{done}");
+    let left = branches();
+    for gone in ["feat/FEAT-001-cart", "worktree-agent-a"] {
+        assert!(!left.lines().any(|b| b == gone), "{gone} survived: {left}");
+    }
+    for kept in [
+        "main",
+        "feat/FEAT-002-later",
+        "worktree-agent-b",
+        "worktree-agent-c",
+    ] {
+        assert!(
+            left.lines().any(|b| b == kept),
+            "{kept} was deleted: {left}"
+        );
+    }
+    let again = ok(run_in(&base, &work, &["git", "tidy"]));
+    assert!(again.contains("no merged branches to delete"), "{again}");
+    assert_eq!(remote_refs(), before, "the remote is untouched");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-051 R-1: closing a sprint says, in one line, that merged branches can go, and names the
+/// command; it deletes nothing itself.
+#[test]
+fn sprint_close_says_when_merged_branches_can_go() {
+    let (base, work) = togaf_scratch("def051-close");
+    git_model_board(&base, &work, true, false);
+    assert_board_is_scratch(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    commit_file_in(&base, &work, "s.txt", "s\n", "x\n\n[no-ref] sprint work");
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["branch", "worktree-agent-old", "main"],
+    ));
+    let said = ok(run_in(&base, &work, &["sprint", "close", "SP-001"]));
+    assert!(
+        said.contains("merged branches can go: `kanbanr git tidy` (lists them), then `--yes`"),
+        "{said}"
+    );
+    let all = ok(git_in(
+        &base,
+        &work,
+        &["branch", "--format=%(refname:short)"],
+    ));
+    assert!(all.lines().any(|b| b == "worktree-agent-old"), "{all}");
+    let _ = std::fs::remove_dir_all(&base);
+}

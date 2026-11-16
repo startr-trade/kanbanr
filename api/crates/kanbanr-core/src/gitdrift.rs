@@ -196,8 +196,9 @@ pub fn check(
                 Severity::Warning,
                 Some(&code),
                 format!(
-                    "{code} is finished and {branch} is merged: delete it with `git branch -d \
-                     {branch}`"
+                    "{code} is finished and {branch} is merged: `kanbanr git tidy` lists the merged \
+                     branches, and `--yes` deletes them locally after one confirmation (never a \
+                     remote)"
                 ),
             ));
         } else if gitmodel::is_parked(config, status) {
@@ -314,6 +315,161 @@ pub fn scan(store: &Store, id: &str, root: &Path) -> Result<Vec<Issue>> {
     Ok(issues)
 }
 
+/// A local branch `kanbanr git tidy` may delete (DEF-051).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TidyCandidate {
+    pub branch: String,
+    /// `"item"` or `"agent"`.
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    /// The line the branch is merged into.
+    pub into: String,
+    pub tip: String,
+    pub why: String,
+}
+
+/// The merged branches that can go: a finished item's merged branch, and a merged
+/// `worktree-agent-*` branch no live scope holds. Never main, the integration branch, `sprint/*`,
+/// `release/*`, `spike/*`, a branch a worktree has checked out, an unmerged branch, or the branch of
+/// a parked or unfinished item. Sorted by branch name; pure over facts already read.
+pub fn tidy_candidates(
+    project: &Project,
+    releases: &[Release],
+    model: &GitModel,
+    facts: &DriftFacts,
+    checked_out: &dyn Fn(&str) -> bool,
+    live_scope_branches: &BTreeSet<String>,
+) -> Vec<TidyCandidate> {
+    let config: &ProjectConfig = &project.config;
+    let mut out = Vec::new();
+    for (branch, tip) in &facts.branches.branches {
+        if *branch == model.main
+            || model.integration_branch.as_deref() == Some(branch.as_str())
+            || branch.starts_with(SPRINT_PREFIX)
+            || branch.starts_with(RELEASE_PREFIX)
+            || branch.starts_with(SPIKE_PREFIX)
+            || checked_out(branch)
+            || live_scope_branches.contains(branch)
+        {
+            continue;
+        }
+        let merged_main = facts.branches.merged_into_main.contains(branch);
+        if branch.starts_with(gitmodel::AGENT_BRANCH_PREFIX) {
+            if merged_main {
+                out.push(TidyCandidate {
+                    branch: branch.clone(),
+                    kind: "agent".into(),
+                    item: None,
+                    into: model.main.clone(),
+                    tip: tip.clone(),
+                    why: format!("a finished agent's branch, merged into {}", model.main),
+                });
+            }
+            continue;
+        }
+        let Some(code) = crate::scm::item_code_from_branch(config.branch_pattern(), branch) else {
+            continue;
+        };
+        let Some(item) = project.features.iter().find(|f| f.code == code) else {
+            continue;
+        };
+        if !gitmodel::is_finished(config, &item.status) {
+            continue;
+        }
+        let line = gitmodel::line_for(model, item, releases);
+        let into = match line.as_ref().filter(|l| {
+            facts
+                .merged_into
+                .get(*l)
+                .is_some_and(|m| m.contains(branch))
+        }) {
+            Some(l) => l.clone(),
+            None if merged_main => model.main.clone(),
+            None => continue,
+        };
+        out.push(TidyCandidate {
+            branch: branch.clone(),
+            kind: "item".into(),
+            item: Some(code.clone()),
+            why: format!(
+                "{code} is {} and the branch is merged into {into}",
+                item.status
+            ),
+            into,
+            tip: tip.clone(),
+        });
+    }
+    out.sort_by(|a, b| a.branch.cmp(&b.branch));
+    out
+}
+
+/// Read the repository and list what `git tidy` would delete (DEF-051). Read-only.
+pub fn tidy_scan(store: &Store, id: &str, root: &Path) -> Result<(Vec<TidyCandidate>, GitModel)> {
+    let project = store.load_meta(id)?;
+    let releases = crate::releases::load(store, id).unwrap_or_default();
+    let (model, _) = gitmodel::load(store, id, root)?;
+    let facts = collect(root, &model, &releases)?;
+    let now = crate::now_rfc3339();
+    let mut live = BTreeSet::new();
+    for s in crate::agentscope::load(store, id).unwrap_or_default() {
+        if matches!(
+            s.state(&now),
+            crate::agentscope::ScopeState::Revoked | crate::agentscope::ScopeState::Expired
+        ) {
+            continue;
+        }
+        live.extend(s.agent_branch.clone());
+        live.extend(s.branch.clone());
+    }
+    let current = crate::coderepo::current_branch(root);
+    let checked_out =
+        |b: &str| current.as_deref() == Some(b) || crate::coderepo::worktree_of(root, b).is_some();
+    let list = tidy_candidates(&project, &releases, &model, &facts, &checked_out, &live);
+    Ok((list, model))
+}
+
+/// What a confirmed tidy did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TidyOutcome {
+    pub deleted: Vec<TidyDeleted>,
+    pub skipped: Vec<TidySkipped>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TidyDeleted {
+    pub branch: String,
+    pub tip: String,
+    pub into: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TidySkipped {
+    pub branch: String,
+    pub why: String,
+}
+
+/// Re-read, re-compute and delete each candidate through the checked helper; a branch that stopped
+/// qualifying is skipped, never forced (DEF-051). Local only.
+pub fn tidy_run(store: &Store, id: &str, root: &Path) -> Result<TidyOutcome> {
+    let (list, _) = tidy_scan(store, id, root)?;
+    let mut out = TidyOutcome::default();
+    for c in list {
+        match crate::coderepo::delete_merged_branch(root, &c.branch, &c.into) {
+            Ok(()) => out.deleted.push(TidyDeleted {
+                branch: c.branch,
+                tip: c.tip,
+                into: c.into,
+            }),
+            Err(e) => out.skipped.push(TidySkipped {
+                branch: c.branch,
+                why: e.to_string(),
+            }),
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,6 +522,72 @@ mod tests {
         issues.iter().map(|i| i.message.clone()).collect()
     }
 
+    /// DEF-051 R-1: each exclusion in "Never listed", and the two kinds that are.
+    #[test]
+    fn tidy_lists_finished_merged_item_branches_and_merged_agent_branches_only() {
+        let p = project(
+            &[
+                ("FEAT-001", "Completed"),
+                ("FEAT-002", "Completed"),
+                ("FEAT-003", "In Progress"),
+                ("FEAT-004", "Deferred"),
+                ("FEAT-005", "Completed"),
+            ],
+            false,
+        );
+        let all = [
+            "main",
+            "sprint/SP-001",
+            "release/v1.0.0",
+            "spike/x",
+            "feat/FEAT-001-merged",
+            "feat/FEAT-002-unmerged",
+            "feat/FEAT-003-working",
+            "feat/FEAT-004-parked",
+            "feat/FEAT-005-occupied",
+            "feat/FEAT-099-nothing",
+            "worktree-agent-merged",
+            "worktree-agent-unmerged",
+            "worktree-agent-live",
+            "worktree-agent-occupied",
+            "other",
+        ];
+        let merged = [
+            "main",
+            "sprint/SP-001",
+            "release/v1.0.0",
+            "spike/x",
+            "feat/FEAT-001-merged",
+            "feat/FEAT-003-working",
+            "feat/FEAT-004-parked",
+            "feat/FEAT-005-occupied",
+            "worktree-agent-merged",
+            "worktree-agent-live",
+            "worktree-agent-occupied",
+            "other",
+        ];
+        let f = facts(&all, &merged);
+        let model = gitmodel::derive(&p.config, &[], &f);
+        let d = DriftFacts {
+            branches: f,
+            ..Default::default()
+        };
+        let live: BTreeSet<String> = ["worktree-agent-live".to_string()].into();
+        let occupied = |b: &str| b == "feat/FEAT-005-occupied" || b == "worktree-agent-occupied";
+        let got = tidy_candidates(&p, &[], &model, &d, &occupied, &live);
+        let names: Vec<_> = got.iter().map(|c| c.branch.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["feat/FEAT-001-merged", "worktree-agent-merged"],
+            "{got:?}"
+        );
+        assert_eq!(got[0].kind, "item");
+        assert_eq!(got[0].item.as_deref(), Some("FEAT-001"));
+        assert_eq!(got[0].into, "main");
+        assert_eq!(got[1].kind, "agent");
+        assert_eq!(got[1].tip, "1".repeat(40));
+    }
+
     #[test]
     fn integrated_item_not_merged_is_an_error() {
         let p = project(&[("FEAT-001", "Completed")], false);
@@ -403,7 +625,7 @@ mod tests {
         let m = messages(&check(&p, &[], &[], &model, &d));
         assert!(
             m.iter()
-                .any(|x| x.contains("FEAT-001 is finished") && x.contains("git branch -d")),
+                .any(|x| x.contains("FEAT-001 is finished") && x.contains("kanbanr git tidy")),
             "{m:?}"
         );
         assert!(

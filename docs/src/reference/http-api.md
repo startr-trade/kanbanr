@@ -113,7 +113,7 @@ dependency views (`/ready`, `/blocked`, `/graph`, `/critical-path`, `/features/{
 their portfolio-wide forms), the portfolio Gantt (`/api/gantt`), trace and Zachman coverage, the
 retrospective and report, the issue mirror's settings, the CLAUDE.md block, the process library
 (`/api/processes`), the project-wide export (`/api/projects/{project}/export`), `/git/model`,
-`/git/doctor`, `/config/method`, the guard rails (`/api/projects/{project}/guards`) and the agent
+`/git/doctor`, `/git/tidy` (GET lists the merged branches that can go; POST deletes them locally; DEF-051), `/config/method`, the guard rails (`/api/projects/{project}/guards`) and the agent
 scopes (`/api/projects/{project}/scopes`, `/scopes/{id}`, `/scopes/{id}/brief` in Markdown, and
 `/scopes/drift`, which reads the code repository; FEAT-214). Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
 project export, which are text.

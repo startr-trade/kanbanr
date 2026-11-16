@@ -193,8 +193,10 @@ because shipped notes can't be edited.
 Claude closes it and writes the retro with you. This changes only the board. Start the next sprint
 before starting new items, because new items branch from the running sprint.
 
-After the cut, ask Claude to check for leftovers. The merged item branch is safe to delete, and Claude
-will say so.
+After the cut, Claude checks for leftovers with `kanbanr git tidy`. If merged item branches and
+finished agents' branches can go, it asks you once, in a dialog, to delete them all, then deletes
+them locally with the confirmation. Nothing unmerged is touched and the remote is left to you.
+Each deleted branch's tip is reported, so one can be restored.
 
 ## Who does what
 

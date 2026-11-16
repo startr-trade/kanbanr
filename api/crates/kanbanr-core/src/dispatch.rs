@@ -1965,6 +1965,27 @@ fn dispatch_routes(
             }
             ser(&out)
         }
+        // The merged branches that can go (DEF-051): the list is read-only; the POST re-reads,
+        // re-checks and deletes them locally, never touching a remote.
+        ("GET", ["projects", p, "git", "tidy"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "git tidy reads the code repository: run it from the project folder".into(),
+                )
+            })?;
+            let (candidates, model) = crate::gitdrift::tidy_scan(store, p, repo)?;
+            ser(&json!({ "candidates": candidates, "model_line": model.line }))
+        }
+        ("POST", ["projects", p, "git", "tidy"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "git tidy deletes branches in the code repository: run it from the project \
+                     folder"
+                        .into(),
+                )
+            })?;
+            ser(&crate::gitdrift::tidy_run(store, p, repo)?)
+        }
         // A release's fixes merged forward into the line, on request (FEAT-190).
         ("POST", ["projects", p, "git", "forward", version]) => {
             let repo = repo.ok_or_else(|| {
@@ -2455,7 +2476,17 @@ fn dispatch_routes(
                 &str_field(b, "reason").unwrap_or_default(),
                 &now,
             )?;
-            ser(&crate::agentscope::ScopeView::new(&scope, &now))
+            let mut view = crate::agentscope::ScopeView::new(&scope, &now);
+            // The agent's merged branch goes with the scope; any refusal leaves it (DEF-051).
+            if let Some(repo) = repo {
+                let cadence = store
+                    .load_meta(p)
+                    .ok()
+                    .and_then(|m| m.config.cadence.main_branch.clone());
+                let main = cadence.unwrap_or_else(|| crate::coderepo::default_branch(repo));
+                view.branch_deleted = crate::agentscope::delete_agent_branch(&scope, repo, &main);
+            }
+            ser(&view)
         }
         ("POST", ["projects", p, "scopes", id, "renew"]) => {
             let hours = b
@@ -2737,6 +2768,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "revoked".into())
         ),
         ["projects", _p, "scopes", id, "renew"] => format!("renew agent scope {id}"),
+        ["projects", _p, "git", "tidy"] => "tidy merged branches".into(),
         ["projects", _p, "batch"] => body
             .and_then(|b| b.get("message").and_then(|m| m.as_str()).map(String::from))
             .unwrap_or_else(|| "batch update".into()),
@@ -3302,6 +3334,26 @@ mod tests {
 
     /// FEAT-213 R-1: one read reports the method's parts, the commit rules, diagram strictness,
     /// each coverage rule with what it leaves uncovered, and the board's push policy.
+    /// DEF-051: both tidy routes read or delete in the code repository, so without one they refuse.
+    #[test]
+    fn tidy_route_needs_a_repository() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-tidy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        for method in ["GET", "POST"] {
+            let err = dispatch(&store, method, "/projects/demo/git/tidy", Some(&json!({})))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("code repository"), "{method}: {err}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn guards_route_reports_every_guard_rail() {
         let dir =

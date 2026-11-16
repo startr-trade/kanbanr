@@ -1941,6 +1941,14 @@ enum GitCmd {
     /// Merge a release's fixes forward into the current line, naming the items they serve
     /// (FEAT-190). Never automatic: the move that integrated the fix says when it is needed.
     Forward { version: String },
+    /// List the merged branches that can go (finished items' branches and finished agents'
+    /// `worktree-agent-*` branches), and with --yes delete them locally (DEF-051). The remote is
+    /// never touched; each deleted branch prints its tip, so `git branch <name> <tip>` restores it.
+    Tidy {
+        /// Delete the listed branches. Without it nothing is deleted.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Compare the board with the branches (FEAT-191): integrated items not merged, commits on a
     /// line for unfinished work, branches naming nothing, release fixes not merged forward.
     /// Read-only; exits 1 when it finds an error.
@@ -2225,6 +2233,9 @@ fn command_access(cmd: &Command) -> Access {
             }
             GitCmd::Forward { .. } => {
                 Outside("`kanbanr git forward` merges outside the board's write path")
+            }
+            GitCmd::Tidy { .. } => {
+                Outside("`kanbanr git tidy` deletes local branches outside the board's write path")
             }
             GitCmd::CheckMsg { .. } | GitCmd::CheckBranch | GitCmd::CheckPush | GitCmd::Guard => {
                 Hook
@@ -3926,6 +3937,79 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 ),
             };
             print_write(cli, &resp, said);
+            Ok(())
+        }
+        GitCmd::Tidy { yes } => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            if !*yes {
+                let resp = client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))?;
+                if cli.json {
+                    println!("{}", pretty(&resp));
+                    return Ok(());
+                }
+                let v: Value = serde_json::from_str(&resp)?;
+                let list = v["candidates"].as_array().cloned().unwrap_or_default();
+                if list.is_empty() {
+                    println!("no merged branches to delete");
+                    return Ok(());
+                }
+                for c in &list {
+                    println!(
+                        "  {}  ({}; tip {})",
+                        c["branch"].as_str().unwrap_or_default(),
+                        c["why"].as_str().unwrap_or_default(),
+                        c["tip"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .get(..7)
+                            .unwrap_or_default()
+                    );
+                }
+                println!(
+                    "nothing deleted; run `kanbanr git tidy --yes` to delete these {}",
+                    list.len()
+                );
+                return Ok(());
+            }
+            let resp = client.write_in(
+                Method::Post,
+                &format!("/projects/{p}/git/tidy"),
+                Some(json!({})),
+                Some(&root),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                for d in v["deleted"].as_array().into_iter().flatten() {
+                    println!(
+                        "deleted {} (was {})",
+                        d["branch"].as_str().unwrap_or_default(),
+                        d["tip"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .get(..7)
+                            .unwrap_or_default()
+                    );
+                }
+                for k in v["skipped"].as_array().into_iter().flatten() {
+                    println!(
+                        "kept {}: {}",
+                        k["branch"].as_str().unwrap_or_default(),
+                        k["why"].as_str().unwrap_or_default()
+                    );
+                }
+                if v["deleted"].as_array().is_none_or(|d| d.is_empty())
+                    && v["skipped"].as_array().is_none_or(|d| d.is_empty())
+                {
+                    println!("no merged branches to delete");
+                }
+            }
+            if v["skipped"].as_array().is_some_and(|s| !s.is_empty()) {
+                std::process::exit(1);
+            }
             Ok(())
         }
         GitCmd::Model { sprints, releases } => {
@@ -8199,15 +8283,22 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             Ok(())
         }
         ScopeCmd::Revoke { id, reason } => {
-            let resp = client.write(
+            let repo = scm::repo_root();
+            let resp = client.write_in(
                 Method::Post,
                 &format!("{base}/{id}/revoke"),
                 Some(json!({ "reason": reason.clone().unwrap_or_default() })),
+                repo.as_deref(),
             )?;
+            let deleted = serde_json::from_str::<Value>(&resp)
+                .ok()
+                .and_then(|v| v["branch_deleted"].as_str().map(str::to_string))
+                .map(|b| format!("\ndeleted its merged agent branch {b}"))
+                .unwrap_or_default();
             print_scope(
                 &resp,
                 format!(
-                    "revoked {id}: nothing more is recorded under it\nthe agent's next tool call is refused"
+                    "revoked {id}: nothing more is recorded under it\nthe agent's next tool call is refused{deleted}"
                 ),
             )
         }
@@ -11906,6 +11997,16 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 }
                 print_catch_up(&v);
                 println!("  look back on it: `kanbanr retro --sprint {code}`");
+                // DEF-051: merged branches that can go, in one line. Silent when unreadable.
+                if let Some(root) = code_repo()
+                    && let Ok(t) = client.get_in(&format!("/projects/{p}/git/tidy"), Some(&root))
+                    && let Ok(t) = serde_json::from_str::<Value>(&t)
+                    && let Some(n) = t["candidates"].as_array().map(Vec::len).filter(|n| *n > 0)
+                {
+                    println!(
+                        "  {n} merged branches can go: `kanbanr git tidy` (lists them), then `--yes`"
+                    );
+                }
             }
         }
     }
@@ -12736,6 +12837,7 @@ Refs: kanbanr:FEAT-082/R-1""#;
             expires_at: "2099-01-02T00:00:00Z".into(),
             note: String::new(),
             worktree: Some(".claude/worktrees/agent-1".into()),
+            agent_branch: None,
             claimed_at: Some("2099-01-01T00:01:00Z".into()),
             revoked_at: revoked.then(|| "2099-01-01T01:00:00Z".to_string()),
             revoked_by: revoked.then(|| "V".to_string()),
