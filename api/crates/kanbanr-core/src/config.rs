@@ -1679,6 +1679,21 @@ impl ProjectConfig {
         self.paths.get(key.as_deref().unwrap_or("feature"))
     }
 
+    /// The gate an item of `kind` is judged against at `status` (FTR-019, DEF-069): the effective
+    /// gate, if it applies to the kind, with the method parts the kind's path leaves out removed by
+    /// `method::strip_gate`. None when the status has no gate for the kind.
+    pub fn gate_for_kind(&self, status: &str, kind: Option<&str>) -> Option<Gate> {
+        let mut gate = self
+            .effective_gates()
+            .get(status)
+            .filter(|g| g.applies_to(kind))
+            .cloned()?;
+        if let Some(path) = self.path_for(kind) {
+            crate::method::strip_gate(&mut gate, &path.method_off);
+        }
+        Some(gate)
+    }
+
     /// As [`ProjectConfig::transition_allowed`] for an item of `kind` (FTR-019). An item whose kind
     /// has a path moves only to the next or previous stage on it, to a no-op disposition, or back
     /// to the starting stage; an item off its path (its kind changed, or it sits in a no-op status)
@@ -2382,6 +2397,50 @@ mod tests {
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")
+    }
+
+    /// DEF-069 R-1: the gate a chore is judged against at its build stage has the parts its path
+    /// leaves out removed; an item with no path keeps them.
+    #[test]
+    fn gate_for_kind_strips_what_the_path_leaves_out() {
+        use crate::readiness::{Check, Condition};
+        // With the method, as a board is made: the `@build` fragment is what puts the Design
+        // section and the design-review sign-off on Implementation (`config_of` reads the bare
+        // preset, which has neither).
+        let togaf = preset("togaf").unwrap().into_config("p");
+        let names_design = |g: &Gate| {
+            g.requires.iter().any(|c| match c {
+                Condition::SpecSections { spec_sections } => spec_sections
+                    .iter()
+                    .any(|s| s.trim().eq_ignore_ascii_case("Design")),
+                _ => false,
+            })
+        };
+        let review = |g: &Gate| g.signoffs.iter().any(|s| s == "design-review");
+
+        let chore = togaf
+            .gate_for_kind("Implementation", Some("chore"))
+            .expect("Implementation has a gate for a chore");
+        assert!(!names_design(&chore), "{chore:?}");
+        assert!(!review(&chore), "{chore:?}");
+        assert!(
+            chore
+                .requires
+                .contains(&Condition::Check(Check::TestsNamed))
+        );
+        assert!(chore.requires.contains(&Condition::Check(Check::Approved)));
+
+        let feature = togaf
+            .gate_for_kind("Implementation", None)
+            .expect("Implementation has a gate for a feature");
+        assert!(names_design(&feature), "{feature:?}");
+        assert!(review(&feature), "{feature:?}");
+
+        assert_eq!(
+            togaf.gate_for_kind("Implementation", Some("Chore ")),
+            Some(chore)
+        );
+        assert_eq!(togaf.gate_for_kind("No Such", Some("chore")), None);
     }
 
     /// FTR-025 R-1: Migration finishes an item for the sprint views; Operations ships it.

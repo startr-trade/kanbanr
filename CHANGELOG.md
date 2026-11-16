@@ -13,6 +13,10 @@ All notable changes to kanbanr are documented here. The format follows
 - Setup can commit its `.kanbanr` marker, `CLAUDE.md` and `.gitignore` on the default branch of a
   repository that already has commits: the guard and the git hooks take that one `[no-ref]`
   commit, with the git model on or off, until the marker is committed (DEF-067).
+### Fixed
+
+- `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
+  is no longer warned that it has no Design section (DEF-069).
 
 ## [0.6.0] - 2026-11-14
 
