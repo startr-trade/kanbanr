@@ -1465,12 +1465,23 @@ impl Page<'_> {
     }
 
     /// Click the button whose label starts with `button`, within the card that names `subject`
-    /// when one is given. An error names what the page offered instead.
+    /// when one is given. With no such button, a checkbox whose accessible name starts with
+    /// `button` is clicked instead (FTR-063 T7: "Select all"); a button always wins over a
+    /// checkbox. An error names what the page offered instead.
     pub fn press(&self, button: &str, subject: Option<&str>) -> Result<()> {
         let js = format!(
             r#"(function(label, subject) {{
   const norm = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const all = Array.from(document.querySelectorAll('button'));
+  const boxName = c => {{
+    if (c.getAttribute('aria-label')) return c.getAttribute('aria-label');
+    const by = c.getAttribute('aria-labelledby');
+    if (by) return by.split(/\s+/).map(id => (document.getElementById(id) || {{}}).innerText || '').join(' ');
+    if (c.labels && c.labels.length) return Array.from(c.labels).map(l => l.innerText).join(' ');
+    return c.title || c.innerText || '';
+  }};
+  const boxes = Array.from(document.querySelectorAll('input[type=checkbox], [role=checkbox]'));
+  const inCardOrAll = list => subject ? list.find(inCard) : list[0];
   const named = all.filter(b => norm(b.innerText).startsWith(norm(label)));
   const inCard = b => {{
     let e = b.parentElement;
@@ -1482,9 +1493,13 @@ impl Page<'_> {
     }}
     return false;
   }};
-  const chosen = subject ? named.find(inCard) : named[0];
-  if (!chosen) return 'none: ' + all.map(b => norm(b.innerText)).filter(Boolean).join(' | ');
-  if (chosen.disabled) return 'disabled: ' + (chosen.title || '');
+  const chosen = inCardOrAll(named)
+    || inCardOrAll(boxes.filter(c => norm(boxName(c)).startsWith(norm(label))));
+  if (!chosen) return 'none: ' + all.map(b => norm(b.innerText))
+    .concat(boxes.map(c => norm(boxName(c))).filter(Boolean).map(n => n + ' (checkbox)'))
+    .filter(Boolean).join(' | ');
+  if (chosen.disabled || chosen.getAttribute('aria-disabled') === 'true')
+    return 'disabled: ' + (chosen.title || '');
   chosen.click();
   return 'clicked';
 }})({label}, {subject})"#,
@@ -2186,6 +2201,41 @@ pub(crate) mod tests {
                 assert!(
                     !approved_within(&monitor, Duration::from_secs(3)),
                     "the board is unchanged"
+                );
+            }
+        }
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FTR-063 R-3 (T7, for FTR-038's group view): a press names a checkbox by its accessible
+    /// name, its label's text here, and ticks it; the group's button then reads "Approve 1" for
+    /// the one waiting item, and a card's Approve is still the card's button. Without a browser
+    /// the test exercises the `NoBrowser` path and says so.
+    #[test]
+    fn a_press_ticks_a_checkbox_by_its_name() {
+        let (_run, base, monitor) = scratch_board("tick");
+        match Browser::open() {
+            Err(e) if is_no_browser(&e) => {
+                eprintln!("no browser on this machine: the press is the finding {e}");
+            }
+            Err(e) => panic!("{e}"),
+            Ok(browser) => {
+                let page = browser.page(&monitor.page_url("shop", "review")).unwrap();
+                let ticked = "String(Array.from(document.querySelectorAll('input[type=checkbox]'))\
+                              .some(c => c.checked))";
+                assert_eq!(page.eval_string(ticked).unwrap(), "false");
+                assert!(!page.text().unwrap().contains("Approve 1"));
+                page.press("Select all", None).unwrap();
+                assert_eq!(page.eval_string(ticked).unwrap(), "true");
+                page.settle(Duration::from_secs(5)).unwrap();
+                let text = page.text().unwrap();
+                assert!(text.contains("Approve 1"), "{text}");
+                // A press that matches a button takes the button: the card's Approve, not the box.
+                page.press("Approve", Some("FEAT-001")).unwrap();
+                assert!(
+                    approved_within(&monitor, Duration::from_secs(20)),
+                    "the card's Approve approved FEAT-001"
                 );
             }
         }
