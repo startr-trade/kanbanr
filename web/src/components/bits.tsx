@@ -162,7 +162,7 @@ export function FeatureCard({
   return (
     <Link className="card" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>
       <div className="card-code">{feature.code}</div>
-      <div className="card-title">{feature.title}</div>
+      <h3 className="card-title">{feature.title}</h3>
       <div className="card-meta">
         {gaps.length > 0 && (
           <span className="chip warn" title={`Not yet stated: ${gaps.map((g) => g.label).join(", ")}`}>

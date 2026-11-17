@@ -21,13 +21,17 @@ let diagramSeq = 0;
  *   and sanitised like the rest; their colours come from the monitor's theme (`styles.css`).
  * - References to the board (`FEAT-012`, `ADR-0005`, a doc path…) link to their pages, and a link
  *   into the monitor navigates in place rather than reloading it (FEAT-181).
+ * - Headings are shifted down by `headingOffset` (default 1), so the page's own title stays its
+ *   only h1 (DEF-082). `DocPage` passes 0 when the doc starts with an h1 and the page draws none.
  */
 export default function Markdown({
   source,
   resolveImage,
+  headingOffset = 1,
 }: {
   source: string;
   resolveImage?: (src: string) => string;
+  headingOffset?: 0 | 1 | 2;
 }) {
   const { project } = useParams();
   const index = useBoardIndex(project);
@@ -37,11 +41,11 @@ export default function Markdown({
   // the host for a file that is not there; the hash router then follows it.
   const html = useMemo(
     () =>
-      markdownToSafeHtml(source, resolveImage, DOMPurify, index).replace(
+      markdownToSafeHtml(source, resolveImage, DOMPurify, index, headingOffset).replace(
         /(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g,
         (_m, pre, path, post) => pre + appHref(path) + post,
       ),
-    [source, resolveImage, index],
+    [source, resolveImage, index, headingOffset],
   );
   const follow = (e: MouseEvent<HTMLDivElement>) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

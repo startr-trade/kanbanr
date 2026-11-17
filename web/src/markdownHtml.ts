@@ -47,6 +47,20 @@ function markInLink(token: Token, seen: WeakSet<object>) {
 }
 
 /**
+ * The parse options that shift every heading down by `offset`, capped at h6: the instance's own
+ * renderer (its link hook included) with `heading` overridden. None when `offset` is 0.
+ */
+function demoted(parser: Marked | typeof marked, offset: number): { renderer?: Renderer } {
+  if (offset <= 0) return {};
+  const base: Renderer = parser.defaults.renderer ?? new Renderer();
+  const renderer = Object.create(base) as Renderer;
+  renderer.heading = function (this: Renderer, text: string, level: number, raw: string) {
+    return Renderer.prototype.heading.call(this, text, Math.min(6, level + offset), raw);
+  };
+  return { renderer };
+}
+
+/**
  * Markdown to HTML that is safe to put in the page (FEAT-140).
  *
  * A board is shared through a git remote, so its documents and specs are written by everyone who
@@ -61,14 +75,20 @@ function markInLink(token: Token, seen: WeakSet<object>) {
  * With a board `index`, references to the board — `FEAT-012`, `FEAT-012/R-2`, `ADR-0005`, `G-1`,
  * `MS-004`, a doc path — become links to their pages, and one that points at nothing is classed
  * `broken` (FEAT-181). They are linked before sanitising, so they pass through DOMPurify too.
+ *
+ * Headings shift down by `headingOffset` (default 1), capped at h6, so a document's `# Title` sits
+ * under the page's own h1 and the page keeps one h1 (DEF-082): `# A` becomes `<h2>`. A page that
+ * draws no h1 of its own passes 0.
  */
 export function markdownToSafeHtml(
   source: string,
   resolveImage?: (src: string) => string,
   purifier: typeof DOMPurify = DOMPurify,
   index?: BoardIndex | null,
+  headingOffset = 1,
 ): string {
-  let out = (index ? linkerFor(index) : marked).parse(source, { async: false }) as string;
+  const parser = index ? linkerFor(index) : marked;
+  let out = parser.parse(source, { async: false, ...demoted(parser, headingOffset) }) as string;
   if (resolveImage) {
     out = out.replace(/(<img\b[^>]*?\bsrc=")([^"]+)(")/g, (m, pre, src, post) =>
       /^(https?:|data:|\/)/i.test(src) ? m : pre + resolveImage(src) + post,

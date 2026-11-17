@@ -240,7 +240,10 @@ summary:focus-visible,
 }
 .card:hover { border-color: var(--accent); text-decoration: none; }
 .card-code { font-size: var(--fs-1); color: var(--muted); font-family: ui-monospace, monospace; }
-.card-title { font-weight: 600; margin: 2px 0 6px; }
+/* A card's title is its h3, and a column's header its h2 (DEF-082); both keep the look they had
+   as plain text, so the size and margins are set here, not by the heading's defaults. */
+.card-title { font-size: var(--fs-2); font-weight: 600; margin: 2px 0 6px; }
+.col-title { font-size: var(--fs-2); font-weight: inherit; margin: 0; }
 .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .chip {

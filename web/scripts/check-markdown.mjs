@@ -53,7 +53,7 @@ for (const [needle, what] of mustNot) {
   if (html.toLowerCase().includes(needle)) problems.push(`kept ${what}`);
 }
 const must = [
-  ["<h1", "the heading"],
+  ["<h2", "the heading, demoted below the page title (DEF-082)"],
   ["<table", "the table"],
   ['class="language-mermaid"', "the mermaid block, for the diagram renderer"],
   ["<strong>bold</strong>", "bold text"],

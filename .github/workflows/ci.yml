@@ -370,6 +370,10 @@ jobs:
       # and one :focus-visible ring covers every focusable element (DEF-082).
       - name: The monitor always shows the keyboard focus ring
         run: npm run check:a11y-focus
+      # One h1 per page, markdown headings demoted below it, and headings on cards, columns and
+      # rows, so a screen reader can move through a page by its headings (DEF-082).
+      - name: The monitor's pages have one h1 and headed cards
+        run: npm run check:a11y-structure
       # A delegation whose grant cannot be checked, because the board's history cannot be read,
       # says so and why on the Review page, not "not granted through kanbanr" (DEF-080).
       - name: The Review page says a grant cannot be checked and why

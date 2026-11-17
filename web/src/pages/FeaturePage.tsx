@@ -108,7 +108,7 @@ export default function FeaturePage() {
       <section className="section">
         <h2>Specification</h2>
         {feature.specification.trim() ? (
-          <Markdown source={feature.specification} />
+          <Markdown source={feature.specification} headingOffset={1} />
         ) : (
           <p className="muted">No specification provided.</p>
         )}

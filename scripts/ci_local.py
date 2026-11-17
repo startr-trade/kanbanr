@@ -114,6 +114,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor's colours meet WCAG 2.1 AA contrast": LOCAL,
             "The monitor draws no text under 13 px": LOCAL,
             "The monitor always shows the keyboard focus ring": LOCAL,
+            "The monitor's pages have one h1 and headed cards": LOCAL,
             "The Review page says a grant cannot be checked and why": LOCAL,
             "The UI kit's accordion rows open on demand under a heading": LOCAL,
             "The UI kit's table sorts, filters and exports correctly": LOCAL,
