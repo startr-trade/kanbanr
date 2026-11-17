@@ -4434,6 +4434,10 @@
           "holds": {
             "type": "boolean"
           },
+          "implied": {
+            "description": "kanbanr asks it of this stage beyond the stage's own `requires`\n([`crate::releasegates::Cadence::implied_requires`], DEF-077), shown as \"(implied)\".",
+            "type": "boolean"
+          },
           "refs": {
             "description": "The requirements it names, as `CODE/R-n` (DEF-043): for `untested_accepted`, exactly what\nthe person accepts; for `later_tests_green`, what is not green yet.",
             "items": {

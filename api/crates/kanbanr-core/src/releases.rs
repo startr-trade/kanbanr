@@ -1358,6 +1358,10 @@ pub struct PlanCondition {
     /// the person accepts; for `later_tests_green`, what is not green yet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<String>,
+    /// kanbanr asks it of this stage beyond the stage's own `requires`
+    /// ([`crate::releasegates::Cadence::implied_requires`], DEF-077), shown as "(implied)".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub implied: bool,
 }
 
 /// One step a promotion takes, and what it will do (FEAT-212).
@@ -1812,6 +1816,7 @@ fn stage_gate_condition(
             )
         },
         refs: Vec::new(),
+        implied: false,
     }
 }
 
@@ -2063,6 +2068,17 @@ fn work_out(
             }
         }
     }
+    // The checks kanbanr asks of a stage entered beyond its own `requires` (DEF-077): under the git
+    // model, `items_merged` on the stage that moves main (or the cut). A move back enters nothing.
+    let mut implied: Vec<ReleaseCheck> = Vec::new();
+    for &i in &entered {
+        for c in cadence.implied_requires(i) {
+            if !requires.iter().any(|(x, _)| *x == c) {
+                requires.push((c, gates[i].0.clone()));
+                implied.push(c);
+            }
+        }
+    }
     // A release sent back by a merge is not cut for a commit that main and the gate have not
     // reached, whatever its stages require (DEF-031). The stage's own `requires` stay as they are.
     let returned = open_return(&release, &stages, cut_stage).map(|c| {
@@ -2224,7 +2240,7 @@ fn work_out(
                 } else if *c == ReleaseCheck::TagPassed {
                     tag_passed(store, id, cadence, &release).2
                 } else if *c == ReleaseCheck::ItemsMerged {
-                    merged_fix(&project, version)
+                    merged_fix(&project, version, &branch)
                 } else {
                     needs_repo_text(version, &stage)
                 };
@@ -2235,6 +2251,7 @@ fn work_out(
                     detail,
                     fix,
                     refs: Vec::new(),
+                    implied: implied.contains(c),
                 });
             }
             for (g, s, on_tag) in &stage_gates {
@@ -2629,7 +2646,7 @@ fn work_out(
                     }
                     ReleaseCheck::ItemsMerged => {
                         let (holds, detail) = items_merged(&project, version);
-                        (holds, detail, merged_fix(&project, version))
+                        (holds, detail, merged_fix(&project, version, &branch))
                     }
                     ReleaseCheck::Prepared => {
                         let fix = match stage_holding(ReleaseAction::Prepare) {
@@ -2776,6 +2793,7 @@ fn work_out(
                     detail,
                     fix: if holds { String::new() } else { fix },
                     refs: Vec::new(),
+                    implied: implied.contains(c),
                 });
             }
             for (g, s, on_tag) in &stage_gates {
@@ -2826,6 +2844,7 @@ fn work_out(
                 detail,
                 fix,
                 refs: Vec::new(),
+                implied: false,
             });
         }
     }
@@ -2897,6 +2916,7 @@ fn work_out(
                       --rev <sha>), then check again"
                     .to_string(),
                 refs,
+                implied: false,
             });
         }
     }
@@ -2917,6 +2937,7 @@ fn work_out(
                 detail: "every shipping requirement has a green test".to_string(),
                 fix: String::new(),
                 refs: Vec::new(),
+                implied: false,
             }
         } else {
             let mut refs: Vec<String> = u.iter().map(Untested::reference).collect();
@@ -2958,6 +2979,7 @@ fn work_out(
                         .to_string()
                 },
                 refs,
+                implied: false,
             }
         };
         conditions.push(condition);
@@ -3004,6 +3026,7 @@ fn work_out(
             detail,
             fix,
             refs: Vec::new(),
+            implied: false,
         });
     }
 
@@ -3338,7 +3361,9 @@ fn items_merged(project: &Project, version: &str) -> (bool, String) {
     }
 }
 
-fn merged_fix(project: &Project, version: &str) -> String {
+/// What to do about each planned item not merged into `branch`, the release's branch (DEF-077):
+/// the move that integrates it, from the project folder.
+fn merged_fix(project: &Project, version: &str, branch: &str) -> String {
     let roles = project.config.roles();
     let target = roles
         .status(crate::config::Role::Integrate)
@@ -3352,9 +3377,10 @@ fn merged_fix(project: &Project, version: &str) -> String {
     unmerged(project, version)
         .1
         .iter()
-        .map(|(c, _)| {
+        .map(|(c, status)| {
             format!(
-                "{c}: move it to {target} (that merges its branch), or plan it into another release"
+                "{c} is at {status}: integrate it into {branch} with `kanbanr feature move {c} \"{target}\"` \
+                 from the project folder (it merges {c}'s branch), or plan it into another release"
             )
         })
         .collect::<Vec<_>>()
@@ -8481,9 +8507,10 @@ pub(crate) mod tests {
     fn the_stage_that_tags_holds_a_merged_item_that_would_carry() {
         let (store, dir, repo) = togaf_staged("tag");
         let merged = togaf_item(&store, "Merged", "Migration");
-        let early = togaf_item(&store, "Early", "Implementation");
         go(&store, &repo, "candidate");
         go(&store, &repo, "main");
+        // Planned after main moved: main asks every planned item to be merged (DEF-077).
+        let early = togaf_item(&store, "Early", "Implementation");
         let plan = plan_to(&store, &repo, "tag");
         let c = merged_ship(&plan);
         assert!(!c.holds && c.stage == "tag", "{c:?}");
@@ -8516,9 +8543,13 @@ pub(crate) mod tests {
     #[test]
     fn the_stage_that_ships_holds_a_merged_item_that_would_carry() {
         let (store, dir, repo) = togaf_staged("ship");
-        let item = togaf_item(&store, "Late", "Implementation");
+        // Main asks every planned item to be merged (DEF-077): the release goes to main with only
+        // an item set aside, and the late one is planned once main has moved.
+        let dropped = togaf_item(&store, "Dropped", "Implementation");
+        store.move_feature("shop", &dropped, "No Action").unwrap();
         go(&store, &repo, "candidate");
         go(&store, &repo, "main");
+        let item = togaf_item(&store, "Late", "Implementation");
         go(&store, &repo, "tag");
         let sha = v1(&store).tag_commit;
         now_result(&store, &sha, true);
@@ -9226,7 +9257,10 @@ pub(crate) mod tests {
         assert!(!c.holds);
         assert_eq!(c.detail, format!("{code} is at Scheduled"));
         assert!(
-            c.fix.contains(&format!("{code}: move it to Completed")),
+            c.fix.contains(&format!(
+                "{code} is at Scheduled: integrate it into release/v1 with \
+                 `kanbanr feature move {code} \"Completed\"`"
+            )),
             "{}",
             c.fix
         );
@@ -9249,6 +9283,188 @@ pub(crate) mod tests {
         assert_eq!(c.detail, "1 planned item(s), all merged");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // ---- DEF-077: the stage that moves main implies items_merged under the git model ----
+
+    /// This board's stage shape: candidate asks nothing, main moves main, production tags.
+    const BOARD_SHAPE: &str = "release_stages: [candidate, main, production]\n\
+         release_gates:\n  candidate: {}\n  \
+         main: { requires: [items_finished], on_enter: [move_main] }\n  \
+         production: { on_enter: [tag] }\n";
+
+    /// The same, with `items_merged` declared on main.
+    const BOARD_SHAPE_DECLARED: &str = "release_stages: [candidate, main, production]\n\
+         release_gates:\n  candidate: {}\n  \
+         main: { requires: [items_finished, items_merged], on_enter: [move_main] }\n  \
+         production: { on_enter: [tag] }\n";
+
+    /// v1 shipped, then its patch v1.0.1 at candidate under the git model, with one planned fix
+    /// at Scheduled (no open task, so `items_finished` holds) whose branch is one commit ahead of
+    /// `release/v1.0.1` and not merged into it: DEF-067 in v0.6.1 (DEF-077).
+    fn unmerged_fix_board(tag: &str, shape: &str) -> (Store, PathBuf, PathBuf, String) {
+        let (store, dir, repo) = board_and_repo(tag);
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        configure(&store, shape);
+        for to in ["candidate", "main", "production"] {
+            super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo)).unwrap();
+        }
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.git_model = true;
+        store.set_cadence("shop", None, c).unwrap();
+        super::add_patch(
+            &store,
+            "shop",
+            "v1.0.1",
+            "",
+            "",
+            "v1",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        // A declared gate on the end status, so the item is judged by it (it asks nothing) and
+        // not by the readiness check a board with no gates applies.
+        let mut gates = store.load("shop").unwrap().config.gates.clone();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                purpose: "integrated and released".into(),
+                roles: vec!["integrate".into(), "release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("shop", gates).unwrap();
+        let code = store
+            .add_feature("shop", "The fix", "", "M", None)
+            .unwrap()
+            .code;
+        store
+            .move_feature_approved("shop", &code, "Scheduled", None)
+            .unwrap();
+        super::plan(&store, "shop", "v1.0.1", std::slice::from_ref(&code)).unwrap();
+        let project = store.load("shop").unwrap();
+        let title = project.feature(&code).unwrap().title.clone();
+        let name = crate::scm::branch_for(project.config.branch_pattern(), &code, &title);
+        coderepo::git(&repo, &["checkout", "-q", "-b", &name, "release/v1.0.1"]).unwrap();
+        commit_file(&repo, "fix.rs", "fixed\n", "the fix");
+        coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        (store, dir, repo, code)
+    }
+
+    /// The plan to promote v1.0.1 to main.
+    fn plan_to_main(store: &Store, repo: &Path) -> super::ReleasePlan {
+        super::plan_promotion(
+            store,
+            "shop",
+            "v1.0.1",
+            Some("main"),
+            "",
+            Some(repo),
+            super::Fetch::No,
+        )
+        .unwrap()
+    }
+
+    /// The plan's `items_merged` conditions.
+    fn merged_conditions(plan: &super::ReleasePlan) -> Vec<super::PlanCondition> {
+        plan.conditions
+            .iter()
+            .filter(|c| c.check == crate::releasegates::ReleaseCheck::ItemsMerged)
+            .cloned()
+            .collect()
+    }
+
+    /// DEF-077 R-1: a finished fix whose branch is not merged into the patch's branch keeps the
+    /// patch from main, although `items_finished` holds.
+    #[test]
+    fn promote_to_main_is_not_ready_while_a_finished_fix_is_unmerged() {
+        let (store, dir, repo, code) = unmerged_fix_board("def077-unmerged", BOARD_SHAPE);
+        let plan = plan_to_main(&store, &repo);
+        let finished = plan
+            .conditions
+            .iter()
+            .find(|c| c.check == crate::releasegates::ReleaseCheck::ItemsFinished)
+            .expect("main requires items_finished");
+        assert!(finished.holds, "{finished:?}");
+        assert!(!plan.ready, "{:?}", plan.missing);
+        let merged = merged_conditions(&plan);
+        assert_eq!(merged.len(), 1, "{:?}", plan.conditions);
+        assert_eq!(merged[0].stage, "main");
+        assert!(!merged[0].holds);
+        assert!(merged[0].detail.contains(&code), "{}", merged[0].detail);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-077 R-1: once the fix is integrated, the condition holds and the patch is ready.
+    #[test]
+    fn a_patch_with_its_fix_merged_is_ready_for_main() {
+        let (store, dir, repo, code) = unmerged_fix_board("def077-merged", BOARD_SHAPE);
+        let moved = crate::gitmodel::move_item(
+            &store,
+            "shop",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            moved.merged.expect("its branch merged").into,
+            "release/v1.0.1"
+        );
+        let plan = plan_to_main(&store, &repo);
+        let merged = merged_conditions(&plan);
+        assert_eq!(merged.len(), 1, "{:?}", plan.conditions);
+        assert!(merged[0].holds, "{:?}", merged[0]);
+        assert!(plan.ready, "{:?}", plan.missing);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-077 R-2: the fix names the move that integrates the item into the release's branch.
+    #[test]
+    fn the_unmerged_fix_names_the_move_that_integrates_it() {
+        let (store, dir, repo, code) = unmerged_fix_board("def077-fix", BOARD_SHAPE);
+        let plan = plan_to_main(&store, &repo);
+        let fix = &merged_conditions(&plan)[0].fix;
+        assert!(
+            fix.contains(&format!("kanbanr feature move {code} \"Completed\"")),
+            "{fix}"
+        );
+        assert!(fix.contains("release/v1.0.1"), "{fix}");
+        assert!(plan.missing.contains(fix), "{:?}", plan.missing);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-077 R-5: the implied condition is marked implied; declared on main, it is not, and it
+    /// is listed once.
+    #[test]
+    fn an_implied_condition_is_marked_implied_on_the_plan() {
+        let (store, dir, repo, _) = unmerged_fix_board("def077-implied", BOARD_SHAPE);
+        let merged = merged_conditions(&plan_to_main(&store, &repo));
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].implied, "{:?}", merged[0]);
+        let json = serde_json::to_value(&merged[0]).unwrap();
+        assert_eq!(json["implied"], true);
+        clean(&dir, &repo);
+
+        let (store, dir, repo, _) = unmerged_fix_board("def077-declared", BOARD_SHAPE_DECLARED);
+        let plan = plan_to_main(&store, &repo);
+        let merged = merged_conditions(&plan);
+        assert_eq!(merged.len(), 1, "not doubled: {:?}", plan.conditions);
+        assert!(!merged[0].implied);
+        assert!(
+            serde_json::to_value(&merged[0])
+                .unwrap()
+                .get("implied")
+                .is_none()
+        );
+        // Every other condition is the stage's own.
+        assert!(plan.conditions.iter().all(|c| !c.implied));
+        clean(&dir, &repo);
     }
 
     fn release_at(stages: &[&str]) -> super::Release {
