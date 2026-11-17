@@ -1833,19 +1833,167 @@ fn stage_gate_condition(
 
 /// The link from a patch's repository notes at `path` to its parent's (DEF-078): the parent's
 /// recorded notes path, else the notes template `template` expanded for the parent.
+/// `None` when the parent has no recorded notes and no template is configured.
 fn parent_notes_link(
-    template: &str,
+    template: Option<&str>,
     path: &str,
     parent: &Release,
 ) -> std::result::Result<Option<String>, String> {
     use crate::releaseprep as prep;
-    let to = if parent.notes_path.is_empty() {
-        let ph = prep::Placeholders::new(&parent.version, &parent.name, &today_ymd())?;
-        prep::expand(template, &ph)
-    } else {
-        parent.notes_path.clone()
+    let to = match template {
+        _ if !parent.notes_path.is_empty() => parent.notes_path.clone(),
+        Some(t) => {
+            let ph = prep::Placeholders::new(&parent.version, &parent.name, &today_ymd())?;
+            prep::expand(t, &ph)
+        }
+        None => return Ok(None),
     };
     Ok(Some(prep::relative_link(path, &to)))
+}
+
+/// The items cutting `version` now would ship, in code order: the cut's own rule (DEF-078).
+fn shipping_items(
+    store: &Store,
+    id: &str,
+    project: &Project,
+    version: &str,
+) -> Result<Vec<FeatureItem>> {
+    let codes: Vec<String> = cut_preview(store, id, version)?
+        .into_iter()
+        .filter(|p| p.ships)
+        .map(|p| p.code)
+        .collect();
+    let mut items: Vec<FeatureItem> = project
+        .features
+        .iter()
+        .filter(|f| codes.contains(&f.code))
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| a.code.cmp(&b.code));
+    Ok(items)
+}
+
+/// Draft `version`'s repository notes again (DEF-078) when they are an untouched draft whose
+/// codes differ from what `cut_preview` says would ship: one commit onto the release branch,
+/// without a checkout, naming `item`, whose merge asked for it. `Ok(None)` when there is nothing
+/// to do: no notes configured or written, notes written by hand, the draft already current, the
+/// release shipped or tagged. Refused, writing nothing, when the branch is checked out in a
+/// worktree.
+pub fn redraft_notes(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: &Path,
+    item: &str,
+) -> Result<Option<String>> {
+    let project = cadence_on(store, id)?;
+    let releases = load(store, id)?;
+    let release = releases
+        .iter()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let Some(stale) = stale_draft(store, id, &project, &releases, release, repo)? else {
+        return Ok(None);
+    };
+    if let Some(worktree) = coderepo::worktree_of(repo, &release.branch) {
+        return Err(CoreError::Unsupported(format!(
+            "{} is checked out in {}: kanbanr drafts the notes again without checking anything \
+             out, so switch that worktree to another branch first",
+            release.branch,
+            worktree.display()
+        )));
+    }
+    let StaleDraft {
+        path,
+        parent_link: link,
+        ships,
+        ..
+    } = stale;
+    let parent = releases
+        .iter()
+        .find(|r| !release.parent.is_empty() && r.version == release.parent);
+    let codes: Vec<String> = ships.iter().map(|f| f.code.clone()).collect();
+    let new = notes(
+        release,
+        parent,
+        link.as_deref(),
+        &ships,
+        &[],
+        &crate::gantt::fmt_date(crate::sprints::today()),
+    );
+    let from = if codes.is_empty() {
+        "no finished item".to_string()
+    } else {
+        codes.join(", ")
+    };
+    let message = format!(
+        "Release {version}: draft notes again\n\nDrafted from {from} after {item} merged.\n\n\
+         [no-ref] release preparation, made by kanbanr\nKanbanr-Release: {version}\n"
+    );
+    coderepo::commit_files(repo, &release.branch, &[(path.clone(), new)], &message)?;
+    Ok(Some(path))
+}
+
+/// A release's repository notes that are an untouched draft no longer naming what ships
+/// (DEF-078).
+struct StaleDraft {
+    /// The notes path.
+    path: String,
+    parent_link: Option<String>,
+    /// The codes the draft was written from.
+    drafted: Vec<String>,
+    /// What cutting now would ship, in code order.
+    ships: Vec<FeatureItem>,
+}
+
+/// `release`'s notes at its branch tip, when they are a stale untouched draft (DEF-078). `None`
+/// when there is nothing to draft again: no notes configured or written, notes written by hand,
+/// the draft current, the release shipped or tagged.
+fn stale_draft(
+    store: &Store,
+    id: &str,
+    project: &Project,
+    releases: &[Release],
+    release: &Release,
+    repo: &Path,
+) -> Result<Option<StaleDraft>> {
+    use crate::releaseprep as prep;
+    let template = project.config.cadence.release_prepare.notes.clone();
+    if release.state == ReleaseState::Shipped
+        || !release.tagged_at.is_empty()
+        || release.branch.is_empty()
+        || (template.is_none() && release.notes_path.is_empty())
+    {
+        return Ok(None);
+    }
+    let ph = prep::Placeholders::new(&release.version, &release.name, &today_ymd())
+        .map_err(CoreError::Unsupported)?;
+    let src = notes_source(store, id, project, release, &ph, repo)?;
+    let Some(text) = src.text else {
+        return Ok(None);
+    };
+    let parent = releases
+        .iter()
+        .find(|r| !release.parent.is_empty() && r.version == release.parent);
+    let parent_link = match parent {
+        Some(p) => {
+            parent_notes_link(template.as_deref(), &src.path, p).map_err(CoreError::Unsupported)?
+        }
+        None => None,
+    };
+    let Some(drafted) = draft_codes(&text, project, release, parent, parent_link.as_deref()) else {
+        return Ok(None);
+    };
+    let ships = shipping_items(store, id, project, &release.version)?;
+    if ships.iter().map(|f| &f.code).eq(drafted.iter()) {
+        return Ok(None);
+    }
+    Ok(Some(StaleDraft {
+        path: src.path,
+        parent_link,
+        drafted,
+        ships,
+    }))
 }
 
 fn today_ymd() -> String {
@@ -3667,7 +3815,7 @@ fn work_prepare(
             .iter()
             .find(|r| !release.parent.is_empty() && r.version == release.parent);
         let link = match parent {
-            Some(p) => parent_notes_link(n, &path, p)?,
+            Some(p) => parent_notes_link(Some(n), &path, p)?,
             None => None,
         };
         let ships: Vec<String> = shipping.iter().map(|f| f.code.clone()).collect();
@@ -9586,6 +9734,171 @@ pub(crate) mod tests {
             .filter(|c| c.check == crate::releasegates::ReleaseCheck::ItemsMerged)
             .cloned()
             .collect()
+    }
+
+    // ---- DEF-078: a patch's draft notes are drafted again when its fix merges ----
+
+    /// The stage shape of [`unmerged_fix_board`], with candidate preparing the release.
+    const PREPARING_SHAPE: &str = "release_stages: [candidate, main, production]\n\
+         release_gates:\n  candidate: { on_enter: [branch, prepare] }\n  \
+         main: { requires: [items_finished], on_enter: [move_main] }\n  \
+         production: { on_enter: [tag] }\n";
+
+    /// v1 shipped, then its patch v1.0.1 added under the git model with `prepare` on, so its
+    /// draft notes say nothing was finished; then one fix planned into it whose branch is one
+    /// commit ahead of `release/v1.0.1` (as [`unmerged_fix_board`], DEF-078).
+    fn drafted_patch_board(tag: &str) -> (Store, PathBuf, PathBuf, String) {
+        let (store, dir, repo) = board_and_repo(tag);
+        assert_own(&store, &dir, &repo);
+        prepare_fixture(&repo);
+        configure(&store, BOARD_SHAPE);
+        for to in ["candidate", "main", "production"] {
+            super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo)).unwrap();
+        }
+        configure(&store, &format!("{PREPARING_SHAPE}{PREPARE}"));
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.git_model = true;
+        store.set_cadence("shop", None, c).unwrap();
+        super::add_patch(
+            &store,
+            "shop",
+            "v1.0.1",
+            "",
+            "",
+            "v1",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        let draft = patch_notes(&repo);
+        assert!(
+            draft.contains("Nothing planned for this release was finished."),
+            "{draft}"
+        );
+        let mut gates = store.load("shop").unwrap().config.gates.clone();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                purpose: "integrated and released".into(),
+                roles: vec!["integrate".into(), "release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("shop", gates).unwrap();
+        let code = store
+            .add_feature("shop", "The fix", "", "M", None)
+            .unwrap()
+            .code;
+        store
+            .move_feature_approved("shop", &code, "Scheduled", None)
+            .unwrap();
+        super::plan(&store, "shop", "v1.0.1", std::slice::from_ref(&code)).unwrap();
+        let project = store.load("shop").unwrap();
+        let title = project.feature(&code).unwrap().title.clone();
+        let name = crate::scm::branch_for(project.config.branch_pattern(), &code, &title);
+        coderepo::git(&repo, &["checkout", "-q", "-b", &name, "release/v1.0.1"]).unwrap();
+        commit_file(&repo, "fix.rs", "fixed\n", "the fix");
+        coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        (store, dir, repo, code)
+    }
+
+    /// v1.0.1's notes at the tip of its branch.
+    fn patch_notes(repo: &Path) -> String {
+        let tip = coderepo::rev_parse(repo, "release/v1.0.1").unwrap();
+        coderepo::read_blob(repo, &tip, "docs/releases/v1.0.1.md")
+            .unwrap()
+            .expect("v1.0.1's notes")
+            .1
+    }
+
+    fn commits_on(repo: &Path, branch: &str) -> usize {
+        coderepo::git(repo, &["rev-list", "--count", branch])
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    /// DEF-078 R-2: the fix merging into the patch's branch drafts its untouched notes again, in
+    /// one more commit, naming the fix.
+    #[test]
+    fn a_merge_into_the_release_drafts_untouched_notes_again() {
+        let (store, dir, repo, code) = drafted_patch_board("def078-redraft");
+        let moved = crate::gitmodel::move_item(
+            &store,
+            "shop",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        let merged_at = moved
+            .merged
+            .as_ref()
+            .expect("its branch merged")
+            .sha
+            .clone();
+        assert_eq!(
+            moved.notes_redrafted.as_deref(),
+            Some("docs/releases/v1.0.1.md"),
+            "{:?}",
+            moved.note
+        );
+        let text = patch_notes(&repo);
+        assert!(text.contains(&format!("### {code} — The fix")), "{text}");
+        assert!(!text.contains("Nothing planned"), "{text}");
+        assert!(
+            text.contains("Patch of v1. Everything in [v1](v1.md) is included; this patch adds:"),
+            "{text}"
+        );
+        // One more commit after the merge, made by kanbanr.
+        assert_eq!(
+            commits_on(&repo, "release/v1.0.1"),
+            commits_on(&repo, &merged_at) + 1
+        );
+        let message =
+            coderepo::git(&repo, &["log", "-1", "--format=%B", "release/v1.0.1"]).unwrap();
+        assert!(
+            message.starts_with("Release v1.0.1: draft notes again"),
+            "{message}"
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-078 R-2: notes written by hand are never drafted again.
+    #[test]
+    fn notes_written_by_hand_are_never_drafted_again() {
+        let (store, dir, repo, code) = drafted_patch_board("def078-hand");
+        let hand = "# v1.0.1\n\nHand-written.\n";
+        super::set_release_notes(
+            &store,
+            "shop",
+            "v1.0.1",
+            Some(&repo),
+            Some(hand),
+            None,
+            "Ada",
+        )
+        .unwrap();
+        let moved = crate::gitmodel::move_item(
+            &store,
+            "shop",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        assert!(moved.merged.is_some());
+        assert_eq!(moved.notes_redrafted, None, "{:?}", moved.note);
+        assert_eq!(patch_notes(&repo), hand);
+        clean(&dir, &repo);
     }
 
     /// DEF-077 R-1: a finished fix whose branch is not merged into the patch's branch keeps the
