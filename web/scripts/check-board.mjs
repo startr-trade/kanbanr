@@ -43,6 +43,7 @@ import {
   isGroupOpen,
   laneInsight,
   laneKinds,
+  lastClosedSprint,
   releaseInProgress,
   seenKey,
   sortItems,
@@ -459,6 +460,26 @@ function makeBoard(n) {
   const fin = laneOf(boardLanes(input(index([item("K-1", "Completed", { entered_on: day(3) }), item("K-3", "Completed", { entered_on: day(1) }), item("K-2", "Completed", { entered_on: day(1) })]), {}, { sort: "priority" })), "Completed");
   eq(problems, "finished: newest first, ties by code", groupItems(fin, "done"), ["K-2", "K-3", "K-1"]);
   report("web::check_board_groups_order_by_closeness_newest_or_priority", problems);
+}
+
+/** A legacy config names no terminal states: Completed is still the finished lane (FTR-078 R-4). */
+{
+  const problems = [];
+  const legacy = config({ terminal_states: [] });
+  eq(problems, "legacy lane kinds", laneKinds(legacy), { Planned: "start", "In Progress": "active", Completed: "finished" });
+  const sprints = [{ code: "SP-003", name: "", start: day(60), end: day(30), state: "closed" }];
+  const items = [
+    item("L-1", "Completed", { sprint: "SP-003", entered_on: day(2) }),
+    item("L-2", "Completed", { entered_on: day(3) }),
+    item("L-3", "In Progress", { sprint: "SP-003" }),
+  ];
+  const idx = index(items, { config: { ...legacy, cadence: { sprints: true, releases: false, git_model: false } }, sprints });
+  const lane = laneOf(boardLanes(input(idx, {})), "Completed");
+  eq(problems, "legacy finished lane kind", lane?.kind, "finished");
+  eq(problems, "legacy finished groups", lane?.groups.map((g) => g.key), ["done"]);
+  eq(problems, "legacy finished items", groupItems(lane, "done").sort(), ["L-1", "L-2"]);
+  eq(problems, "legacy last closed sprint", lastClosedSprint(idx), { code: "SP-003", finished: 1 });
+  report("web::check_board_completed_is_finished_on_a_legacy_config", problems);
 }
 
 // ---- helpers the page draws with (kept with the model) --------------------------------------

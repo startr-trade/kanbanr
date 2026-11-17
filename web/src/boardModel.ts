@@ -152,9 +152,21 @@ const ORDER: Record<LaneKind, GroupKey[]> = {
   finished: ["done"],
 };
 
+/**
+ * The statuses that end an item: the config's `terminal_states` when it names any, else what the core
+ * falls back to for a board made before they existed (`graph::is_terminal_status`): the status named
+ * "Completed" and the no-op states (FTR-078).
+ */
+export function terminalStates(config: IndexConfig): string[] {
+  const named = config.terminal_states ?? [];
+  if (named.length > 0) return named;
+  const completed = (config.statuses ?? []).filter((s) => s.toLowerCase() === "completed");
+  return [...completed, ...(config.no_op_states ?? [])];
+}
+
 /** Terminal displayed statuses are finished; the first other displayed status starts; the rest are active. */
 export function laneKinds(config: IndexConfig): Record<string, LaneKind> {
-  const terminal = config.terminal_states ?? [];
+  const terminal = terminalStates(config);
   const out: Record<string, LaneKind> = {};
   let started = false;
   for (const s of displayedStates(config)) {
@@ -315,7 +327,7 @@ export function lastClosedSprint(index: CompactIndex): { code: string; finished:
   const closed = (index.sprints ?? []).filter((s) => s.state === "closed");
   if (closed.length === 0) return null;
   const last = closed.reduce((m, s) => (s.end > m.end ? s : m));
-  const terminal = index.config.terminal_states ?? [];
+  const terminal = terminalStates(index.config);
   return { code: last.code, finished: index.items.filter((i) => i.sprint === last.code && terminal.includes(i.status)).length };
 }
 
@@ -576,7 +588,7 @@ export function boardLanes(input: BoardInput): Lane[] {
   const { project, index, readiness, scopes, critical, seen, now, sprint, text, sort } = input;
   const config = index.config;
   const usesSprints = config.cadence.sprints === true;
-  const terminal = config.terminal_states ?? [];
+  const terminal = terminalStates(config);
   const kinds = laneKinds(config);
   const byCode = new Map(index.items.map((i) => [i.code, i]));
   const agents = new Map<string, AgentScope>();
