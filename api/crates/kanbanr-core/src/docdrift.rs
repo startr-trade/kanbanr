@@ -17,10 +17,11 @@
 
 use crate::error::{CoreError, Result};
 use crate::refs::{self, BoardIndex, Ref};
-use crate::{Store, coderepo};
+use crate::{Store, coderepo, git, prepared};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -534,6 +535,18 @@ fn parse_log(out: &str, item: Option<&str>) -> Vec<Change> {
     changes
 }
 
+#[cfg(test)]
+thread_local! {
+    static ITEMS_LOGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The code-repository logs `items_changes` ran on this thread, so a test is not counted against
+/// by the others running beside it.
+#[cfg(test)]
+pub(crate) fn items_logs_here() -> u64 {
+    ITEMS_LOGS.with(std::cell::Cell::get)
+}
+
 /// The names in the diff of every non-merge commit whose `Refs:` trailer names one of `codes`
 /// (an item's current code and its earlier ones, FTR-056), newest first. A commit that changed no
 /// recognised name is left out. Each change carries the first code, the item's current one.
@@ -577,6 +590,62 @@ pub fn item_changes(repo: &Path, codes: &[&str], since: Option<&str>) -> Result<
     }
     let out = coderepo::git(repo, &args)?;
     Ok(parse_log(&out, Some(code)))
+}
+
+/// The changes of several items from one `git log`: the log of [`item_changes`] over every code of
+/// every item asked, each commit attributed to the items its `Refs:` trailers name (an earlier code
+/// counts for its item, FTR-056). Each item's list equals `item_changes(repo, <its codes>, None)`;
+/// an item with no change has no entry. `codes` are item codes (current, or an earlier one).
+pub(crate) fn items_changes(
+    repo: &Path,
+    board: &crate::Project,
+    codes: &[&str],
+) -> Result<BTreeMap<String, Vec<Change>>> {
+    let mut wanted: BTreeSet<String> = BTreeSet::new();
+    let mut every: BTreeSet<String> = BTreeSet::new();
+    for code in codes {
+        let item = crate::aliases::find(board, code);
+        wanted.insert(item.map_or(*code, |f| f.code.as_str()).to_string());
+        match item {
+            Some(f) => every.extend(f.codes().map(str::to_string)),
+            None => {
+                every.insert((*code).to_string());
+            }
+        }
+    }
+    for c in &every {
+        if !valid_code(c) {
+            return Err(CoreError::Refused(format!(
+                "{c:?} is not an item code (letters, a dash, digits)"
+            )));
+        }
+    }
+    if every.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let grep = format!(
+        "--grep=^Refs:.*kanbanr:({})([^0-9A-Za-z]|$)",
+        every.iter().cloned().collect::<Vec<_>>().join("|")
+    );
+    #[cfg(test)]
+    ITEMS_LOGS.with(|c| c.set(c.get() + 1));
+    let out = coderepo::git(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--all",
+            "-E",
+            &grep,
+            "--format=@@@%H %cI%n%B%n@@@PATCH",
+            "-p",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+        ],
+    )?;
+    Ok(attribute_log(&out, board, Some(&wanted)))
 }
 
 // ---- scanning a text ------------------------------------------------------------------------
@@ -789,8 +858,33 @@ fn doc_title(path: &str, text: &str) -> String {
 /// itself is never in the list.
 pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
     let p = store.load(project)?;
-    let feature = p.feature(code)?;
+    p.feature(code)?;
     let index = BoardIndex::of(store, &p)?;
+    let adrs = crate::adr::list(store, project)?;
+    let docs = read_docs(store, project)?;
+    linked_in(&p, &index, &adrs, &docs, code)
+}
+
+/// Every doc of the project with its text; one that cannot be read is left out.
+fn read_docs(store: &Store, project: &str) -> Result<Vec<(String, String)>> {
+    let mut docs: Vec<(String, String)> = Vec::new();
+    for path in store.list_docs(project)? {
+        if let Ok(text) = store.read_doc(project, &path) {
+            docs.push((path, text));
+        }
+    }
+    Ok(docs)
+}
+
+/// [`linked`] over the project, its index, its ADRs and its docs, read once by the caller.
+pub(crate) fn linked_in(
+    p: &crate::store::Project,
+    index: &BoardIndex,
+    adrs: &[crate::adr::Adr],
+    docs: &[(String, String)],
+    code: &str,
+) -> Result<Vec<Linked>> {
+    let feature = p.feature(code)?;
     let mut out: BTreeMap<(TargetKind, String), (Target, BTreeSet<String>)> = BTreeMap::new();
     let mut add = |target: Target, via: &str| {
         out.entry((target.kind, target.id.clone()))
@@ -799,14 +893,7 @@ pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
             .insert(via.to_string());
     };
 
-    let adrs = crate::adr::list(store, project)?;
     let adr_at = |path: &str| adrs.iter().find(|a| a.path == path);
-    let mut docs: Vec<(String, String)> = Vec::new();
-    for path in store.list_docs(project)? {
-        if let Ok(text) = store.read_doc(project, &path) {
-            docs.push((path, text));
-        }
-    }
     let doc_target = |path: &str, text: &str| -> Target {
         match adr_at(path) {
             Some(adr) => Target {
@@ -840,7 +927,7 @@ pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
             }
         }
     }
-    for (path, text) in &docs {
+    for (path, text) in docs {
         // 2. Front matter.
         let listed = ["items", "refs"]
             .iter()
@@ -849,7 +936,7 @@ pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
             add(doc_target(path, text), "front matter items");
         }
         // 4. A link in the doc.
-        if refs::find(crate::docs::split_front_matter(text).1, &index)
+        if refs::find(crate::docs::split_front_matter(text).1, index)
             .iter()
             .any(|f| is_this(&f.reference))
         {
@@ -873,14 +960,14 @@ pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
         if other.code == code || p.config.is_no_op(&other.status) {
             continue;
         }
-        if refs::find(&other.specification, &index)
+        if refs::find(&other.specification, index)
             .iter()
             .any(|f| is_this(&f.reference))
         {
             add(item_target(other), "link in the spec of that item");
         }
     }
-    for found in refs::find(&feature.specification, &index) {
+    for found in refs::find(&feature.specification, index) {
         if let Ref::Item { code: c, .. } = &found.reference {
             if c == code {
                 continue;
@@ -1026,6 +1113,11 @@ pub fn target_versions(board: &Path, file: &Path, current: &str) -> Vec<Version>
             text,
         });
     }
+    with_uncommitted(versions, current)
+}
+
+/// `versions` with a last `uncommitted` one when the working text differs from the newest.
+fn with_uncommitted(mut versions: Vec<Version>, current: &str) -> Vec<Version> {
     if versions.is_empty() {
         return versions;
     }
@@ -1329,6 +1421,193 @@ pub fn changed_at(board: &Path, files: &[&Path]) -> Option<String> {
 /// The flags for one item: every linked text that names something the item changed after the text
 /// last changed. Needs the code repository (`repo`). Sorted by target kind and id.
 pub fn flags_for_item(store: &Store, project: &str, code: &str, repo: &Path) -> Result<Vec<Flag>> {
+    let ctx = drift_ctx(store, project, &[code], repo)?;
+    flags_for_item_in(&ctx, code)
+}
+
+/// What the drift of several items is judged with, read once (DEF-106): the board, its index, ADRs
+/// and docs, the board repository's history and uncommitted paths, the prepared records, and every
+/// item's changes from one log of the code repository.
+pub struct DriftCtx {
+    board: crate::store::Project,
+    index: BoardIndex,
+    adrs: Vec<crate::adr::Adr>,
+    docs: Vec<(String, String)>,
+    history: Option<Arc<git::PathHistory>>,
+    dirty: std::collections::HashSet<String>,
+    changes: BTreeMap<String, Vec<Change>>,
+    records: prepared::Records,
+    data_dir: PathBuf,
+    /// Each item's yaml and spec file, by code.
+    item_files: BTreeMap<String, Vec<PathBuf>>,
+}
+
+impl DriftCtx {
+    /// The prepared records, for [`crate::review::split_settled_in`].
+    pub(crate) fn records(&self) -> &prepared::Records {
+        &self.records
+    }
+
+    /// The board the context was read from.
+    pub(crate) fn board(&self) -> &crate::store::Project {
+        &self.board
+    }
+}
+
+/// Read what the drift of `codes` needs, once: one `store.load`, one index, one ADR list, one read
+/// of every doc, one walk of the board's history, one `git status`, one read of the prepared
+/// records and one log of the code repository `repo`.
+pub fn drift_ctx(store: &Store, project: &str, codes: &[&str], repo: &Path) -> Result<DriftCtx> {
+    let board = store.load(project)?;
+    let index = BoardIndex::of(store, &board)?;
+    let adrs = crate::adr::list(store, project)?;
+    let docs = read_docs(store, project)?;
+    let data_dir = store.data_dir().to_path_buf();
+    let history = git::path_history(&data_dir).ok();
+    let dirty = git::dirty_paths(&data_dir);
+    let records = prepared::read_all(store, project).unwrap_or_default();
+    let changes = items_changes(repo, &board, codes)?;
+    let item_files = board
+        .features
+        .iter()
+        .map(|f| {
+            let yaml = store.feature_path(project, &f.status, &f.code);
+            let spec = yaml
+                .parent()
+                .map(|d| d.join("features-spec").join(format!("{}.md", f.code)));
+            let mut files = vec![yaml];
+            files.extend(spec);
+            (f.code.clone(), files)
+        })
+        .collect();
+    Ok(DriftCtx {
+        board,
+        index,
+        adrs,
+        docs,
+        history,
+        dirty,
+        changes,
+        records,
+        data_dir,
+        item_files,
+    })
+}
+
+/// [`changed_at`] over the shared history: now when any file is uncommitted, else the time of the
+/// newest commit touching one. Without a history it asks git, as `changed_at` does.
+fn changed_at_in(ctx: &DriftCtx, files: &[&Path]) -> Option<String> {
+    let rels: Option<Vec<String>> = files
+        .iter()
+        .map(|f| git::rel_path(&ctx.data_dir, f))
+        .collect();
+    let (Some(history), Some(rels)) = (&ctx.history, rels) else {
+        return changed_at(&ctx.data_dir, files);
+    };
+    if rels.iter().any(|r| ctx.dirty.contains(r)) {
+        return OffsetDateTime::now_utc().format(&Rfc3339).ok();
+    }
+    let rels: Vec<&str> = rels.iter().map(String::as_str).collect();
+    history
+        .last_change(&rels)
+        .map(|c| c.at.clone())
+        .filter(|at| !at.is_empty())
+}
+
+/// [`target_versions`] over the shared history: the same rule, read from the walk and the object
+/// store instead of a `git log --follow` and a `git show` per version.
+fn target_versions_in(ctx: &DriftCtx, file: &Path, current: &str) -> Vec<Version> {
+    let (Some(history), Some(rel)) = (&ctx.history, git::rel_path(&ctx.data_dir, file)) else {
+        return target_versions(&ctx.data_dir, file, current);
+    };
+    let mut commits = history.versions(&rel);
+    commits.truncate(MAX_VERSIONS);
+    commits.reverse();
+    let mut versions: Vec<Version> = Vec::new();
+    for v in commits {
+        if v.blob.is_empty() {
+            continue;
+        }
+        let Some(text) = history.blob_text(&ctx.data_dir, &v.blob) else {
+            continue;
+        };
+        if versions
+            .last()
+            .is_some_and(|last| last.text.trim() == text.trim())
+        {
+            continue;
+        }
+        versions.push(Version {
+            sha: v.sha,
+            at: v.at,
+            subject: v.subject,
+            text,
+        });
+    }
+    with_uncommitted(versions, current)
+}
+
+/// [`flags_for_item`] over a shared context: the same flags, for an item `ctx` was made for.
+pub fn flags_for_item_in(ctx: &DriftCtx, code: &str) -> Result<Vec<Flag>> {
+    let current = ctx.board.feature(code).map_or(code, |f| f.code.as_str());
+    let Some(changes) = ctx.changes.get(current).filter(|c| !c.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut flags = Vec::new();
+    for l in linked_in(&ctx.board, &ctx.index, &ctx.adrs, &ctx.docs, current)? {
+        let (text, files) = match l.target.kind {
+            TargetKind::Item => {
+                let Ok(f) = ctx.board.feature(&l.target.id) else {
+                    continue;
+                };
+                (
+                    f.specification.clone(),
+                    ctx.item_files.get(&f.code).cloned().unwrap_or_default(),
+                )
+            }
+            _ => {
+                let Some((_, text)) = ctx.docs.iter().find(|(p, _)| *p == l.target.path) else {
+                    continue;
+                };
+                let file = ctx
+                    .data_dir
+                    .join("projects")
+                    .join(&ctx.board.id)
+                    .join("docs")
+                    .join(&l.target.path);
+                (text.clone(), vec![file])
+            }
+        };
+        let refs: Vec<&Path> = files.iter().map(|f| f.as_path()).collect();
+        let Some(at) = changed_at_in(ctx, &refs) else {
+            continue;
+        };
+        let versions = match l.target.kind {
+            TargetKind::Item => files
+                .get(1)
+                .map(|spec| target_versions_in(ctx, spec, &text))
+                .unwrap_or_default(),
+            _ => files
+                .first()
+                .map(|file| target_versions_in(ctx, file, &text))
+                .unwrap_or_default(),
+        };
+        if let Some(flag) = flag_for(&l, &text, &versions, &at, changes) {
+            flags.push(flag);
+        }
+    }
+    flags.sort_by(|a, b| (a.target.kind, &a.target.id).cmp(&(b.target.kind, &b.target.id)));
+    Ok(flags)
+}
+
+/// Today's body of [`flags_for_item`], kept as the reference the shared context is checked against.
+#[cfg(test)]
+pub(crate) fn flags_for_item_unshared(
+    store: &Store,
+    project: &str,
+    code: &str,
+    repo: &Path,
+) -> Result<Vec<Flag>> {
     // FTR-056: a trailer under an earlier code of the item counts for it.
     let board = store.load_meta(project)?;
     let item = board.feature(code).ok();
@@ -1553,6 +1832,16 @@ fn board_changes(
             &since_arg,
         ],
     )?;
+    Ok(attribute_log(&out, board, None))
+}
+
+/// The per-item changes in a `git log --format=@@@%H %cI%n%B%n@@@PATCH -p -U0` output, split by the
+/// commits' `Refs:` trailers. `wanted` keeps only those items (their current codes).
+fn attribute_log(
+    out: &str,
+    board: &crate::Project,
+    wanted: Option<&BTreeSet<String>>,
+) -> BTreeMap<String, Vec<Change>> {
     #[derive(PartialEq)]
     enum In {
         Message,
@@ -1567,6 +1856,7 @@ fn board_changes(
         let items: BTreeSet<String> = refs_in_message(message)
             .into_iter()
             .map(|c| crate::aliases::current(board, &c).map_or(c.clone(), str::to_string))
+            .filter(|c| wanted.is_none_or(|w| w.contains(c)))
             .collect();
         if items.is_empty() {
             return;
@@ -1610,7 +1900,7 @@ fn board_changes(
     if started {
         flush(&header, &message, &patch);
     }
-    Ok(by_item)
+    by_item
 }
 
 /// One flag per text, whichever items flagged it.
@@ -2429,6 +2719,177 @@ mod tests {
         assert!(item_changes(&dir, &[], None).is_err());
         assert!(item_changes(&dir, &["DEF-1", "x; rm"], None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board of three items and a code repository, for the shared-context tests (DEF-106): FEAT-1
+    /// and FEAT-2 (renamed DEF-2 after its commits, so one trailer names its earlier code) list
+    /// docs, one of them shared, FEAT-3's spec links FEAT-1, a flagged doc is edited after the
+    /// change and another is edited and not committed.
+    fn shared_fixture(tag: &str) -> (Store, PathBuf, PathBuf) {
+        let (store, dir) = board(tag);
+        for (code, affects) in [
+            ("FEAT-1", vec!["design/a.md", "design/shared.md"]),
+            ("FEAT-2", vec!["design/b.md", "design/shared.md"]),
+        ] {
+            let item = store
+                .add_feature("demo", code, "Spec.", "M", Some(code.into()))
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(crate::models::FeatureDefinition {
+                        statement: code.into(),
+                        affects_docs: affects.into_iter().map(String::from).collect(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        store
+            .add_feature(
+                "demo",
+                "Third",
+                "Names --one here. See [F](/p/demo/feature/FEAT-1).",
+                "M",
+                Some("FEAT-3".into()),
+            )
+            .unwrap();
+        for (doc, text) in [
+            ("design/a.md", "# A\n\nUse --one and --shared-one.\n"),
+            ("design/b.md", "# B\n\nUse --two.\n"),
+            ("design/shared.md", "# Shared\n\nUse --one or --two.\n"),
+        ] {
+            store.write_doc("demo", doc, text).unwrap();
+        }
+        git_env(&dir, &["add", "-A"], None);
+        git_env(
+            &dir,
+            &["commit", "-q", "-m", "docs"],
+            Some("2026-11-01T10:00:00+00:00"),
+        );
+
+        let repo = scratch(&format!("{tag}-code"));
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        code_commit(
+            &repo,
+            "src/a.rs",
+            "let a = \"--one\";\n",
+            "one\n\nRefs: kanbanr:FEAT-1",
+            "2026-11-05T10:00:00+00:00",
+        );
+        code_commit(
+            &repo,
+            "src/b.rs",
+            "let b = \"--two\";\n",
+            "two\n\nRefs: kanbanr:FEAT-2/R-1",
+            "2026-11-06T10:00:00+00:00",
+        );
+        code_commit(
+            &repo,
+            "src/c.rs",
+            "let c = \"--shared-one\";\n",
+            "both\n\nRefs: kanbanr:FEAT-1, kanbanr:FEAT-2",
+            "2026-11-07T10:00:00+00:00",
+        );
+        code_commit(
+            &repo,
+            "src/d.rs",
+            "let d = \"--decoy\";\n",
+            "decoy\n\nRefs: kanbanr:FEAT-12",
+            "2026-11-08T10:00:00+00:00",
+        );
+        // FEAT-2 is renamed after its commits were made under the earlier code.
+        store
+            .edit_feature("demo", "FEAT-2", None, None, None, Some("DEF-2".into()))
+            .unwrap();
+        // A flagged doc is edited after the change and committed; another is edited, not committed.
+        store
+            .write_doc(
+                "demo",
+                "design/a.md",
+                "# A\n\nUse --one, --shared-one and more.\n",
+            )
+            .unwrap();
+        git_env(&dir, &["add", "-A"], None);
+        git_env(
+            &dir,
+            &["commit", "-q", "-m", "edit a"],
+            Some("2026-11-10T10:00:00+00:00"),
+        );
+        store
+            .write_doc(
+                "demo",
+                "design/shared.md",
+                "# Shared\n\nUse --one, --two, edited.\n",
+            )
+            .unwrap();
+        (store, dir, repo)
+    }
+
+    /// Flags with the time of an uncommitted edit ("now" at each read) made equal.
+    fn steady(mut flags: Vec<Flag>) -> Vec<Flag> {
+        for f in &mut flags {
+            if f.edits.iter().any(|e| e.sha.is_empty()) {
+                f.target_changed_at = "now".into();
+                for e in f.edits.iter_mut().filter(|e| e.sha.is_empty()) {
+                    e.at = "now".into();
+                }
+            }
+        }
+        flags
+    }
+
+    /// DEF-106 R-6: the shared context gives, for each item, the flags `flags_for_item` gave.
+    #[test]
+    fn shared_context_gives_the_flags_of_flags_for_item() {
+        let (store, _dir, repo) = shared_fixture("shared-flags");
+        let codes = ["FEAT-1", "DEF-2", "FEAT-3"];
+        let ctx = drift_ctx(&store, "demo", &codes, &repo).unwrap();
+        let mut total = 0;
+        for code in codes {
+            let shared = steady(flags_for_item_in(&ctx, code).unwrap());
+            let unshared = steady(flags_for_item_unshared(&store, "demo", code, &repo).unwrap());
+            assert_eq!(shared, unshared, "{code}");
+            // And the public one, which now delegates.
+            assert_eq!(
+                steady(flags_for_item(&store, "demo", code, &repo).unwrap()),
+                unshared
+            );
+            total += unshared.len();
+        }
+        assert!(total >= 4, "the fixture flags texts: {total}");
+        assert!(
+            flags_for_item_in(&ctx, "FEAT-1")
+                .unwrap()
+                .iter()
+                .any(|f| !f.edits.is_empty()),
+            "an edit after the change is listed"
+        );
+        // An earlier code asks the same item.
+        assert_eq!(
+            steady(flags_for_item_in(&ctx, "DEF-2").unwrap()),
+            steady(flags_for_item_unshared(&store, "demo", "FEAT-2", &repo).unwrap())
+        );
+    }
+
+    /// DEF-106 R-6: one code log, attributed to each item, is every item's own log.
+    #[test]
+    fn one_code_log_attributes_changes_as_per_item_logs() {
+        let (store, _dir, repo) = shared_fixture("shared-log");
+        let board = store.load("demo").unwrap();
+        let before = items_logs_here();
+        let shared = items_changes(&repo, &board, &["FEAT-1", "DEF-2", "FEAT-3"]).unwrap();
+        assert_eq!(items_logs_here() - before, 1, "one log for every item");
+        for item in ["FEAT-1", "DEF-2", "FEAT-3"] {
+            let f = board.feature(item).unwrap();
+            let codes: Vec<&str> = f.codes().collect();
+            let own = item_changes(&repo, &codes, None).unwrap();
+            assert_eq!(shared.get(item).cloned().unwrap_or_default(), own, "{item}");
+        }
+        assert_eq!(shared["FEAT-1"].len(), 2);
+        assert_eq!(shared["DEF-2"].len(), 2, "its earlier code's commits too");
+        assert!(!shared.contains_key("FEAT-3"));
     }
 
     /// FTR-013 R-2: the five sources, each target once with its reasons.

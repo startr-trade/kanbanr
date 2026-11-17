@@ -130,11 +130,35 @@ pub fn split_settled(
     code: &str,
     flags: Vec<crate::docdrift::Flag>,
 ) -> (Vec<crate::docdrift::Flag>, Vec<SettledText>) {
+    if flags.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let records = crate::prepared::read_all(store, p).unwrap_or_default();
+    match store.load_meta(p) {
+        Ok(board) => split_settled_in(&records, &board, code, flags),
+        Err(_) => split_with(Vec::new(), flags),
+    }
+}
+
+/// [`split_settled`] over the prepared records and the project, read once by the caller (DEF-106).
+pub fn split_settled_in(
+    records: &crate::prepared::Records,
+    board: &crate::store::Project,
+    code: &str,
+    flags: Vec<crate::docdrift::Flag>,
+) -> (Vec<crate::docdrift::Flag>, Vec<SettledText>) {
     let settlements = if flags.is_empty() {
         Vec::new()
     } else {
-        crate::prepared::settlements(store, p, code).unwrap_or_default()
+        crate::prepared::settlements_in(records, board, code)
     };
+    split_with(settlements, flags)
+}
+
+fn split_with(
+    settlements: Vec<crate::prepared::Prepared>,
+    flags: Vec<crate::docdrift::Flag>,
+) -> (Vec<crate::docdrift::Flag>, Vec<SettledText>) {
     let mut left = Vec::new();
     let mut settled = Vec::new();
     for flag in flags {
@@ -367,6 +391,13 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
         .iter()
         .filter_map(|f| inputs.entry_for(store, p, f))
         .collect();
+    // Pass 2 (DEF-106): the drift of every item waiting on `docs-folded`, from one shared context.
+    if let Some(repo) = repo {
+        let wanting: Vec<usize> = (0..pending.len())
+            .filter(|i| inputs.needs_drift(&pending[*i]))
+            .collect();
+        fill_drift(store, p, repo, &mut pending, &wanting);
+    }
     // Work already built without agreement comes first (FEAT-109), then work being built
     // without it, then work that has not started (FEAT-078 R-2). Finished work whose approval
     // lapsed follows all live decisions (DEF-013). The release question comes after every
@@ -393,7 +424,49 @@ pub fn entry(
 ) -> Result<Option<ReviewEntry>> {
     let inputs = Inputs::load(store, p, repo)?;
     let f = inputs.project.feature(code)?;
-    Ok(inputs.entry_for(store, p, f))
+    let mut entries: Vec<ReviewEntry> = inputs.entry_for(store, p, f).into_iter().collect();
+    if let Some(repo) = repo
+        && entries.first().is_some_and(|e| inputs.needs_drift(e))
+    {
+        fill_drift(store, p, repo, &mut entries, &[0]);
+    }
+    Ok(entries.pop())
+}
+
+/// Fill `to_check` and `settled` (or `drift_skipped`) of the entries at `which`, which wait on
+/// `docs-folded` with a code repository: one [`crate::docdrift::drift_ctx`] for all of them.
+fn fill_drift(
+    store: &Store,
+    p: &str,
+    repo: &std::path::Path,
+    entries: &mut [ReviewEntry],
+    which: &[usize],
+) {
+    if which.is_empty() {
+        return;
+    }
+    let codes: Vec<String> = which.iter().map(|i| entries[*i].code.clone()).collect();
+    let refs: Vec<&str> = codes.iter().map(String::as_str).collect();
+    let ctx = match crate::docdrift::drift_ctx(store, p, &refs, repo) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            for i in which {
+                entries[*i].drift_skipped = Some(format!("the drift check failed: {e}"));
+            }
+            return;
+        }
+    };
+    for i in which {
+        let code = entries[*i].code.clone();
+        match crate::docdrift::flags_for_item_in(&ctx, &code) {
+            Ok(flags) => {
+                let (left, settled) = split_settled_in(ctx.records(), ctx.board(), &code, flags);
+                entries[*i].to_check = Some(left);
+                entries[*i].settled = settled;
+            }
+            Err(e) => entries[*i].drift_skipped = Some(format!("the drift check failed: {e}")),
+        }
+    }
 }
 
 /// How many flagged texts a docs-folded sign-off still waits on Claude to settle (FTR-038): the
@@ -489,6 +562,15 @@ impl Inputs {
             decisions: crate::decisions::load(store, p).unwrap_or_default(),
             now: crate::now_rfc3339(),
         })
+    }
+
+    /// Whether `e` waits on `docs-folded` with a code repository, so its drift is read in the
+    /// second pass.
+    fn needs_drift(&self, e: &ReviewEntry) -> bool {
+        self.ctx.code_repo.is_some()
+            && e.signoffs_needed
+                .iter()
+                .any(|s| s == crate::method::DOCS_FOLDED)
     }
 
     /// The entry for `f`, or `None` when it asks nothing.
@@ -671,17 +753,9 @@ impl Inputs {
             {
                 match ctx.code_repo.as_deref() {
                     None => (None, Vec::new(), Some(DRIFT_SKIPPED.to_string())),
-                    Some(repo) => match crate::docdrift::flags_for_item(store, p, &f.code, repo) {
-                        Ok(flags) => {
-                            let (left, settled) = split_settled(store, p, &f.code, flags);
-                            (Some(left), settled, None)
-                        }
-                        Err(e) => (
-                            None,
-                            Vec::new(),
-                            Some(format!("the drift check failed: {e}")),
-                        ),
-                    },
+                    // Left to the second pass of `pending`/`entry`, which reads the drift of
+                    // every such item once (DEF-106).
+                    Some(_) => (None, Vec::new(), None),
                 }
             } else {
                 (None, Vec::new(), None)
@@ -960,6 +1034,117 @@ mod tests {
         let report =
             crate::readiness::check_board(&store, "demo", Some(&code), Some(&repo)).unwrap();
         assert!(report.items[0].texts_to_settle.is_empty());
+    }
+
+    /// DEF-106 R-5: three items waiting on `docs-folded`, each linking four texts that name
+    /// something it changed, cost one walk of the board's history and one log of the code
+    /// repository, not one of each per item and per text.
+    #[test]
+    fn the_queue_walks_board_history_once_for_every_docs_folded_item() {
+        use crate::docdrift::testkit::{code_commit, scratch};
+        let dir = scratch("queue-walk");
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::config::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                signoffs: vec!["docs-folded".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let mut codes = Vec::new();
+        for i in 0..3 {
+            let f = store
+                .add_feature("demo", &format!("Item {i}"), "# x", "M", None)
+                .unwrap();
+            let def: crate::models::FeatureDefinition = crate::yaml::from_str(
+                "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    tests:\n      - name: t::x\n        kind: unit\n        state: planned\n",
+            )
+            .unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(def))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada").unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+            store
+                .add_task(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "one",
+                    None,
+                    &crate::store::TaskFields::default(),
+                )
+                .unwrap();
+            store
+                .set_task_state(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "T1",
+                    crate::models::TaskState::Completed,
+                )
+                .unwrap();
+            for j in 0..4 {
+                store
+                    .write_doc(
+                        "demo",
+                        &format!("design/d{i}-{j}.md"),
+                        &format!(
+                            "---\nitems: [{}]\n---\n\n# D\n\nRun with --flag-{i}-{j}.\n",
+                            f.code
+                        ),
+                    )
+                    .unwrap();
+            }
+            codes.push(f.code);
+        }
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        let repo = scratch("queue-walk-code");
+        crate::docdrift::testkit::git_env(&repo, &["init", "-q", "-b", "main"], None);
+        for (i, code) in codes.iter().enumerate() {
+            let body: String = (0..4)
+                .map(|j| format!("let a{j} = \"--flag-{i}-{j}\";\n"))
+                .collect();
+            code_commit(
+                &repo,
+                &format!("src/f{i}.rs"),
+                &body,
+                &format!("add\n\nRefs: kanbanr:{code}"),
+                "2099-01-01T00:00:00+00:00",
+            );
+        }
+
+        let walks = crate::git::path_history_walks_here();
+        let logs = crate::docdrift::items_logs_here();
+        let queue = pending(&store, "demo", Some(&repo)).unwrap();
+        let mine: Vec<&ReviewEntry> = queue.iter().filter(|e| codes.contains(&e.code)).collect();
+        assert_eq!(mine.len(), 3, "{queue:?}");
+        for e in &mine {
+            assert_eq!(e.to_check.as_ref().map(Vec::len), Some(4), "{}", e.code);
+        }
+        assert_eq!(crate::git::path_history_walks_here() - walks, 1);
+        assert_eq!(crate::docdrift::items_logs_here() - logs, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FTR-006 R-9: an item at the design role naming `architecture/context.md` gets the baseline

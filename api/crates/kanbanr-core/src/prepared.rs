@@ -1189,22 +1189,28 @@ pub fn checked_of(r: &Prepared, flag: &crate::docdrift::Flag) -> crate::models::
 /// The open `text-check` records of `item`, newest first. A newer open one for the same target
 /// supersedes an older one; none is deleted, and the drift check is not run here.
 pub fn settlements(store: &Store, p: &str, item: &str) -> Result<Vec<Prepared>> {
-    let (all, _) = read_all(store, p)?;
-    // FTR-056: a record made under an earlier code of the item is the item's.
+    let all = read_all(store, p)?;
     let board = store.load_meta(p)?;
-    let item = crate::aliases::current(&board, item).unwrap_or(item);
+    Ok(settlements_in(&all, &board, item))
+}
+
+/// [`settlements`] over records and a project already read, so a queue judges every item against
+/// one read (DEF-106).
+pub fn settlements_in(all: &Records, board: &crate::store::Project, item: &str) -> Vec<Prepared> {
+    // FTR-056: a record made under an earlier code of the item is the item's.
+    let item = crate::aliases::current(board, item).unwrap_or(item);
     let mut out: Vec<Prepared> = Vec::new();
-    for (r, answer) in all.into_iter().rev() {
-        let of = crate::aliases::current(&board, &r.subject.item).unwrap_or(&r.subject.item);
+    for (r, answer) in all.0.iter().rev() {
+        let of = crate::aliases::current(board, &r.subject.item).unwrap_or(&r.subject.item);
         if r.kind != "text-check" || of != item || answer.is_some() {
             continue;
         }
         if out.iter().any(|n| n.subject.target == r.subject.target) {
             continue;
         }
-        out.push(r);
+        out.push(r.clone());
     }
-    Ok(out)
+    out
 }
 
 /// Where a record stands (pure): answered; a kind this version does not know; replaced by a newer
