@@ -10,11 +10,14 @@
 //   web::baseline_page_sits_under_the_architecture_area (R-6) — nav.ts's Architecture area holds
 //     the Baseline entry, linking /p/:project/baseline, no other area does, main.tsx routes it, and
 //     the page marks that entry active.
+//   web::releases_page_shows_the_baselines_stage_gates (R-3) — stageGateLines names each gate the
+//     baseline requires at a release stage as "requires `sast` (baseline B-007)", in stage order,
+//     and the Releases page renders them.
 //
 // Usage: npm run check:baseline
 import { readFileSync } from "node:fs";
 import { NAV, activeEntry } from "../src/nav.ts";
-import { areaRows, chosenId, entryLine, revisionAsPrepared } from "../src/baseline.ts";
+import { areaRows, chosenId, entryLine, revisionAsPrepared, stageGateLines } from "../src/baseline.ts";
 import { closeRender, render } from "./lib/render.mjs";
 
 let failed = false;
@@ -266,6 +269,36 @@ const view = {
   const main = read("main.tsx");
   if (!/path: "p\/:project\/baseline", element: <BaselinePage \/>/.test(main)) problems.push("main.tsx does not route p/:project/baseline to BaselinePage");
   report("web::baseline_page_sits_under_the_architecture_area", problems, "Architecture › Baseline links /p/:project/baseline, routed and marked active.");
+}
+
+// R-3: the gates the baseline requires at release stages, as the Releases page shows them.
+{
+  const problems = [];
+  const cadence = {
+    release_stages: ["candidate", "main", "production"],
+    release_gates: {
+      production: { requires: ["pushed"], gates: [{ gate: "sast", from: "B-007" }] },
+      main: { gates: [{ gate: "ci", from: "B-002" }] },
+      candidate: { requires: ["items_merged"] },
+    },
+  };
+  const got = stageGateLines(cadence);
+  const want = [
+    { stage: "main", text: "requires `ci` (baseline B-002)" },
+    { stage: "production", text: "requires `sast` (baseline B-007)" },
+  ];
+  if (!same(got, want)) problems.push(`stageGateLines gave ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+  if (stageGateLines({ release_stages: ["a"], release_gates: { a: {} } }).length !== 0) problems.push("a stage with no baseline gates gave a line");
+  if (stageGateLines(undefined).length !== 0) problems.push("no cadence gave a line");
+  const page = read("pages/ReleasesPage.tsx");
+  if (!/<BaselineStageGates\b/.test(page)) problems.push("ReleasesPage.tsx does not render BaselineStageGates");
+  const part = read("pages/releases/BaselineStageGates.tsx");
+  if (!/stageGateLines\(/.test(part)) problems.push("BaselineStageGates.tsx does not use stageGateLines");
+  report(
+    "web::releases_page_shows_the_baselines_stage_gates",
+    problems,
+    "each baseline stage gate reads \"requires `<gate>` (baseline B-n)\" on the Releases page, in stage order.",
+  );
 }
 
 await closeRender();

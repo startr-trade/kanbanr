@@ -615,7 +615,17 @@ export interface ProjectConfig {
     /** Branching follows the git model the cadence implies (FEAT-189). */
     git_model?: boolean;
     /** Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). */
-    release_gates?: Record<string, { purpose?: string; requires?: string[]; after?: string[]; on_enter?: string[] }>;
+    release_gates?: Record<
+      string,
+      {
+        purpose?: string;
+        requires?: string[];
+        after?: string[];
+        on_enter?: string[];
+        /** Gates the engineering baseline requires here, each with the entry that promised it (FTR-033). */
+        gates?: { gate: string; from: string }[];
+      }
+    >;
     /** What a release's `prepare` action commits onto `release/<V>` (FEAT-212). */
     release_prepare?: {
       version_files?: { path: string; match?: string }[];

@@ -104,3 +104,25 @@ export function adrHref(project: string, adr: string, adrs: { id: string; path: 
   if (!found || found.path.split("/").includes("..")) return null;
   return `/p/${encodeURIComponent(project)}/docs/file/${found.path.split("/").map(encodeURIComponent).join("/")}`;
 }
+
+/** The stages a release moves through when the project names none (FEAT-183), as the Releases page has them. */
+const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
+
+/**
+ * Each gate the engineering baseline requires at a release stage, in stage order, as the Releases
+ * page shows it: "requires `sast` (baseline B-007)" (FTR-033). Empty without a cadence or gates.
+ */
+export function stageGateLines(
+  cadence:
+    | { release_stages?: string[]; release_gates?: Record<string, { gates?: { gate: string; from: string }[] }> }
+    | undefined,
+): { stage: string; text: string }[] {
+  if (!cadence?.release_gates) return [];
+  const stages = cadence.release_stages?.length ? cadence.release_stages : DEFAULT_STAGES;
+  return stages.flatMap((stage) =>
+    (cadence.release_gates?.[stage]?.gates ?? []).map((g) => ({
+      stage,
+      text: `requires \`${g.gate}\` (baseline ${g.from})`,
+    })),
+  );
+}

@@ -9,6 +9,7 @@ import { unshownFor } from "../prepared";
 import { ReleaseButton } from "./releases/ReleaseActions";
 import { ReleaseNotesSection } from "./releases/ReleaseNotesSection";
 import { PreparedNotRequired } from "./releases/ReleaseBody";
+import { BaselineStageGates } from "./releases/BaselineStageGates";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
@@ -125,6 +126,7 @@ export default function ReleasesPage() {
         <h1>Releases</h1>
         <LiveDot />
       </div>
+      <BaselineStageGates project={project} cadence={config.cadence} />
       {list.length === 0 ? (
         <p className="muted">
           No releases yet — <code>kanbanr release add v0.1.0 --target YYYY-MM-DD</code>.

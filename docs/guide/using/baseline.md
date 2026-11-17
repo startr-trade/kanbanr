@@ -174,8 +174,13 @@ project's `cadence.release_gates`, marked with the entry it came from.
 
 Promoting a release into that stage is then refused until a passed result for the gate is recorded
 for the release's commit: "stage main requires a passed `sast` result for the release tip (B-007)".
+The Releases page and `kanbanr release stages` show each such gate under its stage, as "requires
+`sast` (baseline B-007)".
+
 So the baseline becomes the pipeline's to-do list: the gates it names are the steps the pipeline
-must record before the first release. A revision that supersedes or withdraws the entry,
+must record before the first release. Until a result of that gate is recorded on the board at all,
+`kanbanr check` says so: "the baseline requires the `sast` gate at main; nothing records it yet:
+add the pipeline step (see the practice text) or revise the entry". A revision that supersedes or withdraws the entry,
 or removes its pack, removes the gate again; a gate removed by hand is reported by `kanbanr doctor`.
 
 ## The commands

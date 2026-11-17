@@ -326,6 +326,10 @@ pub struct ReleaseStageView {
     /// [`Cadence::implied_requires`]. Derived from the cadence, never written into config.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implied: Vec<ReleaseCheck>,
+    /// The gates the engineering baseline requires here (FTR-033), each with the entry that
+    /// promised it: shown as "requires `sast` (baseline B-007)".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<StageGate>,
 }
 
 impl ReleaseGate {
@@ -357,6 +361,7 @@ impl Cadence {
                 cut: i == cut,
                 after_cut: i > cut,
                 implied: self.implied_requires(i),
+                gates: g.gates,
             })
             .collect()
     }
