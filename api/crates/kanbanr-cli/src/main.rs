@@ -10472,14 +10472,34 @@ fn scope_drift(
 fn scope_drift_text(client: &Backend, p: &str, brief: bool) -> anyhow::Result<String> {
     use std::fmt::Write as _;
     let drift = scope_drift(client, p, brief)?;
+    let footprints = scope_footprints(client, p);
     let mut out = String::new();
-    if drift.is_empty() && !brief {
+    if drift.is_empty() && footprints.is_empty() && !brief {
         out.push_str("no agent work is ahead of the board\n");
     }
     for d in &drift {
         let _ = writeln!(out, "{}", d.line());
     }
+    // A task whose commits touched files it did not declare, or left its files untouched
+    // (FTR-060): one line each under --brief, one per kind otherwise.
+    for f in &footprints {
+        if brief {
+            let _ = writeln!(out, "{}", f.line());
+        } else {
+            for l in f.lines() {
+                let _ = writeln!(out, "{l}");
+            }
+        }
+    }
     Ok(out)
+}
+
+/// The task footprints that drifted (FTR-060); none outside a git repository or when git cannot
+/// be read, as `scope drift --brief` treats branch drift.
+fn scope_footprints(client: &Backend, p: &str) -> Vec<kanbanr_core::agentscope::Footprint> {
+    scm::repo_root()
+        .and_then(|root| kanbanr_core::agentscope::footprints(client.store(), p, &root).ok())
+        .unwrap_or_default()
 }
 
 /// Search features with rich filters + full-text, in one project or across all. (FEAT-032)

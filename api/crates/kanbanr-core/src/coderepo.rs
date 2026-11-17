@@ -711,6 +711,28 @@ pub fn is_ancestor(root: &Path, ancestor: &str, of: &str) -> bool {
     succeeds(root, &["merge-base", "--is-ancestor", ancestor, of])
 }
 
+/// The paths one commit changed against its first parent (FTR-060), renames as a delete and an
+/// add: what a task's footprint is measured from.
+pub fn commit_paths(root: &Path, sha: &str) -> Result<Vec<String>> {
+    let out = git(
+        root,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "--no-renames",
+            "-r",
+            "-z",
+            sha,
+        ],
+    )?;
+    Ok(out
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// The paths that differ between two commits, without checking anything out (DEF-031).
 pub fn changed_paths(root: &Path, from: &str, to: &str) -> Result<Vec<String>> {
     let out = git(

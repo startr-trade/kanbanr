@@ -16945,3 +16945,68 @@ fn ready_tasks_lists_the_tasks_free_to_start_and_why_others_wait() {
         ]
     );
 }
+
+/// FTR-060 R-6: `scope drift` names a task whose commits touched a file it did not declare and,
+/// once it is Completed, a declared file no commit touched; `--brief` gives one line for it and
+/// `git doctor` warns with the same line.
+#[test]
+fn scope_drift_names_a_tasks_footprint_drift() {
+    let fx = ScopeFx::new("footprint");
+    fx.ok(
+        &fx.work,
+        &[
+            "task",
+            "edit",
+            "FEAT-001",
+            "TL-001",
+            "T1",
+            "--writes",
+            "t1.rs,missing.rs",
+        ],
+    );
+    fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--task", "T1"],
+    );
+    let wt = fx.worktree("agent-footprint");
+    fx.ok(&wt, &["scope", "claim", "SC-001"]);
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    for file in ["t1.rs", "other.rs"] {
+        std::fs::write(wt.join(file), "fn work() {}\n").unwrap();
+        fx.ok_git(&wt, &["add", file]);
+    }
+    fx.ok(&wt, &["commit", "-m", "work on T1"]);
+
+    let undeclared = "FEAT-001/TL-001/T1 touched other.rs, not in its files";
+    let untouched = "FEAT-001/TL-001/T1 is Completed and never touched missing.rs";
+    let drift = fx.ok(&fx.work, &["scope", "drift"]);
+    assert!(drift.contains(undeclared), "{drift}");
+    assert!(!drift.contains(untouched), "not Completed yet: {drift}");
+
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    );
+    let drift = fx.ok(&fx.work, &["scope", "drift"]);
+    assert!(
+        drift.contains(&format!("{undeclared}\n{untouched}")),
+        "{drift}"
+    );
+    let brief = fx.ok(&fx.work, &["scope", "drift", "--brief"]);
+    let one = format!("{undeclared}; {untouched}");
+    assert_eq!(
+        brief
+            .lines()
+            .filter(|l| l.contains("FEAT-001/TL-001/T1"))
+            .count(),
+        1,
+        "{brief}"
+    );
+    assert!(brief.contains(&one), "{brief}");
+    let doctor = fx.run(&fx.work, &["git", "doctor"]);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains(&one), "{doctor}");
+}

@@ -1803,6 +1803,12 @@ pub fn drift_issues(store: &Store, id: &str, root: &Path, now: &str) -> Vec<crat
         .iter()
         .map(|d| warn(&d.item, d.line()))
         .collect();
+    out.extend(
+        footprints(store, id, root)
+            .unwrap_or_default()
+            .iter()
+            .map(|f| warn(&f.item, f.line())),
+    );
     if let Some(main_root) = coderepo::worktree_facts(root).map(|w| w.main_root) {
         for s in load(store, id).unwrap_or_default() {
             if s.state(now) == ScopeState::Active
@@ -1821,6 +1827,166 @@ pub fn drift_issues(store: &Store, id: &str, root: &Path, now: &str) -> Vec<crat
         }
     }
     out
+}
+
+// ---- task footprints (FTR-060) --------------------------------------------------------------
+
+/// A task whose commits and recorded files disagree (FTR-060 R-6): the paths its commits touched
+/// that its `writes` do not cover, and, once it is Completed, the `writes` no commit touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Footprint {
+    /// The task scope its commits were made under, when a trailer names one.
+    pub scope: Option<String>,
+    pub item: String,
+    /// `TL-001/T3`.
+    pub task: String,
+    pub undeclared: Vec<String>,
+    pub untouched: Vec<String>,
+    /// The task's commits, newest first.
+    pub commits: Vec<String>,
+}
+
+impl Footprint {
+    /// What `scope drift` prints: one line per kind of drift.
+    pub fn lines(&self) -> Vec<String> {
+        let id = format!("{}/{}", self.item, self.task);
+        let mut out = Vec::new();
+        if !self.undeclared.is_empty() {
+            out.push(format!(
+                "{id} touched {}, not in its files",
+                self.undeclared.join(", ")
+            ));
+        }
+        if !self.untouched.is_empty() {
+            out.push(format!(
+                "{id} is Completed and never touched {}",
+                self.untouched.join(", ")
+            ));
+        }
+        out
+    }
+
+    /// One line, for `--brief`, the Stop hook and `git doctor`.
+    pub fn line(&self) -> String {
+        self.lines().join("; ")
+    }
+}
+
+/// Every task whose footprint drifted (FTR-060): for each task of each item, its commits are the
+/// non-merge commits on the item's branches (the item branch and its task branches) that no line
+/// holds, whose `Agent-Scope` trailer names a scope covering that task or whose refs name
+/// `CODE/TL/T`. Git is only read; a branch or commit that cannot be read is skipped.
+pub fn footprints(store: &Store, id: &str, root: &Path) -> Result<Vec<Footprint>> {
+    let project = store.load_meta(id)?;
+    let config = &project.config;
+    let branches = coderepo::local_branches(root)?;
+    let main = gitmodel::main_of(config, root);
+    let lines = gitmodel::line_branches(config, &main, &branches);
+    let scopes: std::collections::BTreeMap<String, Scope> = load(store, id)?
+        .into_iter()
+        .map(|s| (s.id.clone(), s))
+        .collect();
+    let pattern = config.branch_pattern();
+    let mut out = Vec::new();
+    for item in &project.features {
+        if item.todo_lists.iter().all(|l| l.tasks.is_empty()) {
+            continue;
+        }
+        let mine: Vec<&String> = branches
+            .keys()
+            .filter(|b| {
+                crate::scm::item_code_from_branch(pattern, b).as_deref() == Some(item.code.as_str())
+            })
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let mut args = vec![
+            "log".to_string(),
+            "--no-merges".to_string(),
+            "--format=%H%x1f%B%x1e".to_string(),
+        ];
+        args.extend(mine.iter().map(|b| b.to_string()));
+        args.extend(lines.iter().map(|l| format!("^{l}")));
+        args.push("--".to_string());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let Ok(log) = coderepo::git(root, &args) else {
+            continue;
+        };
+        let commits: Vec<(String, String)> = log
+            .split('\u{1e}')
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .filter_map(|r| {
+                let (sha, msg) = r.split_once('\u{1f}')?;
+                Some((sha.to_string(), msg.to_string()))
+            })
+            .collect();
+        for list in &item.todo_lists {
+            for task in &list.tasks {
+                let key = format!("{}/{}", list.code, task.key);
+                let mut scope = None;
+                let mut shas = Vec::new();
+                let mut touched: std::collections::BTreeSet<String> = Default::default();
+                for (sha, msg) in &commits {
+                    let by_scope = trailer_scope(msg)
+                        .and_then(|s| scopes.get(s))
+                        .filter(|s| s.item == item.code && s.task.as_deref() == Some(key.as_str()));
+                    let by_ref = crate::scm::parse_refs(msg).iter().any(|r| {
+                        matches!(r, crate::scm::ItemRef::Task { code, todo, task: t }
+                            if *code == item.code && *todo == list.code && *t == task.key)
+                    });
+                    if by_scope.is_none() && !by_ref {
+                        continue;
+                    }
+                    if scope.is_none() {
+                        scope = by_scope.map(|s| s.id.clone());
+                    }
+                    let Ok(paths) = coderepo::commit_paths(root, sha) else {
+                        continue;
+                    };
+                    shas.push(sha.clone());
+                    touched.extend(paths);
+                }
+                if shas.is_empty() {
+                    continue;
+                }
+                let undeclared: Vec<String> = touched
+                    .iter()
+                    .filter(|p| {
+                        crate::taskgraph::overlaps(std::slice::from_ref(*p), &task.writes, &[])
+                            .is_empty()
+                    })
+                    .cloned()
+                    .collect();
+                let touched: Vec<String> = touched.into_iter().collect();
+                let untouched: Vec<String> = if task.state == crate::models::TaskState::Completed {
+                    task.writes
+                        .iter()
+                        .filter(|w| {
+                            crate::taskgraph::overlaps(std::slice::from_ref(*w), &touched, &[])
+                                .is_empty()
+                        })
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                if undeclared.is_empty() && untouched.is_empty() {
+                    continue;
+                }
+                out.push(Footprint {
+                    scope,
+                    item: item.code.clone(),
+                    task: key,
+                    undeclared,
+                    untouched,
+                    commits: shas,
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -3509,6 +3675,113 @@ mod tests {
         let again = std::fs::read_to_string(path(&store, "demo")).unwrap();
         assert!(again.contains("agent_branch: worktree-agent-zz"), "{again}");
         assert!(again.contains("from_the_future"), "{again}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-060 R-6: a task's commits are found by its scope's trailer and by a `Refs:` naming it;
+    /// the paths they touched outside its files are undeclared, its files no commit touched are
+    /// untouched once it is Completed, and a merge commit is never counted.
+    #[test]
+    fn a_tasks_undeclared_and_untouched_files_are_named() {
+        use crate::models::TaskState::{Completed, InProgress, NotStarted};
+        let (dir, store, repo) = task_fixture(
+            "footprints",
+            vec![
+                task("T1", Completed, &[], &["src/a.rs", "src/c.rs"]),
+                task("T2", NotStarted, &[], &["src/b.rs"]),
+                task("T3", InProgress, &[], &["docs/"]),
+                task("T4", NotStarted, &[], &[]),
+            ],
+        );
+        let now = crate::now_rfc3339();
+        let issued = issue(
+            &store,
+            "demo",
+            &issue_req(Some("T2")),
+            "me",
+            Some(&repo),
+            &now,
+        )
+        .unwrap();
+        let sc = issued.scope.scope.id.clone();
+        let write = |file: &str| {
+            let p = repo.join(file);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, format!("{file}\n")).unwrap();
+            coderepo::git(&repo, &["add", file]).unwrap();
+        };
+        let commit = |msg: &str| {
+            coderepo::git(&repo, &["commit", "-q", "-m", msg]).unwrap();
+        };
+        // T1 by `Refs:` on the item branch: a.rs is its own, x.rs is not; c.rs never touched.
+        coderepo::git(&repo, &["switch", "-q", "feat/FEAT-001-cart"]).unwrap();
+        write("src/a.rs");
+        write("src/x.rs");
+        commit("t1 work\n\nRefs: kanbanr:FEAT-001/TL-001/T1");
+        // A merge naming T1 brings in z.rs: the merge is not T1's commit, nor is the side one.
+        coderepo::git(&repo, &["switch", "-q", "-c", "side", "main"]).unwrap();
+        write("src/z.rs");
+        commit("side work");
+        coderepo::git(&repo, &["switch", "-q", "feat/FEAT-001-cart"]).unwrap();
+        coderepo::git(
+            &repo,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "side",
+                "-m",
+                "merge\n\nRefs: kanbanr:FEAT-001/TL-001/T1",
+            ],
+        )
+        .unwrap();
+        // T3 by `Refs:`, inside its folder: no drift, and it is not Completed.
+        write("docs/guide.md");
+        commit("t3 work\n\nRefs: kanbanr:FEAT-001/TL-001/T3");
+        // T2 by its scope's trailer on its task branch: b.rs is its own, y.rs is not.
+        coderepo::git(&repo, &["switch", "-q", "feat/FEAT-001-cart--tl-001-t2"]).unwrap();
+        write("src/b.rs");
+        write("src/y.rs");
+        commit(&format!(
+            "t2 work\n\nAgent-Scope: {sc} (build, by the agent for FEAT-001)"
+        ));
+        coderepo::git(&repo, &["switch", "-q", "main"]).unwrap();
+
+        let found = footprints(&store, "demo", &repo).unwrap();
+        let by_task = |t: &str| found.iter().find(|f| f.task == t).cloned();
+        let t1 = by_task("TL-001/T1").expect("T1 drifted");
+        assert_eq!(t1.undeclared, ["src/x.rs"]);
+        assert_eq!(t1.untouched, ["src/c.rs"]);
+        assert_eq!(t1.commits.len(), 1, "the merge is not counted: {t1:?}");
+        assert_eq!(t1.scope, None);
+        assert_eq!(
+            t1.lines(),
+            [
+                "FEAT-001/TL-001/T1 touched src/x.rs, not in its files",
+                "FEAT-001/TL-001/T1 is Completed and never touched src/c.rs",
+            ]
+        );
+        let t2 = by_task("TL-001/T2").expect("T2 drifted");
+        assert_eq!(t2.undeclared, ["src/y.rs"]);
+        assert!(t2.untouched.is_empty(), "untouched only once Completed");
+        assert_eq!(t2.scope.as_deref(), Some(sc.as_str()));
+        assert!(by_task("TL-001/T3").is_none(), "{found:?}");
+        assert!(by_task("TL-001/T4").is_none(), "{found:?}");
+        assert_eq!(found.len(), 2, "{found:?}");
+
+        // Each is a warning in `git doctor`'s drift issues.
+        let issues = drift_issues(&store, "demo", &repo, &now);
+        for f in &found {
+            assert!(issues.iter().any(|i| i.message == f.line()), "{issues:?}");
+        }
+
+        // A task with commits and no files: every path is undeclared.
+        coderepo::git(&repo, &["switch", "-q", "feat/FEAT-001-cart"]).unwrap();
+        write("src/w.rs");
+        commit("t4 work\n\nRefs: kanbanr:FEAT-001/TL-001/T4");
+        let found = footprints(&store, "demo", &repo).unwrap();
+        let t4 = found.iter().find(|f| f.task == "TL-001/T4").unwrap();
+        assert_eq!(t4.undeclared, ["src/w.rs"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
