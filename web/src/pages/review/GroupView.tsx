@@ -36,6 +36,7 @@ import {
 import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
 import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
+import { ManualGroupLive } from "./ManualGroup";
 import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
 
 /**
@@ -384,6 +385,24 @@ export function GroupPanel(p: {
           <Empty title="Nothing is waiting in this group." />
         ) : shown.length === 0 ? (
           <Empty title="No row matches the filter." />
+        ) : slice.key === "manual" ? (
+          // Manual checks grouped under their item, the release being shipped first (FTR-057).
+          <ManualGroupLive
+            project={p.project}
+            slice={slice}
+            rows={shown}
+            writable={p.writable}
+            tick={p.tick}
+            sel={sel}
+            onSelect={(key, v) => setSel((s) => select(s, slice.key, key, v, slice.rows, pending))}
+            onSelectItem={setSel}
+            onConfirmItem={(chosen) => send(slice.action, chosen)}
+            reasonFor={reasonFor}
+            openRows={openRows}
+            onOpen={setOpen}
+            inFlight={inFlight}
+            body={p.body}
+          />
         ) : (
           shown.map((row) => {
             const why = reasonFor(row);
