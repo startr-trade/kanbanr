@@ -3485,6 +3485,10 @@
             "description": "When the text last changed, RFC 3339.",
             "type": "string"
           },
+          "target_hash": {
+            "description": "The stable hash of the text the flag scanned (DEF-102): a check of the text covers it while\nthis is unchanged.",
+            "type": "string"
+          },
           "via": {
             "items": {
               "type": "string"

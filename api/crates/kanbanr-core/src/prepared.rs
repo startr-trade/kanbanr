@@ -1095,6 +1095,7 @@ fn prepare_text_check(
         "covers".into(),
         serde_json::json!({
             "text_changed_at": flag.target_changed_at,
+            "text_hash": flag.target_hash,
             "commits": flag.commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>(),
             "edits": flag.edits.iter().map(|e| e.sha.clone()).collect::<Vec<_>>(),
         }),
@@ -1129,10 +1130,11 @@ fn field_text_of<'a>(fields: &'a Map<String, Value>, name: &str) -> &'a str {
     fields.get(name).and_then(Value::as_str).unwrap_or("")
 }
 
-/// Does the check `r` cover `flag` (pure)? The same text, as it last changed, and every commit
-/// the flag names was seen when it was checked, and every edit of the text since the flag opened.
-/// A new commit naming the text again, or a later edit of the text, makes the flag need settling
-/// again.
+/// Does the check `r` cover `flag` (pure)? The same text (DEF-102: its hash; a record made before
+/// hashes, a text not changed since the time it saw), and every commit the flag names was seen
+/// when it was checked, and every edit of the text since the flag opened. A new commit naming the
+/// text again, or a later edit of the text, makes the flag need settling again. A task, test,
+/// history or status write to the item that holds the text does not.
 pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
     if r.kind != "text-check" || r.subject.target != flag.target.key() {
         return false;
@@ -1140,9 +1142,18 @@ pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
     let Some(covers) = r.fields.get("covers") else {
         return false;
     };
-    if covers.get("text_changed_at").and_then(Value::as_str)
-        != Some(flag.target_changed_at.as_str())
-    {
+    let same_text = match covers.get("text_hash").and_then(Value::as_str) {
+        Some(hash) if !hash.is_empty() => hash == flag.target_hash,
+        // Made before text hashes: the time it saw was the newest of the item's YAML and spec, so
+        // it is never earlier than the text's own last change unless the text changed after it.
+        _ => covers
+            .get("text_changed_at")
+            .and_then(Value::as_str)
+            .is_some_and(|seen| {
+                crate::cmp_instants(seen, &flag.target_changed_at) != std::cmp::Ordering::Less
+            }),
+    };
+    if !same_text {
         return false;
     }
     let seen: Vec<&str> = covers
@@ -4031,6 +4042,226 @@ mod tests {
         let edited = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
         assert_eq!(edited[0].edits.len(), 1);
         assert!(!settles(&got, &edited[0]));
+    }
+
+    // ---- DEF-102: a text check covers the text ------------------------------------------------
+
+    /// Commit everything on the board at `when` (before the code change of 2099-01-01).
+    fn commit_board(board: &std::path::Path, msg: &str, when: &str) {
+        use crate::docdrift::testkit::git_env;
+        git_env(board, &["add", "-A"], None);
+        git_env(board, &["commit", "-q", "-m", msg], Some(when));
+    }
+
+    /// `drift_board`, plus an item whose spec names `--since` and links the changed item, so that
+    /// the item's text is flagged. The store, the folder, the changed item, the code repository,
+    /// the flagged item, and its target key. The folder is removed when the first part drops.
+    #[allow(clippy::type_complexity)]
+    fn item_drift_board() -> (
+        (Box<dyn std::any::Any>, PathBuf),
+        Store,
+        String,
+        PathBuf,
+        String,
+        String,
+    ) {
+        let (store, d, code, repo) = crate::tests::drift_board();
+        let board = d.path.clone();
+        let other = store
+            .add_feature(
+                "demo",
+                "Other",
+                &format!("Run with --since, as [{code}](/p/demo/feature/{code}) reads it.\n"),
+                "M",
+                None,
+            )
+            .unwrap()
+            .code;
+        commit_board(&board, "other", "2098-01-01T00:00:00+00:00");
+        let target = format!("item:{other}");
+        ((Box::new(d), board), store, code, repo, other, target)
+    }
+
+    fn item_flag(
+        store: &Store,
+        code: &str,
+        repo: &std::path::Path,
+        target: &str,
+    ) -> crate::docdrift::Flag {
+        crate::docdrift::flags_for_item(store, "demo", code, repo)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.target.key() == target)
+            .unwrap_or_else(|| panic!("{target} is flagged"))
+    }
+
+    /// A task write and a test-result write on the target item, each committed.
+    fn task_and_test_writes(store: &Store, board: &std::path::Path, other: &str) {
+        let list = store.add_todo_list("demo", other, "work", None).unwrap();
+        store
+            .add_task(
+                "demo",
+                other,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                other,
+                &list.code,
+                "T1",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        commit_board(board, "update task T1", "2098-02-01T00:00:00+00:00");
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
+            "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    \
+             tests:\n      - name: t::x\n        kind: unit\n        state: planned\n",
+        )
+        .unwrap();
+        store
+            .set_feature_definition("demo", other, Some(def))
+            .unwrap();
+        store
+            .set_test_state(
+                "demo",
+                other,
+                "R-1",
+                "t::x",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        commit_board(board, "test t::x is now green", "2098-03-01T00:00:00+00:00");
+    }
+
+    /// DEF-102 R-8: task and test writes on the target item leave its text check settling.
+    #[test]
+    fn a_text_check_still_settles_after_a_task_or_test_write_on_its_target() {
+        let (d, store, code, repo, other, target) = item_drift_board();
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, &target, "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        assert!(settles(&got, &item_flag(&store, &code, &repo, &target)));
+        task_and_test_writes(&store, &d.1, &other);
+        let flag = item_flag(&store, &code, &repo, &target);
+        assert!(
+            settles(&got, &flag),
+            "covers {:?}, flag {}",
+            got.fields["covers"],
+            flag.target_changed_at
+        );
+    }
+
+    /// DEF-102 R-8: an edit of the target's text makes its check lapse.
+    #[test]
+    fn a_text_check_lapses_when_its_target_text_changes() {
+        let (d, store, code, repo, other, target) = item_drift_board();
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, &target, "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &other,
+                None,
+                Some(format!(
+                    "Run with --since, reworded, as [{code}](/p/demo/feature/{code}) reads it.\n"
+                )),
+                None,
+                None,
+            )
+            .unwrap();
+        commit_board(&d.1, "edit the spec", "2098-02-01T00:00:00+00:00");
+        assert!(!settles(&got, &item_flag(&store, &code, &repo, &target)));
+    }
+
+    /// DEF-102 R-8: a status move of the target (its YAML and spec renamed) leaves its check
+    /// settling.
+    #[test]
+    fn a_text_check_still_settles_after_its_target_item_moves() {
+        let (d, store, code, repo, other, target) = item_drift_board();
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
+            "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n",
+        )
+        .unwrap();
+        store
+            .set_feature_definition("demo", &other, Some(def))
+            .unwrap();
+        store.approve_feature("demo", &other, "Ada").unwrap();
+        commit_board(&d.1, "approve", "2098-01-10T00:00:00+00:00");
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, &target, "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        let spec_of = |store: &Store| {
+            let f = store.load("demo").unwrap().feature(&other).unwrap().clone();
+            store
+                .feature_path("demo", &f.status, &f.code)
+                .parent()
+                .unwrap()
+                .join("features-spec")
+                .join(format!("{other}.md"))
+        };
+        let spec_before = spec_of(&store);
+        assert!(spec_before.is_file(), "{spec_before:?}");
+        store.move_feature("demo", &other, "Scheduled").unwrap();
+        let spec_after = spec_of(&store);
+        assert_ne!(spec_before, spec_after, "the spec moved with the item");
+        assert!(spec_after.is_file());
+        commit_board(&d.1, "move", "2098-02-01T00:00:00+00:00");
+        assert!(settles(&got, &item_flag(&store, &code, &repo, &target)));
+    }
+
+    /// DEF-102 R-9: a record made before text hashes (its time from the YAML or the spec, the
+    /// newer) settles after a task write on its target, and stops settling after a spec edit.
+    #[test]
+    fn a_record_made_before_text_hashes_settles_while_the_text_is_unchanged() {
+        let (d, store, code, repo, other, target) = item_drift_board();
+        let mut got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, &target, "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        let covers = got.fields["covers"].as_object_mut().unwrap();
+        covers.remove("text_hash");
+        covers.insert(
+            "text_changed_at".into(),
+            Value::String("2098-01-01T00:00:00+00:00".into()),
+        );
+        task_and_test_writes(&store, &d.1, &other);
+        assert!(settles(&got, &item_flag(&store, &code, &repo, &target)));
+        store
+            .edit_feature(
+                "demo",
+                &other,
+                None,
+                Some(format!(
+                    "Run with --since, reworded, as [{code}](/p/demo/feature/{code}) reads it.\n"
+                )),
+                None,
+                None,
+            )
+            .unwrap();
+        commit_board(&d.1, "edit the spec", "2098-04-01T00:00:00+00:00");
+        assert!(!settles(&got, &item_flag(&store, &code, &repo, &target)));
     }
 
     // ---- DEF-095: a prepared gate result no stage asks for -----------------------------------
