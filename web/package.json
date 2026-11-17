@@ -52,7 +52,8 @@
     "check:ui-figures": "node scripts/check-ui-figures.mjs",
     "check:ui-gallery": "node scripts/check-ui-gallery.mjs",
     "check:review-groups": "node scripts/check-review-groups.mjs",
-    "check:needs-you": "node scripts/check-needs-you.mjs"
+    "check:needs-you": "node scripts/check-needs-you.mjs",
+    "check:feature-no-docs": "node scripts/check-feature-no-docs.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

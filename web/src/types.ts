@@ -179,6 +179,8 @@ export interface FeatureDefinition {
   design_doc?: string;
   /** Board docs this item's design changes (FEAT-180); `docs_updated` checks each changed. */
   affects_docs?: string[];
+  /** Why this item changes no doc, recorded when the person confirms it (DEF-075); absent if unset. */
+  affects_no_docs?: string;
   requirements?: Requirement[];
   approval?: Approval | null;
   /** Every agreement and withdrawal, oldest first (FEAT-069). Nothing is ever removed. */

@@ -123,6 +123,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The UI kit's gallery shows every component, and pages are uncapped": LOCAL,
             "The Review page groups decisions": LOCAL,
             "The Needs-you badge and drawer show what waits on the person": LOCAL,
+            "The item page shows why an item changes no docs": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

@@ -311,6 +311,10 @@ function Definition({ feature, project, tick }: { feature: Feature; project: str
             ))}
           </div>
         ) : null}
+        {/* Why the item changes no doc, as the person confirmed it (DEF-075): a plain line, not a chip. */}
+        {def.affects_no_docs?.trim() ? (
+          <p>Changes no docs: {def.affects_no_docs.trim()}</p>
+        ) : null}
         {/* Read-only copy of the monitor (FEAT-178): the command that withdraws, not a button. */}
         {def.approval != null && isReadOnly() ? (
           <p className="muted small">
