@@ -747,6 +747,49 @@
         ],
         "type": "object"
       },
+      "BoardInfo": {
+        "description": "One board as `GET /api/boards` lists it. Names no server path and no remote URL.",
+        "properties": {
+          "head": {
+            "description": "The board repository's HEAD commit, 40 hex.",
+            "type": "string"
+          },
+          "head_at": {
+            "description": "The HEAD commit's committer time, RFC 3339 UTC.",
+            "type": "string"
+          },
+          "history_unreadable": {
+            "description": "Why the board's git history cannot be read, without its path (DEF-080).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "description": "The projects served from this board, sorted; a project an earlier board holds is not here.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "shadowed": {
+            "description": "Projects on this board that an earlier board also holds, so they are served from there.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "writer": {
+            "$ref": "#/components/schemas/BoardWriter",
+            "description": "The kanbanr that last wrote this board."
+          }
+        },
+        "required": [
+          "name",
+          "projects"
+        ],
+        "type": "object"
+      },
       "BoardLane": {
         "description": "One normalized lane plus its cards (across all projects).",
         "properties": {
@@ -7906,6 +7949,27 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "openapi": "3.1.0",
   "paths": {
+    "/api/boards": {
+      "get": {
+        "operationId": "getBoards",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BoardInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "The boards this server shows, in order, each with its projects"
+      }
+    },
     "/api/events": {
       "get": {
         "operationId": "getEvents",
