@@ -16473,3 +16473,219 @@ fn where_suggests_the_facts_and_asks_for_them() {
     assert_eq!(v["ask_the_user"], serde_json::json!([]), "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A fresh board for FTR-005's CLI tests: a data dir under the temp dir (L-41), the project
+/// `demo` with one milestone, and a runner that returns (success, stdout, stderr).
+fn facts_board(tag: &str) -> (PathBuf, impl Fn(&[&str]) -> (bool, String, String)) {
+    let base = std::env::temp_dir().join(format!("kanbanr-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let run = move |args: &[&str]| -> (bool, String, String) {
+        let mut all = vec!["--project", "demo"];
+        all.extend_from_slice(args);
+        let o = Command::new(cli())
+            .args(&all)
+            .current_dir(&base)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_SERVER_URL")
+            .env_remove("KANBANR_LOCAL")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stdout).to_string(),
+            String::from_utf8_lossy(&o.stderr).to_string(),
+        )
+    };
+    let ok = |r: (bool, String, String), what: &str| assert!(r.0, "{what}: {}", r.2);
+    ok(
+        run(&["identity", "--name", "Tester", "--email", "t@example.com"]),
+        "identity",
+    );
+    ok(
+        run(&["project", "init", "demo", "--description", "facts"]),
+        "project init",
+    );
+    ok(
+        run(&["milestone", "add", "--name", "M", "--code", "MS-1"]),
+        "milestone",
+    );
+    (
+        std::env::temp_dir().join(format!("kanbanr-{tag}-{}", std::process::id())),
+        run,
+    )
+}
+
+/// FTR-005 R-1: the CLI sets, shows and `--json`s the facts record; an unknown value is refused,
+/// naming it; `vocabulary` lists the five questions.
+#[test]
+fn facts_set_and_show_round_trip() {
+    let (base, run) = facts_board("facts-cli");
+    let (ok, out, _) = run(&["facts"]);
+    assert!(ok && out.contains("no project facts"), "{out}");
+
+    let (ok, out, err) = run(&[
+        "facts",
+        "set",
+        "--languages",
+        "Rust, typescript",
+        "--runtimes",
+        "native,browser",
+        "--production",
+        "developer-machine",
+        "--parts",
+        "cli,web-ui",
+        "--data",
+        "files",
+    ]);
+    assert!(ok, "{err}");
+    assert!(out.contains("facts saved"), "{out}");
+    let (ok, out, _) = run(&["facts", "show"]);
+    assert!(ok && out.contains("rust, typescript"), "{out}");
+    assert!(out.contains("developer-machine"), "{out}");
+    let (ok, out, _) = run(&["--json", "facts"]);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v["languages"],
+        serde_json::json!(["rust", "typescript"]),
+        "{v}"
+    );
+    assert_eq!(v["parts"], serde_json::json!(["cli", "web-ui"]), "{v}");
+    assert!(v["set_at"].as_str().is_some_and(|s| !s.is_empty()), "{v}");
+
+    // Refused, naming the value; the record stays.
+    let (ok, _, err) = run(&["facts", "set", "--languages", "cobol"]);
+    assert!(!ok && err.contains("cobol"), "{err}");
+    let (_, out, _) = run(&["--json", "facts"]);
+    assert!(out.contains("typescript"), "{out}");
+
+    // From a YAML file, replacing the whole record.
+    let file = base.join("facts.yaml");
+    std::fs::write(&file, "languages: [go]\nproduction: [server]\n").unwrap();
+    let (ok, _, err) = run(&["facts", "set", "--from-file", file.to_str().unwrap()]);
+    assert!(ok, "{err}");
+    let (_, out, _) = run(&["--json", "facts"]);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["languages"], serde_json::json!(["go"]), "{v}");
+    assert_eq!(v["parts"], serde_json::json!([]), "{v}");
+
+    let (ok, out, _) = run(&["facts", "vocabulary"]);
+    assert!(ok, "{out}");
+    for key in [
+        "languages",
+        "runtimes",
+        "production",
+        "parts",
+        "data",
+        "other:<text>",
+    ] {
+        assert!(out.contains(key), "{key}: {out}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-005 R-5: `catalog init` writes the starter, a second refuses, `--force` rewrites and
+/// `--print` writes nothing; the status names rows, gaps and an override.
+#[test]
+fn catalog_init_writes_the_starter_and_refuses_twice() {
+    let (base, run) = facts_board("catalog-cli");
+    let file = base.join("data/projects/demo/catalog.yaml");
+    let (ok, out, _) = run(&["catalog"]);
+    assert!(ok && out.contains("no catalog"), "{out}");
+
+    let (ok, out, _) = run(&["catalog", "init", "--print"]);
+    assert!(
+        ok && out.contains("rows:") && out.contains("id: context"),
+        "{out}"
+    );
+    assert!(!file.exists(), "--print writes nothing");
+
+    let (ok, out, err) = run(&["catalog", "init"]);
+    assert!(ok, "{err}");
+    assert!(file.exists());
+    assert!(out.contains("context") && out.contains("missing"), "{out}");
+    assert!(out.contains("no project facts"), "{out}");
+
+    let (ok, _, err) = run(&["catalog", "init"]);
+    assert!(!ok && err.contains("--force"), "{err}");
+    std::fs::write(&file, "rows: []\n").unwrap();
+    let (ok, _, err) = run(&["catalog", "init", "--force"]);
+    assert!(ok, "{err}");
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("id: context")
+    );
+
+    // Off needs a reason and shows it; on clears it.
+    let (ok, out, err) = run(&["catalog", "off", "security", "--why", "a toy with no users"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("off (a toy with no users)"), "{out}");
+    let (ok, out, _) = run(&["catalog", "on", "security"]);
+    assert!(ok && !out.contains("a toy with no users"), "{out}");
+
+    // JSON is the status; a row the catalog already has cannot be added again.
+    let (ok, out, _) = run(&["--json", "catalog"]);
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["starter"], 1, "{v}");
+    assert!(v["rows"].as_array().is_some_and(|r| r.len() == 21), "{v}");
+    let (ok, _, err) = run(&["catalog", "add", "context"]);
+    assert!(!ok && err.contains("already has row"), "{err}");
+
+    // Set from a file: a bad row is refused, naming it.
+    let bad = base.join("bad.yaml");
+    std::fs::write(
+        &bad,
+        "rows:\n  - id: context\n    title: C\n    answers: [sometimes]\n    for: [architect]\n    level: system\n    source: {kind: written, path: a.md}\n",
+    )
+    .unwrap();
+    let (ok, _, err) = run(&["catalog", "set", "--from-file", bad.to_str().unwrap()]);
+    assert!(!ok && err.contains("sometimes"), "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-005 R-8: a board without the facts and catalog files sees no catalog line from `feature
+/// add`, `move` or `doctor`; doctor gives its one facts hint.
+#[test]
+fn catalog_is_silent_without_one() {
+    let (base, run) = facts_board("catalog-silent");
+    let mut outputs = Vec::new();
+    for args in [
+        &["feature", "add", "--title", "Login", "--milestone", "MS-1"][..],
+        &["move", "FEAT-001", "In Progress"][..],
+    ] {
+        let (ok, out, err) = run(args);
+        assert!(ok, "{args:?}: {err}");
+        outputs.push(format!("{out}{err}"));
+    }
+    let (_, out, err) = run(&["doctor"]);
+    let doctor = format!("{out}{err}");
+    // FTR-006's system-baseline gate names its own `kanbanr catalog baseline init`; that line is
+    // not this catalog's.
+    for text in outputs.iter().chain(std::iter::once(&doctor)) {
+        let catalog_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.to_lowercase().contains("catalog") && !l.contains("system baseline"))
+            .collect();
+        assert!(catalog_lines.is_empty(), "{catalog_lines:?}");
+    }
+    let hints = doctor.lines().filter(|l| l.contains("facts")).count();
+    assert_eq!(hints, 1, "{doctor}");
+    assert!(!base.join("data/projects/demo/catalog.yaml").exists());
+    assert!(!base.join("data/projects/demo/facts.yaml").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
