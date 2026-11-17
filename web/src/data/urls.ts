@@ -111,7 +111,8 @@ export const urls = {
   /** The flow plan in agent-hours: the running sprint's, else the open work's, unless `scope` names one (FTR-061). */
   planFlow: (p: string, scope?: string) => apiUrl(`${project(p)}/plan/flow${query([["scope", scope]])}`),
   /** The portfolio's timeline, one row per project (FTR-043); a root read. */
-  portfolioPlan: () => apiUrl(`/portfolio/plan`),
+  portfolioPlan: (board?: string | null) =>
+    apiUrl(`/portfolio/plan${board ? `?board=${encodeURIComponent(board)}` : ""}`),
 };
 
 /** What `/attention` reads (FTR-048): items, releases, prepared records, manual tests, decisions, gates, docs, ADRs and config. */

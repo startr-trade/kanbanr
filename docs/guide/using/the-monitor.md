@@ -217,6 +217,11 @@ resolves nothing from one board to another.
   `?board=<name>` (`/portfolio?board=katalogr`). A view that resolves across boards is `FEAT-074`,
   not built.
 
+With several boards the home page has one section per board: the board's name as a heading, a
+line saying when it last changed (or why its history can't be read), then its projects as tiles and
+a Portfolio link for that board. A dependency on another board's project is shown as its chip
+followed by the board's name and "not resolved here".
+
 `/api/boards` lists the boards, each with its projects and its last commit
 ([HTTP API](../reference/http-api.md#several-boards)). On two copies of kanbanr's own board (one
 project of about 400 items each), its first answer after a start took 4 to 7 ms, and 49 ms the

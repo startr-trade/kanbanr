@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
@@ -16,6 +16,9 @@ const PAGE_SIZES = [10, 25, 50, 100];
  * portfolio %) plus a cross-project board grouping every feature into normalized lanes. */
 export default function PortfolioPage() {
   const tick = useLiveTick(api.allEvents());
+  // On a server showing several boards a global read answers one board: `?board=<name>`, else the
+  // first (FTR-040 R-11). Nothing merges across boards.
+  const boardName = useSearchParams()[0].get("board");
   // A portfolio lane holds EVERY project's work in that disposition, so it is the longest column
   // in the product — a "Not started" lane across several boards runs to hundreds of cards, and
   // the page became a scroll with no shape (FEAT-091). Paginated per lane, exactly as the project
@@ -38,10 +41,10 @@ export default function PortfolioPage() {
   useEffect(() => {
     setPages({});
   }, [pageSize]);
-  const rollups = useAsync(() => api.getPortfolioRollups(), [tick]);
-  const board = useAsync(() => api.getPortfolioBoard(), [tick]);
+  const rollups = useAsync(() => api.getPortfolioRollups(boardName), [tick, boardName]);
+  const board = useAsync(() => api.getPortfolioBoard(boardName), [tick, boardName]);
   // What runs now in every project, one timeline row each (FTR-043 R-7).
-  const now = useQuery<PortfolioPlan>(null, urls.portfolioPlan(), ["*"]);
+  const now = useQuery<PortfolioPlan>(null, urls.portfolioPlan(boardName), ["*"]);
   // A portfolio read belongs to no project, so no project's live change marks it stale: it is read
   // again on the page's own live tick, as the rollups and the board are.
   const reloadNow = now.reload;

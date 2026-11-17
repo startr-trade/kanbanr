@@ -6,7 +6,7 @@ import type { CatalogStatus, FactsOrEmpty } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, BoardInfo, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 import type { PickView, Picked, RepoDoc, RepoTree } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
 
@@ -29,12 +29,21 @@ async function getText(url: string): Promise<string> {
   return res.text();
 }
 
+/** `?board=<name>` for a global read on a server with several boards (FTR-040); empty otherwise. */
+function boardQuery(board?: string | null): string {
+  return board ? `?board=${encodeURIComponent(board)}` : "";
+}
+
 export const api = {
   listProjects: () => getJson<ProjectSummary[]>(apiUrl("/projects")),
   // Portfolio / program hierarchy (FEAT-030).
-  getPortfolio: () => getJson<PortfolioView>(apiUrl("/portfolio")),
-  getPortfolioRollups: () => getJson<RollupReport>(apiUrl("/portfolio/rollups")),
-  getPortfolioBoard: () => getJson<BoardReport>(apiUrl("/portfolio/board")),
+  // The boards a server shows; an older daemon has no such route, and that is one board (FTR-040).
+  getBoards: () => getJson<BoardInfo[]>(apiUrl("/boards")).catch(() => [] as BoardInfo[]),
+  getPortfolio: (board?: string | null) => getJson<PortfolioView>(apiUrl(`/portfolio${boardQuery(board)}`)),
+  getPortfolioRollups: (board?: string | null) =>
+    getJson<RollupReport>(apiUrl(`/portfolio/rollups${boardQuery(board)}`)),
+  getPortfolioBoard: (board?: string | null) =>
+    getJson<BoardReport>(apiUrl(`/portfolio/board${boardQuery(board)}`)),
   getProject: (id: string) => getJson<Project>(apiUrl(`/projects/${encodeURIComponent(id)}`)),
   // The monitor's slices (DEF-081): pages read these through useQuery and `urls`, not the whole board.
   /** The compact index: items as cards, milestones, sprints, releases, ADRs, docs and goals. */
@@ -63,7 +72,7 @@ export const api = {
   /** The flow plan in agent-hours for a scope, the running sprint's by default (FTR-061). */
   getPlanFlow: (id: string, scope?: string) => getJson<FlowPlan>(urls.planFlow(id, scope)),
   /** The portfolio's timeline, one row per project, with its window (FTR-043). */
-  getPortfolioPlan: () => getJson<PortfolioPlan>(urls.portfolioPlan()),
+  getPortfolioPlan: (board?: string | null) => getJson<PortfolioPlan>(urls.portfolioPlan(board)),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getProcess: (id: string) =>
     getJson<ProcessStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/process`)),
