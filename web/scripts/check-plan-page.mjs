@@ -14,6 +14,8 @@
 //     slice and an opened row's body through the shared cache with the Plan tags; a row's body is
 //     drawn only inside AccordionRow's `children`, so a closed row reads nothing; nothing under the
 //     page calls api.getProject, getGantt or useAsync. An empty Current tab asks Claude to plan.
+//     At 390 px the row table drops Placed and Critical path, and the timeline scrolls sideways
+//     inside its frame at a 40rem scale (the rules that apply at 390 px, read from styles.css).
 //   web::check_plan_timeline_draws_tall_bands_with_progress_a_release_lane_and_a_today_line (R-10)
 //     — toTimeline gives a sprint 3 of 6 done progress 0.5 and a release a lane of diamond and dot
 //     marks with no band; rendered, the bands are 24 px tall with a filled part half their width,
@@ -64,6 +66,17 @@ const summary = (current, planned, past) => ({
 
 const text = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
 const src = (rel) => readFileSync(new URL(`../src/${rel}`, import.meta.url), "utf8");
+/** The declarations that apply to `selector` at `px` wide: the rules of every `@media (max-width: N px)` block with N >= px. */
+function declarationsAt(css, px, selector) {
+  let out = "";
+  for (const block of css.matchAll(/@media \(max-width:\s*(\d+)px\)\s*\{([\s\S]*?)^\}/gm)) {
+    if (Number(block[1]) < px) continue;
+    for (const rule of block[2].matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (rule[1].split(",").map((s) => s.trim()).includes(selector)) out += rule[2];
+    }
+  }
+  return out;
+}
 /** Each row's key and whether its header says it is open. */
 const expanded = (document) =>
   Object.fromEntries([...document.querySelectorAll("section.ui-row")].map((s) => [s.id, s.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") === "true"]));
@@ -298,6 +311,29 @@ await check(
     const empty = await render("src/pages/PlanPage.tsx", "PlanTabBody", { project: "shop", scope: "current", slice: { ...CURRENT, lanes: [], undated: [] } }, { url: "/p/shop/plan" });
     expect("the empty Current tab", text(empty.document.querySelector(".ui-empty-title")), "Nothing is running today.");
     expect("its ask", text(empty.document.querySelector(".ui-empty-sentence")), "Ask Claude to plan the next sprint.");
+
+    // At 390 px (below 640 px, T7): the timeline scrolls sideways inside its frame, and the row table
+    // drops Placed and Critical path, keeping Code, Title and Status. jsdom has no layout, so the
+    // render gives the classes the table draws and the rules that apply at 390 px give the rest.
+    const narrowTable = body.document.querySelector(".plan-items");
+    expect(
+      "the table's columns, with the two the 390 px rule hides marked",
+      [...narrowTable.querySelectorAll("thead th")].map((th) => [text(th), th.className]),
+      [
+        ["Code", ""],
+        ["Title", ""],
+        ["Status", ""],
+        ["Placed", "plan-col-placed"],
+        ["Critical path", "plan-col-critical"],
+      ],
+    );
+    const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const hidden of [".plan-items .plan-col-placed", ".plan-items .plan-col-critical"]) {
+      if (!/display:\s*none/.test(declarationsAt(styles, 390, hidden))) problems.push(`at 390 px ${hidden} is not hidden`);
+    }
+    expect("at 390 px the timeline frame scrolls sideways", /overflow-x:\s*auto/.test(declarationsAt(styles, 390, ".plan-row-items .ui-timeline")), true);
+    expect("at 390 px the Current tab's frame scrolls sideways", /overflow-x:\s*auto/.test(declarationsAt(styles, 390, ".plan-tab .ui-timeline")), true);
+    expect("at 390 px the timeline keeps a 40rem scale inside its frame", /min-width:\s*40rem/.test(declarationsAt(styles, 390, ".plan-row-items .ui-timeline svg")), true);
   },
 );
 
