@@ -9,12 +9,22 @@
 //     entry it was reached from, compared on whole path segments (R-2);
 //   web::check_nav_menus_open_one_at_a_time_and_close_on_escape — the menu reducer (R-3);
 //   web::check_shell_links_are_not_duplicated — no path twice in NAV plus the global nav (R-5);
-//   web::check_nav_puts_review_second_under_work — Work lists Board, then Review (R-7).
+//   web::check_nav_puts_review_second_under_work — Work lists Board, then Review (R-7);
+//   web::check_nav_menus_are_disclosure_buttons — the rendered shell: an area with several pages is
+//     a disclosure button, marked current when it holds the page you are on (R-3);
+//   web::check_nav_collapses_behind_one_button_at_the_narrow_breakpoint — at 720 px and below the
+//     areas fold behind one ≡ button, and the badge and the theme toggle stay outside them (R-4);
+//   web::check_nav_areas_with_several_pages_are_menu_buttons — one row of menu buttons above 720 px,
+//     no second row and no sidebar (R-6);
+//   web::check_nav_renders_a_one_page_area_as_a_link_named_for_the_area — never a one-entry menu (R-8).
+//
+// The last four render the shell through scripts/lib/render.mjs (FTR-046).
 //
 // Usage: npm run check:nav
 import { readFileSync } from "node:fs";
 import { NAV, activeEntry, visibleAreas } from "../src/nav.ts";
 import { navReducer } from "../src/navState.ts";
+import { closeRender, render } from "./lib/render.mjs";
 
 let failed = false;
 function report(name, problems) {
@@ -155,6 +165,180 @@ const entries = NAV.flatMap((a) => a.entries.map((e) => ({ area: a.key, ...e, at
   const keys = work ? work.entries.map((e) => e.key) : [];
   if (keys[0] !== "board" || keys[1] !== "review") problems.push(`Work lists ${JSON.stringify(keys)}, expected board then review first`);
   report("web::check_nav_puts_review_second_under_work", problems);
+}
+
+// The rendered shell. ThemeToggle reads the saved theme while rendering, so the browser globals it
+// touches are stubbed; effects do not run on the server, so nothing else is reached.
+globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
+globalThis.window ??= { matchMedia: () => ({ matches: false }) };
+
+const stylesCss = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** The bodies of `@media (max-width: 720px)` blocks, and the stylesheet with them removed. */
+function splitNarrow(css) {
+  const narrow = [];
+  let wide = "";
+  let i = 0;
+  const at = /@media\s*\(max-width:\s*720px\)\s*\{/g;
+  let m;
+  while ((m = at.exec(css)) !== null) {
+    wide += css.slice(i, m.index);
+    let depth = 1;
+    let j = m.index + m[0].length;
+    for (; j < css.length && depth > 0; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}") depth--;
+    }
+    narrow.push(css.slice(m.index + m[0].length, j - 1));
+    i = j;
+    at.lastIndex = j;
+  }
+  wide += css.slice(i);
+  return { narrow: narrow.join("\n"), wide };
+}
+
+/** The declarations of every rule whose selector list includes exactly `selector`. */
+function declarations(css, selector) {
+  const out = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = m[1].split(",").map((x) => x.trim());
+    if (selectors.includes(selector)) out.push(m[2]);
+  }
+  return out.join(";");
+}
+
+const { narrow, wide } = splitNarrow(stylesCss);
+
+try {
+  // R-3: at /p/x/milestones, Work is a closed disclosure button marked current, and Milestones is the page.
+  {
+    const problems = [];
+    const { document } = await render("src/App.tsx", "ShellNav", { project: P, index: null }, { url: `${root}/milestones` });
+    const work = document.querySelector('button.nav-area[aria-controls="nav-work"]');
+    if (!work) problems.push("no Work button with aria-controls=nav-work");
+    else {
+      if (work.getAttribute("aria-expanded") !== "false") problems.push(`Work's aria-expanded is ${work.getAttribute("aria-expanded")}, expected false`);
+      if (!work.classList.contains("current")) problems.push(`Work's class is "${work.className}", expected it to include current`);
+      if (!/^Work\s*▾$/.test(work.textContent.trim())) problems.push(`Work's button reads "${work.textContent}", expected "Work ▾"`);
+      const caret = [...work.querySelectorAll("span")].find((x) => x.textContent.includes("▾"));
+      if (caret?.getAttribute("aria-hidden") !== "true") problems.push("the ▾ is not in an aria-hidden span");
+    }
+    const list = document.getElementById("nav-work");
+    if (!list) problems.push("no list with id nav-work");
+    else if (!list.hasAttribute("hidden")) problems.push("Work's list is not hidden while its menu is closed");
+    const current = [...document.querySelectorAll('[aria-current="page"]')];
+    if (current.length !== 1 || current[0].textContent.trim() !== "Milestones" || current[0].getAttribute("href") !== `${root}/milestones`)
+      problems.push(`aria-current=page is on ${JSON.stringify(current.map((x) => x.textContent))}, expected only Milestones`);
+    for (const b of document.querySelectorAll("button.nav-area")) {
+      if (b !== work && b.classList.contains("current")) problems.push(`${b.textContent} is marked current too`);
+    }
+    report("web::check_nav_menus_are_disclosure_buttons", problems);
+  }
+
+  // R-4: the narrow breakpoint folds the areas behind one button; the badge and the theme stay out.
+  {
+    const problems = [];
+    const hideAreas = declarations(narrow, ".nav-areas");
+    if (!/display:\s*none/.test(hideAreas)) problems.push("@media (max-width: 720px) does not hide .nav-areas");
+    if (!/display:\s*(inline-block|inline-flex|block|flex)/.test(declarations(narrow, ".nav-toggle"))) problems.push("@media (max-width: 720px) does not show .nav-toggle");
+    if (!/display:\s*none/.test(declarations(wide, ".nav-toggle"))) problems.push(".nav-toggle is not hidden above 720 px");
+    for (const m of stylesCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/\.nav\b|\.nav-/.test(m[1]) && /overflow-x:\s*auto/.test(m[2])) problems.push(`${m[1].trim()} scrolls sideways (overflow-x: auto)`);
+    }
+    if (/\.tabs\b/.test(stylesCss)) problems.push("styles.css still has .tabs rules");
+    const { document } = await render("src/App.tsx", "default", {}, { url: `${root}/review` });
+    const toggle = document.querySelector("button.nav-toggle");
+    if (!toggle) problems.push("no .nav-toggle in the shell");
+    else {
+      if (toggle.getAttribute("aria-controls") !== "nav-areas") problems.push(`.nav-toggle's aria-controls is ${toggle.getAttribute("aria-controls")}`);
+      if (toggle.getAttribute("aria-expanded") !== "false") problems.push(".nav-toggle is not aria-expanded=false while closed");
+      if (toggle.getAttribute("aria-label") !== "Menu") problems.push(".nav-toggle has no Menu label");
+      if (toggle.closest(".nav-areas")) problems.push(".nav-toggle is inside the panel it opens");
+    }
+    const areas = document.getElementById("nav-areas");
+    if (!areas || !areas.classList.contains("nav-areas")) problems.push("no .nav-areas with id nav-areas");
+    else {
+      const theme = document.querySelector(".theme-toggle");
+      if (!theme) problems.push("no theme toggle in the shell");
+      else if (areas.contains(theme)) problems.push("the theme toggle is inside .nav-areas");
+      // NeedsYouBadge draws nothing until FTR-048; it is rendered after the nav, outside the panel.
+      const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+      const shellAt = app.indexOf("<ShellNav ");
+      const badgeAt = app.indexOf("<NeedsYouBadge ");
+      const buildAt = app.indexOf('className="build"');
+      if (shellAt < 0 || badgeAt < 0 || !(shellAt < badgeAt && badgeAt < buildAt)) problems.push("App.tsx does not render NeedsYouBadge between the nav and the build label");
+      const here = document.querySelector(".nav-here");
+      if (!here || here.textContent.replace(/[·\s]/g, "") !== "Review") problems.push(`the here label reads "${here?.textContent}", expected "· Review"`);
+      const global = [...areas.querySelectorAll(".global-nav a")].map((a) => a.textContent.trim());
+      if (JSON.stringify(global) !== JSON.stringify(["Projects", "Portfolio"])) problems.push(`the panel's global views are ${JSON.stringify(global)}`);
+    }
+    const navs = document.querySelectorAll("nav.nav");
+    if (navs.length !== 1) problems.push(`${navs.length} nav.nav elements, expected one serving both widths`);
+    report("web::check_nav_collapses_behind_one_button_at_the_narrow_breakpoint", problems);
+  }
+
+  // R-6: above 720 px, each area with several pages is one menu button on a single row.
+  {
+    const problems = [];
+    const ix = { config: { cadence: { sprints: false, releases: true, git_model: false } } };
+    const { document } = await render("src/App.tsx", "ShellNav", { project: P, index: ix }, { url: `${root}/docs` });
+    for (const area of visibleAreas(NAV, ix)) {
+      if (area.entries.length < 2) continue;
+      const buttons = document.querySelectorAll(`button.nav-area[aria-controls="nav-${area.key}"]`);
+      if (buttons.length !== 1) {
+        problems.push(`${area.label} has ${buttons.length} menu buttons, expected 1`);
+        continue;
+      }
+      if (!buttons[0].hasAttribute("aria-expanded")) problems.push(`${area.label}'s button has no aria-expanded`);
+      const list = document.getElementById(`nav-${area.key}`);
+      if (!list || list.tagName !== "UL" || list.parentElement !== buttons[0].parentElement) problems.push(`${area.label}'s list is not a ul beside its button`);
+      else {
+        const links = [...list.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+        const want = area.entries.map((e) => e.path(P));
+        if (JSON.stringify(links) !== JSON.stringify(want)) problems.push(`${area.label}'s list links ${JSON.stringify(links)}, expected ${JSON.stringify(want)}`);
+      }
+    }
+    const navRule = declarations(wide, ".nav");
+    if (!/display:\s*flex/.test(navRule) || !/flex-wrap:\s*nowrap/.test(navRule)) problems.push(`.nav above 720 px is not one flex row with flex-wrap: nowrap (${navRule.trim()})`);
+    if (!/flex-wrap:\s*nowrap/.test(declarations(wide, ".nav-areas"))) problems.push(".nav-areas above 720 px may wrap to a second row");
+    // A page may keep its own side panel (the docs tree); the shell's navigation never becomes one.
+    for (const m of stylesCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/sidebar/i.test(m[1]) && /\bnav\b|\.nav-/.test(m[1])) problems.push(`${m[1].trim()} is a sidebar rule for the navigation`);
+    }
+    for (const sel of [".nav", ".nav-areas"]) {
+      if (/flex-direction:\s*column/.test(declarations(wide, sel))) problems.push(`${sel} is a column above 720 px`);
+    }
+    report("web::check_nav_areas_with_several_pages_are_menu_buttons", problems);
+  }
+
+  // R-8: an area with one page is a plain link named for the area.
+  {
+    const problems = [];
+    const fixture = [
+      { key: "work", label: "Work", entries: [{ key: "board", label: "Board", path: (p) => `/p/${p}` }, { key: "review", label: "Review", path: (p) => `/p/${p}/review` }] },
+      { key: "architecture", label: "Architecture", entries: [{ key: "workflow", label: "Workflow", path: (p) => `/p/${p}/workflow` }] },
+    ];
+    const { document } = await render("src/App.tsx", "ShellNav", { project: P, index: null, nav: fixture }, { url: `${root}/workflow` });
+    const links = [...document.querySelectorAll("a")].filter((a) => a.getAttribute("href") === `${root}/workflow`);
+    if (links.length !== 1) problems.push(`${links.length} links to ${root}/workflow, expected 1`);
+    else {
+      const a = links[0];
+      if (a.textContent.trim() !== "Architecture") problems.push(`the link reads "${a.textContent}", expected "Architecture"`);
+      if (a.getAttribute("aria-current") !== "page") problems.push("the one-page area's link is not aria-current=page on its page");
+      if (!a.classList.contains("current")) problems.push("the one-page area is not marked current on its page");
+    }
+    if (document.querySelector('button[aria-controls="nav-architecture"]') || document.getElementById("nav-architecture")) problems.push("Architecture is rendered as a menu");
+    // The narrow layout's here label names the page you are on ("· Workflow"); the area item never does.
+    document.querySelector(".nav-here")?.remove();
+    if (/Workflow/.test(document.body.textContent)) problems.push("the area item shows the page's own label, Workflow");
+    if (!document.querySelector('button[aria-controls="nav-work"]')) problems.push("the fixture's two-page Work area is not a menu button");
+    report("web::check_nav_renders_a_one_page_area_as_a_link_named_for_the_area", problems);
+  }
+} catch (e) {
+  failed = true;
+  console.error(`check:nav — rendering the shell failed: ${e?.stack ?? e}`);
+} finally {
+  await closeRender();
 }
 
 if (failed) process.exit(1);
