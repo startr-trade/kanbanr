@@ -678,7 +678,7 @@ pub struct PlacedItem {
     pub placed: String,
     /// On the project's dependency critical path.
     pub critical: bool,
-    /// The planning decisions waiting on the item (FTR-049); empty until then.
+    /// The ids of the pending planning decisions that name the item, oldest first (FTR-049).
     pub pending: Vec<String>,
 }
 
@@ -790,6 +790,16 @@ pub fn row(store: &Store, p: &str, key: &str, _today: Date) -> Result<RowBody> {
             .schedule(Some(p))
             .critical
     };
+    // The planning decisions waiting on each item, oldest first (FTR-049).
+    let mut pending: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for v in crate::planning::list(store, p, Some("pending"))? {
+        for code in v.decision.items.iter().collect::<BTreeSet<_>>() {
+            pending
+                .entry(code.clone())
+                .or_default()
+                .push(v.decision.id.clone());
+        }
+    }
     let items = items
         .into_iter()
         .map(|f| {
@@ -802,7 +812,7 @@ pub fn row(store: &Store, p: &str, key: &str, _today: Date) -> Result<RowBody> {
                 to,
                 placed: placed.to_string(),
                 critical: critical.contains(&crate::graph::qualify(p, &f.code)),
-                pending: Vec::new(),
+                pending: pending.get(&f.code).cloned().unwrap_or_default(),
             }
         })
         .collect();

@@ -7,15 +7,19 @@
  * tab reads its own slice, and a row reads its items only once it is opened. The tab is `?tab=`
  * and the open rows are the hash (`#sprint:SP-004`; a bare `#SP-004` is read as a sprint).
  */
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { api, type Meta } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { LiveDot } from "../components/bits";
 import { Empty, ErrorState, LoadingState, Tabs, Timeline, writeOpen } from "../ui";
-import { defaultTab, openLanes, planTabs, toTimeline } from "../planTabs";
-import type { PlanScope, PlanSlice, PlanSummary } from "../types";
+import { defaultTab, openLanes, planTabs, planTargets, toTimeline } from "../planTabs";
+import { pendingByTarget } from "../planning";
+import type { CompactIndex, PlanningView, PlanScope, PlanSlice, PlanSummary } from "../types";
 import { PlanRow } from "./plan/PlanRow";
+import type { PlanningContext } from "./plan/RowItems";
 import { PastRow } from "./plan/PastRow";
 
 export default function PlanPage() {
@@ -50,14 +54,41 @@ export function PlanBody(p: { project: string; summary: PlanSummary }): JSX.Elem
   );
 }
 
+/**
+ * What the Current and Planned tabs know of planning decisions (FTR-049): the pending ones and
+ * those declined (the rows keep the last 14 days), the sprints and releases still open to plan
+ * into, from the compact index, and whether this monitor may record a decision, as whom. A read
+ * that fails leaves its part empty: the tab still draws.
+ */
+function usePlanning(project: string): PlanningContext {
+  const pending = useQuery<PlanningView[]>(project, urls.planning(project, "pending"), TAGS.planning);
+  const declined = useQuery<PlanningView[]>(project, urls.planning(project, "declined"), TAGS.planning);
+  const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
+  const meta = useQuery<Meta>(null, urls.meta(), TAGS.meta, () => api.getMeta());
+  // Who a decision is recorded as: the board's commit identity, as on the Review page.
+  const who = api.approver(meta.data ?? null);
+  // A read-only monitor (FEAT-178) records nothing; pending and declined still show.
+  const writable = !isReadOnly() && meta.data?.writes === true && who != null;
+  return useMemo(
+    () => ({
+      views: [...(pending.data ?? []), ...(declined.data ?? [])],
+      targets: planTargets(index.data?.sprints ?? [], index.data?.releases ?? []),
+      writable,
+      who: who ?? "",
+    }),
+    [pending.data, declined.data, index.data, writable, who],
+  );
+}
+
 /** One tab: its own slice, read when the tab is selected. */
 function PlanTab(p: { project: string; scope: PlanScope }): JSX.Element {
   const { project, scope } = p;
   const slice = useQuery<PlanSlice>(project, urls.plan(project, scope), TAGS.plan);
+  const planning = usePlanning(project);
   if (!slice.data) {
     return slice.error ? <ErrorState error={slice.error} retry={slice.reload} /> : <LoadingState />;
   }
-  return <PlanTabBody project={project} scope={scope} slice={slice.data} />;
+  return <PlanTabBody project={project} scope={scope} slice={slice.data} planning={scope === "past" ? undefined : planning} />;
 }
 
 const CAPTION: Record<PlanScope, string> = {
@@ -70,8 +101,8 @@ const CAPTION: Record<PlanScope, string> = {
  * A tab's slice drawn: the timeline of its dated lanes, then one row per lane, undated ones last.
  * Past lanes are compact rows. Exported so the checks render it without a daemon.
  */
-export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanSlice }): JSX.Element {
-  const { project, scope, slice } = p;
+export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanSlice; planning?: PlanningContext }): JSX.Element {
+  const { project, scope, slice, planning } = p;
   const location = useLocation();
   const navigate = useNavigate();
   const open = openLanes(location.hash);
@@ -95,7 +126,7 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
     return <Empty title="Nothing has closed or shipped yet." />;
   }
 
-  const timeline = toTimeline(slice);
+  const timeline = toTimeline(slice, pendingByTarget(planning?.views ?? []));
   const drawn = timeline.lanes.filter((l) => l.bands.length > 0 || l.marks.length > 0);
   return (
     <div className={`plan-tab plan-${scope}`}>
@@ -131,6 +162,7 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
               today={slice.today}
               open={open.has(lane.key)}
               onToggle={(v) => toggle(lane.key, v)}
+              planning={planning}
             />
           ),
         )}

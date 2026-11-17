@@ -11,6 +11,13 @@
 // declined decision's nearest move into a request for the same items, and DeclinedPlanning shows
 // the reason and posts that request on one press.
 //
+// web::check_plan_rows_show_pending_planning_decisions (R-3): `pendingByTarget` and
+// `pendingByItem` key the pending decisions; `toTimeline` marks a lane's band pending when one
+// waits on it, and the Plan tab draws it dashed; an opened row shows "pending: into SP-004 (PD-1)"
+// on each item it names, the last declined decision's reason, a checkbox per item and one
+// PlanningAction for the selection, offering the open sprints and releases but not the row's own;
+// a read-only monitor shows the pills and no selection.
+//
 // The components are rendered to markup through scripts/lib/render.mjs, and rendered in jsdom and
 // pressed, with `fetch` replaced by a recorder, so the posts are the ones api.ts would send.
 //
@@ -27,11 +34,13 @@ import {
   dropRequest,
   targetRequest,
 } from "../src/planning.ts";
+import { declinedByItem, planTargets, toTimeline } from "../src/planTabs.ts";
 
 const R1 = "web::check_planning_action_asks_first_and_posts_one_decision";
 const R5 = "web::check_a_declined_planning_decision_offers_the_nearest_move";
+const R3 = "web::check_plan_rows_show_pending_planning_decisions";
 
-const problems = { [R1]: [], [R5]: [] };
+const problems = { [R1]: [], [R3]: [], [R5]: [] };
 const expect = (test, name, got, want) => {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     problems[test].push(`${name}: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
@@ -114,6 +123,85 @@ const base = { project: "demo", items: ["FTR-044", "DEF-076"], targets, writable
   expect(R5, "one button, the nearest move", [...document.querySelectorAll("button")].map((b) => b.textContent), ["Ask for v0.8.0 instead"]);
   const ro = await render("src/components/PlanningAction.tsx", "DeclinedPlanning", { project: "demo", view: views[2], writable: false, who: "Ada" });
   ok(R5, "read-only: the reason, no button", ro.document.querySelectorAll("button").length === 0 && ro.document.body.textContent.includes("declined:"), ro.html);
+}
+
+// ---- R-3: pending decisions on the Plan page's lanes and rows ----
+{
+  expect(R3, "pending by target: the sprint and the release", [...byTarget.keys()], ["sprint:SP-004", "release:v0.9.0"]);
+  expect(R3, "pending by item: both decisions naming DEF-076", byItem.get("DEF-076")?.map((v) => v.decision.id), ["PD-1", "PD-2"]);
+  ok(R3, "a declined or carried decision is not pending", !byItem.has("X-9") && !byTarget.has("release:v0.7.0"), [...byTarget.keys()]);
+
+  const laneOf = (key, kind, state, bands = []) => ({ key, kind, label: key.slice(key.indexOf(":") + 1), state, from: "2026-11-16", to: "2026-11-29", bands, marks: [], done: 0, total: 2, points_done: null, points_total: null, carried: 0, burndown: null });
+  const sprintBand = { from: "2026-11-16", to: "2026-11-29", label: "SP-004", tone: "info", progress: 0.5 };
+  const slice = {
+    scope: "current",
+    today: "2026-11-17",
+    from: "2026-11-03",
+    to: "2026-12-01",
+    lanes: [
+      laneOf("sprint:SP-004", "sprint", "active", [sprintBand]),
+      laneOf("sprint:SP-005", "sprint", "planned", [{ ...sprintBand, label: "SP-005" }]),
+      laneOf("release:v0.8.0", "release", "candidate"),
+      laneOf("release:v0.9.0", "release", "planned"),
+      laneOf("sprint:SP-003", "sprint", "closed", [{ ...sprintBand, label: "SP-003" }]),
+    ],
+    undated: [],
+  };
+  const t = toTimeline(slice, byTarget);
+  const pendingOf = (key) => t.lanes.find((l) => l.key === key)?.bands.map((b) => b.pending);
+  expect(R3, "the lane a decision plans into is pending", pendingOf("sprint:SP-004"), [true]);
+  expect(R3, "a lane with none is not", pendingOf("sprint:SP-005"), [false]);
+  expect(R3, "toTimeline with no decisions marks nothing", toTimeline(slice).lanes.flatMap((l) => l.bands.map((b) => b.pending)), [false, false, false]);
+
+  const indexSprints = [
+    { code: "SP-003", name: "", start: "2026-11-02", end: "2026-11-15", state: "closed" },
+    { code: "SP-004", name: "", start: "2026-11-16", end: "2026-11-29", state: "active" },
+    { code: "SP-005", name: "", start: "2026-11-30", end: "2026-12-13", state: "planned" },
+  ];
+  const indexReleases = [
+    { version: "v0.7.0", state: "shipped" },
+    { version: "v0.8.0", state: "planned", stage: "candidate" },
+    { version: "v0.9.0", state: "planned" },
+    { version: "v0.6.9", state: "superseded" },
+  ];
+  expect(R3, "targets: open sprints and planned releases, never frozen or closed", planTargets(indexSprints, indexReleases), [
+    { key: "sprint:SP-004", label: "SP-004" },
+    { key: "sprint:SP-005", label: "SP-005" },
+    { key: "release:v0.9.0", label: "v0.9.0" },
+  ]);
+  const old = declined(decision("PD-6", "into-sprint", "SP-003", ["DEF-076"]), "SP-003 is closed", null);
+  old.outcome.at = "2026-10-01T10:00:00Z";
+  const recent = declinedByItem([...views, old], "2026-11-17");
+  expect(R3, "declined by item: the last 14 days only", [...recent.keys()], ["FTR-044"]);
+
+  const planning = { views, targets: planTargets(indexSprints, indexReleases), writable: true, who: "Ada" };
+  const page = await render("src/pages/PlanPage.tsx", "PlanTabBody", { project: "demo", scope: "current", slice, planning }, { url: "/p/demo/plan" });
+  const dashed = [...page.document.querySelectorAll(".ui-tl-band.ui-tl-pending")].map((b) => b.textContent);
+  ok(R3, "the tab draws the pending lane's band dashed", dashed.length === 1 && dashed[0].includes("SP-004"), page.html.slice(0, 400));
+  ok(R3, "the row says how many decisions wait on it", page.document.body.textContent.includes("1 pending decision"), page.document.body.textContent);
+
+  const body = {
+    key: "sprint:SP-005",
+    items: [
+      { code: "FTR-044", title: "Forty-four", status: "Planned", from: "2026-11-16", to: "2026-11-29", placed: "sprint", critical: false, pending: ["PD-1"] },
+      { code: "DEF-076", title: "Seventy-six", status: "Planned", from: "", to: "", placed: "undated", critical: false, pending: ["PD-1", "PD-2"] },
+      { code: "X-1", title: "Other", status: "Planned", from: "", to: "", placed: "undated", critical: false, pending: [] },
+    ],
+    by_status: [],
+    carried: [],
+  };
+  const row = { project: "demo", lane: slice.lanes[1], from: slice.from, to: slice.to, today: slice.today, body, planning };
+  const { document } = await render("src/pages/plan/RowItems.tsx", "RowItemsBody", row, { url: "/p/demo/plan" });
+  const cell = (code) => [...document.querySelectorAll("table.plan-items tbody tr")].find((r) => r.textContent.includes(code))?.textContent ?? "";
+  ok(R3, "the item's pill names the target and the decision", cell("FTR-044").includes("pending: into SP-004 (PD-1)"), cell("FTR-044"));
+  ok(R3, "an item in two decisions shows both", cell("DEF-076").includes("pending: into SP-004 (PD-1)") && cell("DEF-076").includes("pending: into v0.9.0 (PD-2)"), cell("DEF-076"));
+  ok(R3, "an item with none shows no pill", !cell("X-1").includes("pending:"), cell("X-1"));
+  ok(R3, "the declined one shows its reason", cell("FTR-044").includes("declined: v0.7.0 is at candidate; its scope is frozen"), cell("FTR-044"));
+  expect(R3, "a checkbox per item", [...document.querySelectorAll('table.plan-items input[type="checkbox"]')].map((c) => c.getAttribute("aria-label")), ["Select FTR-044", "Select DEF-076", "Select X-1"]);
+  expect(R3, "one action, offering every open target but the row's own", [...document.querySelectorAll(".plan-planning select option")].map((o) => o.textContent), ["SP-004", "v0.9.0"]);
+
+  const ro = await render("src/pages/plan/RowItems.tsx", "RowItemsBody", { ...row, planning: { ...planning, writable: false } }, { url: "/p/demo/plan" });
+  ok(R3, "read-only: the pills, no selection or action", ro.document.querySelectorAll('input[type="checkbox"], .plan-planning').length === 0 && ro.document.body.textContent.includes("pending: into SP-004 (PD-1)"), ro.html.slice(0, 400));
 }
 await closeRender();
 

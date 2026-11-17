@@ -660,7 +660,7 @@
             "type": "integer"
           },
           "kind": {
-            "description": "A review group's key, as the Review page names it, or `release`, `red-tests`,\n`doctor-errors`, `git-doctor`, `retro-due`, or `read-error` for a source that could not be\nread.",
+            "description": "A review group's key, as the Review page names it, or `planning`, `release`, `red-tests`,\n`doctor-errors`, `git-doctor`, `retro-due`, or `read-error` for a source that could not be\nread.",
             "type": "string"
           },
           "label": {
@@ -5271,7 +5271,7 @@
             "type": "string"
           },
           "pending": {
-            "description": "The planning decisions waiting on the item (FTR-049); empty until then.",
+            "description": "The ids of the pending planning decisions that name the item, oldest first (FTR-049).",
             "items": {
               "type": "string"
             },

@@ -4,8 +4,9 @@
  * read only when it is opened (R-8), inside the row's `children`.
  */
 import { AccordionRow } from "../../ui";
+import { pendingByTarget } from "../../planning";
 import type { PlanLane } from "../../types";
-import { RowItems } from "./RowItems";
+import { RowItems, type PlanningContext } from "./RowItems";
 
 const KIND: Record<string, string> = { sprint: "Sprint", release: "Release", milestone: "Milestone" };
 
@@ -24,8 +25,11 @@ export function PlanRow(p: {
   today: string;
   open: boolean;
   onToggle(open: boolean): void;
+  /** The planning decisions and targets, when the page read them (FTR-049). */
+  planning?: PlanningContext;
 }): JSX.Element {
   const { lane } = p;
+  const pendingHere = pendingByTarget(p.planning?.views ?? []).get(lane.key)?.length ?? 0;
   return (
     <AccordionRow
       id={lane.key}
@@ -49,10 +53,15 @@ export function PlanRow(p: {
           {lane.from ? null : <span className="ui-pill ui-pill-neutral">undated</span>}
           <span className="ui-pill ui-pill-info">{doneText(lane)}</span>
           {lane.carried > 0 ? <span className="ui-pill ui-pill-warn">{lane.carried} carried</span> : null}
+          {pendingHere > 0 ? (
+            <span className="ui-pill ui-pill-info plan-pending">
+              {pendingHere} pending {pendingHere === 1 ? "decision" : "decisions"}
+            </span>
+          ) : null}
         </>
       }
     >
-      {() => <RowItems project={p.project} lane={lane} from={p.from} to={p.to} today={p.today} />}
+      {() => <RowItems project={p.project} lane={lane} from={p.from} to={p.to} today={p.today} planning={p.planning} />}
     </AccordionRow>
   );
 }
