@@ -64,6 +64,8 @@ pub fn warm_routes(project: &str) -> Vec<String> {
         format!("/projects/{project}/attention"),
         // The Plan page's counts (FTR-043), so its tab labels draw warm.
         format!("/projects/{project}/plan/summary"),
+        // The Releases page's counts (FTR-041), so its tab labels draw warm.
+        format!("/projects/{project}/releases/summary"),
     ]
 }
 
@@ -983,7 +985,8 @@ mod tests {
                 "/projects/demo/review/summary".to_string(),
                 "/projects/demo/overview".to_string(),
                 "/projects/demo/attention".to_string(),
-                "/projects/demo/plan/summary".to_string()
+                "/projects/demo/plan/summary".to_string(),
+                "/projects/demo/releases/summary".to_string()
             ]
         );
         let key = memo::canonical("/projects/demo/index");

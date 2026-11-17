@@ -1842,7 +1842,33 @@ fn dispatch_routes(
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
         // ---- releases (FEAT-120) ----
-        ("GET", ["projects", p, "releases"]) => ser(&crate::releases::report_all(store, p)?),
+        // `?scope=current|planned|past`: one Releases tab, newest first (FTR-041); without it,
+        // every release as before.
+        ("GET", ["projects", p, "releases"]) => match query_param(query, "scope").as_deref() {
+            None => ser(&crate::releases::report_all(store, p)?),
+            Some(scope) => {
+                let scope = match scope {
+                    "current" => crate::releases::Scope::Current,
+                    "planned" => crate::releases::Scope::Planned,
+                    "past" => crate::releases::Scope::Past,
+                    _ => {
+                        return Err(CoreError::Unsupported(
+                            "scope is current, planned or past".into(),
+                        ));
+                    }
+                };
+                ser(&crate::releases::slice(store, p, scope)?)
+            }
+        },
+        // The Releases page's counts per tab (FTR-041). Matched before the `{version}` arms; no
+        // release can be called `summary`.
+        ("GET", ["projects", p, "releases", "summary"]) => {
+            ser(&crate::releases::summary(store, p)?)
+        }
+        // One release's item table (FTR-041), with the daemon's repository for docs-folded.
+        ("GET", ["projects", p, "releases", version, "items"]) => ser(
+            &crate::releases::items_table_in(store, p, &percent_decode(version), repo)?,
+        ),
         // `patch_of`: a patch of a cut release, branched from its tag (FEAT-184).
         ("POST", ["projects", p, "releases"]) => match str_field(b, "patch_of") {
             Some(parent) => ser(&crate::releases::add_patch(

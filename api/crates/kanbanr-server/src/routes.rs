@@ -400,7 +400,7 @@ pub(crate) fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a 
 }
 
 /// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor`,
-/// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), and the readiness and review reads that judge the repository
+/// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), `…/releases/<V>/items`, whose docs-folded pill asks whether the branch moved on (FTR-041), and the readiness and review reads that judge the repository
 /// docs of an item (DEF-033), the drift reads (FTR-013), and the items list, whose stale evidence
 /// is judged against HEAD (FTR-048), the attention read, whose review groups and git doctor
 /// read it (FTR-048), the Overview, which embeds attention and judges staleness against HEAD
@@ -419,6 +419,7 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "guards"]
             | ["projects", _, "releases", _, "plan"]
             | ["projects", _, "releases", _, "notes"]
+            | ["projects", _, "releases", _, "items"]
             | ["projects", _, "review"]
             | ["projects", _, "readiness"]
             | ["projects", _, "features", _, "readiness"]

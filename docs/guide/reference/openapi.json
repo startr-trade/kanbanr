@@ -6776,6 +6776,73 @@
         ],
         "type": "object"
       },
+      "ReleaseItemRow": {
+        "description": "One row of a release's item table (FTR-041). Derived, never stored.",
+        "properties": {
+          "approval": {
+            "description": "`approved` (ratified counts), `lapsed`, `added` (approved, then only extended) or `none`.",
+            "type": "string"
+          },
+          "carried_to": {
+            "description": "The release a carried item moved to, or `unplanned`; empty for an item not carried.",
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "design_review": {
+            "description": "`signed`, `lapsed`, or empty when never given (or withdrawn).",
+            "type": "string"
+          },
+          "docs_folded": {
+            "description": "`signed`, `lapsed`, or empty when never given (or withdrawn).",
+            "type": "string"
+          },
+          "finished": {
+            "description": "An end status, or a stage marked `done` (FEAT-137), as [`ReleaseReport::finished`] counts.",
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "sprint": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tests_green": {
+            "description": "Tests named across the definition's requirements that are green.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tests_named": {
+            "description": "Every test named across the definition's requirements.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "kind",
+          "status",
+          "sprint",
+          "tests_green",
+          "tests_named",
+          "approval",
+          "design_review",
+          "docs_folded",
+          "carried_to",
+          "finished"
+        ],
+        "type": "object"
+      },
       "ReleaseNow": {
         "description": "A release in flight, as a stage stepper.",
         "properties": {
@@ -7103,6 +7170,37 @@
           "shipped"
         ],
         "type": "string"
+      },
+      "ReleasesSummary": {
+        "description": "How many releases each tab holds, and the tab the page opens on (FTR-041). Derived from\n`releases.yaml` alone.",
+        "properties": {
+          "current": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "description": "`current` when any release is in flight, else `planned` when any is planned, else `past`.",
+            "type": "string"
+          },
+          "past": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "planned": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "current",
+          "planned",
+          "past",
+          "open"
+        ],
+        "type": "object"
       },
       "Report": {
         "description": "Every flag for the board (or one item), with when it was generated, so two runs can be compared\nlater (FTR-013 R-8).",
@@ -11563,6 +11661,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "One Releases tab, newest first (FTR-041): current (at a stage, not shipped), planned (not yet at a stage) or past (shipped or superseded). Without it, every release.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "enum": [
+                "current",
+                "planned",
+                "past"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11593,6 +11705,47 @@
           }
         },
         "summary": "The project's releases, each with what it ships"
+      }
+    },
+    "/api/projects/{project}/releases/summary": {
+      "get": {
+        "operationId": "getProjectsReleasesSummary",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasesSummary"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The Releases page's counts per tab (current, planned, past) and the tab it opens on"
       }
     },
     "/api/projects/{project}/releases/{version}/cut-preview": {
@@ -11646,6 +11799,59 @@
           }
         },
         "summary": "What cutting a release now would ship and carry over, with nothing written"
+      }
+    },
+    "/api/projects/{project}/releases/{version}/items": {
+      "get": {
+        "operationId": "getProjectsReleasesItems",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The release's version, such as 1.0.",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReleaseItemRow"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One release's item table: each item's status, tests, approval and sign-offs"
       }
     },
     "/api/projects/{project}/releases/{version}/plan": {
