@@ -777,6 +777,9 @@ pub fn evidence(
                 (Some(c), Some(r), Some(t)) => (c, r, t),
                 _ => return Err(missing()),
             };
+            // A key kept under an earlier code still names the item (FTR-056).
+            let project = store.load_meta(p)?;
+            let code = crate::aliases::current(&project, code).unwrap_or(code);
             let m = crate::manual::waiting(store, p)?
                 .into_iter()
                 .find(|m| m.code == code && m.requirement == requirement && m.test == test)
@@ -1194,6 +1197,39 @@ mod tests {
             changed_at: String::new(),
             tests_only: false,
         }
+    }
+
+    /// FTR-056 R-2: a manual row's key kept under a code the item has since left still opens the
+    /// item's evidence.
+    #[test]
+    fn a_manual_row_keyed_by_an_earlier_code_still_finds_its_evidence() {
+        let (store, dir) = board();
+        let code = define(
+            &store,
+            "Checked",
+            FeatureDefinition {
+                requirements: vec![Requirement {
+                    text: "THE SYSTEM SHALL do it".into(),
+                    tests: vec![TestRef {
+                        name: "manual: the person judges whether it reads clearly".into(),
+                        kind: "manual".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..statement("Checked by hand")
+            },
+        );
+        let key = slice(&store, "demo", "manual", None).unwrap().rows[0]
+            .key
+            .clone();
+        assert!(key.starts_with(&format!("{code}/")), "{key}");
+        store
+            .edit_feature("demo", &code, None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let ev = evidence(&store, "demo", "manual", &key, None).unwrap();
+        assert_eq!(ev.manual.unwrap().code, "DEF-900");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// FTR-038 R-1: every waiting decision sits in the group of the decision it needs; the summary

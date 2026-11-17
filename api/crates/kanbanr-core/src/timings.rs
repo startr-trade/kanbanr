@@ -257,13 +257,17 @@ fn window(store: &Store, id: &str, baseline: Option<&Baseline>) -> Vec<Slot> {
 /// [`last_for`] read from the kept files, bounded (R-11): over the [`window`] only, newest first,
 /// stopping once each test in `wanted` has met its newest row. Rows of the item's other tests met
 /// on the way are kept too, as `last_for` keeps them. A wanted test not timed inside the window
-/// is not in the answer (no timing yet). With nothing wanted, nothing is read.
+/// is not in the answer (no timing yet). With nothing wanted, nothing is read. `codes` is the
+/// item's current code, then its earlier ones (FTR-056): rows under any of them count, keyed by the
+/// first.
 pub fn last_for_read(
     store: &Store,
     id: &str,
-    code: &str,
+    codes: &[&str],
     wanted: &BTreeSet<TestKey>,
 ) -> Result<BTreeMap<TestKey, (u64, String)>> {
+    // Rows a run recorded under an earlier code are the item's too, keyed by its current one.
+    let current = codes.first().copied().unwrap_or_default();
     let mut out: BTreeMap<TestKey, (u64, String)> = BTreeMap::new();
     if wanted.is_empty() {
         return Ok(out);
@@ -272,8 +276,12 @@ pub fn last_for_read(
     let mut missing = wanted.len();
     for slot in window(store, id, base.as_ref()).into_iter().rev() {
         let Some(run) = run_of(slot) else { continue };
-        for row in run.tests.into_iter().filter(|r| r.code == code) {
-            let key = (row.code, row.requirement, row.test);
+        for row in run
+            .tests
+            .into_iter()
+            .filter(|r| codes.contains(&r.code.as_str()))
+        {
+            let key = (current.to_string(), row.requirement, row.test);
             if out.contains_key(&key) {
                 continue;
             }
@@ -365,7 +373,7 @@ pub fn last_view(store: &Store, id: &str, code: Option<&str>) -> Result<TimingsV
     Ok(TimingsView::from_last(last_for_read(
         store,
         id,
-        &feature.code,
+        &feature.codes().collect::<Vec<_>>(),
         &wanted,
     )?))
 }
@@ -576,6 +584,59 @@ mod tests {
             tests: rows,
             ..TimingRun::default()
         }
+    }
+
+    /// FTR-056 R-2: rows a run recorded under a code the item has since left still read as the
+    /// item's own, under its current code.
+    #[test]
+    fn an_earlier_code_still_finds_the_run_rows_of_the_item() {
+        let (store, dir) = scratch("ftr056-alias");
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let code = store.add_feature("demo", "T", "", "M", None).unwrap().code;
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    requirements: vec![crate::models::Requirement {
+                        text: "THE SYSTEM SHALL".into(),
+                        tests: vec![crate::models::TestRef {
+                            name: "m::t".into(),
+                            kind: "unit".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let req = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .requirements[0]
+            .id
+            .clone();
+        write(
+            &store,
+            "demo",
+            &run("2026-11-01T10:00:00Z", vec![row(&code, &req, "m::t", 42)]),
+        )
+        .unwrap();
+        store
+            .edit_feature("demo", &code, None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let view = last_view(&store, "demo", Some(&code)).unwrap();
+        assert_eq!(view.tests.len(), 1, "{view:?}");
+        assert_eq!(view.tests[0].ms, 42);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// FTR-058 R-4: a run file is named by its time and revision, written once, read back, and a
@@ -976,7 +1037,7 @@ mod tests {
         }
         let wanted: BTreeSet<TestKey> = last_for(&on_disk, "FTR-042").into_keys().collect();
         let t = std::time::Instant::now();
-        let one = last_for_read(&store, "demo", "FTR-042", &wanted).unwrap();
+        let one = last_for_read(&store, "demo", &["FTR-042"], &wanted).unwrap();
         let read_last = t.elapsed();
         assert_eq!(one, last_for(&on_disk, "FTR-042"));
         let t = std::time::Instant::now();

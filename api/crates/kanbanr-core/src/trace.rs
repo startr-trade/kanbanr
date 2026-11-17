@@ -169,7 +169,7 @@ pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> 
             let items: Vec<&FeatureItem> = project
                 .features
                 .iter()
-                .filter(|f| named.contains(&f.code))
+                .filter(|f| named.iter().any(|c| f.answers_to(c)))
                 .collect();
             (format!("docs/{path}"), None, items)
         }
@@ -652,6 +652,33 @@ mod tests {
             doc.links_out
                 .contains(&crate::refs::Ref::Goal { id: "G-1".into() })
         );
+    }
+
+    /// FTR-056 R-2: a doc that links an item by a code it has since left still traces to the item.
+    #[test]
+    fn a_doc_naming_an_earlier_code_traces_to_the_item() {
+        let (store, _dir) = fixture();
+        let a = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/data.md",
+                &format!("The cart ([{0}](/p/demo/feature/{0})) keeps G-1.", a.code),
+            )
+            .unwrap();
+        store
+            .edit_feature("demo", &a.code, None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let doc = run(
+            &store,
+            "demo",
+            &Subject::Doc {
+                path: "architecture/data.md".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.items.len(), 1, "{:?}", doc.items);
+        assert_eq!(doc.items[0].code, "DEF-900");
     }
 
     #[test]

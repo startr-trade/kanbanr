@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 import { api, viaOrigin, type Meta } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useQuery } from "../data/useQuery";
@@ -20,6 +20,7 @@ import {
 import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef, TestTiming } from "../types";
 import { signoffDocs } from "../position";
 import { releaseLine } from "../releaseLine";
+import { currentCode } from "../aliases";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
@@ -38,6 +39,19 @@ export default function FeaturePage() {
   useScrollToHash(!!feature);
   const usesReleases = index.data?.config.cadence.releases === true;
   const releases = useQuery<Release[]>(project, usesReleases ? urls.releases(project) : null, TAGS.releases);
+
+  // An earlier code of a renamed item goes to the item's address under its current code, keeping
+  // the hash (FTR-056).
+  const location = useLocation();
+  const current = currentCode(index.data?.items ?? [], code);
+  if (current && current !== code) {
+    return (
+      <Navigate
+        replace
+        to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(current)}${location.hash}`}
+      />
+    );
+  }
 
   if (loading && !feature) return <Loading />;
   if (error?.startsWith("404 ")) return <ErrorBox error={`Feature ${code} not found`} />;

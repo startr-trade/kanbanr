@@ -737,10 +737,11 @@ pub fn report(store: &Store, id: &str, code: &str, today: time::Date) -> Result<
     // Read as of today, on the copy only: a sprint dated ahead is planned (DEF-041).
     sprint.state = sprint.state_on(today);
     let carried_out: Vec<&str> = sprint.carried.iter().map(|c| c.code.as_str()).collect();
+    let carried = |f: &FeatureItem| carried_out.iter().any(|c| f.answers_to(c));
     let scope: Vec<&FeatureItem> = project
         .features
         .iter()
-        .filter(|f| f.sprint.as_deref() == Some(code) || carried_out.contains(&f.code.as_str()))
+        .filter(|f| f.sprint.as_deref() == Some(code) || carried(f))
         .collect();
     let committed = total(scope.iter().map(|f| size(&project, f)));
     let first = crate::gantt::parse_ymd(&sprint.start).unwrap_or(today);
@@ -752,10 +753,7 @@ pub fn report(store: &Store, id: &str, code: &str, today: time::Date) -> Result<
         let burned = total(
             scope
                 .iter()
-                .filter(|f| {
-                    !carried_out.contains(&f.code.as_str())
-                        && finished_on(&project, f).is_some_and(|d| d <= day)
-                })
+                .filter(|f| !carried(f) && finished_on(&project, f).is_some_and(|d| d <= day))
                 .map(|f| size(&project, f)),
         );
         burndown.push(BurndownDay {
@@ -770,7 +768,7 @@ pub fn report(store: &Store, id: &str, code: &str, today: time::Date) -> Result<
     let done = total(
         scope
             .iter()
-            .filter(|f| !carried_out.contains(&f.code.as_str()) && done(&project, f))
+            .filter(|f| !carried(f) && done(&project, f))
             .map(|f| size(&project, f)),
     );
     let days_left = if today > last {
@@ -813,7 +811,7 @@ pub fn velocity(store: &Store, id: &str) -> Result<Option<Vec<(String, f64)>>> {
                         .features
                         .iter()
                         .filter(|f| f.sprint.as_deref() == Some(s.code.as_str()))
-                        .filter(|f| !carried.contains(&f.code.as_str()) && done(&project, f))
+                        .filter(|f| !carried.iter().any(|c| f.answers_to(c)) && done(&project, f))
                         .map(|f| size(&project, f)),
                 );
                 (s.code.clone(), finished)
@@ -852,7 +850,7 @@ pub fn outside_running_sprint(
         .features
         .iter()
         .filter(|f| f.sprint.is_none())
-        .filter(|f| only.is_none_or(|o| o.contains(&f.code)))
+        .filter(|f| only.is_none_or(|o| o.iter().any(|c| f.answers_to(c))))
         .filter(|f| !crate::graph::is_terminal_status(&project.config, &f.status))
         .filter_map(|f| {
             let version = f.release.as_deref()?;
@@ -1061,6 +1059,60 @@ mod tests {
         // Planned into the sprint, it is no longer named.
         super::plan(&store, "shop", "SP-001", std::slice::from_ref(&left_out)).unwrap();
         assert!(outside(&store, None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-056 R-2: an item planned into a release under a code it has since left is still named
+    /// when it is outside the running sprint, whichever of its codes the caller asks about.
+    #[test]
+    fn an_earlier_code_still_finds_an_item_outside_the_running_sprint() {
+        let (store, codes, dir) = board("ftr056-outside", Default::default());
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": true, "releases": true})),
+        )
+        .unwrap();
+        crate::releases::add(&store, "shop", "v1", "", "").unwrap();
+        let left_out = store.add_feature("shop", "D", "", "M", None).unwrap().code;
+        let both: Vec<String> = vec![codes[0].clone(), left_out.clone()];
+        crate::releases::plan(&store, "shop", "v1", &both).unwrap();
+        super::start(&store, "shop", "SP-001").unwrap();
+        store
+            .edit_feature("shop", &left_out, None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let project = store.load("shop").unwrap();
+        let found = super::outside_running_sprint(
+            &project,
+            &super::load(&store, "shop").unwrap(),
+            &crate::releases::load(&store, "shop").unwrap(),
+            Some(std::slice::from_ref(&left_out)),
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, "DEF-900");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-056 R-2: an item a closed sprint carried out under a code it has since left is still
+    /// the one the sprint carried: the report counts it in scope, and a retro's list holds it.
+    #[test]
+    fn an_earlier_code_still_finds_the_item_a_sprint_carried_out() {
+        let gates = crate::config::preset("scrum").unwrap().gates;
+        let (store, codes, dir) = board("ftr056-carried", gates);
+        arrive(&store, &codes[0], "Done", "2026-10-06T10:00:00Z");
+        let closed = super::close(&store, "shop", "SP-001", Some("backlog")).unwrap();
+        assert!(closed.carried.iter().any(|c| c.code == codes[2]));
+        store
+            .edit_feature("shop", &codes[2], None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let today = crate::gantt::parse_ymd("2026-10-09").unwrap();
+        let report = super::report(&store, "shop", "SP-001", today).unwrap();
+        assert!(
+            report.items.contains(&"DEF-900".to_string()),
+            "{:?}",
+            report.items
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
