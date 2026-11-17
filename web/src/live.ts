@@ -30,6 +30,9 @@ export function settle(fn: () => void, ms: number): { call(): void; cancel(): vo
  *
  * With `settleMs > 0` a burst of events bumps the counter once, `settleMs` after the last one, for
  * a page whose refetch is costly (DEF-022).
+ *
+ * For root-stream pages only (Home, Portfolio: root reads off `/events`); a project page reads
+ * through `useQuery`, which shares the project's one stream (DEF-081).
  */
 export function useLiveTick(sseUrl: string, settleMs = 0): number {
   const [tick, setTick] = useState(0);

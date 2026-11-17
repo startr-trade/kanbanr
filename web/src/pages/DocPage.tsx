@@ -1,6 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import Markdown from "../components/Markdown";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import type { DocFolder } from "../types";
@@ -44,14 +45,13 @@ export default function DocPage() {
   const params = useParams();
   const project = params.project ?? "";
   const path = params["*"] ?? "";
-  const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getDoc(project, path), [project, path, tick]);
+  // The doc and the tree through the shared cache, re-read only when a doc changes (DEF-081).
+  const { data, error, loading } = useQuery<string>(project, urls.doc(project, path), TAGS.doc(path), () =>
+    api.getDoc(project, path),
+  );
   const ownH1 = data !== null && startsWithH1(data);
   // The doc tree is read only for a doc that brings no h1 of its own.
-  const tree = useAsync(
-    () => (data !== null && !ownH1 ? api.getDocTree(project) : Promise.resolve(null)),
-    [project, data !== null && !ownH1, tick],
-  );
+  const tree = useQuery<DocFolder>(project, data !== null && !ownH1 ? urls.docTree(project) : null, TAGS.docTree);
 
   const base = `/p/${encodeURIComponent(project)}/docs`;
   const parentPath = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
