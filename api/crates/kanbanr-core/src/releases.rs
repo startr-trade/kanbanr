@@ -3101,7 +3101,9 @@ fn work_out(
             // when they are dated today (DEF-001). A promotion that prepares writes today's date.
             let today = today_ymd();
             let stale = match (&tip_before, will_have_branch && !prepares) {
-                (Some(t), true) => stale_dates(&project, &releases[index], repo, t, &today),
+                (Some(t), true) => {
+                    stale_dates(store, id, &project, &releases[index], repo, t, &today)
+                }
                 _ => Vec::new(),
             };
             let redates = moves && !main_at_tip && !left_behind && !stale.is_empty();
@@ -4016,6 +4018,8 @@ fn work_prepare(
     let cfg = &project.config.cadence.release_prepare;
     let release = &releases[index];
     let ph = prep::Placeholders::new(&release.version, &release.name, &today_ymd())?;
+    // Where this branch has the book: today's paths, or earlier ones on an older branch (MNT-002).
+    let paths = prepare_paths(store, id, project, release, &ph, repo, tip, branch)?;
     let mut files: Vec<(String, String)> = Vec::new();
     fn put(files: &mut Vec<(String, String)>, path: &str, content: String) {
         match files.iter_mut().find(|(p, _)| p == path) {
@@ -4093,7 +4097,7 @@ fn work_prepare(
             .collect::<Vec<_>>()
             .join(", ");
         let write = |files: &mut Vec<(String, String)>, new: String| {
-            for copy in &cfg.changelog_copies {
+            for copy in &paths.changelog_copies {
                 prep::check_repo_path(copy)?;
                 put(files, copy, new.clone());
             }
@@ -4131,12 +4135,7 @@ fn work_prepare(
     let mut notes_path = String::new();
     let mut notes_found = String::new();
     let mut drafted_from: Vec<String> = Vec::new();
-    if let Some(n) = &cfg.notes {
-        let path = if release.notes_path.is_empty() {
-            prep::expand(n, &ph)
-        } else {
-            release.notes_path.clone()
-        };
+    if let (Some(n), Some(path)) = (&cfg.notes, paths.notes.clone()) {
         prep::check_repo_path(&path)?;
         notes_found = path.clone();
         let existing = match files.iter().find(|(p, _)| *p == path) {
@@ -4186,7 +4185,7 @@ fn work_prepare(
         }
     }
     let mut listed = false;
-    for l in &cfg.notes_listings {
+    for l in &paths.listings {
         let path = prep::expand(&l.path, &ph);
         let text = read(&files, &path)?;
         if let Some(new) = prep::add_listing(
@@ -4203,6 +4202,7 @@ fn work_prepare(
     if listed && notes_path.is_empty() {
         parts.push("the notes listing".to_string());
     }
+    notes_said.extend(paths.said);
     let does = if files.is_empty() {
         let mut said = vec!["nothing to change: it is already prepared".to_string()];
         said.extend(notes_said);
@@ -4533,7 +4533,7 @@ pub fn promote_with(
                 let project = with_recorded_notes(&store.load_meta(id)?, &releases[index]);
                 let at = coderepo::rev_parse(repo, &w.branch)?;
                 let ymd = today_ymd();
-                let files = redate_files(&project, &releases[index], repo, &at, &ymd)?;
+                let files = redate_files(store, id, &project, &releases[index], repo, &at, &ymd)?;
                 if !files.is_empty() {
                     let message = redate_message(version, &ymd, by);
                     let (old, new) = coderepo::commit_files(repo, &w.branch, &files, &message)?;
@@ -5314,13 +5314,15 @@ struct NotesSource {
     tried: Vec<String>,
 }
 
-/// The notes templates the board's config has named, newest first: today's, then each earlier one
-/// from the config file's history (DEF-036). Only when a template is configured today. When the
-/// history cannot be read, today's alone, with a note saying why (DEF-080).
-fn notes_templates(store: &Store, id: &str, project: &Project) -> Vec<String> {
-    let Some(current) = project.config.cadence.release_prepare.notes.clone() else {
-        return Vec::new();
-    };
+/// The release-prepare settings the board's config has had, newest first: today's, then each
+/// distinct earlier one from the config file's history (MNT-002, from DEF-036's notes history).
+/// When the history cannot be read, today's alone, with a note saying why (DEF-080).
+fn past_prepare_configs(
+    store: &Store,
+    id: &str,
+    project: &Project,
+) -> Vec<crate::releasegates::ReleasePrepare> {
+    let current = project.config.cadence.release_prepare.clone();
     let rel = format!("projects/{id}/config.yaml");
     let versions = match crate::git::file_versions(store.data_dir(), &rel) {
         Ok(v) => v,
@@ -5334,16 +5336,156 @@ fn notes_templates(store: &Store, id: &str, project: &Project) -> Vec<String> {
     };
     let mut out = vec![current];
     for text in versions {
-        let past = crate::yaml::from_str::<crate::ProjectConfig>(&text)
+        let Some(past) = crate::yaml::from_str::<crate::ProjectConfig>(&text)
             .ok()
-            .and_then(|c| c.cadence.release_prepare.notes);
-        if let Some(t) = past
-            && !out.contains(&t)
-        {
+            .map(|c| c.cadence.release_prepare)
+        else {
+            continue;
+        };
+        if !out.contains(&past) {
+            out.push(past);
+        }
+    }
+    out
+}
+
+/// The notes templates the board's config has named, newest first: today's, then each earlier one
+/// from the config file's history (DEF-036). Only when a template is configured today. When the
+/// history cannot be read, today's alone, with a note saying why (DEF-080).
+fn notes_templates(store: &Store, id: &str, project: &Project) -> Vec<String> {
+    if project.config.cadence.release_prepare.notes.is_none() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for t in past_prepare_configs(store, id, project)
+        .iter()
+        .filter_map(|c| c.notes.clone())
+    {
+        if !out.contains(&t) {
             out.push(t);
         }
     }
     out
+}
+
+/// The paths `prepare` and the notes writers use on one release branch (MNT-002): today's
+/// settings, each replaced by an earlier configured path when the branch has that one and not
+/// today's, as a patch of a release made before the book moved does.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PreparePaths {
+    pub changelog_copies: Vec<String>,
+    /// The notes file, its placeholders filled; `None` when no notes are configured.
+    pub notes: Option<String>,
+    /// Today's listings, each at the path chosen for it.
+    pub listings: Vec<crate::releasegates::NotesListing>,
+    /// What the plan says about each earlier path used, and each earlier path skipped.
+    pub said: Vec<String>,
+}
+
+/// Where `release`'s changelog copies, notes and notes listings are on `tip` (MNT-002). For each
+/// setting the candidates are today's value, then the value at the same place in each earlier
+/// config ([`past_prepare_configs`]), placeholders filled. Today's must pass `check_repo_path` (an
+/// error); an earlier one that does not is skipped, said so. Changelog copies and listings must be
+/// files on `tip`, the notes' folder a folder there; the first candidate found is used, and when
+/// it is not today's, `said` names it. A notes path recorded on the release wins outright
+/// (DEF-036). Nothing found: today's path, as before.
+#[allow(clippy::too_many_arguments)]
+fn prepare_paths(
+    store: &Store,
+    id: &str,
+    project: &Project,
+    release: &Release,
+    ph: &crate::releaseprep::Placeholders,
+    repo: &Path,
+    tip: &str,
+    _branch: &str,
+) -> std::result::Result<PreparePaths, String> {
+    use crate::releaseprep as prep;
+    let cfg = &project.config.cadence.release_prepare;
+    let mut said: Vec<String> = Vec::new();
+    // Filled only when today's path is not on the branch, so a current branch reads no history.
+    let mut history: Option<Vec<crate::releasegates::ReleasePrepare>> = None;
+    let mut choose = |setting: &str,
+                      today: &str,
+                      earlier: &dyn Fn(&crate::releasegates::ReleasePrepare) -> Option<String>,
+                      need: prep::Need,
+                      said: &mut Vec<String>|
+     -> std::result::Result<String, String> {
+        let now = prep::expand(today, ph);
+        prep::check_repo_path(&now)?;
+        let mut candidates = vec![now.clone()];
+        if prep::resolve_on_branch(repo, tip, &candidates, need).is_some() {
+            return Ok(now);
+        }
+        let past = history.get_or_insert_with(|| past_prepare_configs(store, id, project));
+        for c in past.iter().skip(1) {
+            let Some(t) = earlier(c) else { continue };
+            let path = prep::expand(&t, ph);
+            if candidates.contains(&path) {
+                continue;
+            }
+            match prep::check_repo_path(&path) {
+                Ok(()) => candidates.push(path),
+                Err(e) => {
+                    let note = format!("`{setting}`: the earlier path {path} is skipped: {e}");
+                    if !said.contains(&note) {
+                        said.push(note);
+                    }
+                }
+            }
+        }
+        // Today's is not on the branch: the earlier ones, newest first.
+        match prep::resolve_on_branch(repo, tip, &candidates[1..], need) {
+            Some((path, _)) => {
+                said.push(format!(
+                    "`{setting}` at `{path}`: the branch has the book at that path"
+                ));
+                Ok(path)
+            }
+            None => Ok(now),
+        }
+    };
+    let mut changelog_copies = Vec::new();
+    for (i, copy) in cfg.changelog_copies.iter().enumerate() {
+        changelog_copies.push(choose(
+            "changelog_copies",
+            copy,
+            &|c| c.changelog_copies.get(i).cloned(),
+            prep::Need::File,
+            &mut said,
+        )?);
+    }
+    let notes = match &cfg.notes {
+        None => None,
+        Some(_) if !release.notes_path.is_empty() => {
+            prep::check_repo_path(&release.notes_path)?;
+            Some(release.notes_path.clone())
+        }
+        Some(n) => Some(choose(
+            "notes",
+            n,
+            &|c| c.notes.clone(),
+            prep::Need::Dir,
+            &mut said,
+        )?),
+    };
+    let mut listings = Vec::new();
+    for (i, l) in cfg.notes_listings.iter().enumerate() {
+        let path = choose(
+            "notes_listings",
+            &l.path,
+            &|c| c.notes_listings.get(i).map(|x| x.path.clone()),
+            prep::Need::File,
+            &mut said,
+        )?;
+        listings.push(crate::releasegates::NotesListing { path, ..l.clone() });
+    }
+    Ok(PreparePaths {
+        changelog_copies,
+        notes,
+        listings,
+        said,
+    })
 }
 
 /// Find a release's notes (DEF-036). Refs, first hit wins: a shipped release's tag (else its
@@ -5589,13 +5731,15 @@ pub fn release_notes(
 /// The dates before `today` on the lines of a release's notes and changelog that carry one, at
 /// `tip`: what `redate_files` would change.
 fn stale_dates(
+    store: &Store,
+    id: &str,
     project: &Project,
     release: &Release,
     repo: &Path,
     tip: &str,
     today: &str,
 ) -> Vec<String> {
-    dated_lines(project, release, repo, tip)
+    dated_lines(store, id, project, release, repo, tip)
         .into_iter()
         .filter(|l| l.date.as_str() < today)
         .map(|l| l.date)
@@ -5614,10 +5758,22 @@ struct DatedLine {
 
 /// The release notes and the changelog (with its copies) at `tip`, each with the date it carries;
 /// a file that is missing or has no date line is left out.
-fn dated_lines(project: &Project, release: &Release, repo: &Path, tip: &str) -> Vec<DatedLine> {
+fn dated_lines(
+    store: &Store,
+    id: &str,
+    project: &Project,
+    release: &Release,
+    repo: &Path,
+    tip: &str,
+) -> Vec<DatedLine> {
     use crate::releaseprep as prep;
     let cfg = &project.config.cadence.release_prepare;
     let Ok(ph) = prep::Placeholders::new(&release.version, &release.name, &today_ymd()) else {
+        return Vec::new();
+    };
+    // Where this branch has the book (MNT-002); a path today's config refuses dates nothing.
+    let Ok(paths) = prepare_paths(store, id, project, release, &ph, repo, tip, &release.branch)
+    else {
         return Vec::new();
     };
     let read = |path: &str| {
@@ -5628,20 +5784,18 @@ fn dated_lines(project: &Project, release: &Release, repo: &Path, tip: &str) -> 
             .map(|(_, t)| t)
     };
     let mut out = Vec::new();
-    if let Some(n) = &cfg.notes {
-        let path = prep::expand(n, &ph);
-        if let Some(text) = read(&path)
-            && let Some(date) = prep::notes_date(&text)
-        {
-            out.push(DatedLine {
-                path,
-                text,
-                date,
-                changelog: false,
-            });
-        }
+    if let Some(path) = paths.notes
+        && let Some(text) = read(&path)
+        && let Some(date) = prep::notes_date(&text)
+    {
+        out.push(DatedLine {
+            path,
+            text,
+            date,
+            changelog: false,
+        });
     }
-    for path in cfg.changelog.iter().chain(cfg.changelog_copies.iter()) {
+    for path in cfg.changelog.iter().chain(paths.changelog_copies.iter()) {
         if let Some(text) = read(path)
             && let Some(date) = prep::changelog_date(&text, &ph.number)
         {
@@ -5659,6 +5813,8 @@ fn dated_lines(project: &Project, release: &Release, repo: &Path, tip: &str) -> 
 /// The files of `release` at `tip` whose date is before `ymd`, with the text they should have:
 /// the notes, the changelog and each of its copies. Empty when there is nothing to date.
 fn redate_files(
+    store: &Store,
+    id: &str,
     project: &Project,
     release: &Release,
     repo: &Path,
@@ -5668,7 +5824,7 @@ fn redate_files(
     use crate::releaseprep as prep;
     let ph = prep::Placeholders::new(&release.version, &release.name, ymd)
         .map_err(CoreError::Unsupported)?;
-    Ok(dated_lines(project, release, repo, tip)
+    Ok(dated_lines(store, id, project, release, repo, tip)
         .into_iter()
         .filter(|l| l.date.as_str() < ymd)
         .filter_map(|l| {
@@ -5797,7 +5953,7 @@ pub fn redate_release(
             .unwrap_or_default();
         notes_at(&project, &release, repo, &path, text, at)
     };
-    let files = redate_files(&project, &release, repo, &tip, &ymd)?;
+    let files = redate_files(store, id, &project, &release, repo, &tip, &ymd)?;
     if files.is_empty() {
         return Ok(NotesSaved {
             sha: tip.clone(),
@@ -5903,6 +6059,9 @@ pub fn set_release_notes(
     let tip = branch_tip(repo, &release)?;
     // Edited where the notes are, not duplicated at today's path; recorded once written.
     let path = notes_source(store, id, &project, &release, &ph, repo)?.path;
+    // The listings and the changelog copies where this branch has the book (MNT-002).
+    let paths = prepare_paths(store, id, &project, &release, &ph, repo, &tip, &branch)
+        .map_err(CoreError::Unsupported)?;
     let read = |path: &str| -> Result<Option<String>> {
         Ok(coderepo::read_blob(repo, &tip, path)?.map(|(_, t)| t))
     };
@@ -5922,7 +6081,7 @@ pub fn set_release_notes(
         notes_changed = true;
         files.push((path.clone(), text.to_string()));
     }
-    for l in &cfg.notes_listings {
+    for l in &paths.listings {
         if text.is_none() {
             break;
         }
@@ -5970,7 +6129,7 @@ pub fn set_release_notes(
             .map_err(|e| CoreError::Unsupported(format!("{c}: {e}")))?;
         // The same text goes to each copy, so the count is the same for each (DEF-088).
         copies_removed = removed;
-        for target in std::iter::once(c).chain(cfg.changelog_copies.iter()) {
+        for target in std::iter::once(c).chain(paths.changelog_copies.iter()) {
             prep::check_repo_path(target).map_err(CoreError::Unsupported)?;
             if read(target)?.as_deref() != Some(filled.as_str()) {
                 changelog_changed = true;
@@ -8344,6 +8503,264 @@ pub(crate) mod tests {
             "{err}"
         );
         assert!(!err.contains("nothing has written"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // ---- MNT-002: a patch of a release made before the book moved ----
+
+    /// The release-prepare settings with the book at `book` (`docs/src` or `docs/guide`).
+    fn book_prepare(book: &str) -> String {
+        format!(
+            "release_prepare:\n  version_files:\n    - path: Cargo.toml\n  changelog: CHANGELOG.md\n  \
+             changelog_copies: [{book}/project/changelog.md]\n  \
+             notes: {book}/releases/{{version}}.md\n  notes_listings:\n    \
+             - {{ path: {book}/SUMMARY.md, after: '- [Release notes](releases/index.md)', \
+             entry: '  - [{{number}}](releases/{{version}}.md)' }}\n    \
+             - {{ path: {book}/releases/index.md, after: '# Release notes', \
+             entry: '- [{{version}}]({{version}}.md)' }}\n"
+        )
+    }
+
+    /// The files a prepared release is made from, with the book at `book`, committed on main.
+    fn book_files(repo: &Path, book: &str) {
+        let at = repo.join(book);
+        std::fs::create_dir_all(at.join("project")).unwrap();
+        std::fs::create_dir_all(at.join("releases")).unwrap();
+        std::fs::write(
+            repo.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let changelog = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Gates.\n\n\
+                         [Unreleased]: https://example.com/r/compare/v0.1.0...HEAD\n";
+        std::fs::write(repo.join("CHANGELOG.md"), changelog).unwrap();
+        std::fs::write(at.join("project/changelog.md"), changelog).unwrap();
+        std::fs::write(
+            at.join("SUMMARY.md"),
+            "- [Intro](intro.md)\n- [Release notes](releases/index.md)\n",
+        )
+        .unwrap();
+        std::fs::write(at.join("releases/index.md"), "# Release notes\n").unwrap();
+        coderepo::git(repo, &["add", "-A"]).unwrap();
+        coderepo::git(repo, &["commit", "-q", "-m", "files"]).unwrap();
+    }
+
+    /// v0.2.0 shipped and tagged with the book at `docs/src`; then main moved the book to
+    /// `docs/guide` and the board's config followed, each config its own board commit, so the
+    /// history holds both (MNT-002).
+    fn moved_book_board(tag: &str) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(tag);
+        assert_own(&store, &dir, &repo);
+        board_history(&dir);
+        book_files(&repo, "docs/src");
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        plan_done(&store, "v0.2.0");
+        configure(
+            &store,
+            &format!("{BOARD_SHAPE}{}", book_prepare("docs/src")),
+        );
+        crate::git::commit(&dir, "Ada", "ada@example.com", "prepare at docs/src");
+        for to in ["candidate", "main", "production"] {
+            super::promote(&store, "shop", "v0.2.0", Some(to), "Ada", "", Some(&repo)).unwrap();
+        }
+        assert!(coderepo::tag_exists(&repo, "v0.2.0"));
+        coderepo::git(&repo, &["mv", "docs/src", "docs/guide"]).unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "the book moves"]).unwrap();
+        configure(
+            &store,
+            &format!("{PREPARING_SHAPE}{}", book_prepare("docs/guide")),
+        );
+        crate::git::commit(&dir, "Ada", "ada@example.com", "prepare at docs/guide");
+        (store, dir, repo)
+    }
+
+    /// What `prepare` would write for `version` now, at its branch tip.
+    fn prepare_for(store: &Store, repo: &Path, version: &str) -> super::PrepWork {
+        let project = store.load_meta("shop").unwrap();
+        let releases = super::load(store, "shop").unwrap();
+        let index = releases.iter().position(|r| r.version == version).unwrap();
+        let branch = format!("release/{version}");
+        let tip = coderepo::rev_parse(repo, &branch).unwrap();
+        super::work_prepare(
+            store, "shop", &project, &releases, index, repo, &tip, &branch, "test",
+        )
+        .unwrap()
+    }
+
+    /// The paths `prepare` would use for `version` at `rev` (a release added if it is not yet).
+    fn paths_at(store: &Store, repo: &Path, version: &str, rev: &str) -> super::PreparePaths {
+        if !super::load(store, "shop")
+            .unwrap()
+            .iter()
+            .any(|r| r.version == version)
+        {
+            super::add(store, "shop", version, "", "").unwrap();
+        }
+        let project = store.load_meta("shop").unwrap();
+        let release = super::load(store, "shop")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.version == version)
+            .unwrap();
+        let ph = crate::releaseprep::Placeholders::new(version, "", &super::today_ymd()).unwrap();
+        let tip = coderepo::rev_parse(repo, rev).unwrap();
+        super::prepare_paths(store, "shop", &project, &release, &ph, repo, &tip, rev).unwrap()
+    }
+
+    /// MNT-002 R-3: a patch of a release tagged before the book moved is prepared where its branch
+    /// has the book (notes, changelog copy, both listings), nothing is written at today's paths,
+    /// and the plan names each earlier path it used.
+    #[test]
+    fn a_patch_of_an_older_release_prepares_at_the_paths_its_branch_has() {
+        let (store, dir, repo) = moved_book_board("mnt002-patch");
+        super::add_patch(
+            &store,
+            "shop",
+            "v0.2.1",
+            "",
+            "",
+            "v0.2.0",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
+        let at = |p: &str| coderepo::read_blob(&repo, &tip, p).unwrap().map(|(_, t)| t);
+        let notes = at("docs/src/releases/v0.2.1.md").expect("the notes where the book is");
+        assert!(notes.starts_with("# v0.2.1"), "{notes}");
+        let copy = at("docs/src/project/changelog.md").unwrap();
+        assert!(copy.contains("## [0.2.1]"), "{copy}");
+        assert_eq!(Some(copy), at("CHANGELOG.md"));
+        let summary = at("docs/src/SUMMARY.md").unwrap();
+        assert!(
+            summary.contains("  - [0.2.1](releases/v0.2.1.md)"),
+            "{summary}"
+        );
+        let index = at("docs/src/releases/index.md").unwrap();
+        assert!(index.contains("- [v0.2.1](v0.2.1.md)"), "{index}");
+        for stray in [
+            "docs/guide/releases/v0.2.1.md",
+            "docs/guide/project/changelog.md",
+            "docs/guide/SUMMARY.md",
+            "docs/guide/releases/index.md",
+        ] {
+            assert!(at(stray).is_none(), "{stray} was written on the old branch");
+        }
+        // The plan names the earlier paths.
+        let does = prepare_for(&store, &repo, "v0.2.1").does;
+        for said in [
+            "`changelog_copies` at `docs/src/project/changelog.md`: the branch has the book at that path",
+            "`notes` at `docs/src/releases/v0.2.1.md`: the branch has the book at that path",
+            "`notes_listings` at `docs/src/SUMMARY.md`: the branch has the book at that path",
+            "`notes_listings` at `docs/src/releases/index.md`: the branch has the book at that path",
+        ] {
+            assert!(does.contains(said), "{does}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// MNT-002 R-3: a listing whose file the branch has only at an earlier configured path is
+    /// listed there, keeping today's texts, and said so; one that is nowhere stays at today's path.
+    #[test]
+    fn a_listing_missing_on_the_branch_falls_back_to_an_earlier_configured_path() {
+        let (store, dir, repo) = moved_book_board("mnt002-listing");
+        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
+        coderepo::git(
+            &repo,
+            &["mv", "docs/guide/SUMMARY.md", "docs/src/SUMMARY.md"],
+        )
+        .unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "summary left behind"]).unwrap();
+        let p = paths_at(&store, &repo, "v0.3.0", "main");
+        assert_eq!(p.listings[0].path, "docs/src/SUMMARY.md");
+        assert_eq!(p.listings[0].after, "- [Release notes](releases/index.md)");
+        assert_eq!(p.listings[0].entry, "  - [{number}](releases/{version}.md)");
+        assert_eq!(p.listings[1].path, "docs/guide/releases/index.md");
+        assert_eq!(p.changelog_copies, ["docs/guide/project/changelog.md"]);
+        assert_eq!(p.notes.as_deref(), Some("docs/guide/releases/v0.3.0.md"));
+        assert_eq!(
+            p.said,
+            ["`notes_listings` at `docs/src/SUMMARY.md`: the branch has the book at that path"]
+        );
+        // Nowhere on the branch: today's path, which prepare then refuses by name, as before.
+        coderepo::git(&repo, &["rm", "-q", "docs/src/SUMMARY.md"]).unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "summary gone"]).unwrap();
+        let p = paths_at(&store, &repo, "v0.3.0", "main");
+        assert_eq!(p.listings[0].path, "docs/guide/SUMMARY.md");
+        assert!(p.said.is_empty(), "{:?}", p.said);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// MNT-002 R-3: on a branch that has today's paths nothing falls back and nothing is said; a
+    /// recorded notes path wins outright; on an old branch a changelog section written through
+    /// `release notes` lands in the copy the branch has, not beside it.
+    #[test]
+    fn prepare_paths_fall_back_only_when_todays_path_is_absent_on_the_branch() {
+        let (store, dir, repo) = moved_book_board("mnt002-current");
+        let p = paths_at(&store, &repo, "v0.3.0", "main");
+        assert_eq!(p.changelog_copies, ["docs/guide/project/changelog.md"]);
+        assert_eq!(p.notes.as_deref(), Some("docs/guide/releases/v0.3.0.md"));
+        let listed: Vec<&str> = p.listings.iter().map(|l| l.path.as_str()).collect();
+        assert_eq!(
+            listed,
+            ["docs/guide/SUMMARY.md", "docs/guide/releases/index.md"]
+        );
+        assert!(p.said.is_empty(), "{:?}", p.said);
+        // A recorded notes path wins (DEF-036).
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut()
+            .find(|r| r.version == "v0.3.0")
+            .unwrap()
+            .notes_path = "docs/elsewhere/v0.3.0.md".into();
+        super::save(&store, "shop", &rs).unwrap();
+        let p = paths_at(&store, &repo, "v0.3.0", "main");
+        assert_eq!(p.notes.as_deref(), Some("docs/elsewhere/v0.3.0.md"));
+        assert!(p.said.is_empty(), "{:?}", p.said);
+
+        // An old branch: the changelog copy written by `release notes` is the one it has.
+        super::add_patch(
+            &store,
+            "shop",
+            "v0.2.1",
+            "",
+            "",
+            "v0.2.0",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.1",
+            Some(&repo),
+            Some("# v0.2.1\n\nA fix.\n"),
+            Some("### Fixed\n\n- A fix written by hand.\n"),
+            "Ada",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
+        let at = |p: &str| coderepo::read_blob(&repo, &tip, p).unwrap().map(|(_, t)| t);
+        let copy = at("docs/src/project/changelog.md").unwrap();
+        assert!(copy.contains("- A fix written by hand."), "{copy}");
+        assert_eq!(Some(copy), at("CHANGELOG.md"));
+        assert_eq!(
+            at("docs/src/releases/v0.2.1.md").as_deref(),
+            Some("# v0.2.1\n\nA fix.\n")
+        );
+        assert!(at("docs/guide/project/changelog.md").is_none());
+        assert!(at("docs/guide/SUMMARY.md").is_none());
+        let summary = at("docs/src/SUMMARY.md").unwrap();
+        assert_eq!(
+            summary.matches("releases/v0.2.1.md").count(),
+            1,
+            "{summary}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

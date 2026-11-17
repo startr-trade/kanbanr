@@ -123,6 +123,8 @@ All notable changes to kanbanr are documented here. The format follows
 - A patch's notes list only its own items, with one line that names its parent and links the
   parent's notes; its draft is written again when its fix merges, and the plan says when a draft
   no longer matches what ships (DEF-078).
+- A patch of a release made before the docs move is prepared at the paths its branch has, and the
+  plan says which earlier path it used (MNT-002).
 
 ## [0.7.0] - 2026-11-16
 

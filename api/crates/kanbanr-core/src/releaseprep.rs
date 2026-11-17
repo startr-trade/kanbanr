@@ -660,6 +660,52 @@ pub fn changelog_entries(items: &[ChangelogItem]) -> String {
     out
 }
 
+/// What a configured path must find on a branch for [`resolve_on_branch`] to choose it
+/// (MNT-002): the file itself, or the folder a file about to be created goes in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Need {
+    /// The path is a file at the tip.
+    File,
+    /// The path's parent is a folder at the tip (the file itself is new).
+    Dir,
+}
+
+/// The first of `candidates` that `need` finds at `tip` in `repo`, with its index: index 0 is
+/// today's setting, later ones the paths the config named earlier, newest first (MNT-002). `None`
+/// when no candidate is there. One `git ls-tree` per candidate until a hit, read from git's
+/// objects only: the working tree is never touched and nothing is written.
+pub fn resolve_on_branch(
+    repo: &std::path::Path,
+    tip: &str,
+    candidates: &[String],
+    need: Need,
+) -> Option<(String, usize)> {
+    let found = |path: &str| -> bool {
+        let listed = |p: &str| crate::coderepo::git(repo, &["ls-tree", tip, "--", p]).ok();
+        match need {
+            // `<mode> <type> <object>\t<path>`: a file is a blob.
+            Need::File => listed(path).is_some_and(|out| {
+                out.lines()
+                    .next()
+                    .and_then(|l| l.split('\t').next())
+                    .is_some_and(|meta| meta.split_whitespace().nth(1) == Some("blob"))
+            }),
+            Need::Dir => match path.trim_end_matches('/').rsplit_once('/') {
+                // At the root, the folder is the tree itself.
+                None => true,
+                Some((parent, _)) => {
+                    listed(&format!("{parent}/")).is_some_and(|out| !out.trim().is_empty())
+                }
+            },
+        }
+    };
+    candidates
+        .iter()
+        .enumerate()
+        .find(|(_, c)| found(c))
+        .map(|(i, c)| (c.clone(), i))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,5 +998,91 @@ mod tests {
             relative_link("releases/v1.0.1.md", "releases/v1.0.0.md"),
             "v1.0.0.md"
         );
+    }
+
+    /// MNT-002 R-3: today's path wins when the branch has it; else the newest earlier one the
+    /// branch has; a new file is placed where its folder is; nothing found is `None`.
+    #[test]
+    fn resolve_on_branch_prefers_todays_path_then_the_newest_earlier_one() {
+        let repo = crate::coderepo::tests::scratch_repo("resolve-on-branch");
+        assert!(
+            repo.canonicalize()
+                .unwrap()
+                .starts_with(std::env::temp_dir().canonicalize().unwrap())
+        );
+        for dir in [
+            "docs/guide/releases",
+            "docs/src/releases",
+            "docs/old/releases",
+        ] {
+            std::fs::create_dir_all(repo.join(dir)).unwrap();
+            std::fs::write(repo.join(dir).join("index.md"), "# Releases\n").unwrap();
+        }
+        crate::coderepo::git(&repo, &["add", "-A"]).unwrap();
+        crate::coderepo::git(&repo, &["commit", "-q", "-m", "books"]).unwrap();
+        let tip = crate::coderepo::rev_parse(&repo, "main").unwrap();
+        let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let found = |cands: &[&str], need| resolve_on_branch(&repo, &tip, &c(cands), need);
+        // Today's path is on the branch: it wins, whatever came before.
+        assert_eq!(
+            found(
+                &["docs/guide/releases/index.md", "docs/src/releases/index.md"],
+                Need::File
+            ),
+            Some(("docs/guide/releases/index.md".to_string(), 0))
+        );
+        // Today's is not: the newest earlier one the branch has, by its index.
+        assert_eq!(
+            found(
+                &[
+                    "docs/book/releases/index.md",
+                    "docs/src/releases/index.md",
+                    "docs/old/releases/index.md"
+                ],
+                Need::File
+            ),
+            Some(("docs/src/releases/index.md".to_string(), 1))
+        );
+        assert_eq!(
+            found(
+                &[
+                    "docs/book/releases/index.md",
+                    "docs/gone/releases/index.md",
+                    "docs/old/releases/index.md"
+                ],
+                Need::File
+            ),
+            Some(("docs/old/releases/index.md".to_string(), 2))
+        );
+        // A folder is not a file.
+        assert_eq!(found(&["docs/src/releases"], Need::File), None);
+        // A file about to be created goes where its folder is.
+        assert_eq!(
+            found(
+                &[
+                    "docs/book/releases/v0.2.1.md",
+                    "docs/src/releases/v0.2.1.md"
+                ],
+                Need::Dir
+            ),
+            Some(("docs/src/releases/v0.2.1.md".to_string(), 1))
+        );
+        assert_eq!(
+            found(&["docs/guide/releases/v0.2.1.md"], Need::Dir),
+            Some(("docs/guide/releases/v0.2.1.md".to_string(), 0))
+        );
+        // At the root, the folder is always there.
+        assert_eq!(
+            found(&["NOTES.md"], Need::Dir),
+            Some(("NOTES.md".to_string(), 0))
+        );
+        // Nothing found anywhere.
+        assert_eq!(
+            found(&["docs/book/x.md", "docs/gone/x.md"], Need::File),
+            None
+        );
+        assert_eq!(found(&["docs/book/x.md"], Need::Dir), None);
+        assert_eq!(found(&[], Need::File), None);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
