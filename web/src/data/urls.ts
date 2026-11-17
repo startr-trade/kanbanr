@@ -1,7 +1,7 @@
 // Every URL the shared cache keys a read by, spelled once (DEF-081), and the slice tags each read
 // depends on, so a live change re-reads only what it touched.
 import { apiUrl } from "../runtimeConfig.ts";
-import type { ItemFilter, PlanScope } from "../types";
+import type { ItemFilter, PlanScope, Scope } from "../types";
 
 const enc = encodeURIComponent;
 const project = (p: string) => `/projects/${enc(p)}`;
@@ -39,7 +39,14 @@ export const urls = {
   scopes: (p: string) => apiUrl(`${project(p)}/scopes`),
   /** Agent branches ahead of their items' tasks (FEAT-214); reads the code repository. */
   scopeDrift: (p: string) => apiUrl(`${project(p)}/scopes/drift`),
-  releases: (p: string) => apiUrl(`${project(p)}/releases`),
+  /** The releases, newest first; only one Releases tab's when `scope` is given (FTR-041). */
+  releases: (p: string, scope?: Scope) => apiUrl(`${project(p)}/releases${query([["scope", scope]])}`),
+  /** The Releases page's counts per tab and the tab it opens on (FTR-041). */
+  releasesSummary: (p: string) => apiUrl(`${project(p)}/releases/summary`),
+  /** One release's item table, read when its accordion opens (FTR-041). */
+  releaseItems: (p: string, v: string) => apiUrl(`${project(p)}/releases/${enc(v)}/items`),
+  /** What promoting a release to its next stage would do, nothing changed (FEAT-212). */
+  releasePlan: (p: string, v: string) => apiUrl(`${project(p)}/releases/${enc(v)}/plan`),
   /** The workflow as a mermaid state diagram: text, not JSON. */
   workflowDiagram: (p: string) => apiUrl(`${project(p)}/workflow?format=mermaid`),
   process: (p: string) => apiUrl(`${project(p)}/process`),

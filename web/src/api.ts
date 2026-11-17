@@ -5,6 +5,7 @@ import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
 import type { CatalogStatus, FactsOrEmpty } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
+import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
 
@@ -74,6 +75,12 @@ export const api = {
     getJson<SprintReport>(apiUrl(`/projects/${encodeURIComponent(id)}/sprints/${encodeURIComponent(code)}`)),
   /** A project's releases (FEAT-120). */
   getReleases: (id: string) => getJson<Release[]>(apiUrl(`/projects/${encodeURIComponent(id)}/releases`)),
+  /** One Releases tab's releases, newest first (FTR-041). */
+  getReleaseSlice: (id: string, scope: Scope) => getJson<Release[]>(urls.releases(id, scope)),
+  /** The Releases page's counts per tab and the tab it opens on (FTR-041). */
+  getReleasesSummary: (id: string) => getJson<ReleasesSummary>(urls.releasesSummary(id)),
+  /** One release's item table (FTR-041). */
+  getReleaseItems: (id: string, version: string) => getJson<ReleaseItemRow[]>(urls.releaseItems(id, version)),
   /**
    * The git model (FEAT-189), read by a daemon started in the code repository (FEAT-213). A
    * daemon started anywhere else refuses it; `getGitModelPreview` then gives the model from the
@@ -191,10 +198,7 @@ export const api = {
    * What promoting `version` to its next stage would do, nothing changed (FEAT-212): the button,
    * each step and condition, what is missing and, for the cut, what ships. Never fetches.
    */
-  getReleasePlan: (id: string, version: string) =>
-    getJson<ReleasePlan>(
-      apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/plan`),
-    ),
+  getReleasePlan: (id: string, version: string) => getJson<ReleasePlan>(urls.releasePlan(id, version)),
   /**
    * A release's notes as they are on `release/<V>` (FEAT-216), read from the code repository the
    * daemon was started in.
