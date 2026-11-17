@@ -325,6 +325,26 @@
         ],
         "type": "object"
       },
+      "Applicability": {
+        "description": "Whether a row applies, why not, and what decided it.",
+        "properties": {
+          "applies": {
+            "type": "boolean"
+          },
+          "by": {
+            "description": "`always` (no `when`), `facts` (the `when` clause decided) or `override` (`applies:`).",
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "applies",
+          "by"
+        ],
+        "type": "object"
+      },
       "Approval": {
         "additionalProperties": true,
         "properties": {
@@ -1063,6 +1083,69 @@
         "required": [
           "gaps",
           "next"
+        ],
+        "type": "object"
+      },
+      "CatalogStatus": {
+        "description": "The catalog as it stands: every row's state, the cells no applying row fills, and what is\nwrong with the catalog file. Derived, never stored (ADR-0002).",
+        "properties": {
+          "docs_read": {
+            "description": "How many source docs were read (each written source once).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "facts_rev": {
+            "description": "The facts record's content revision; empty with no facts record.",
+            "type": "string"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/Cell"
+            },
+            "type": "array"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RowStatus"
+            },
+            "type": "array"
+          },
+          "starter": {
+            "description": "The starter version the catalog began from; 0 with none.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "facts_rev",
+          "starter",
+          "rows",
+          "gaps",
+          "docs_read"
+        ],
+        "type": "object"
+      },
+      "Cell": {
+        "description": "A (question, perspective) pair.",
+        "properties": {
+          "perspective": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "perspective"
         ],
         "type": "object"
       },
@@ -2347,6 +2430,66 @@
           }
         ]
       },
+      "Facts": {
+        "additionalProperties": true,
+        "description": "What the project is: the answers to the five [`VOCABULARY`] questions.",
+        "properties": {
+          "data": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "languages": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "parts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "production": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "runtimes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "schema": {
+            "default": 1,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "set_at": {
+            "description": "When the record was last saved; stamped by [`save`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "languages",
+          "runtimes",
+          "production",
+          "parts",
+          "data"
+        ],
+        "type": "object"
+      },
       "FeatureDefinition": {
         "additionalProperties": true,
         "description": "Why a work item exists, what must be true, and how that is verified (FEAT-047).\n\nThe prose case *for* the work stays in the item's specification markdown — this block holds the\nshort, checkable parts: one-line answers, ids that link to the charter, and requirements each\ncarrying the tests that verify them. Keeping it one-line-per-field is deliberate: a structured\ncopy of the spec would rot into a second, disagreeing version of the same argument.",
@@ -2905,7 +3048,7 @@
             "type": "string"
           },
           "level": {
-            "$ref": "#/components/schemas/Level"
+            "$ref": "#/components/schemas/Level2"
           },
           "message": {
             "description": "What is missing and what to do about it.",
@@ -4015,6 +4158,15 @@
         ]
       },
       "Level": {
+        "description": "What a row documents: the whole system, each component, or each item.",
+        "enum": [
+          "system",
+          "component",
+          "item"
+        ],
+        "type": "string"
+      },
+      "Level2": {
         "oneOf": [
           {
             "enum": [
@@ -5512,6 +5664,26 @@
         ],
         "type": "object"
       },
+      "ProtectionStatus": {
+        "description": "One protection of a row and whether the project has it in force.",
+        "properties": {
+          "in_force": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "why": {
+            "description": "What decides it, or what is missing.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "in_force"
+        ],
+        "type": "object"
+      },
       "QualityScenario": {
         "additionalProperties": true,
         "description": "Stimulus / environment / response / measure — what turns \"it should be fast\" into something\ncheckable. The `measure` names the test or benchmark that checks it; a number with nothing\nbehind it is reported as an unsupported claim.",
@@ -6756,6 +6928,65 @@
         ],
         "type": "object"
       },
+      "RowStatus": {
+        "description": "One row, with its derived state.",
+        "properties": {
+          "answers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "applies": {
+            "$ref": "#/components/schemas/Applicability"
+          },
+          "for": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "href": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/Level"
+          },
+          "notation": {
+            "type": "string"
+          },
+          "protections": {
+            "items": {
+              "$ref": "#/components/schemas/ProtectionStatus"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source2"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SourceState"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "level",
+          "answers",
+          "for",
+          "source",
+          "state",
+          "applies",
+          "protections"
+        ],
+        "type": "object"
+      },
       "Section": {
         "description": "Where a line is shown in the drawer.",
         "enum": [
@@ -6981,6 +7212,104 @@
           "key"
         ],
         "type": "object"
+      },
+      "Source2": {
+        "additionalProperties": true,
+        "description": "Where a row's content comes from.",
+        "properties": {
+          "generator": {
+            "description": "Generated: `kanbanr:<view>` or `katalogr:<op>`.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind",
+            "default": "written"
+          },
+          "path": {
+            "description": "Written: a board doc, a board folder ending `/`, or `repo:<path>`.",
+            "type": "string"
+          },
+          "test": {
+            "description": "Enforced: the test or rule that keeps the content true.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "SourceKind": {
+        "description": "The three kinds a realized design becomes (ADR-0014 point 2).",
+        "enum": [
+          "written",
+          "generated",
+          "enforced"
+        ],
+        "type": "string"
+      },
+      "SourceState": {
+        "description": "What a row's source holds right now, derived from the board, the config and the code\nrepository the surface has.",
+        "oneOf": [
+          {
+            "const": "present",
+            "description": "A written doc with a body.",
+            "type": "string"
+          },
+          {
+            "const": "stub",
+            "description": "A written doc whose body is under [`STUB_THRESHOLD`] non-blank characters.",
+            "type": "string"
+          },
+          {
+            "const": "missing",
+            "description": "A written doc (or folder) that is not there.",
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A written folder and the docs under it (0 counts as missing for the gaps).",
+            "properties": {
+              "folder": {
+                "properties": {
+                  "docs": {
+                    "format": "uint",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "docs"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "folder"
+            ],
+            "type": "object"
+          },
+          {
+            "const": "available",
+            "description": "A generated kanbanr view: always derivable.",
+            "type": "string"
+          },
+          {
+            "const": "needs_katalogr",
+            "description": "A `katalogr:` view: it needs katalogr (FTR-016 reports the capability).",
+            "type": "string"
+          },
+          {
+            "const": "declared",
+            "description": "An enforced source, or an item-level written row with no path: the row declares it.",
+            "type": "string"
+          },
+          {
+            "const": "no_repository",
+            "description": "A `repo:` source on a surface with no code repository: it cannot tell (not a gap).",
+            "type": "string"
+          }
+        ]
       },
       "SpecBrief": {
         "description": "The spec a sign-off pins, as the person is shown it (FTR-023).",
@@ -8375,6 +8704,47 @@
         "summary": "The project's engineering baseline (FTR-033): the packs it follows with their drift, every area with its standing answer and entries, every revision with what accepting it does, and the charter's constraints"
       }
     },
+    "/api/projects/{project}/catalog": {
+      "get": {
+        "operationId": "getProjectsCatalog",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's content catalog (FTR-005): each row with whether it applies and why, its source's state and its protections, and the (question, perspective) cells no applying row fills; no rows with no catalog"
+      }
+    },
     "/api/projects/{project}/charter": {
       "get": {
         "operationId": "getProjectsCharter",
@@ -8729,6 +9099,56 @@
           }
         },
         "summary": "Server-sent events: `changed` whenever this project changes"
+      }
+    },
+    "/api/projects/{project}/facts": {
+      "get": {
+        "operationId": "getProjectsFacts",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Facts"
+                    },
+                    {
+                      "description": "No facts record is set.",
+                      "maxProperties": 0,
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's facts (FTR-005): its languages, runtimes, where it runs, its parts and its data; `{}` when no facts record is set"
       }
     },
     "/api/projects/{project}/features": {

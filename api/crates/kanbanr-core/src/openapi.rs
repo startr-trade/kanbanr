@@ -99,6 +99,17 @@ fn schema_of<T: JsonSchema>(g: &mut SchemaGenerator) -> Schema {
     g.subschema_for::<T>()
 }
 
+/// The project's facts record, or `{}` when it has none (FTR-005).
+fn facts_or_empty(g: &mut SchemaGenerator) -> Schema {
+    let facts = g.subschema_for::<crate::facts::Facts>();
+    json_schema!({
+        "anyOf": [
+            facts,
+            { "type": "object", "maxProperties": 0, "description": "No facts record is set." }
+        ]
+    })
+}
+
 fn any_object(_: &mut SchemaGenerator) -> Schema {
     json_schema!({ "type": "object", "description": "An OpenAPI 3.1 document: this one." })
 }
@@ -230,6 +241,21 @@ pub fn public_routes() -> Vec<RouteDoc> {
             summary: "The project's charter: purpose, goals, scope and constraints",
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::charter::Charter>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/facts",
+            summary: "The project's facts (FTR-005): its languages, runtimes, where it runs, its \
+                      parts and its data; `{}` when no facts record is set",
+            params: &[PROJECT],
+            response: Response::Json(facts_or_empty),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/catalog",
+            summary: "The project's content catalog (FTR-005): each row with whether it applies \
+                      and why, its source's state and its protections, and the (question, \
+                      perspective) cells no applying row fills; no rows with no catalog",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::catalog::CatalogStatus>),
         },
         RouteDoc {
             path: "/api/projects/{project}/readiness",

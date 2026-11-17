@@ -8979,4 +8979,126 @@ requirements:
         );
         go().expect("the sprint has started, so the item moves");
     }
+
+    /// FTR-005 R-4: `PUT …/catalog` with a bad row is refused, naming the row, and the catalog
+    /// file is left as it was, in both body forms.
+    #[test]
+    fn set_catalog_refuses_invalid_rows() {
+        use serde_json::json;
+        let (store, dir) = temp_store();
+        assert!(
+            dir.path.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects/demo/catalog/init",
+            Some(&json!({})),
+        )
+        .unwrap();
+        let file = store.project_dir("demo").join(crate::catalog::CATALOG_FILE);
+        let before = std::fs::read(&file).unwrap();
+        let bad_text = "rows:\n  - id: context\n    title: Context\n    answers: [sometimes]\n    for: [architect]\n    level: system\n    source: {kind: written, path: architecture/context.md}\n";
+        let err = crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/catalog",
+            Some(&json!({ "text": bad_text })),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("context") && err.contains("sometimes"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "the file is unchanged"
+        );
+        let err = crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/catalog",
+            Some(&json!({ "rows": [{
+                "id": "deployment",
+                "title": "Deployment",
+                "answers": ["where"],
+                "for": ["nobody"],
+                "level": "system",
+                "source": { "kind": "written", "path": "architecture/deployment.md" }
+            }] })),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("deployment") && err.contains("nobody"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "the file is unchanged"
+        );
+    }
+
+    /// FTR-005 R-7: `GET …/catalog` through `dispatch` answers with exactly what
+    /// `catalog::status` derives from the same board.
+    #[test]
+    fn the_catalog_route_answers_with_the_same_status_as_the_command() {
+        use serde_json::json;
+        let (store, dir) = temp_store();
+        assert!(
+            dir.path.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        new_project(&store, "demo");
+        // No catalog: no rows, no gaps.
+        let none: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(&store, "GET", "/projects/demo/catalog", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(none["rows"], json!([]), "{none}");
+        assert_eq!(none["gaps"], json!([]), "{none}");
+        crate::facts::save(
+            &store,
+            "demo",
+            &crate::facts::Facts {
+                languages: vec!["rust".into()],
+                production: vec!["server".into()],
+                parts: vec!["api".into()],
+                data: vec!["files".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::catalog::init(&store, "demo", false).unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                &format!(
+                    "# Context\n\n{}\n",
+                    "The system and its neighbours. ".repeat(5)
+                ),
+            )
+            .unwrap();
+        let routed: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(&store, "GET", "/projects/demo/catalog", None).unwrap(),
+        )
+        .unwrap();
+        let derived = serde_json::to_value(
+            crate::catalog::status(&store, &store.load("demo").unwrap(), None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(routed, derived);
+        assert!(!routed["rows"].as_array().unwrap().is_empty(), "{routed}");
+        let facts: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(&store, "GET", "/projects/demo/facts", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(facts["languages"], json!(["rust"]), "{facts}");
+    }
 }
