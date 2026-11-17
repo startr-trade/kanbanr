@@ -3657,21 +3657,29 @@ fn work_prepare(
         };
         prep::check_repo_path(&path)?;
         notes_found = path.clone();
-        let there = files.iter().any(|(p, _)| *p == path)
-            || coderepo::read_blob(repo, tip, &path)
+        let existing = match files.iter().find(|(p, _)| *p == path) {
+            Some((_, t)) => Some(t.clone()),
+            None => coderepo::read_blob(repo, tip, &path)
                 .map_err(|e| e.to_string())?
-                .is_some();
-        if there {
+                .map(|(_, t)| t),
+        };
+        let parent = releases
+            .iter()
+            .find(|r| !release.parent.is_empty() && r.version == release.parent);
+        let link = match parent {
+            Some(p) => parent_notes_link(n, &path, p)?,
+            None => None,
+        };
+        let ships: Vec<String> = shipping.iter().map(|f| f.code.clone()).collect();
+        // An untouched draft that no longer names what ships is drafted again (DEF-078 R-3);
+        // a current draft, and notes written by hand, are kept.
+        let stale = existing.as_deref().is_some_and(|t| {
+            draft_codes(t, project, release, parent, link.as_deref()).is_some_and(|c| c != ships)
+        });
+        if existing.is_some() && !stale {
             notes_said.push(format!("{path} is already written, so it is kept"));
         } else {
-            drafted_from = shipping.iter().map(|f| f.code.clone()).collect();
-            let parent = releases
-                .iter()
-                .find(|r| !release.parent.is_empty() && r.version == release.parent);
-            let link = match parent {
-                Some(p) => parent_notes_link(n, &path, p)?,
-                None => None,
-            };
+            drafted_from = ships;
             put(
                 &mut files,
                 &path,
@@ -3684,7 +3692,14 @@ fn work_prepare(
                     &crate::gantt::fmt_date(crate::sprints::today()),
                 ),
             );
-            parts.push("draft notes".to_string());
+            parts.push(
+                if stale {
+                    "draft notes again"
+                } else {
+                    "draft notes"
+                }
+                .to_string(),
+            );
             notes_path = path;
         }
     }
@@ -4695,6 +4710,41 @@ fn notes(
         }
     }
     out
+}
+
+/// The codes an untouched kanbanr draft was written from, oldest first (DEF-078). `Some` only
+/// when `text`, with its date line taken as it is, is exactly what `notes` would write today for
+/// those codes and no carry, so any hand edit (or a later edit of an item's statement or
+/// requirements) reads as not a draft. `None` for notes written by hand.
+fn draft_codes(
+    text: &str,
+    project: &Project,
+    release: &Release,
+    parent: Option<&Release>,
+    parent_link: Option<&str>,
+) -> Option<Vec<String>> {
+    let mut lines = text.lines();
+    lines.find(|l| *l == "## What shipped" || *l == "## What this patch adds")?;
+    let mut codes: Vec<String> = Vec::new();
+    for l in lines {
+        if l.starts_with("## ") {
+            break;
+        }
+        if let Some(rest) = l.strip_prefix("### ") {
+            // The code ends at the ` — ` separator, never at a substring (L-23).
+            let (code, _) = rest.split_once(" — ")?;
+            codes.push(code.to_string());
+        }
+    }
+    let released = text
+        .lines()
+        .find_map(|l| l.strip_prefix("_Released ")?.strip_suffix("._"))?;
+    let items = codes
+        .iter()
+        .map(|c| project.features.iter().find(|f| f.code == *c).cloned())
+        .collect::<Option<Vec<FeatureItem>>>()?;
+    let rebuilt = notes(release, parent, parent_link, &items, &[], released);
+    (rebuilt.trim_end() == text.trim_end()).then_some(codes)
 }
 
 /// A release's notes as they are on its release branch (FEAT-216): where they are, what they say,
@@ -7185,6 +7235,106 @@ pub(crate) mod tests {
         configure(&store, &format!("{THREE}{PREPARE}"));
         super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
         (store, dir, repo)
+    }
+
+    /// DEF-078: v0.2.0 promoted to candidate with `prepare` while the one item planned into it is
+    /// not finished, so its draft notes name no item. Returns the item's code.
+    fn unfinished_notes_fixture(tag: &str) -> (Store, PathBuf, PathBuf, String) {
+        let (store, dir, repo) = board_and_repo(tag);
+        assert_own(&store, &dir, &repo);
+        prepare_fixture(&repo);
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        let code = store
+            .add_feature("shop", "Ships later", "", "M", None)
+            .unwrap()
+            .code;
+        super::plan(&store, "shop", "v0.2.0", std::slice::from_ref(&code)).unwrap();
+        configure(&store, &format!("{THREE}{PREPARE}"));
+        super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        (store, dir, repo, code)
+    }
+
+    /// What `prepare` would write for v0.2.0 now, at its branch tip.
+    fn prepare_now(store: &Store, repo: &Path) -> super::PrepWork {
+        let project = store.load_meta("shop").unwrap();
+        let releases = super::load(store, "shop").unwrap();
+        let index = releases.iter().position(|r| r.version == "v0.2.0").unwrap();
+        let tip = coderepo::rev_parse(repo, "release/v0.2.0").unwrap();
+        super::work_prepare(
+            store,
+            "shop",
+            &project,
+            &releases,
+            index,
+            repo,
+            &tip,
+            "release/v0.2.0",
+            "test",
+        )
+        .unwrap()
+    }
+
+    /// Finish an item already planned into a release, as the person would, with a reason.
+    fn finish(store: &Store, code: &str) {
+        for status in ["Scheduled", "Completed"] {
+            store
+                .move_feature_approved("shop", code, status, Some("finished in the test"))
+                .unwrap();
+        }
+    }
+
+    /// DEF-078 R-3: preparing again replaces an untouched draft that no longer names what ships;
+    /// a current draft and notes written by hand are kept.
+    #[test]
+    fn preparing_again_replaces_a_stale_untouched_draft() {
+        const NOTES: &str = "docs/releases/v0.2.0.md";
+        let (store, dir, repo, code) = unfinished_notes_fixture("notes-stale-prep");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        let draft = coderepo::read_blob(&repo, &tip, NOTES).unwrap().unwrap().1;
+        assert!(
+            draft.contains("Nothing planned for this release was finished."),
+            "{draft}"
+        );
+        // The draft names nothing and nothing ships: it is current, and kept.
+        let current = prepare_now(&store, &repo);
+        assert!(
+            !current.files.iter().any(|(p, _)| p == NOTES),
+            "{:?}",
+            current.files
+        );
+        // The item finishes: the draft is stale and is written again, naming it.
+        finish(&store, &code);
+        let stale = prepare_now(&store, &repo);
+        let (_, text) = stale
+            .files
+            .iter()
+            .find(|(p, _)| p == NOTES)
+            .unwrap_or_else(|| panic!("{:?}", stale.files));
+        assert!(
+            text.contains(&format!("### {code} — Ships later")),
+            "{text}"
+        );
+        assert!(!text.contains("Nothing planned"), "{text}");
+        assert!(stale.does.contains("draft notes again"), "{}", stale.does);
+        // Notes written by hand are never replaced.
+        super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("# v0.2.0\n\nHand-written.\n"),
+            None,
+            "Ada",
+        )
+        .unwrap();
+        let hand = prepare_now(&store, &repo);
+        assert!(
+            !hand.files.iter().any(|(p, _)| p == NOTES),
+            "{:?}",
+            hand.files
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FEAT-216 R-1: a release's notes are read at the tip of release/<V>, from the path the
