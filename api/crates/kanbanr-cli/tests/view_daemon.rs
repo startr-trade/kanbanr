@@ -2089,7 +2089,8 @@ fn the_meta_route_reports_a_newer_writer_than_the_running_monitor() {
 
 /// FTR-058 R-9: the timings routes answer what the functions derive from the kept runs: each of an
 /// item's tests' last duration (and every test's with no code), and the slowest and slowing report
-/// against the newest shipped release, `top` capped at 100. Both are reads, served read-only.
+/// against the newest shipped release, `top` capped at 100, all over the runs since the baseline
+/// (R-11: a test timed only before them, `c`, has no timing yet). Both are reads, served read-only.
 #[test]
 fn the_timings_routes_answer_last_durations_and_the_report() {
     use kanbanr_core::models::{FeatureDefinition, Requirement, TestRef};
@@ -2180,15 +2181,19 @@ fn the_timings_routes_answer_last_durations_and_the_report() {
         ..TimingRow::default()
     };
     for (at, rows) in [
+        // Before the window (the newest run at or before the baseline opens it): not read.
         (
             "2026-11-05T00:00:00Z",
+            vec![row(&code, "a", 100), row(&code, "c", 9)],
+        ),
+        (
+            "2026-11-09T00:00:00Z",
             vec![
-                row(&code, "a", 100),
+                row(&code, "a", 120),
                 row(&code, "b", 50),
                 row("OTHER-9", "z", 7),
             ],
         ),
-        ("2026-11-09T00:00:00Z", vec![row(&code, "a", 120)]),
         ("2026-11-12T00:00:00Z", vec![row(&code, "a", 400)]),
     ] {
         timings::write(
@@ -2231,7 +2236,7 @@ fn the_timings_routes_answer_last_durations_and_the_report() {
         item,
         serde_json::json!({"tests": [
             {"code": code, "requirement": "R-1", "test": "a", "ms": 400, "at": "2026-11-12T00:00:00Z"},
-            {"code": code, "requirement": "R-1", "test": "b", "ms": 50, "at": "2026-11-05T00:00:00Z"},
+            {"code": code, "requirement": "R-1", "test": "b", "ms": 50, "at": "2026-11-09T00:00:00Z"},
         ]})
     );
     // No code: every test's.
@@ -2249,6 +2254,7 @@ fn the_timings_routes_answer_last_durations_and_the_report() {
         serde_json::to_value(timings::report_read(&store, "demo", 10).unwrap()).unwrap()
     );
     assert_eq!(report["baseline"]["version"], "v0.1.0");
+    assert_eq!(report["runs"], 2, "the window since the baseline: {report}");
     assert_eq!(report["slowest"][0]["test"], "a");
     assert_eq!(report["slowing"].as_array().unwrap().len(), 1, "{report}");
     assert_eq!(report["slowing"][0]["grew_ms"], 280);

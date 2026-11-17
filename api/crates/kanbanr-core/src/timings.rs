@@ -17,6 +17,10 @@ use time::format_description::well_known::Rfc3339;
 /// The project folder that holds the kept runs.
 pub const FOLDER: &str = "timings";
 
+/// How many of the newest run files a read covers when there is no baseline release to start
+/// from (releases off, or none shipped).
+pub const TIMINGS_WINDOW: usize = 50;
+
 /// One timed tracked test in a run.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -179,23 +183,95 @@ pub fn last_for(runs: &[TimingRun], code: &str) -> BTreeMap<TestKey, (u64, Strin
     out
 }
 
-/// [`last_for`] read from the kept files, bounded (R-11): newest first, stopping once each test in
-/// `wanted` has met its newest row, so a read costs the runs since each asked test was last timed,
-/// not every run kept. Rows of the item's other tests met on the way are kept too, as `last_for`
-/// keeps them. With nothing wanted, nothing is read.
+/// One run file of a [`window`], with its run when placing it already read it.
+type Slot = (PathBuf, Option<TimingRun>);
+
+/// The run, read now unless placing it already read it; `None` when it cannot be read.
+fn run_of(slot: Slot) -> Option<TimingRun> {
+    let (path, run) = slot;
+    run.or_else(|| read_run(&path))
+}
+
+/// The run files every read covers (R-11), oldest first by name: those after the baseline's
+/// `shipped_at` and the newest readable one at or before it; with no baseline (or a `shipped_at`
+/// that is not a time), the newest [`TIMINGS_WINDOW`]. A test timed only before the window reads
+/// as no timing yet. Only the files stamped in the shipping second and the one opening the window
+/// are read to place them (and kept, so no file is parsed twice); the name's stamp places the rest.
+fn window(store: &Store, id: &str, baseline: Option<&Baseline>) -> Vec<Slot> {
+    let paths = files(store, id);
+    let shipped = baseline.and_then(|b| {
+        OffsetDateTime::parse(b.shipped_at.trim(), &Rfc3339)
+            .ok()
+            .map(|t| (b, t))
+    });
+    let Some((b, shipped)) = shipped else {
+        let from = paths.len().saturating_sub(TIMINGS_WINDOW);
+        return paths.into_iter().skip(from).map(|p| (p, None)).collect();
+    };
+    let s = shipped.to_offset(time::UtcOffset::UTC);
+    let cut = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        s.year(),
+        u8::from(s.month()),
+        s.day(),
+        s.hour(),
+        s.minute(),
+        s.second()
+    );
+    // Files stamped before the shipping second are all at or before it, those after it all after;
+    // within that second a run's own `at` decides (an unreadable one counts as before).
+    let mut read: HashMap<usize, Option<TimingRun>> = HashMap::new();
+    let mut after = paths.partition_point(|p| order(p).0 < cut);
+    while after < paths.len() && order(&paths[after]).0 == cut {
+        let run = read_run(&paths[after]);
+        let later = run.as_ref().is_some_and(|r| {
+            crate::cmp_instants(&r.at, &b.shipped_at) == std::cmp::Ordering::Greater
+        });
+        read.insert(after, run);
+        if later {
+            break;
+        }
+        after += 1;
+    }
+    // The newest readable run at or before the baseline opens the window.
+    let mut first = after;
+    for i in (0..after).rev() {
+        let run = read.remove(&i).unwrap_or_else(|| read_run(&paths[i]));
+        if run.is_some() {
+            read.insert(i, run);
+            first = i;
+            break;
+        }
+    }
+    paths
+        .into_iter()
+        .enumerate()
+        .skip(first)
+        .map(|(i, p)| {
+            let run = read.remove(&i).flatten();
+            (p, run)
+        })
+        .collect()
+}
+
+/// [`last_for`] read from the kept files, bounded (R-11): over the [`window`] only, newest first,
+/// stopping once each test in `wanted` has met its newest row. Rows of the item's other tests met
+/// on the way are kept too, as `last_for` keeps them. A wanted test not timed inside the window
+/// is not in the answer (no timing yet). With nothing wanted, nothing is read.
 pub fn last_for_read(
     store: &Store,
     id: &str,
     code: &str,
     wanted: &BTreeSet<TestKey>,
-) -> BTreeMap<TestKey, (u64, String)> {
+) -> Result<BTreeMap<TestKey, (u64, String)>> {
     let mut out: BTreeMap<TestKey, (u64, String)> = BTreeMap::new();
     if wanted.is_empty() {
-        return out;
+        return Ok(out);
     }
+    let base = baseline(store, id)?;
     let mut missing = wanted.len();
-    for path in files(store, id).iter().rev() {
-        let Some(run) = read_run(path) else { continue };
+    for slot in window(store, id, base.as_ref()).into_iter().rev() {
+        let Some(run) = run_of(slot) else { continue };
         for row in run.tests.into_iter().filter(|r| r.code == code) {
             let key = (row.code, row.requirement, row.test);
             if out.contains_key(&key) {
@@ -210,47 +286,16 @@ pub fn last_for_read(
             break;
         }
     }
-    out
+    Ok(out)
 }
 
-/// The runs the report needs (R-11): those after the baseline's `shipped_at`, and the newest at or
-/// before it, oldest first. Only those files are read; the file name's stamp tells which they are.
-/// With no baseline (or a `shipped_at` that is not a time), every kept run.
+/// The runs of the [`window`] (R-11), oldest first: the runs the report and the read with no code
+/// derive from. A file that cannot be read is skipped.
 pub fn runs_since(store: &Store, id: &str, baseline: Option<&Baseline>) -> Result<Vec<TimingRun>> {
-    let Some(b) = baseline else {
-        return runs(store, id);
-    };
-    let Ok(shipped) = OffsetDateTime::parse(b.shipped_at.trim(), &Rfc3339) else {
-        return runs(store, id);
-    };
-    let s = shipped.to_offset(time::UtcOffset::UTC);
-    let cut = format!(
-        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
-        s.year(),
-        u8::from(s.month()),
-        s.day(),
-        s.hour(),
-        s.minute(),
-        s.second()
-    );
-    let paths = files(store, id);
-    // Files stamped before the shipping second are all at or before it; from that second on, a
-    // run's own `at` decides.
-    let first = paths.partition_point(|p| order(p).0 < cut);
-    let mut tail: Vec<TimingRun> = paths[first..].iter().filter_map(|p| read_run(p)).collect();
-    let after = tail
-        .iter()
-        .position(|r| crate::cmp_instants(&r.at, &b.shipped_at) == std::cmp::Ordering::Greater)
-        .unwrap_or(tail.len());
-    let mut out: Vec<TimingRun> = Vec::with_capacity(tail.len() - after + 1);
-    let newest_before = if after > 0 {
-        tail.drain(..after).next_back()
-    } else {
-        paths[..first].iter().rev().find_map(|p| read_run(p))
-    };
-    out.extend(newest_before);
-    out.extend(tail);
-    Ok(out)
+    Ok(window(store, id, baseline)
+        .into_iter()
+        .filter_map(run_of)
+        .collect())
 }
 
 /// One test's last duration, as `GET /projects/{p}/timings` lists it.
@@ -291,13 +336,19 @@ impl TimingsView {
     }
 }
 
-/// The last durations the route answers: for one item, its tracked tests' (manual and walkthrough
-/// ones are never timed) through [`last_for_read`]; with no code, every test's over every kept
-/// run. An unknown project or item is an error.
+/// The last durations the route answers, over the [`window`] only (R-11): for one item, its
+/// tracked tests' (manual and walkthrough ones are never timed) through [`last_for_read`]; with no
+/// code, every test's timed in the window. A test not timed in the window is not listed (no timing
+/// yet). An unknown project or item is an error.
 pub fn last_view(store: &Store, id: &str, code: Option<&str>) -> Result<TimingsView> {
     let project = store.load_meta(id)?;
     let Some(code) = code else {
-        return Ok(TimingsView::from_last(last(&runs(store, id)?)));
+        let base = baseline(store, id)?;
+        return Ok(TimingsView::from_last(last(&runs_since(
+            store,
+            id,
+            base.as_ref(),
+        )?)));
     };
     let feature = project.feature(code)?;
     let wanted: BTreeSet<TestKey> = feature
@@ -316,7 +367,7 @@ pub fn last_view(store: &Store, id: &str, code: Option<&str>) -> Result<TimingsV
         id,
         &feature.code,
         &wanted,
-    )))
+    )?))
 }
 
 /// The report the route answers: over the runs since the baseline ([`runs_since`]), `top` capped
@@ -739,6 +790,96 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// FTR-058 R-11: every read is bounded to one window: the runs since the baseline release plus
+    /// the newest at or before it, or with no baseline the newest `TIMINGS_WINDOW` run files. A
+    /// test timed only before the window, or never timed, reads as no timing yet, for one item,
+    /// with no code, and in the report.
+    #[test]
+    fn a_test_not_timed_inside_the_window_reads_as_no_timing_yet() {
+        use crate::models::{FeatureDefinition, Requirement, TestRef};
+        let (store, dir) = scratch("window");
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let code = store
+            .add_feature("demo", "Login", "", "M", None)
+            .unwrap()
+            .code;
+        let test = |name: &str| TestRef {
+            name: name.into(),
+            kind: "unit".into(),
+            ..TestRef::default()
+        };
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Login works".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "WHEN a person logs in THE SYSTEM SHALL let them in".into(),
+                        tests: vec![test("old"), test("new"), test("never")],
+                        ..Requirement::default()
+                    }],
+                    ..FeatureDefinition::default()
+                }),
+            )
+            .unwrap();
+        let names = |v: &TimingsView| -> Vec<String> {
+            v.tests.iter().map(|t| t.test.clone()).collect::<Vec<_>>()
+        };
+
+        // No baseline (releases off): the newest TIMINGS_WINDOW run files. `old` is timed only in
+        // the run just before them, `new` in every run.
+        for r in 0..=TIMINGS_WINDOW {
+            let mut rows = vec![row(&code, "R-1", "new", 10 + r as u64)];
+            if r == 0 {
+                rows.push(row(&code, "R-1", "old", 999));
+                rows.push(row("OTHER-9", "R-1", "z", 7));
+            }
+            let at = format!("2026-11-01T{:02}:{:02}:00Z", r / 60, r % 60);
+            write(&store, "demo", &run(&at, rows)).unwrap();
+        }
+        let item = last_view(&store, "demo", Some(&code)).unwrap();
+        assert_eq!(names(&item), vec!["new"], "{item:?}");
+        assert_eq!(item.tests[0].ms, 10 + TIMINGS_WINDOW as u64);
+        let all = last_view(&store, "demo", None).unwrap();
+        assert_eq!(names(&all), vec!["new"], "{all:?}");
+        let r = report_read(&store, "demo", 10).unwrap();
+        assert_eq!(r.runs, TIMINGS_WINDOW);
+        assert_eq!(r.baseline, None);
+        let slow: Vec<&str> = r.slowest.iter().map(|s| s.test.as_str()).collect();
+        assert_eq!(slow, vec!["new"]);
+
+        // With a baseline: the window is the newest run at or before it (00:30) and those after;
+        // `old`, timed at 00:00 only, is outside it.
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        std::fs::write(
+            store.project_dir("demo").join("releases.yaml"),
+            "- version: v0.1.0\n  state: shipped\n  shipped_at: 2026-11-01T00:30:30Z\n",
+        )
+        .unwrap();
+        let item = last_view(&store, "demo", Some(&code)).unwrap();
+        assert_eq!(names(&item), vec!["new"], "{item:?}");
+        assert_eq!(
+            names(&last_view(&store, "demo", None).unwrap()),
+            vec!["new"]
+        );
+        let r = report_read(&store, "demo", 10).unwrap();
+        assert_eq!(r.runs, TIMINGS_WINDOW + 1 - 30);
+        assert!(r.slowest.iter().all(|s| s.test == "new"), "{r:?}");
+        assert_eq!(r.slowing.len(), 1);
+        assert_eq!(r.slowing[0].before_ms, 40);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// FTR-058 R-11: on 500 kept runs of 1,300 rows, `last` for one item (`last_for`) stays under
     /// 150 ms and `report` under 1 s. The fixture is generated in memory: what is measured is the
     /// two derivations, not the YAML parse of 65 MB of run files (printed for reference from one
@@ -835,7 +976,7 @@ mod tests {
         }
         let wanted: BTreeSet<TestKey> = last_for(&on_disk, "FTR-042").into_keys().collect();
         let t = std::time::Instant::now();
-        let one = last_for_read(&store, "demo", "FTR-042", &wanted);
+        let one = last_for_read(&store, "demo", "FTR-042", &wanted).unwrap();
         let read_last = t.elapsed();
         assert_eq!(one, last_for(&on_disk, "FTR-042"));
         let t = std::time::Instant::now();
