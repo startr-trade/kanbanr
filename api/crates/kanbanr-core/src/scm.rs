@@ -638,6 +638,25 @@ pub fn message_verdict(facts: &RepoFacts, project: &Project, board: Option<&Boar
     {
         return Verdict::refuse(why);
     }
+    // In setup's or the block's window on the default branch, pre-commit lets a staged set of
+    // the window's shape through on the understanding that the message makes it setup's commit or
+    // the block's refresh; one whose message does not (a reference, a merge's text with no merge)
+    // is a commit straight to the default branch, refused here as the guard refuses it (FTR-059
+    // R-5: no commit rule lives only in the guard).
+    if facts.has_commits
+        && (setup_hint(facts).is_some() || block_hint(facts).is_some())
+        && !setup_commit(facts)
+        && !block_commit(facts)
+        && let Some(branch) = facts.branch.as_deref()
+    {
+        return refuse_with_hint(
+            facts,
+            format!(
+                "this would commit straight to {branch}, the default branch. Work belongs on a \
+                 branch for its item: run `kanbanr start <CODE>` first."
+            ),
+        );
+    }
     if is_generated_commit(message) {
         return Verdict::allow(); // git wrote it; there is no author to ask for a reference
     }
@@ -1361,5 +1380,115 @@ Refs: kanbanr:FEAT-001",
         let block_at = text.find("is let through too").expect("the block's hint");
         assert!(setup_at < block_at, "setup's hint comes first: {text}");
         assert!(!text.contains("one exception"), "{text}");
+    }
+
+    /// FTR-059 R-5: no commit rule lives only in the guard. Wherever the guard (`commit_verdict`)
+    /// refuses a commit, the git hooks refuse it too: pre-commit (`branch_verdict`, which reads
+    /// the staged paths and no message) or commit-msg (`message_verdict`, which reads the message
+    /// and no staged paths). So a wrapper the guard does not see through, or a guard that never
+    /// ran, weakens only the early feedback, never the rule. The guard is asked with the inline
+    /// message the hooks then read (a commit that opens an editor gives the guard no message, and
+    /// its caution there is for want of one, not a rule); every staged set below is tried.
+    #[test]
+    fn every_commit_rule_the_guard_applies_a_git_hook_applies_too() {
+        let messages = [
+            "wip",
+            "[no-ref] initial setup",
+            "[no-ref] refresh the generated block",
+            "x\n\nRefs: kanbanr:FEAT-001",
+            "x\n\nRefs: kanbanr:FEAT-999",
+            "x\n\nRefs: kanbanr:FEAT-001\n\n[no-ref] both",
+            "Merge branch 'feat/FEAT-001-t'",
+        ];
+        let staged_sets: [&[&str]; 5] = [
+            &[".kanbanr", "CLAUDE.md", ".gitignore"],
+            &[".kanbanr"],
+            &["CLAUDE.md"],
+            &["src/x.rs"],
+            &["CLAUDE.md", "src/x.rs"],
+        ];
+        let merging = |branch: &str| {
+            let mut f = on(Some(branch), None);
+            f.merging = true;
+            f
+        };
+        let unborn = {
+            let mut f = on(Some("main"), None);
+            f.has_commits = false;
+            f
+        };
+        let setup_window = {
+            let mut f = on(Some("main"), None);
+            f.setup_pending = true;
+            f
+        };
+        let block_window = {
+            let mut f = on(Some("main"), None);
+            f.block_refresh = true;
+            f
+        };
+        let both_windows = {
+            let mut f = setup_window.clone();
+            f.block_refresh = true;
+            f
+        };
+        let line_setup_window = {
+            let mut f = on(Some("sprint/SP-001"), None);
+            f.setup_pending = true;
+            f.block_refresh = true;
+            f
+        };
+        let cases: Vec<(&str, RepoFacts)> = vec![
+            ("on main", on(Some("main"), None)),
+            ("on a line", on(Some("sprint/SP-001"), None)),
+            ("on an item branch", on(Some("feat/FEAT-001-t"), None)),
+            ("on a branch naming no item", on(Some("topic"), None)),
+            ("on a spike", on(Some("spike/try"), None)),
+            ("detached", on(None, None)),
+            ("a merge on main", merging("main")),
+            ("a merge on a line", merging("sprint/SP-001")),
+            ("a new repository's first commit", unborn),
+            ("the setup window", setup_window),
+            ("the block window", block_window),
+            ("both windows", both_windows),
+            ("both windows on a line", line_setup_window),
+        ];
+        let mut gaps = Vec::new();
+        for git_model in [false, true] {
+            let p = board(git_model);
+            for (name, base) in &cases {
+                for message in messages {
+                    let with_message = RepoFacts {
+                        message: Some(message.to_string()),
+                        staged: None,
+                        ..base.clone()
+                    };
+                    if commit_verdict(&with_message, &p).is_allowed() {
+                        continue;
+                    }
+                    if !message_verdict(&with_message, &p, None).is_allowed() {
+                        continue;
+                    }
+                    for staged in staged_sets {
+                        let pre_commit = RepoFacts {
+                            message: None,
+                            staged: Some(staged.iter().map(|s| s.to_string()).collect()),
+                            ..base.clone()
+                        };
+                        if branch_verdict(&pre_commit, &p).is_allowed() {
+                            gaps.push(format!(
+                                "{name}, git model {git_model}, message {message:?}, \
+                                 staged {staged:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            gaps.is_empty(),
+            "the guard refuses these and both git hooks let them through:\n{}",
+            gaps.join("\n")
+        );
     }
 }

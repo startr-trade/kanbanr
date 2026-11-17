@@ -1729,4 +1729,41 @@ mod tests {
         assert_eq!(slash_joined(Path::new(r"a\b.rs")), "a/b.rs");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// FTR-059 R-9: kanbanr appends its lines to the board's `.gitignore` and never rewrites,
+    /// drops or reorders a line someone else put there; a second run changes nothing.
+    #[test]
+    fn the_board_gitignore_gains_lines_and_never_loses_or_reorders_one() {
+        let dir = temp("gitignore-append");
+        let repo = Repository::init(&dir).unwrap();
+        let path = dir.join(".gitignore");
+        std::fs::write(&path, "b\n# mine\na").unwrap();
+
+        ensure_secret_ignored(&repo, &dir);
+        let first = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = first.lines().collect();
+        assert_eq!(lines[..3], ["b", "# mine", "a"], "{first}");
+        let ours = [
+            SECRET_FILE,
+            WRITE_LOCK_FILE,
+            UNPUSHED_FILE,
+            crate::eventing::CONFIG_FILE,
+            SESSIONS_DIR,
+            "*.tmp",
+        ];
+        assert_eq!(
+            lines[3..],
+            ours,
+            "appended once each, after the others: {first}"
+        );
+        assert!(first.ends_with('\n'), "{first:?}");
+
+        ensure_secret_ignored(&repo, &dir);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            first,
+            "a second run changes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
