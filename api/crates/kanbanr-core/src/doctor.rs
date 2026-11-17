@@ -1382,7 +1382,7 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
     // Every folder kanbanr writes at a project's root. A new one goes here too, or doctor calls it
     // stray.
-    const EXPECTED: [&str; 10] = [
+    const EXPECTED: [&str; 11] = [
         "features",
         "milestones",
         "docs",
@@ -1393,6 +1393,7 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
         crate::prepared::FOLDER,
         crate::manual::FOLDER,
         crate::timings::FOLDER,
+        crate::tasklog::FOLDER,
     ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
