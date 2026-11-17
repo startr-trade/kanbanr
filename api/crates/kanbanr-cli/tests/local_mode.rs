@@ -12791,6 +12791,158 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-113 R-6: `kanbanr prepare test --retired` needs a note and is refused for both outcome flags
+/// at parse; for an item of a shipped release it prepares a record that `prepare list` shows, with
+/// no terminal command; for an item that has not shipped the core refuses it in its own words.
+#[test]
+fn prepare_test_retired_needs_a_note_and_a_shipped_release() {
+    let (base, work) = release_scratch("prepare-retired");
+    // The board is the test's own, under the temporary folder (L-41).
+    assert!(base.starts_with(std::env::temp_dir()));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let as_claude = |args: &[&str]| {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    // `release_scratch` plans one finished item into v1.0.0; a second release holds another.
+    ok(run_in(&base, &work, &["release", "add", "v2.0.0"]));
+    let shipped = "FEAT-001";
+    let unshipped = plan_finished_item(&base, &work, "v2.0.0");
+    for (code, test) in [
+        (shipped, "manual: the cart looks right"),
+        (unshipped.as_str(), "manual: the till looks right"),
+    ] {
+        let file = base.join(format!("{code}.yaml"));
+        std::fs::write(
+            &file,
+            format!(
+                "statement: Keep a cart\nrequirements:\n- id: R-1\n  text: THE SYSTEM SHALL keep it.\n  \
+                 tests:\n  - name: '{test}'\n    kind: manual\n"
+            ),
+        )
+        .unwrap();
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "define", code, "--file", file.to_str().unwrap()],
+        ));
+    }
+    // v1.0.0 ships: the board's own releases file, in the scratch folder.
+    let releases = base.join("code/shop.kanbanr/projects/shop/releases.yaml");
+    let mut all: Vec<kanbanr_core::releases::Release> =
+        kanbanr_core::yaml::from_str(&std::fs::read_to_string(&releases).unwrap()).unwrap();
+    for r in &mut all {
+        if r.version == "v1.0.0" {
+            r.state = kanbanr_core::releases::ReleaseState::Shipped;
+        }
+    }
+    std::fs::write(&releases, kanbanr_core::yaml::to_string(&all).unwrap()).unwrap();
+
+    let name = "manual: the cart looks right";
+    let src = ["--source", "conversation 17 Nov: retire it"];
+    // Parse: a note is required; neither outcome flag goes with it.
+    let no_note = as_claude(
+        &[
+            &["prepare", "test", shipped, "R-1", name, "--retired"][..],
+            &src,
+        ]
+        .concat(),
+    );
+    assert!(!no_note.status.success());
+    assert!(
+        String::from_utf8_lossy(&no_note.stderr).contains("--note"),
+        "{}",
+        String::from_utf8_lossy(&no_note.stderr)
+    );
+    for flag in ["--passed", "--failed"] {
+        let both = as_claude(
+            &[
+                &[
+                    "prepare",
+                    "test",
+                    shipped,
+                    "R-1",
+                    name,
+                    "--retired",
+                    "--note",
+                    "n",
+                    flag,
+                ][..],
+                &src,
+            ]
+            .concat(),
+        );
+        assert!(!both.status.success(), "{flag}");
+    }
+    // A shipped release's item: prepared, listed, no terminal command.
+    let o = as_claude(
+        &[
+            &[
+                "prepare",
+                "test",
+                shipped,
+                "R-1",
+                name,
+                "--retired",
+                "--note",
+                "shipped in v1.0.0; not judged",
+            ][..],
+            &src,
+        ]
+        .concat(),
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        said.contains(&format!("the retirement of {shipped} R-1")),
+        "{said}"
+    );
+    let list = as_claude(&["--json", "prepare", "list"]);
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["fields"]["state"], "retired", "{v}");
+    assert_eq!(
+        rows[0]["fields"]["note"], "shipped in v1.0.0; not judged",
+        "{v}"
+    );
+    assert_eq!(rows[0]["command"], "", "{v}");
+    // An item that has not shipped is refused with the core's sentence.
+    let refused = as_claude(
+        &[
+            &[
+                "prepare",
+                "test",
+                &unshipped,
+                "R-1",
+                "manual: the till looks right",
+                "--retired",
+                "--note",
+                "n",
+            ][..],
+            &src,
+        ]
+        .concat(),
+    );
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("which has not shipped"), "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-095 R-1, R-4: `kanbanr prepare gate` for a gate no release stage asks for warns on stderr,
 /// naming the stages, and still records the result and exits 0.
 #[test]
