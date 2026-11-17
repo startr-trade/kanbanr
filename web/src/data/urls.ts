@@ -47,6 +47,8 @@ export const urls = {
     apiUrl(`${project(p)}/repo-docs/raw${query([["path", path], ["at", at]])}`),
   /** The lessons in force, or those that bear on one item when `for` is given. */
   lessons: (p: string, q: { for?: string } = {}) => apiUrl(`${project(p)}/lessons${query([["for", q.for]])}`),
+  /** The items on the longest dependency chain (FTR-078). */
+  criticalPath: (p: string) => apiUrl(`${project(p)}/critical-path`),
   /** The project's agent scopes with their state (FEAT-214). */
   scopes: (p: string) => apiUrl(`${project(p)}/scopes`),
   /** Agent branches ahead of their items' tasks (FEAT-214); reads the code repository. */
@@ -147,6 +149,8 @@ export const TAGS = {
   /** `lessons?for=`: matched against the item's labels, kind and goals. */
   lessonsFor: (c: string) => ["lessons", `item:${c}`],
   scopes: ["scopes"],
+  /** The dependency graph is the items' `depends_on` (FTR-078). */
+  criticalPath: ["items"],
   releases: ["releases", "items"],
   workflowDiagram: ["config"],
   /** The config against the packs it follows. */

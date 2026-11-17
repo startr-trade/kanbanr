@@ -6,6 +6,8 @@
  * waiting for a sign-off, or that it is ready — and nothing at all while the item's tasks are open,
  * since the tasks chip already says so and "ready" would not be true.
  */
+import type { CheckTally } from "./types";
+
 export interface NextStage {
   status: string;
   /** Everything the stage still lacks, its sign-offs included. */
@@ -20,6 +22,8 @@ export interface NextStage {
   immediate?: boolean;
   /** How many of `missing` the user settles: sign-offs and approval. Absent counts as 0. */
   for_you?: number;
+  /** What the stage lacks by family; absent from an older daemon (FTR-078). */
+  checks?: CheckTally[];
 }
 
 export interface CardHint {
