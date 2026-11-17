@@ -362,6 +362,10 @@ jobs:
       # says so and why on the Review page, not "not granted through kanbanr" (DEF-080).
       - name: The Review page says a grant cannot be checked and why
         run: npm run check:grant-unverifiable
+      # Accordion rows render their body only when open, head it with a real heading holding the
+      # toggle, and keep the open ids in the URL hash (FTR-046).
+      - name: The UI kit's accordion rows open on demand under a heading
+        run: npm run check:ui-accordion
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

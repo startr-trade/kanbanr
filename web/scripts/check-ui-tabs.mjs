@@ -46,6 +46,17 @@ let ok = true;
   eq(problems, "all empty: the first visible", pickTab([{ key: "x", label: "X", hidden: true }, { key: "y", label: "Y", count: 0 }, { key: "z", label: "Z" }], null), "y");
   eq(problems, "no tabs", pickTab([], "a", "b"), "");
   eq(problems, "only hidden tabs", pickTab([{ key: "x", label: "X", hidden: true }], "x"), "");
+  // A disabled tab is never selected: requested, preferred or largest, it falls through like a hidden one.
+  const withDisabled = [
+    { key: "a", label: "A", count: 1 },
+    { key: "b", label: "B", count: 4 },
+    { key: "x", label: "X", count: 9, disabled: "not yet" },
+  ];
+  eq(problems, "a requested disabled tab falls through to the preferred", pickTab(withDisabled, "x", "a"), "a");
+  eq(problems, "a preferred disabled tab falls through to the largest", pickTab(withDisabled, null, "x"), "b");
+  eq(problems, "a disabled largest tab falls through to the largest enabled", pickTab(withDisabled, null), "b");
+  eq(problems, "all empty with the first disabled: the first enabled", pickTab([{ key: "x", label: "X", disabled: "no" }, { key: "y", label: "Y" }], null), "y");
+  eq(problems, "only disabled tabs", pickTab([{ key: "x", label: "X", count: 3, disabled: "no" }], "x", "x"), "");
   eq(problems, "visibleTabs drops hidden and keeps disabled", visibleTabs(tabs).map((t) => t.key), ["a", "b", "d", "e"]);
 
   eq(problems, "parseState reads a key and ignores unknown ones", parseState("?tab=b&x=1", { tab: "" }), { tab: "b" });
