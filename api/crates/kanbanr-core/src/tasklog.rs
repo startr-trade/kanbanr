@@ -210,13 +210,19 @@ pub struct KindRatio {
     pub ratio: f64,
 }
 
-/// Estimate-to-actual per kind, over completed tasks with an estimate and a recorded actual
-/// (a task completed before the log existed has none, and counting it as 0 h would invent one).
-/// Kinds in the order core, cli, server, web, docs, ci, other, unknown.
-pub fn ratios(graph: &TaskGraph, actuals: &BTreeMap<String, TaskActual>) -> Vec<KindRatio> {
+/// Estimate-to-actual per kind, over `project`'s completed tasks with an estimate and a recorded
+/// actual (a task completed before the log existed has none, and counting it as 0 h would invent
+/// one). `actuals` come from `project`'s task log, keyed by local id, so a task of another project
+/// the graph holds is never paired with them, whatever its id. Kinds in the order core, cli,
+/// server, web, docs, ci, other, unknown.
+pub fn ratios(
+    graph: &TaskGraph,
+    project: &str,
+    actuals: &BTreeMap<String, TaskActual>,
+) -> Vec<KindRatio> {
     let mut by_kind: BTreeMap<&'static str, (usize, f64, f64)> = BTreeMap::new();
     for n in graph.nodes.values() {
-        if n.state != TaskState::Completed {
+        if n.id.project != project || n.state != TaskState::Completed {
             continue;
         }
         let Some(estimate) = n.estimate_h.filter(|h| *h > 0.0) else {
@@ -423,7 +429,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let got = ratios(&graph, &acts);
+        let got = ratios(&graph, "p", &acts);
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!(got[0].kind, "core");
         assert_eq!(got[0].tasks, 2);
@@ -435,5 +441,30 @@ mod tests {
         assert!((got[1].estimate_h - 2.0).abs() < 1e-9);
         assert!((got[1].actual_h - 1.0).abs() < 1e-9);
         assert!((got[1].ratio - 0.5).abs() < 1e-9);
+    }
+
+    /// R-4: the task log is one project's, keyed by local id, so a task of another project the
+    /// graph holds (through a cross-project ref) with the same local id is never paired with it.
+    #[test]
+    fn a_task_of_another_project_with_the_same_local_id_is_never_paired() {
+        use TaskState::*;
+        let mut graph = TaskGraph::default();
+        let mine = node("T1", Completed, &["web/src/x.ts"], Some(2.0));
+        let mut theirs = node(
+            "T1",
+            Completed,
+            &["api/crates/kanbanr-core/src/x.rs"],
+            Some(4.0),
+        );
+        theirs.id.project = "other".into();
+        for n in [mine, theirs] {
+            graph.nodes.insert(n.id.to_string(), n);
+        }
+        let acts: BTreeMap<String, TaskActual> = [actual("T1", 1.0)].into_iter().collect();
+        let got = ratios(&graph, "p", &acts);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].kind, "web");
+        assert_eq!(got[0].tasks, 1);
+        assert!((got[0].estimate_h - 2.0).abs() < 1e-9);
     }
 }
