@@ -6,6 +6,8 @@ import { locateError } from "../diagramCheck";
 import { appHref } from "../runtimeConfig";
 import { useBoardIndex } from "../useBoardIndex";
 import { currentPick, rewriteRepoLinks } from "../position";
+import type { DocViews } from "../types";
+import { ASKING, figureElement, pairBlocks, saidElement, webViewFor } from "../docViews";
 
 // Unique-per-diagram id prefix, so two diagrams on one page never share an SVG id.
 let diagramSeq = 0;
@@ -26,6 +28,9 @@ let diagramSeq = 0;
  *   page at the position, which is `at` (an item page passes its own code) or else the pick in the
  *   URL or kept for the session (FTR-004). A link to a board doc (`/p/…/docs/file/…`) is absolute and
  *   untouched.
+ * - Fenced ```katalogr-query blocks are asked of katalogr through `resolveViews` (FTR-016): each is
+ *   drawn as one figure when the daemon has a view, and otherwise keeps its source with one plain
+ *   sentence under it. The page never blanks a block, and nothing here needs katalogr.
  * - Headings are shifted down by `headingOffset` (default 1), so the page's own title stays its
  *   only h1 (DEF-082). `DocPage` passes 0 when the doc starts with an h1 and the page draws none.
  */
@@ -34,12 +39,15 @@ export default function Markdown({
   resolveImage,
   headingOffset = 1,
   at,
+  resolveViews,
 }: {
   source: string;
   resolveImage?: (src: string) => string;
   headingOffset?: 0 | 1 | 2;
   /** The position repository doc links open at; default is the current pick (FTR-004). */
   at?: string;
+  /** Asks the daemon for this doc's query blocks (`api.getDocViews`); without it blocks stay source. */
+  resolveViews?: () => Promise<DocViews>;
 }) {
   const { project } = useParams();
   const { search } = useLocation();
@@ -105,6 +113,39 @@ export default function Markdown({
       });
     }
 
+    // Draw any ```katalogr-query blocks from what the daemon asked of katalogr (FTR-016).
+    const queryBlocks = Array.from(root.querySelectorAll<HTMLElement>("code.language-katalogr-query"));
+    let cancelled = false;
+    let waiting: HTMLElement[] = [];
+    if (queryBlocks.length && resolveViews) {
+      const hosts = queryBlocks.map((code) => code.closest("pre") ?? code);
+      waiting = hosts.map((host) => {
+        const note = saidElement(document, ASKING);
+        host.after(note);
+        return note;
+      });
+      Promise.all([resolveViews().then((v) => v, () => null), import("pele")]).then(([views, { render }]) => {
+        if (cancelled) return;
+        waiting.forEach((n) => n.remove());
+        pairBlocks(hosts, views ?? { doc: "", position: "", position_from: "", katalogr: { state: "absent", url: "", said: "" }, blocks: [] }).forEach((pair) => {
+          const host = pair.node;
+          if (!host.isConnected) return;
+          const what = webViewFor(views, pair);
+          if (what.kind === "say") {
+            host.after(saidElement(document, what.text));
+            return;
+          }
+          try {
+            const { svg } = render(what.block.view!.mermaid, { idPrefix: `k${diagramSeq++}-` });
+            host.replaceWith(figureElement(document, what.block, views!, safeSvg(svg)));
+          } catch (e) {
+            const { line, message } = locateError(e, 1);
+            host.after(saidElement(document, `Diagram error, line ${line}: ${message}`));
+          }
+        });
+      });
+    }
+
     // Add a small "Copy" button to ordinary code blocks (markdown nicety; skip mermaid blocks).
     root.querySelectorAll<HTMLPreElement>("pre").forEach((pre) => {
       if (pre.querySelector("code.language-mermaid")) return;
@@ -122,7 +163,11 @@ export default function Markdown({
       };
       pre.appendChild(btn);
     });
-  }, [html]);
+    return () => {
+      cancelled = true;
+      waiting.forEach((n) => n.remove());
+    };
+  }, [html, resolveViews]);
 
   return <div className="markdown" ref={ref} onClick={follow} dangerouslySetInnerHTML={{ __html: html }} />;
 }

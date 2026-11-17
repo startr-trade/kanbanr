@@ -1124,6 +1124,58 @@ export interface DocFolder {
   docs: DocFile[];
 }
 
+/** One repository's position (CD-2), as katalogr and kanbanr both write it (FTR-016). */
+export interface PositionRef {
+  repo: string;
+  commit: string | null;
+  dirty: string | null;
+}
+
+/** What `GET /projects/{p}/katalogr` and each doc's views carry about the link (FTR-016). */
+export type KatalogrState =
+  | { state: "ready"; url: string; katalogr: string; contract: number; capabilities: string[] }
+  | { state: "absent"; url: string; said: string }
+  | { state: "too_old"; url: string; katalogr: string; said: string };
+
+/** What the monitor draws for one query block: katalogr's answer (FTR-016). */
+export interface BlockView {
+  mermaid: string;
+  positions: PositionRef[];
+  exact: boolean;
+  view_id?: string;
+  pele: string;
+  /** katalogr's own page for this view, only when katalogr lists `web-view`. */
+  open?: string;
+  warnings?: string[];
+}
+
+export interface DocViewBlock {
+  index: number;
+  line: number;
+  source: string;
+  problem?: string;
+  view?: BlockView;
+  /** Why there is no view, in one sentence; absent when `view` is set. */
+  said?: string;
+}
+
+/** `GET /projects/{p}/docs/views?path=`: a doc's query blocks asked of katalogr (FTR-016). */
+export interface DocViews {
+  doc: string;
+  position: string;
+  position_from: string;
+  katalogr: KatalogrState;
+  blocks: DocViewBlock[];
+}
+
+/** `GET /projects/{p}/katalogr`. */
+export interface KatalogrStatus {
+  state: KatalogrState;
+  position: string;
+  position_from: string;
+  url: string;
+}
+
 /** The states displayed for a project (falls back to all statuses). */
 export function displayedStates(config: { displayed_states?: string[]; statuses?: string[] }): string[] {
   return config.displayed_states?.length ? config.displayed_states : (config.statuses ?? []);

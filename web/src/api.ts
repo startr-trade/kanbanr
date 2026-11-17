@@ -8,6 +8,7 @@ import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBod
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, BoardInfo, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 import type { PickView, Picked, RepoDoc, RepoTree } from "./types";
+import type { DocViews, KatalogrStatus } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
 import type { CharterProgress } from "./types";
 
@@ -538,6 +539,10 @@ export const api = {
   getDocTree: (id: string) => getJson<DocFolder>(apiUrl(`/projects/${encodeURIComponent(id)}/docs`)),
   getDoc: (id: string, path: string) =>
     getText(apiUrl(`/projects/${encodeURIComponent(id)}/docs/content?path=${encodeURIComponent(path)}`)),
+  // A doc's `katalogr-query` blocks asked of katalogr by the daemon, and the link's own state (FTR-016).
+  getDocViews: (id: string, path: string) =>
+    getJson<DocViews>(apiUrl(`/projects/${encodeURIComponent(id)}/docs/views?path=${encodeURIComponent(path)}`)),
+  getKatalogr: (id: string) => getJson<KatalogrStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/katalogr`)),
   getActivity: (id: string, params = "") =>
     getJson<Activity[]>(apiUrl(`/projects/${encodeURIComponent(id)}/activity${params}`)),
   // Docs read at a position (FTR-004): the picker's entries, a pick resolved, the repository's docs
