@@ -54,6 +54,9 @@ pub struct MigrationReport {
     /// Pushes the board's push policy ran and that failed (the commit is made either way).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub push_failures: Vec<String>,
+    /// Why the migration commit could not be made; the files were put back (DEF-102).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
 }
 
 impl MigrationReport {
@@ -111,8 +114,17 @@ pub fn run(
             });
         }
         git::require_identity(data_dir).map_err(WriteError::Refused)?;
+        let before = git::changed_paths(data_dir);
         let mut report = migrate_to_v5(store).map_err(WriteError::Core)?;
-        report.committed = git::commit_local(data_dir, COMMIT_MESSAGE);
+        // A commit that cannot be made puts the files back, so the migration can be run again
+        // (DEF-102).
+        match crate::write::commit_or_restore(data_dir, COMMIT_MESSAGE, &before) {
+            Ok(oid) => report.committed = oid.is_some(),
+            Err(e) => {
+                report.committed = false;
+                report.problem = Some(e.to_string());
+            }
+        }
         if report.committed
             && let Some(outcome) = git::after_commit(data_dir, policy)
         {

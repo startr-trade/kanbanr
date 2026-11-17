@@ -1034,6 +1034,10 @@ pub struct Flag {
     pub commits: Vec<CommitRef>,
     /// When the text last changed, RFC 3339.
     pub target_changed_at: String,
+    /// The stable hash of the text the flag scanned (DEF-102): a check of the text covers it while
+    /// this is unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_hash: String,
     /// Edits to the text since the first change that opened the flag, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edits: Vec<Edit>,
@@ -1187,16 +1191,18 @@ fn unified_diff(before: &str, after: &str) -> (String, bool) {
 /// Flag `linked` if some change put in the code a name that the text, as it stood when the change
 /// was made, held. An edit after the change never closes the flag; only a check does. `versions`
 /// is the text's history, oldest first; with none (history unreadable) the old rule applies: a
-/// name changed after `changed_at` that the text holds now. Pure but for the diff.
+/// name changed after `changed_at` that the text holds now. `text_hash` is the stable hash of
+/// `current`, kept on the flag (DEF-102). Pure but for the diff.
 pub fn flag_for(
     linked: &Linked,
     current: &str,
     versions: &[Version],
     changed_at: &str,
+    text_hash: &str,
     changes: &[Change],
 ) -> Option<Flag> {
     if versions.is_empty() {
-        return flag_after(linked, current, changed_at, changes);
+        return flag_after(linked, current, changed_at, text_hash, changes);
     }
     // Each change opens the flag by the names the text held when it was made.
     let mut opening: Vec<(&Change, &Version, Vec<Hit>)> = Vec::new();
@@ -1268,6 +1274,7 @@ pub fn flag_for(
         hits,
         commits,
         target_changed_at: changed_at.to_string(),
+        target_hash: text_hash.to_string(),
         edits,
         diff,
         diff_truncated,
@@ -1276,7 +1283,13 @@ pub fn flag_for(
 
 /// The rule before DEF-050, kept for a text whose history cannot be read: flag when a change
 /// after the text last changed names something the text holds now.
-fn flag_after(linked: &Linked, text: &str, changed_at: &str, changes: &[Change]) -> Option<Flag> {
+fn flag_after(
+    linked: &Linked,
+    text: &str,
+    changed_at: &str,
+    text_hash: &str,
+    changes: &[Change],
+) -> Option<Flag> {
     let since = instant(changed_at)?;
     let later: Vec<&Change> = changes
         .iter()
@@ -1313,6 +1326,7 @@ fn flag_after(linked: &Linked, text: &str, changed_at: &str, changes: &[Change])
         hits,
         commits,
         target_changed_at: changed_at.to_string(),
+        target_hash: text_hash.to_string(),
         edits: Vec::new(),
         diff: String::new(),
         diff_truncated: false,
@@ -1659,10 +1673,20 @@ pub fn flags_for_changes(
                 (text, vec![file])
             }
         };
-        let refs: Vec<&Path> = files.iter().map(|f| f.as_path()).collect();
-        let Some(at) = changed_at(board, &refs) else {
+        // When the text last changed (DEF-102): an item's spec file when it has one, so a task,
+        // test, history or status write to its YAML does not count; the YAML for an item whose
+        // spec was never split out.
+        let text_files: Vec<&Path> = match l.target.kind {
+            TargetKind::Item => match files.get(1).filter(|spec| spec.is_file()) {
+                Some(spec) => vec![spec.as_path()],
+                None => files.first().map(|y| y.as_path()).into_iter().collect(),
+            },
+            _ => files.iter().map(|f| f.as_path()).collect(),
+        };
+        let Some(at) = changed_at(board, &text_files) else {
             continue;
         };
+        let text_hash = crate::hash::stable_hash(&text);
         // The history of the text itself: an item's spec file, or the doc file.
         let versions = match l.target.kind {
             TargetKind::Item => files
@@ -1674,7 +1698,7 @@ pub fn flags_for_changes(
                 .map(|file| target_versions(board, file, &text))
                 .unwrap_or_default(),
         };
-        if let Some(flag) = flag_for(&l, &text, &versions, &at, changes) {
+        if let Some(flag) = flag_for(&l, &text, &versions, &at, &text_hash, changes) {
             flags.push(flag);
         }
     }
@@ -2366,6 +2390,7 @@ mod tests {
             text,
             &[],
             "2026-11-02T09:00:00+00:00",
+            "",
             std::slice::from_ref(&change),
         )
         .unwrap();
@@ -2379,6 +2404,7 @@ mod tests {
                 text,
                 &[],
                 "2026-11-07T16:00:00+05:30",
+                "",
                 std::slice::from_ref(&change)
             )
             .is_none()
@@ -2389,12 +2415,13 @@ mod tests {
                 text,
                 &[],
                 "2026-11-08T00:00:00+00:00",
+                "",
                 std::slice::from_ref(&change)
             )
             .is_none()
         );
         // An unreadable time is never flagged.
-        assert!(flag_for(&l, text, &[], "yesterday", &[change]).is_none());
+        assert!(flag_for(&l, text, &[], "yesterday", "", &[change]).is_none());
     }
 
     /// A board whose doc `design/data.md` has the given versions, each committed at its date, and
@@ -3102,6 +3129,7 @@ mod tests {
             hits: vec![],
             commits: vec![],
             target_changed_at: "2026-11-01T00:00:00Z".into(),
+            target_hash: String::new(),
             edits: vec![],
             diff: String::new(),
             diff_truncated: false,
