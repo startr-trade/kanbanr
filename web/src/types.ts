@@ -1987,6 +1987,82 @@ export interface PortfolioPlan {
   lanes: PortfolioLane[];
 }
 
+// ---- The flow plan (FTR-061): `GET /projects/{p}/plan/flow` ----
+
+/** Why an open task cannot start now (FTR-060). */
+export type TaskWait =
+  | { Dependency: string }
+  | { Conflict: { task: string; paths: string[] } }
+  | { ItemNotAtBuild: string }
+  | { UnknownFootprint: string };
+
+/** A task free to start (FTR-060's ReadyTask). */
+export interface FlowReady {
+  id: string;
+  text: string;
+  estimate_h?: number | null;
+  /** On the critical path. */
+  critical: boolean;
+  /** The longest remaining chain starting at it, in agent-hours. */
+  chain_h: number;
+}
+
+/** A task in progress. */
+export interface FlowRunning {
+  id: string;
+  text: string;
+  /** The live agent scope working it. */
+  scope?: string | null;
+  elapsed_h: number;
+  estimate_h?: number | null;
+  /** It has run longer than its estimate. */
+  over: boolean;
+}
+
+/** A task that cannot start now, and every reason why. */
+export interface FlowBlocked {
+  id: string;
+  waits: TaskWait[];
+}
+
+/** How long the remaining work takes with `lanes` agents and `slots` builds at once. */
+export interface FlowForecast {
+  lanes: number;
+  slots: number;
+  /** The lanes that help, bounded by the build slots. */
+  effective_lanes: number;
+  /** Hours from now. */
+  finish_h: number;
+}
+
+/** A date a person set: a running sprint's last day, or a release's target. */
+export interface PersonDate {
+  what: string;
+  date: string;
+}
+
+/** A scope's work in agent-hours over its task graph. */
+export interface FlowPlan {
+  scope: string;
+  total_h: number;
+  done_h: number;
+  remaining_h: number;
+  critical_path: string[];
+  critical_h: number;
+  widest: number;
+  running: FlowRunning[];
+  ready: FlowReady[];
+  blocked: FlowBlocked[];
+  forecasts: FlowForecast[];
+  build_share: number;
+  build_share_measured: boolean;
+  unestimated: string[];
+  untasked_items: string[];
+  outside: string[];
+  /** The only dates in the plan, each set by a person. */
+  dates: PersonDate[];
+}
+
 // ---- The project's facts and its content catalog (FTR-005): `GET /projects/{p}/facts`, `…/catalog` ----
 
 /** What the project is: its answers to the five facts questions (`kanbanr facts vocabulary`). */

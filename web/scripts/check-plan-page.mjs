@@ -241,7 +241,7 @@ await check(
   async (expect, problems) => {
     const sources = { "pages/PlanPage.tsx": src("pages/PlanPage.tsx") };
     for (const f of readdirSync(new URL("../src/pages/plan", import.meta.url))) sources[`pages/plan/${f}`] = src(`pages/plan/${f}`);
-    expect("the files under pages/plan", Object.keys(sources).sort(), ["pages/PlanPage.tsx", "pages/plan/PastRow.tsx", "pages/plan/PlanRow.tsx", "pages/plan/RowItems.tsx"]);
+    expect("the files under pages/plan", Object.keys(sources).sort(), ["pages/PlanPage.tsx", "pages/plan/FlowPanel.tsx", "pages/plan/PastRow.tsx", "pages/plan/PlanRow.tsx", "pages/plan/RowItems.tsx"]);
     for (const [rel, text] of Object.entries(sources)) {
       for (const bad of [/\bapi\.getProject\s*\(/, /\bgetGantt\b/, /\buseAsync\b/, /\bapi\.getPlan/]) {
         if (bad.test(text)) problems.push(`${rel} has ${bad}: reads go through useQuery and urls`);

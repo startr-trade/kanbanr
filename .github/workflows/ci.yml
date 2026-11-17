@@ -437,6 +437,10 @@ jobs:
       # the tab and the open rows, and /schedule and /gantt go to the Plan page (FTR-043).
       - name: The Plan page
         run: npm run check:plan-page
+      # The Plan page's Flow panel shows what runs, what is ready, what each blocked task waits on
+      # and the forecast per lane count in agent-hours, and quotes no calendar days (FTR-061).
+      - name: The Plan page's flow
+        run: npm run check:plan-flow
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

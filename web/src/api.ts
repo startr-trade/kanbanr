@@ -4,7 +4,7 @@ import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types"
 import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
 import type { CatalogStatus, FactsOrEmpty } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
-import type { PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
+import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
@@ -59,6 +59,8 @@ export const api = {
   getPlan: (id: string, scope: PlanScope) => getJson<PlanSlice>(urls.plan(id, scope)),
   /** One Plan row's items, read when it is opened (FTR-043). */
   getPlanRow: (id: string, key: string) => getJson<RowBody>(urls.planRow(id, key)),
+  /** The flow plan in agent-hours for a scope, the running sprint's by default (FTR-061). */
+  getPlanFlow: (id: string, scope?: string) => getJson<FlowPlan>(urls.planFlow(id, scope)),
   /** The portfolio's timeline, one row per project, with its window (FTR-043). */
   getPortfolioPlan: () => getJson<PortfolioPlan>(urls.portfolioPlan()),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.

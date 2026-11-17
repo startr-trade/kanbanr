@@ -98,6 +98,8 @@ export const urls = {
   plan: (p: string, scope: PlanScope) => apiUrl(`${project(p)}/plan?scope=${enc(scope)}`),
   /** One Plan row's items, read when the row is opened (FTR-043); the key `sprint:SP-004` is one segment. */
   planRow: (p: string, key: string) => apiUrl(`${project(p)}/plan/rows/${enc(key)}`),
+  /** The flow plan in agent-hours: the running sprint's, else the open work's, unless `scope` names one (FTR-061). */
+  planFlow: (p: string, scope?: string) => apiUrl(`${project(p)}/plan/flow${query([["scope", scope]])}`),
   /** The portfolio's timeline, one row per project (FTR-043); a root read. */
   portfolioPlan: () => apiUrl(`/portfolio/plan`),
 };
@@ -153,4 +155,6 @@ export const TAGS = {
   planningCheck: ["planning", "items", "sprints", "releases"],
   /** The Plan page (FTR-043): its counts, tabs and rows read sprints, releases, milestones and items. */
   plan: ["sprints", "releases", "milestones", "items"],
+  /** The Flow panel (FTR-061): the items' tasks, the sprints and releases it scopes by, and the task log. */
+  planFlow: ["items", "sprints", "releases", "tasklog"],
 } as const;

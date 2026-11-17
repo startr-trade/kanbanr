@@ -17,6 +17,7 @@ import { defaultTab, openLanes, planTabs, toTimeline } from "../planTabs";
 import type { PlanScope, PlanSlice, PlanSummary } from "../types";
 import { PlanRow } from "./plan/PlanRow";
 import { PastRow } from "./plan/PastRow";
+import { FlowPanel } from "./plan/FlowPanel";
 
 export default function PlanPage() {
   const { project = "" } = useParams();
@@ -44,7 +45,12 @@ export function PlanBody(p: { project: string; summary: PlanSummary }): JSX.Elem
         <LiveDot />
       </div>
       <Tabs tabs={planTabs(p.summary)} param="tab" defaultKey={defaultTab(p.summary, null)} label="Plan">
-        {(key) => <PlanTab project={p.project} scope={key as PlanScope} />}
+        {(key) => (
+          <>
+            {key === "current" && <FlowPanel project={p.project} />}
+            <PlanTab project={p.project} scope={key as PlanScope} />
+          </>
+        )}
       </Tabs>
     </div>
   );
