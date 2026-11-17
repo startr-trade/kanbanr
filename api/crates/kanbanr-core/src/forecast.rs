@@ -1425,8 +1425,10 @@ mod tests {
         assert_eq!(PlanScope::default_for(&[], today), PlanScope::Open);
     }
 
-    /// R-9: the plan with four forecasts over 3,000 tasks within 300 ms (median of 5) in a debug
-    /// build, the project's items once read; 100 ms in a release build. The times are printed.
+    /// R-9: the plan with four forecasts over 3,000 tasks within 300 ms (median of 5) in a release
+    /// build, the project's items once read; three times that, 900 ms, in a debug build (the
+    /// coordinator's decision on T4's question, 17 Nov 2026). The board read is timed apart and
+    /// printed, as are the times.
     #[test]
     fn the_plan_stays_within_budget_on_3000_tasks() {
         let b = Board::new("budget");
@@ -1493,7 +1495,7 @@ mod tests {
         }
         times.sort();
         let median = times[2];
-        let budget_ms = if cfg!(debug_assertions) { 300 } else { 100 };
+        let budget_ms = if cfg!(debug_assertions) { 900 } else { 300 };
         println!("the plan over 3,000 tasks: median {median:?} (budget {budget_ms} ms)");
         assert!(
             median < std::time::Duration::from_millis(budget_ms),

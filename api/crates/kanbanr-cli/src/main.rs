@@ -650,6 +650,38 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// The flow plan in agent-hours (FTR-061): what is left and the critical path through the
+    /// scope's tasks, what runs, what is ready and what each blocked task waits on, and how long
+    /// the work takes with 1, 4 and 8 lanes, bounded by build slots. Never a calendar date: the
+    /// only dates shown are those a person set. The running sprint, else every open item.
+    Plan {
+        /// Plan this sprint's items.
+        #[arg(long, conflicts_with_all = ["release", "milestone", "open"])]
+        sprint: Option<String>,
+        /// Plan this release's items.
+        #[arg(long, conflicts_with_all = ["milestone", "open"])]
+        release: Option<String>,
+        /// Plan this milestone's items.
+        #[arg(long, conflicts_with = "open")]
+        milestone: Option<String>,
+        /// Plan every open item.
+        #[arg(long)]
+        open: bool,
+        /// Lane counts to forecast, comma-separated (default 1,4,8 and the sprint's own lanes).
+        #[arg(long, value_delimiter = ',')]
+        lanes: Option<Vec<usize>>,
+        /// Build slots (default: the sprint's, else the project's build settings here).
+        #[arg(long)]
+        slots: Option<usize>,
+        /// The part of a task's time spent in builds, over 0 and at most 1 (default: measured
+        /// once five tasks have builds, else 0.25).
+        #[arg(long)]
+        build_share: Option<f64>,
+        /// Add each task's actuals from the task log: agent, build and wait time, rework, red
+        /// builds, tokens and cost.
+        #[arg(long)]
+        actuals: bool,
+    },
     /// Write or refresh the board's README: what this repository is, its projects, and how to
     /// install kanbanr and see it as a board (FEAT-201). Text outside its markers is kept.
     Readme,
@@ -1314,12 +1346,22 @@ enum TaskCmd {
         #[arg(long)]
         estimate: Option<String>,
     },
-    /// Set a task's state within a todo-list.
+    /// Set a task's state within a todo-list. On completion, what the build log on this machine
+    /// holds for the task since it last went in progress is sent with it (FTR-061).
     State {
         feature: String,
         todo: String,
         key: String,
         state: String,
+        /// The tokens the agent spent on the task, kept in the task log.
+        #[arg(long)]
+        tokens: Option<u64>,
+        /// What the task cost in US dollars, kept in the task log.
+        #[arg(long)]
+        cost_usd: Option<f64>,
+        /// The model that did the work, kept in the task log.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// List tasks (optionally for a single todo-list).
     List {
@@ -2612,6 +2654,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Query(_)
         | Command::Gantt { .. }
         | Command::CriticalPath { .. }
+        | Command::Plan { .. }
         | Command::Doctor { .. }
         | Command::Drift { .. } => Read,
         Command::Init { .. } => Outside("`kanbanr init` changes kanbanr itself"),
@@ -10064,6 +10107,29 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             println!("{}", client.get(&path)?);
             Ok(())
         }
+        Command::Plan {
+            sprint,
+            release,
+            milestone,
+            open,
+            lanes,
+            slots,
+            build_share,
+            actuals,
+        } => run_plan(
+            cli,
+            &client,
+            &PlanArgs {
+                sprint: sprint.clone(),
+                release: release.clone(),
+                milestone: milestone.clone(),
+                open: *open,
+                lanes: lanes.clone(),
+                slots: *slots,
+                build_share: *build_share,
+                actuals: *actuals,
+            },
+        ),
         Command::CriticalPath { all_projects } => {
             let path = if *all_projects {
                 "/critical-path".to_string()
@@ -11008,6 +11074,324 @@ fn run_index(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<
     } else {
         for id in &ids {
             println!("rebuilt index for {id}");
+        }
+    }
+    Ok(())
+}
+
+/// `kanbanr plan`'s arguments (FTR-061).
+struct PlanArgs {
+    sprint: Option<String>,
+    release: Option<String>,
+    milestone: Option<String>,
+    open: bool,
+    lanes: Option<Vec<usize>>,
+    slots: Option<usize>,
+    build_share: Option<f64>,
+    actuals: bool,
+}
+
+/// The query `GET /projects/{p}/plan/flow` takes for `args`: only what was given.
+fn plan_flow_query(args: &PlanArgs) -> String {
+    let mut q: Vec<String> = Vec::new();
+    let scope = if let Some(c) = &args.sprint {
+        Some(format!("sprint:{c}"))
+    } else if let Some(v) = &args.release {
+        Some(format!("release:{v}"))
+    } else if let Some(m) = &args.milestone {
+        Some(format!("milestone:{m}"))
+    } else if args.open {
+        Some("open".to_string())
+    } else {
+        None
+    };
+    if let Some(scope) = scope {
+        q.push(format!("scope={}", urlencode(&scope)));
+    }
+    if let Some(lanes) = &args.lanes {
+        let list: Vec<String> = lanes.iter().map(|n| n.to_string()).collect();
+        q.push(format!("lanes={}", list.join(",")));
+    }
+    if let Some(n) = args.slots {
+        q.push(format!("slots={n}"));
+    }
+    if let Some(f) = args.build_share {
+        q.push(format!("build_share={f}"));
+    }
+    if q.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", q.join("&"))
+    }
+}
+
+/// Agent-hours as the plan prints them: minutes under 1 h (`45 min`), else hours to one decimal.
+fn plan_hours(h: f64) -> String {
+    if h < 1.0 {
+        format!("{} min", (h * 60.0).round() as u64)
+    } else {
+        format!("{h:.1} h")
+    }
+}
+
+/// A date a person set, `YYYY-MM-DD`, as `4 Dec 2026`; anything else as it is.
+fn plan_date(d: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let parts: Vec<&str> = d.splitn(3, '-').collect();
+    match (
+        parts.first().and_then(|y| y.parse::<u32>().ok()),
+        parts.get(1).and_then(|m| m.parse::<usize>().ok()),
+        parts
+            .get(2)
+            .and_then(|x| x.get(..2))
+            .and_then(|x| x.parse::<u32>().ok()),
+    ) {
+        (Some(y), Some(m @ 1..=12), Some(day)) => format!("{day} {} {y}", MONTHS[m - 1]),
+        _ => d.to_string(),
+    }
+}
+
+/// What a blocked task waits on, in words (FTR-060's texts).
+fn plan_wait_text(id: &str, w: &Value) -> String {
+    if let Some(t) = w["Dependency"].as_str() {
+        return format!("waits on {t}");
+    }
+    if let Some(c) = w.get("Conflict") {
+        let task = c["task"].as_str().unwrap_or("?");
+        let paths: Vec<&str> = c["paths"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        return if paths.is_empty() {
+            format!("{task} is in progress in the same item, and its files are not recorded")
+        } else {
+            format!("writes {}, which {task} is writing", paths.join(", "))
+        };
+    }
+    if let Some(status) = w["ItemNotAtBuild"].as_str() {
+        let item = id.split('/').next().unwrap_or(id);
+        return format!("{item} is in {status}, not at the build stage");
+    }
+    if let Some(t) = w["UnknownFootprint"].as_str() {
+        return format!("it records no files, and {t} of its item is in progress");
+    }
+    w.to_string()
+}
+
+/// `kanbanr plan` (FTR-061): the flow plan the Plan page's Flow panel shows, as plain text, and
+/// with `--actuals` each task's actuals from the task log.
+fn run_plan(cli: &Cli, client: &Backend, args: &PlanArgs) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let resp = client.get(&format!("/projects/{p}/plan/flow{}", plan_flow_query(args)))?;
+    let mut plan: Value = serde_json::from_str(&resp)?;
+    let actuals = if args.actuals {
+        let events = kanbanr_core::tasklog::read_all(client.store().data_dir(), &p);
+        Some(kanbanr_core::tasklog::actuals(
+            &events,
+            &kanbanr_core::now_rfc3339(),
+        ))
+    } else {
+        None
+    };
+    if cli.json {
+        if let Some(a) = &actuals {
+            plan["actuals"] = serde_json::to_value(a)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+        return Ok(());
+    }
+    let f = |k: &str| plan[k].as_f64().unwrap_or(0.0);
+    let list = |k: &str| plan[k].as_array().cloned().unwrap_or_default();
+    let (running, ready, blocked) = (list("running"), list("ready"), list("blocked"));
+    println!("Plan for {}", plan["scope"].as_str().unwrap_or("?"));
+    if f("total_h") == 0.0 && running.is_empty() && ready.is_empty() && blocked.is_empty() {
+        println!("No tasks to plan. Ask Claude to break the sprint's items into tasks.");
+    } else {
+        println!(
+            "Remaining {:.1} agent-h · critical path {} over {} tasks · up to {} at once",
+            f("remaining_h"),
+            plan_hours(f("critical_h")),
+            list("critical_path").len(),
+            plan["widest"].as_u64().unwrap_or(0)
+        );
+        println!(
+            "Done {} of {} in all",
+            plan_hours(f("done_h")),
+            plan_hours(f("total_h"))
+        );
+        let critical: Vec<&str> = plan["critical_path"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if !critical.is_empty() {
+            println!("Critical path: {}", critical.join(" → "));
+        }
+        println!("\nRunning");
+        if running.is_empty() {
+            println!("  (none)");
+        }
+        for r in &running {
+            let elapsed = r["elapsed_h"].as_f64().unwrap_or(0.0);
+            let time = match r["estimate_h"].as_f64() {
+                Some(e) => format!("{} of {}", plan_hours(elapsed), plan_hours(e)),
+                None => format!("{} so far", plan_hours(elapsed)),
+            };
+            let mut line = format!(
+                "  {}  {}",
+                r["id"].as_str().unwrap_or("?"),
+                r["text"].as_str().unwrap_or("")
+            );
+            if let Some(scope) = r["scope"].as_str() {
+                line.push_str(&format!("  {scope}"));
+            }
+            line.push_str(&format!("  {time}"));
+            if r["over"].as_bool().unwrap_or(false) {
+                line.push_str("  over");
+            }
+            println!("{line}");
+        }
+        println!("\nReady");
+        if ready.is_empty() {
+            println!("  (none)");
+        }
+        for r in &ready {
+            println!(
+                "  {} {}  {}  chain {}",
+                if r["critical"].as_bool().unwrap_or(false) {
+                    "*"
+                } else {
+                    " "
+                },
+                r["id"].as_str().unwrap_or("?"),
+                r["text"].as_str().unwrap_or(""),
+                plan_hours(r["chain_h"].as_f64().unwrap_or(0.0))
+            );
+        }
+        println!("\nBlocked");
+        if blocked.is_empty() {
+            println!("  (none)");
+        }
+        for b in &blocked {
+            let id = b["id"].as_str().unwrap_or("?");
+            println!("  {id}");
+            for w in b["waits"].as_array().into_iter().flatten() {
+                println!("    {}", plan_wait_text(id, w));
+            }
+        }
+        println!("\nForecast (hours from now)");
+        for fc in list("forecasts") {
+            let lanes = fc["lanes"].as_u64().unwrap_or(0);
+            let slots = fc["slots"].as_u64().unwrap_or(0);
+            let effective = fc["effective_lanes"].as_u64().unwrap_or(lanes);
+            let mut line = format!(
+                "  {lanes} {} · {slots} build {} → {}",
+                if lanes == 1 { "lane" } else { "lanes" },
+                if slots == 1 { "slot" } else { "slots" },
+                plan_hours(fc["finish_h"].as_f64().unwrap_or(0.0))
+            );
+            if effective < lanes {
+                line.push_str(&format!(" (slots allow {effective})"));
+            }
+            println!("{line}");
+        }
+        println!(
+            "  critical path {}: the least it can take however many lanes run",
+            plan_hours(f("critical_h"))
+        );
+    }
+    let names = |k: &str| -> Vec<String> {
+        list(k)
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    };
+    let (unestimated, untasked, outside) = (
+        names("unestimated"),
+        names("untasked_items"),
+        names("outside"),
+    );
+    let share = format!(
+        "build share {} ({})",
+        f("build_share"),
+        if args.build_share.is_some() {
+            "given"
+        } else if plan["build_share_measured"].as_bool().unwrap_or(false) {
+            "measured"
+        } else {
+            "assumed"
+        }
+    );
+    println!("\nNotes");
+    if !unestimated.is_empty() {
+        println!(
+            "  {} {} no estimate (counted as 1 h): {}",
+            unestimated.len(),
+            if unestimated.len() == 1 {
+                "task has"
+            } else {
+                "tasks have"
+            },
+            unestimated.join(", ")
+        );
+    }
+    if !untasked.is_empty() {
+        println!(
+            "  {} {} no tasks: {}",
+            untasked.len(),
+            if untasked.len() == 1 {
+                "item has"
+            } else {
+                "items have"
+            },
+            untasked.join(", ")
+        );
+    }
+    if !outside.is_empty() {
+        println!(
+            "  open tasks outside the scope that its tasks wait on ({}): {}",
+            outside.len(),
+            outside.join(", ")
+        );
+    }
+    println!("  {share}");
+    let dates = list("dates");
+    if !dates.is_empty() {
+        println!("\nDates a person set");
+        for d in &dates {
+            println!(
+                "  {} {} (set by the person)",
+                d["what"].as_str().unwrap_or("?"),
+                plan_date(d["date"].as_str().unwrap_or(""))
+            );
+        }
+    }
+    if let Some(actuals) = actuals {
+        println!("\nActuals (task log)");
+        if actuals.is_empty() {
+            println!("  (no task state changes recorded yet)");
+        }
+        let ms = |n: u64| plan_hours(n as f64 / 3_600_000.0);
+        for (id, a) in &actuals {
+            let mut line = format!(
+                "  {id}  agent {}  build {}  wait {}  rework {}  red builds {}",
+                ms(a.agent_ms),
+                ms(a.build_ms),
+                ms(a.wait_ms),
+                a.rework,
+                a.red_builds
+            );
+            if let Some(t) = a.tokens {
+                line.push_str(&format!("  tokens {t}"));
+            }
+            if let Some(c) = a.cost_usd {
+                line.push_str(&format!("  ${c:.2}"));
+            }
+            if a.running_since.is_some() {
+                line.push_str("  running");
+            }
+            println!("{line}");
         }
     }
     Ok(())
@@ -11997,11 +12381,30 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
             todo,
             key,
             state,
+            tokens,
+            cost_usd,
+            model,
         } => {
+            let mut body = json!({ "state": state });
+            if let Some(t) = tokens {
+                body["tokens"] = json!(t);
+            }
+            if let Some(c) = cost_usd {
+                body["cost_usd"] = json!(c);
+            }
+            if let Some(m) = model {
+                body["model"] = json!(m);
+            }
+            if kanbanr_core::models::TaskState::parse(state)
+                == Some(kanbanr_core::models::TaskState::Completed)
+                && let Some(build) = task_build_totals(client, &p, feature, todo, key)
+            {
+                body["build"] = serde_json::to_value(build)?;
+            }
             let resp = client.write(
                 Method::Put,
                 &format!("/projects/{p}/features/{feature}/todos/{todo}/tasks/{key}"),
-                Some(json!({ "state": state })),
+                Some(body),
             )?;
             print_write(
                 cli,
@@ -12256,6 +12659,44 @@ fn wait_line(item: &str, w: &Value) -> String {
         };
     }
     w.to_string()
+}
+
+/// What the build log in this code repository holds for task `feature/todo/key` since it last
+/// went in progress (FTR-061): the last InProgress change in the task log, else the task's own
+/// `changed_at` while it is in progress. None when there is no such time or no build since it.
+fn task_build_totals(
+    client: &Backend,
+    p: &str,
+    feature: &str,
+    todo: &str,
+    key: &str,
+) -> Option<kanbanr_core::buildplan::BuildTotals> {
+    use kanbanr_core::models::TaskState;
+    let id = format!("{feature}/{todo}/{key}");
+    let rows = buildrun::log(&code_repo()?, Some(&id), "");
+    if rows.is_empty() {
+        return None;
+    }
+    let logged = kanbanr_core::tasklog::read_all(client.store().data_dir(), p)
+        .into_iter()
+        .filter(|e| e.task_id() == id && e.to == TaskState::InProgress)
+        .map(|e| e.at)
+        .max_by(|a, b| kanbanr_core::cmp_instants(a, b));
+    let since = match logged {
+        Some(at) => at,
+        None => get_feature(client, p, feature)
+            .ok()?
+            .todo_lists
+            .iter()
+            .find(|l| l.code == todo)?
+            .tasks
+            .iter()
+            .find(|t| t.key == key && t.state == TaskState::InProgress)?
+            .changed_at
+            .clone()?,
+    };
+    let totals = kanbanr_core::buildplan::task_totals(&rows, &id, &since);
+    (totals.runs > 0).then_some(totals)
 }
 
 fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Result<()> {

@@ -570,6 +570,51 @@ pub fn public_routes() -> Vec<RouteDoc> {
             ],
             response: Response::Json(schema_of::<crate::taskgraph::TaskReadiness>),
         },
+        RouteDoc {
+            path: "/api/projects/{project}/plan/flow",
+            summary: "The flow plan (FTR-061): a scope's work in agent-hours over its task graph \
+                      (total, done and remaining, the critical path and its length, the widest \
+                      parallelism and its profile), what runs, what is ready and what each \
+                      blocked task waits on, and a forecast in hours from now per lane count, \
+                      bounded by build slots; the only dates are those a person set",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "scope",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "`sprint:<code>`, `release:<version>`, `milestone:<code>` or \
+                                  `open`; the running sprint, else `open`, when absent.",
+                },
+                Param {
+                    name: "lanes",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Lane counts to forecast, comma-separated (`1,4,8`); 1, 4 and \
+                                  8 plus the sprint's own lanes when absent.",
+                },
+                Param {
+                    name: "slots",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::Integer,
+                    description: "Build slots; the sprint's, else the project's build settings \
+                                  on this machine, when absent.",
+                },
+                Param {
+                    name: "build_share",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "The part of a task's time spent in builds, over 0 and at \
+                                  most 1; measured once five tasks have builds, else 0.25, when \
+                                  absent.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::forecast::FlowPlan>),
+        },
         // ---- docs ----
         RouteDoc {
             path: "/api/projects/{project}/docs",

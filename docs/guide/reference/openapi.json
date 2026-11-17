@@ -708,6 +708,25 @@
         ],
         "type": "object"
       },
+      "Blocked": {
+        "description": "A task of the scope that cannot start now, and every reason why.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "waits": {
+            "items": {
+              "$ref": "#/components/schemas/Wait"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "waits"
+        ],
+        "type": "object"
+      },
       "BoardCard": {
         "description": "A single feature as it appears on the cross-project board.",
         "properties": {
@@ -3043,6 +3062,177 @@
         ],
         "type": "object"
       },
+      "FlowPlan": {
+        "description": "A scope's work in agent-hours over its task graph, and how long it takes with more agents.",
+        "properties": {
+          "blocked": {
+            "items": {
+              "$ref": "#/components/schemas/Blocked"
+            },
+            "type": "array"
+          },
+          "build_share": {
+            "description": "The part of a task's time spent in builds.",
+            "format": "double",
+            "type": "number"
+          },
+          "build_share_measured": {
+            "description": "`build_share` was measured over completed tasks, not assumed or given.",
+            "type": "boolean"
+          },
+          "critical_h": {
+            "description": "Its length: the least time the work can take however many agents run.",
+            "format": "double",
+            "type": "number"
+          },
+          "critical_path": {
+            "description": "The longest chain through the remaining work (tasks outside the scope it waits on\nincluded), start first.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dates": {
+            "description": "The only dates in the plan, each set by a person.",
+            "items": {
+              "$ref": "#/components/schemas/PersonDate"
+            },
+            "type": "array"
+          },
+          "done_h": {
+            "description": "The estimates of completed tasks.",
+            "format": "double",
+            "type": "number"
+          },
+          "forecasts": {
+            "items": {
+              "$ref": "#/components/schemas/Forecast"
+            },
+            "type": "array"
+          },
+          "outside": {
+            "description": "Open tasks outside the scope that its tasks wait on: simulated, not counted in totals.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "profile": {
+            "description": "How many tasks run at once over time, with unlimited lanes.",
+            "items": {
+              "$ref": "#/components/schemas/Step"
+            },
+            "type": "array"
+          },
+          "ratios": {
+            "items": {
+              "$ref": "#/components/schemas/KindRatio"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyTask"
+            },
+            "type": "array"
+          },
+          "remaining_h": {
+            "description": "What the open tasks weigh: an estimate, or what a running one has left.",
+            "format": "double",
+            "type": "number"
+          },
+          "running": {
+            "items": {
+              "$ref": "#/components/schemas/Running"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "description": "`sprint:SP-004`, `release:v0.8.0`, `milestone:MS-004` or `open`.",
+            "type": "string"
+          },
+          "total_h": {
+            "description": "Every task's estimate (an unestimated task counts 1.0 h).",
+            "format": "double",
+            "type": "number"
+          },
+          "unestimated": {
+            "description": "Tasks with no estimate, counted as 1.0 h.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "untasked_items": {
+            "description": "Items in the scope with no tasks: not planned here.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "widest": {
+            "description": "The most tasks that ever run at once with unlimited lanes.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scope",
+          "total_h",
+          "done_h",
+          "remaining_h",
+          "critical_path",
+          "critical_h",
+          "widest",
+          "profile",
+          "running",
+          "ready",
+          "blocked",
+          "forecasts",
+          "build_share",
+          "build_share_measured",
+          "unestimated",
+          "untasked_items",
+          "outside",
+          "ratios",
+          "dates"
+        ],
+        "type": "object"
+      },
+      "Forecast": {
+        "description": "How long the scope's remaining work takes with `lanes` agents and `slots` builds at once.",
+        "properties": {
+          "effective_lanes": {
+            "description": "The lanes that help: `min(lanes, max(1, floor(slots / build share)))`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finish_h": {
+            "description": "Hours from now, to 0.1 h. Never less than the critical path.",
+            "format": "double",
+            "type": "number"
+          },
+          "lanes": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slots": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lanes",
+          "slots",
+          "effective_lanes",
+          "finish_h"
+        ],
+        "type": "object"
+      },
       "Gap": {
         "description": "One thing an item is missing.",
         "properties": {
@@ -3945,6 +4135,40 @@
         },
         "required": [
           "stages"
+        ],
+        "type": "object"
+      },
+      "KindRatio": {
+        "description": "Estimates against actuals for one kind of task.",
+        "properties": {
+          "actual_h": {
+            "format": "double",
+            "type": "number"
+          },
+          "estimate_h": {
+            "format": "double",
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ratio": {
+            "description": "`actual_h / estimate_h`.",
+            "format": "double",
+            "type": "number"
+          },
+          "tasks": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "tasks",
+          "estimate_h",
+          "actual_h",
+          "ratio"
         ],
         "type": "object"
       },
@@ -4932,6 +5156,24 @@
           "added",
           "changed",
           "removed"
+        ],
+        "type": "object"
+      },
+      "PersonDate": {
+        "description": "A date a person set: a running sprint's last day, or a release's target.",
+        "properties": {
+          "date": {
+            "description": "`YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "what": {
+            "description": "`SP-004 ends`, `v0.8.0 target`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "what",
+          "date"
         ],
         "type": "object"
       },
@@ -7028,6 +7270,49 @@
         ],
         "type": "object"
       },
+      "Running": {
+        "description": "A task of the scope in progress.",
+        "properties": {
+          "elapsed_h": {
+            "description": "Hours since it last went in progress (0 when the task log holds no such change).",
+            "format": "double",
+            "type": "number"
+          },
+          "estimate_h": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "over": {
+            "description": "It has run longer than its estimate.",
+            "type": "boolean"
+          },
+          "scope": {
+            "description": "The live agent scope working it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "scope",
+          "elapsed_h",
+          "estimate_h",
+          "over"
+        ],
+        "type": "object"
+      },
       "Section": {
         "description": "Where a line is shown in the drawer.",
         "enum": [
@@ -7740,6 +8025,25 @@
           "by",
           "at",
           "origin"
+        ],
+        "type": "object"
+      },
+      "Step": {
+        "description": "From `at_h` hours on, `running` tasks run at once (with as many lanes as help).",
+        "properties": {
+          "at_h": {
+            "format": "double",
+            "type": "number"
+          },
+          "running": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at_h",
+          "running"
         ],
         "type": "object"
       },
@@ -10048,6 +10352,84 @@
           }
         },
         "summary": "The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity"
+      }
+    },
+    "/api/projects/{project}/plan/flow": {
+      "get": {
+        "operationId": "getProjectsPlanFlow",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`sprint:<code>`, `release:<version>`, `milestone:<code>` or `open`; the running sprint, else `open`, when absent.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Lane counts to forecast, comma-separated (`1,4,8`); 1, 4 and 8 plus the sprint's own lanes when absent.",
+            "in": "query",
+            "name": "lanes",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Build slots; the sprint's, else the project's build settings on this machine, when absent.",
+            "in": "query",
+            "name": "slots",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The part of a task's time spent in builds, over 0 and at most 1; measured once five tasks have builds, else 0.25, when absent.",
+            "in": "query",
+            "name": "build_share",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowPlan"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The flow plan (FTR-061): a scope's work in agent-hours over its task graph (total, done and remaining, the critical path and its length, the widest parallelism and its profile), what runs, what is ready and what each blocked task waits on, and a forecast in hours from now per lane count, bounded by build slots; the only dates are those a person set"
       }
     },
     "/api/projects/{project}/position": {
