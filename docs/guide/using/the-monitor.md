@@ -287,8 +287,7 @@ flowchart LR
   Board["Board — a column per displayed status"]
   Review["Review — what waits on you"]
   Ms["Milestones — list, newest first"]
-  Sched["Schedule — milestones by feature status"]
-  Gantt["Gantt"]
+  PlanPage["Plan — Current, Planned and Past"]
   Rel["Releases — on a project in releases"]
   Wf["Workflow"]
   Base["Baseline — the engineering baseline"]
@@ -308,8 +307,7 @@ flowchart LR
   Work --> Board
   Work --> Review
   Work --> Ms
-  Plan --> Sched
-  Plan --> Gantt
+  Plan --> PlanPage
   Plan --> Rel
   Arch --> Wf
   Arch --> Base
@@ -357,8 +355,9 @@ outside the menu, always visible.
   item ("Released in v0.4.0"), which it is planned for and not released yet, or that it is in none.
   Completed is not released: only that chip says an item has shipped.
 - **Milestone page**: the milestones it **depends on**, plus its **feature items as tiles**.
-- **Schedule**: a *derived* view — for each displayed status, the milestones that contain
-  feature items in that status, dependency-ordered. Nothing to create; it always reflects reality.
+- **Plan** (FTR-043): sprints, releases and milestones on a timeline, in three tabs. Its section is
+  [The Plan page](#the-plan-page). The old Gantt and Schedule links open it: `/schedule` on its
+  Planned tab, `/gantt` on its default tab.
 - **Documentation**: drill from root folders (tiles) into sub-folders and files (any depth);
   files render as markdown.
 
@@ -461,21 +460,21 @@ it.
 |---|---|---|
 | ![Review: approve, ratify, sign off](../images/review.png) | ![The charter, goals and lessons](../images/charter.png) | ![The workflow and its gates](../images/workflow.png) |
 | **Review** — approve, ratify, sign off | **Charter** — goals, the way travelled, lessons | **Workflow** — stages and their gates |
-| ![Milestones](../images/milestones.png) | ![A milestone](../images/milestone.png) | ![The derived schedule](../images/schedule.png) |
-| **Milestones**, newest first, and their dependencies | **A milestone** and its items | **Schedule** — derived, never stored |
-| ![The Gantt](../images/gantt.png) | ![A status page](../images/status.png) | ![The Ongoing stream](../images/ongoing.png) |
-| **Gantt** with the critical path | **A status**, grouped | **Ongoing** — work that never completes |
-| ![Docs](../images/docs.png) | ![A doc with an embedded image](../images/doc-file.png) | ![A doc with a Mermaid diagram](../images/doc-mermaid.png) |
-| **Docs** — a folder tree per project | Embedded images | Live **Mermaid** diagrams |
+| ![Milestones](../images/milestones.png) | ![A milestone](../images/milestone.png) | ![A status page](../images/status.png) |
+| **Milestones**, newest first, and their dependencies | **A milestone** and its items | **A status**, grouped |
+| ![The Ongoing stream](../images/ongoing.png) | ![Docs](../images/docs.png) | ![A doc with an embedded image](../images/doc-file.png) |
+| **Ongoing** — work that never completes | **Docs** — a folder tree per project | Embedded images |
+| ![A doc with a Mermaid diagram](../images/doc-mermaid.png) | | |
+| Live **Mermaid** diagrams | | |
 
 With sprints and releases switched on ([Processes](processes.md#sprints-and-releases)), the board
-opens on the running sprint, and Releases and the Gantt show the cadence. Its **Sprint** filter also
+opens on the running sprint, and Releases and the Plan page show the cadence. Its **Sprint** filter also
 offers **All items** and **Unscheduled**, the items not yet in any sprint:
 
-| | | |
-|---|---|---|
-| ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
-| **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
+| | |
+|---|---|
+| ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) |
+| **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes |
 
 ### The Board
 
@@ -554,6 +553,48 @@ never invented. Every number on it links to the list behind it.
 
 The page says when it was read and from which board revision. A kanbanr older than this page has
 no progress route: the charter's tables still show, and each drawn section says to update kanbanr.
+
+### The Plan page
+
+The **Plan** page (`/p/<project>/plan`, FTR-043) shows sprints, releases and milestones on a
+timeline, in three tabs. Each tab's label carries its count. The page opens on **Current** when
+something is running today, else on **Planned**. It replaces the old Gantt and Schedule pages; the
+Gantt stays in the CLI (`kanbanr gantt`) and in the HTTP API for export.
+
+- **Current**: a window of four weeks centred on today, with a line for today. It widens to cover
+  the running sprint and never exceeds six weeks. Its rows are the running sprint, drawn as a tall
+  band over its dates with the part done filled in, and the releases in flight, drawn as a
+  diamond at their target with a dot for each stage change. A release due in the window is a row
+  too. Rows run soonest end first. With nothing running, the tab says "Nothing is running today.
+  Ask Claude to plan the next sprint."
+- **Planned**: upcoming sprints, releases and milestones on a quarter's timeline from today,
+  soonest start first. A milestone is a band from today to the latest target of the releases its
+  items are planned into. A milestone whose items are in no release, or a release with no target,
+  is listed undated, after the dated rows.
+- **Past**: closed sprints and shipped releases, newest first and compact. Each shows what was
+  planned against what was delivered and what was carried over, for example "SP-003 · 14–20 Nov ·
+  9 of 11 delivered · 2 carried → SP-004". Older rows, beyond the newest 13 weeks, are listed
+  without bands.
+
+Rows are sprints, releases and milestones; the whole board is never drawn at once. A row opens
+like an accordion, and only then reads its items:
+
+- an item in a sprint is drawn within the sprint's dates; a finished item is drawn at the dates of
+  its own moves, from its first move out of its starting status to its move into its end status
+  (from its creation to its last update when its history has no moves); an unfinished item with a
+  start date is drawn from it, for its estimate in days;
+- an item with none of these is listed as **Undated**, with no date made up for it;
+- the items sit in a table with code, title, status, where each is placed and a **critical path**
+  mark (the dependency chain that decides when the work can finish). The mark is shown only inside
+  an opened row;
+- a sprint's row also shows its burndown, and a milestone's row shows its items by status, in
+  dependency order, as the Schedule's cards did.
+
+The tab and the open rows are in the URL: `?tab=current|planned|past`, and the open rows after `#`,
+such as `#sprint:SP-004`. A bare sprint code after `#` (`#SP-004`) opens that sprint's row.
+
+The **portfolio** page has a **Now** section with one row per project: its running sprint as a band
+and its releases in flight as diamonds, with an empty row for a project that has nothing running.
 
 ### The Plan page's Flow panel
 
@@ -634,7 +675,7 @@ says `off:` and its reason, greyed), its source's state (present, stub, missing,
 katalogr), its notations, and each protection, in force or not configured, with the reason as its
 title. A system row also carries its [system baseline](living-docs.md#the-system-baseline) state:
 pinned, changed since the acceptance, not pinned or awaiting. A written source links to its doc (a folder to the Docs page at that folder); a generated
-source links to the page that shows it, such as the Charter, Gantt or Releases. A repository doc
+source links to the page that shows it, such as the Charter, the Plan page or Releases. A repository doc
 shows its path. With no facts the page says so and names `kanbanr facts set`; with no catalog it
 names `kanbanr catalog init`. The page is read-only: Claude keeps the catalog. See
 [Living architecture docs](living-docs.md#what-a-project-documents-the-content-catalog).
@@ -697,8 +738,8 @@ nothing changed. When the CLI changes the board, the daemon says which parts cha
 page re-reads just those parts. The Review page reads its list of groups first, then their counts, then the open
 group's rows, and a row's evidence only when the row is opened. The Releases page reads its tab
 counts first, then the open tab's releases, and a release's items only when its row is opened (see
-[The Releases page](#the-releases-page)). The Schedule page still reads the whole board until its
-own rebuild lands.
+[The Releases page](#the-releases-page)). The Plan page reads its counts first, then only the tab
+it shows, and a row's items only when the row is opened (see [The Plan page](#the-plan-page)).
 
 ### The Releases page
 

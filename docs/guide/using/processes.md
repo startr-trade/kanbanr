@@ -433,11 +433,10 @@ committed against done, and the burndown against the ideal line:
 ![The board on a running sprint: goal, dates, points done and the burndown](../images/sprint.png)
 
 The Releases page shows each release's scope, how much of it is finished, its target, and its notes
-once cut; the Gantt adds the sprints as a lane and the releases as milestones:
+once cut; the [Plan page](the-monitor.md#the-plan-page) draws the running sprint as a band and the
+releases in flight as diamonds on the same timeline:
 
 ![The Releases page: a shipped release and a planned one](../images/releases.png)
-
-![The Gantt with a sprint lane and release milestones](../images/gantt-sprints.png)
 
 ### Release stages
 
