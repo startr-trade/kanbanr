@@ -16,6 +16,15 @@ import { checkBlocks, type DiagramProblem } from "../../diagramCheck";
 import { AccordionRow } from "../../ui";
 import type { ItemDiagrams, ReviewRow as Row } from "../../types";
 
+/**
+ * The row's `what` text as drawn: empty when a pill already says it (DEF-112). The state is named
+ * once, as the pill, because the pills are what FTR-080 filters by; the served row is unchanged,
+ * so the What column and the evidence sentence still read `row.what`. Exact match only.
+ */
+export function rowWhat(row: Pick<Row, "what" | "pills">): string {
+  return row.pills.includes(row.what) ? "" : row.what;
+}
+
 export function ReviewRow(p: {
   project: string;
   row: Row;
@@ -33,6 +42,7 @@ export function ReviewRow(p: {
   const enc = encodeURIComponent;
   // A delegation, a delegated decision and an ADR are not items; their code links nowhere.
   const isItem = /^[A-Z][A-Z0-9]*-\d+$/.test(row.code) && !/^(DLG|ADR)-/.test(row.code);
+  const what = rowWhat(row);
   const pills = [...row.pills, ...(row.release ? [row.release] : []), ...(row.sprint ? [row.sprint] : [])];
   return (
     <AccordionRow
@@ -51,7 +61,7 @@ export function ReviewRow(p: {
       }
       meta={
         <>
-          <span className="review-row-what">{row.what}</span>
+          {what !== "" && <span className="review-row-what">{what}</span>}
           {p.badge}
           {pills.map((text, i) => (
             <span className="ui-pill ui-pill-neutral" key={`${i}-${text}`}>
