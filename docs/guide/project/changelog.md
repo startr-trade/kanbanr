@@ -8,6 +8,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- A project can take its decisions in the conversation: Claude asks with the board's tagged question, the person's answer makes a one-time pass through a Claude Code hook, and the verdict is recorded only with that pass, keeping the question and answer on the record (FTR-035).
 - Renaming an item's code keeps the old code as an alias: trailers, links, dependencies and records made under it still reach the item, and a code is never given to another item. `kanbanr feature recode` plans bringing old items to their kinds' prefixes, for the person to confirm as one change on the Review page; Claude prepares it (`kanbanr prepare recode`) and never applies it. The alias is an additive key in board schema 5, so put every machine that writes a board on 0.8.0 before a bulk recode (FTR-056).
 - The Charter page is compact and visual: goals, non-goals, stakeholders and constraints as tables, each goal's items and proven requirements, the releases travelled with the goals each moved, lessons by theme with where each was learned and cited, and recent wins; every number links to its list (FTR-076).
 - Docs are read at the position you pick: main, the working tree, an item, a sprint, a release or a commit, from git with nothing checked out; every doc page says what it read; `doctor` checks repository doc links at the item's position; an item's merge commit, a sprint's closing commit and the docs a sign-off read are recorded (FTR-004).

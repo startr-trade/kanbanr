@@ -631,6 +631,27 @@ mod tests {
         }
     }
 
+    /// FTR-035 R-2: the skill asks for a verdict only in conversation mode, with the board's own
+    /// question, records it only with the pass the hook made, and never runs the hook's command.
+    #[test]
+    fn skill_asks_for_a_verdict_only_in_conversation_mode_with_the_boards_question() {
+        let skill = skill_md();
+        for want in [
+            "**In `conversation` mode** (FTR-035)",
+            "kanbanr decisions question <approve|ratify|signoff> <CODE> [<NAME>] --json",
+            "verbatim, tag included",
+            "never ask it in
+any other mode",
+            "kanbanr approve|ratify|signoff … --pass P-n",
+            "kanbanr decisions heard                           # the hook's; never run it",
+            // The FTR-024 rule stays, with the exception named after it.
+            "You never record a verdict, and never ask for one in a plan or a question.",
+            "The one exception is a project in `conversation` mode",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FTR-028 R-5: the skill says where decisions are taken is the project's choice, how Claude
     /// acts under a delegation, and that setup proposes the process's delegations under
     /// **Decisions** in the plan.

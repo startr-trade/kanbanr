@@ -17,6 +17,8 @@ Scheduled, Completed. It has no sprints and no releases. You don't need to learn
   If Claude Code runs in auto mode, its safety check may stop a delegated command. When you grant a
   delegation, kanbanr offers the one allow rule that lets it through; say yes to Claude, or run the
   command it names.
+  In **conversation** mode you take these in Claude's question dialog instead: it asks with the
+  board's own question, and your answer is the record.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scheduled from the command line](scheduled-cli.md). To
