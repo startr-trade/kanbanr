@@ -694,7 +694,7 @@ histories. An item page reads that item alone, and a status page only the items 
 Every page shares one copy of each read, however many parts of it ask. The daemon answers each
 read once per change to the board and gzips it. The browser then asks again only to be told
 nothing changed. When the CLI changes the board, the daemon says which parts changed, and the
-page re-reads just those parts. The Review page reads its group counts first, then the open
+page re-reads just those parts. The Review page reads its list of groups first, then their counts, then the open
 group's rows, and a row's evidence only when the row is opened. The Releases page reads its tab
 counts first, then the open tab's releases, and a release's items only when its row is opened (see
 [The Releases page](#the-releases-page)). The Schedule page still reads the whole board until its
@@ -843,6 +843,9 @@ each with its count: **System baseline**, **Approve**, **Ratify**, a **Sign off*
 (**Sign off design-review**, **Sign off docs-folded**, a release's sign-off), **Which release**,
 **Manual checks**, **Delegations**, **Delegated decisions**, **Proposed ADRs** and, last, **Recode**.
 An empty group has no tab. The page opens on the largest group, or on the one its link names.
+The groups are drawn at once, each with a "…" in place of its count, and the counts fill in as they
+arrive; the groups with nothing waiting then go. A read that takes more than a second says it is still
+working and for how many seconds, and a read repeated after a change keeps the last answer on screen.
 
 - **System baseline.** Before the first build, the acceptance of the [system
   baseline](living-docs.md#the-system-baseline) is its own group, **System baseline**, first among

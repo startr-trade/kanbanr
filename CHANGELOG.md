@@ -113,6 +113,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The Review page draws its decision groups at once and fills their counts as they arrive, says how long a slow read has been working, and no longer starts a read that is already running. Its reads compute the review queue once per board revision and walk the board's history once, so the summary that took about a minute answers in a few seconds and is kept until the board or the code repository changes (DEF-106).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
