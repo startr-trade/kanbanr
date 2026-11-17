@@ -425,6 +425,10 @@ jobs:
       # The item page says why an item changes no doc, as a plain line under Affects docs (DEF-075).
       - name: The item page shows why an item changes no docs
         run: npm run check:feature-no-docs
+      # A planning action asks first and records one decision as the person's; a declined one offers
+      # the nearest valid move on one press (FTR-049).
+      - name: Planning decisions from the pages
+        run: npm run check:planning
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
