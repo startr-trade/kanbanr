@@ -2152,7 +2152,11 @@ fn the_timings_routes_answer_last_durations_and_the_report() {
                 requirements: vec![Requirement {
                     id: "R-1".into(),
                     text: "WHEN a person logs in THE SYSTEM SHALL let them in".into(),
-                    tests: vec![test("a", "unit"), test("b", "unit"), test("m", "manual")],
+                    tests: vec![
+                        test("a", "unit"),
+                        test("b", "unit"),
+                        test("manual: m reads clearly", "manual"),
+                    ],
                     ..Requirement::default()
                 }],
                 ..FeatureDefinition::default()

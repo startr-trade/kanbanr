@@ -1222,6 +1222,9 @@ impl Store {
                 // One spelling per tag (MNT-009): a tag added or changed is stored canonical, one
                 // carried unchanged is kept, so a change of case never lapses an approval.
                 crate::vocab::canonicalise_iso(previous.as_ref(), &mut def)?;
+                // A manual test is a judgement test (FTR-039): at most one per item, and only for
+                // what a person must judge. Only a new or renamed one is checked.
+                crate::judgement::check_write(previous.as_ref(), &def)?;
                 // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
                 // it. Erasing would lose who agreed to what, and would report "never approved" for an
                 // item whose scope simply changed after a yes — the exact distinction that matters.

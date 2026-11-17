@@ -3683,7 +3683,7 @@ fn check_names_an_open_manual_test() {
     let def = base.join("def.yaml");
     std::fs::write(
         &def,
-        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: Edit and Save\n        kind: manual\n",
+        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: 'manual: Edit and Save reads clearly'\n        kind: manual\n",
     )
     .unwrap();
     ok(run_in(
@@ -3700,12 +3700,15 @@ fn check_names_an_open_manual_test() {
     let out = ok(run_in(&base, &work, &["check", "FEAT-001"]));
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(
-        said.contains("manual test not run: R-1: Edit and Save"),
+        said.contains("manual test not run: R-1: manual: Edit and Save reads clearly"),
         "{said}"
     );
     let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
     let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
-    assert_eq!(v[0]["open_manual"][0], "R-1: Edit and Save");
+    assert_eq!(
+        v[0]["open_manual"][0],
+        "R-1: manual: Edit and Save reads clearly"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -14096,7 +14099,7 @@ fn a_manual_result_for_an_item_before_its_build_stage_is_refused() {
     let def = base.join("def.yaml");
     std::fs::write(
         &def,
-        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: 'manual: the cart keeps its items'\n        kind: manual\n",
+        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: 'manual: the person judges whether the cart reads clearly'\n        kind: manual\n",
     )
     .unwrap();
     ok(run_in(
@@ -14112,7 +14115,7 @@ fn a_manual_result_for_an_item_before_its_build_stage_is_refused() {
     ));
     let sentence = "FEAT-001 is at Planned: its manual check opens at In Progress, once the code \
                     it checks exists. Record it then.";
-    let test = "manual: the cart keeps its items";
+    let test = "manual: the person judges whether the cart reads clearly";
     let refused = run_in(&base, &work, &["test", "FEAT-001", "R-1", test, "green"]);
     assert!(!refused.status.success());
     let err = String::from_utf8_lossy(&refused.stderr);
@@ -15093,5 +15096,120 @@ fn release_promote_adopts_an_identical_hand_made_branch() {
     assert_eq!(r["branch"], "release/v1.0.0");
     assert_eq!(r["branch_adopted"], true);
     assert_eq!(r["stage"], "candidate");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-039 R-1: through `kanbanr feature define` on a temp board, a second manual (judgement)
+/// test is refused, naming both, and the item keeps the definition it had.
+#[test]
+fn feature_define_refuses_a_second_manual_test() {
+    let base =
+        std::env::temp_dir().join(format!("kanbanr-judgement-define-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&run(&["--json", "where"])).unwrap();
+    let board = PathBuf::from(v["data_dir"].as_str().unwrap());
+    // L-41: the board is this test's own, in the temp dir, before the first write to it.
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{board:?}"
+    );
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Release notes",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    let first = "manual: the person judges whether the release notes read clearly to a newcomer";
+    let second = "manual: a newcomer judges whether the wording is clear";
+    let def = base.join("def.yaml");
+    let write = |tests: &[&str]| {
+        let mut yaml = String::from(
+            "statement: Write release notes a newcomer understands\n\
+             requirements:\n  - kind: functional\n    text: \"THE SYSTEM SHALL write release notes.\"\n\
+             \x20   tests:\n",
+        );
+        for t in tests {
+            yaml.push_str(&format!(
+                "      - name: \"{t}\"\n        kind: manual\n        state: planned\n"
+            ));
+        }
+        std::fs::write(&def, yaml).unwrap();
+    };
+    write(&[first]);
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    write(&[first, second]);
+    let refused = exec(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    assert!(
+        !refused.status.success(),
+        "a second manual test is refused: {}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains(first), "{err}");
+    assert!(err.contains(second), "{err}");
+    assert!(err.contains("keep one judgement test"), "{err}");
+
+    // The item is unchanged: it keeps its one judgement test.
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    let tests = exported["definition"]["requirements"][0]["tests"]
+        .as_array()
+        .unwrap();
+    assert_eq!(tests.len(), 1, "{tests:?}");
+    assert_eq!(tests[0]["name"], first);
     let _ = std::fs::remove_dir_all(&base);
 }

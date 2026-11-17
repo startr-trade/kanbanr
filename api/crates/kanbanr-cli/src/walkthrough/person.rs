@@ -1601,7 +1601,7 @@ pub(crate) mod tests {
              \x20 - id: R-1\n\
              \x20   text: WHEN a shopper returns THE SYSTEM SHALL show the basket they left\n\
              \x20   tests:\n\
-             \x20     - name: 'manual: open the basket page, add an item, reopen it and the item is still there'\n\
+             \x20     - name: 'manual: the person judges whether the basket they left reads clearly'\n\
              \x20       kind: manual\n",
         )
         .unwrap();

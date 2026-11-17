@@ -392,8 +392,24 @@ mod tests {
                         tests: vec![
                             test("cart::holds", "unit"),
                             test("manual: looks right", "manual"),
-                            test("manual: feels right", "manual"),
                         ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // An item has at most one judgement test (FTR-039): the green one is on a second item.
+        let g = store.add_feature("demo", "Till", "", "MS-1", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &g.code,
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "THE SYSTEM SHALL open the till.".into(),
+                        tests: vec![test("manual: feels right", "manual")],
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -402,10 +418,11 @@ mod tests {
             .unwrap();
         // A manual check opens at the build stage, Scheduled here (DEF-076).
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        store.move_feature("demo", &g.code, "Scheduled").unwrap();
         store
             .set_test_state(
                 "demo",
-                &f.code,
+                &g.code,
                 "R-1",
                 "manual: feels right",
                 TestState::Green,
@@ -517,7 +534,10 @@ mod tests {
                         requirements: vec![Requirement {
                             id: "R-1".into(),
                             text: "THE SYSTEM SHALL work.".into(),
-                            tests: vec![test("manual: it works", "manual")],
+                            tests: vec![test(
+                                "manual: the person judges whether it works for them",
+                                "manual",
+                            )],
                             ..Default::default()
                         }],
                         ..Default::default()

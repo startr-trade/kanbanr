@@ -64,7 +64,7 @@ for line in sys.stdin:
         run("milestone", "add", "--name", "M1", "--code", "MS-1")
         run("feature", "add", "--title", "Saved basket", "--milestone", "MS-1")
         with open("def.yaml", "w") as f:
-            f.write("statement: A shopper's basket survives between visits\nrequirements:\n  - id: R-1\n    text: WHEN a shopper returns THE SYSTEM SHALL show the basket they left\n    tests:\n      - name: 'manual: reopen the page and the item is still there'\n        kind: manual\n")
+            f.write("statement: A shopper's basket survives between visits\nrequirements:\n  - id: R-1\n    text: WHEN a shopper returns THE SYSTEM SHALL show the basket they left\n    tests:\n      - name: 'manual: the person judges whether the basket they left reads clearly'\n        kind: manual\n")
         run("feature", "define", "FEAT-001", "--file", "def.yaml")
         say("The board is set up.")
         result("Where should the board live?\n1. Beside the project (recommended)\n2. Inside the project\n\nReply with your choice.", cost)
@@ -180,7 +180,7 @@ fn world(name: &str) -> World {
     let def = root.join("target-def.yaml");
     std::fs::write(
         &def,
-        "statement: every decision is one click\nrequirements:\n  - id: R-5\n    text: WHEN a walkthrough runs THE SYSTEM SHALL take every decision with one click\n    tests:\n      - name: 'manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed'\n        kind: manual\n",
+        "statement: every decision is one click\nrequirements:\n  - id: R-5\n    text: WHEN a walkthrough runs THE SYSTEM SHALL take every decision with one click\n    tests:\n      - name: 'manual: the person judges whether, in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed'\n        kind: manual\n",
     )
     .unwrap();
     k(&[
@@ -240,9 +240,9 @@ model: fake
 budget_usd: 2
 max_minutes: 10
 checks:
-  MT-1: {item: FEAT-001, requirement: R-5, test: "manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
+  MT-1: {item: FEAT-001, requirement: R-5, test: "manual: the person judges whether, in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
   MT-W: {item: FEAT-002, requirement: R-1, test: "walkthrough: the run pushed main to its own remote"}
-  MT-V: {item: FEAT-001, requirement: R-5, test: "manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
+  MT-V: {item: FEAT-001, requirement: R-5, test: "manual: the person judges whether, in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
 answers:
   - {match: "where .*board", pick: "Beside the project, with the remote {board_remote}."}
 steps:
