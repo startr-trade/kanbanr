@@ -347,11 +347,26 @@ enum Command {
         /// Window, e.g. `14d` or an RFC3339 timestamp. Items are counted by when they finished.
         #[arg(long)]
         since: Option<String>,
+        /// The slowest tests and those that slowed most since the last shipped release, from the
+        /// kept run durations (FTR-058), instead of the flow report.
+        #[arg(long)]
+        tests: bool,
+        /// How many tests each list of `--tests` shows.
+        #[arg(long, default_value_t = 10, requires = "tests")]
+        top: usize,
     },
     /// Record test results from a real run (FEAT-053). Reads a Claude Code PostToolUse payload on
     /// stdin, finds the test names the board is tracking, and flips their state to match what
-    /// actually happened — so evidence is measured, never claimed.
-    Capture,
+    /// actually happened — so evidence is measured, never claimed. With `--junit`, reads a
+    /// cargo-nextest JUnit report instead (FTR-058). Durations the run printed are kept.
+    Capture {
+        /// A cargo-nextest JUnit report to read instead of a hook payload on stdin.
+        #[arg(long, value_name = "FILE")]
+        junit: Option<PathBuf>,
+        /// The project revision the run tested; the folder's HEAD when omitted.
+        #[arg(long, value_name = "REV")]
+        rev: Option<String>,
+    },
     /// Is this item actually ready? Reports what it has not said and what it cannot yet show:
     /// missing dimensions, requirements with no test, unproven requirements, approval state.
     Check {
@@ -2289,7 +2304,7 @@ fn no_board_here(cli: &Cli) -> Option<PathBuf> {
 fn runs_from_a_hook(command: &Command) -> bool {
     matches!(
         command,
-        Command::Capture
+        Command::Capture { junit: None, .. }
             | Command::Git(
                 GitCmd::Guard | GitCmd::CheckMsg { .. } | GitCmd::CheckBranch | GitCmd::CheckPush
             )
@@ -2443,7 +2458,7 @@ fn command_access(cmd: &Command) -> Access {
             "`kanbanr review --ui` starts a monitor that writes outside the board's write path",
         ),
         Command::Review { .. } => Read,
-        Command::Capture => Hook,
+        Command::Capture { .. } => Hook,
         // Makes a pass from the person's answer (FTR-035); every other decisions command writes
         // through core.
         Command::Decisions(DecisionsCmd::Heard) => Hook,
@@ -4614,7 +4629,7 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
 fn is_identifying_hook(command: &Command) -> bool {
     matches!(
         command,
-        Command::Capture
+        Command::Capture { junit: None, .. }
             | Command::Git(GitCmd::Guard)
             | Command::Claude(ClaudeCmd::Guard)
             | Command::Decisions(DecisionsCmd::Heard)
@@ -6548,7 +6563,7 @@ fn project_head_rev() -> Option<String> {
 /// failed, and flips the state of every one the board is tracking. Matching by test NAME rather
 /// than by "whatever item is in progress" is what makes this trustworthy: it records what ran,
 /// not what someone meant to run, and it is silent when nothing it knows about ran.
-fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+fn run_capture(cli: &Cli, client: &Backend, rev: Option<&str>) -> anyhow::Result<()> {
     let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
     // The tool ran in the payload's folder; the hook's own process may stand in another session's
@@ -6588,23 +6603,19 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
     // The tests ran in the payload's folder, and an agent's worktree has its own HEAD.
-    let rev = project::project_revision(&cwd, project::home_dir().as_deref());
+    let rev = rev
+        .map(str::to_string)
+        .or_else(|| project::project_revision(&cwd, project::home_dir().as_deref()));
     let scope = process_scope_as(client, &cwd, caller);
     let ops = capture_plan(&payload, &project, &scope, caller, rev.as_deref());
-    let n = ops.len();
-    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+    let (recorded, n) = (ops.len(), recorded_text(&ops));
+    if !record_capture(client, &p, &cwd, caller, ops)? {
         return Ok(());
-    };
-    let path = format!("/projects/{p}/batch");
-    // The coordinator's run is recorded unscoped, whatever folder its shell stood in.
-    if caller == kanbanr_core::agentscope::Caller::Coordinator {
-        client.as_unscoped(|| client.write(Method::Post, &path, Some(batch)))?;
-    } else {
-        client.write_from(&cwd, Method::Post, &path, Some(batch))?;
     }
-    eprintln!("kanbanr: recorded {n} test result(s) from this run");
+    eprintln!("kanbanr: recorded {n} from this run");
     if condensed.is_some()
-        && let Some(notice) = kanbanr_core::evidence::unread_run_notice(&commands, n, condensed)
+        && let Some(notice) =
+            kanbanr_core::evidence::unread_run_notice(&commands, recorded, condensed)
     {
         notify(notice);
     }
@@ -6635,12 +6646,24 @@ fn capture_plan(
     caller: kanbanr_core::agentscope::Caller,
     rev: Option<&str>,
 ) -> Vec<Value> {
-    use kanbanr_core::agentscope::{Caller, ProcessScope};
     let results = kanbanr_core::evidence::parse_timed_results(&capture_text(payload));
+    capture_ops(project, &results, scope, caller, rev)
+}
+
+/// The board operations timed results earn, for the coordinator or for an agent's scope, as
+/// [`capture_plan`] says. Pure.
+fn capture_ops(
+    project: &kanbanr_core::Project,
+    results: &std::collections::BTreeMap<String, kanbanr_core::evidence::Timed>,
+    scope: &kanbanr_core::agentscope::ProcessScope,
+    caller: kanbanr_core::agentscope::Caller,
+    rev: Option<&str>,
+) -> Vec<Value> {
+    use kanbanr_core::agentscope::{Caller, ProcessScope};
     if results.is_empty() {
         return Vec::new();
     }
-    let ops = kanbanr_core::evidence::plan_capture(project, &results, rev);
+    let ops = kanbanr_core::evidence::plan_capture(project, results, rev);
     if caller != Caller::Agent {
         return ops;
     }
@@ -6648,6 +6671,192 @@ fn capture_plan(
         ProcessScope::Scoped(s) => kanbanr_core::agentscope::retain_permitted(s, ops).0,
         ProcessScope::Refused { .. } => Vec::new(),
         ProcessScope::Unscoped => ops,
+    }
+}
+
+/// "N test result(s) and M duration(s)": the ops recorded, and those of them that carry a
+/// duration (FTR-058). The batch's reply carries no duration, so the ops are counted.
+fn recorded_text(ops: &[Value]) -> String {
+    let timed = ops.iter().filter(|op| op["ms"].is_u64()).count();
+    format!("{} test result(s) and {timed} duration(s)", ops.len())
+}
+
+/// Write a capture's ops as one batch: the coordinator's unscoped, whatever folder its shell stood
+/// in; an agent's from its folder, under its scope. `false` when there was nothing to write.
+fn record_capture(
+    client: &Backend,
+    p: &str,
+    cwd: &Path,
+    caller: kanbanr_core::agentscope::Caller,
+    ops: Vec<Value>,
+) -> anyhow::Result<bool> {
+    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+        return Ok(false);
+    };
+    let path = format!("/projects/{p}/batch");
+    if caller == kanbanr_core::agentscope::Caller::Coordinator {
+        client.as_unscoped(|| client.write(Method::Post, &path, Some(batch)))?;
+    } else {
+        client.write_from(cwd, Method::Post, &path, Some(batch))?;
+    }
+    Ok(true)
+}
+
+/// `kanbanr capture --junit <FILE> [--rev <REV>]` (FTR-058): record a cargo-nextest JUnit report's
+/// results and durations. The caller is the coordinator unless this folder is an agent's worktree,
+/// whose scope then keeps only its own item's; the revision is `--rev` or this folder's HEAD. A
+/// report that cannot be read, is not one, or holds no testcase is an error naming the file.
+fn run_capture_junit(
+    cli: &Cli,
+    client: &Backend,
+    file: &Path,
+    rev: Option<&str>,
+) -> anyhow::Result<()> {
+    use kanbanr_core::agentscope::{Caller, ProcessScope};
+    let xml = std::fs::read_to_string(file)
+        .map_err(|e| anyhow::anyhow!("could not read {}: {e}", file.display()))?;
+    let results = kanbanr_core::evidence::parse_junit(&xml)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+    if results.is_empty() {
+        anyhow::bail!("{} holds no testcase", file.display());
+    }
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let rev = rev
+        .map(str::to_string)
+        .or_else(|| project::project_revision(&cwd, project::home_dir().as_deref()));
+    let scope = process_scope_as(client, &cwd, Caller::Agent);
+    let caller = if scope == ProcessScope::Unscoped {
+        Caller::Coordinator
+    } else {
+        Caller::Agent
+    };
+    let ops = capture_ops(&project, &results, &scope, caller, rev.as_deref());
+    let n = recorded_text(&ops);
+    record_capture(client, &p, &cwd, caller, ops)?;
+    println!("kanbanr: recorded {n} from {}", file.display());
+    Ok(())
+}
+
+/// An item's markdown brief with each timed test's last duration after its name and kind,
+/// `` - [x] `name` (unit) · 4 ms `` (FTR-058). `timings` is `GET /projects/{p}/timings?code=`'s
+/// answer; a test it does not list is left as it was.
+fn with_durations(brief: &str, timings: &Value) -> String {
+    let last: std::collections::BTreeMap<(&str, &str), u64> = timings["tests"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| {
+            Some((
+                (t["requirement"].as_str()?, t["test"].as_str()?),
+                t["ms"].as_u64()?,
+            ))
+        })
+        .collect();
+    if last.is_empty() {
+        return brief.to_string();
+    }
+    let mut out = String::with_capacity(brief.len());
+    let (mut in_requirements, mut requirement) = (false, "");
+    for line in brief.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n');
+        if body.starts_with("## ") {
+            in_requirements = body == "## Requirements";
+        } else if in_requirements && let Some(head) = body.strip_prefix("### ") {
+            requirement = head.split(" · ").next().unwrap_or("").trim();
+        } else if in_requirements
+            && body.starts_with("- [")
+            && let Some((before, rest)) = body.split_once(" `")
+            && let Some((name, after)) = rest.split_once('`')
+            && let Some(ms) = last.get(&(requirement, name))
+        {
+            // After the kind, `(unit)`, when there is one; before any "— checked at …".
+            let kind_len = if after.starts_with(" (") {
+                after.find(')').map_or(0, |i| i + 1)
+            } else {
+                0
+            };
+            let (kind, tail) = after.split_at(kind_len);
+            out.push_str(&format!(
+                "{before} `{name}`{kind} · {}{tail}{}",
+                duration_text(*ms),
+                &line[body.len()..]
+            ));
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// `slowest test: <name> <duration> (of N timed)`: an item's slowest test by its last duration,
+/// ties by name, or `None` when none is timed (FTR-058).
+fn slowest_line(view: &kanbanr_core::timings::TimingsView) -> Option<String> {
+    let slowest = view
+        .tests
+        .iter()
+        .max_by(|a, b| a.ms.cmp(&b.ms).then_with(|| b.test.cmp(&a.test)))?;
+    Some(format!(
+        "slowest test: {} {} (of {} timed)",
+        slowest.test,
+        duration_text(slowest.ms),
+        view.tests.len()
+    ))
+}
+
+/// `kanbanr report --tests` as text (FTR-058): "Slowest tests", then "Slowed most since <version>
+/// (<date>)", or the sentence that says no release has shipped to compare with.
+fn tests_report_text(report: &kanbanr_core::timings::TimingReport) -> String {
+    let mut out = format!("Slowest tests (from {} kept run(s))\n", report.runs);
+    if report.slowest.is_empty() {
+        out.push_str("  No test has a kept duration yet.\n");
+    }
+    for row in &report.slowest {
+        out.push_str(&format!(
+            "  {:>12}  {} {}  {}\n",
+            duration_text(row.ms),
+            row.code,
+            row.requirement,
+            row.test
+        ));
+    }
+    out.push('\n');
+    let Some(baseline) = &report.baseline else {
+        out.push_str("No release has shipped yet, so nothing to compare with.\n");
+        return out;
+    };
+    let date: String = baseline.shipped_at.chars().take(10).collect();
+    out.push_str(&format!(
+        "Slowed most since {} ({date})\n",
+        baseline.version
+    ));
+    if report.slowing.is_empty() {
+        out.push_str("  No test slowed since then.\n");
+    }
+    for row in &report.slowing {
+        out.push_str(&format!(
+            "  {:>12}  {} -> {}  {} {}  {}\n",
+            format!("+{}", duration_text(row.grew_ms)),
+            duration_text(row.before_ms),
+            duration_text(row.now_ms),
+            row.code,
+            row.requirement,
+            row.test
+        ));
+    }
+    out
+}
+
+/// A duration as `feature show`, `check` and the report print it (FTR-058): under 1 s `N ms`,
+/// under 60 s `S.ss s`, else `M min S s`.
+fn duration_text(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        format!("{}.{:02} s", ms / 1_000, (ms % 1_000) / 10)
+    } else {
+        format!("{} min {} s", ms / 60_000, (ms % 60_000) / 1_000)
     }
 }
 
@@ -7749,7 +7958,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_write(cli, &resp, line);
             Ok(())
         }
-        Command::Report { since } => {
+        Command::Report {
+            tests: true, top, ..
+        } => {
+            let p = require_project(cli)?;
+            let resp = client.get(&format!("/projects/{p}/timings/report?top={top}"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let report: kanbanr_core::timings::TimingReport = serde_json::from_str(&resp)?;
+            print!("{}", tests_report_text(&report));
+            Ok(())
+        }
+        Command::Report { since, .. } => {
             let p = require_project(cli)?;
             let since = since.as_deref().map(kanbanr_core::report::parse_since);
             let rev = project_head_rev();
@@ -7826,7 +8048,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Capture => run_capture(cli, &client),
+        Command::Capture { junit, rev } => match junit {
+            Some(file) => run_capture_junit(cli, &client, file, rev.as_deref()),
+            None => run_capture(cli, &client, rev.as_deref()),
+        },
         Command::Walkthrough(cmd) => walkthrough::run_command(cli, cmd),
         Command::Check { code, file } => {
             if let Some(file) = file {
@@ -7867,6 +8092,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     for gap in gaps {
                         println!("    {}", gap.as_str().unwrap_or(""));
                     }
+                }
+                // The item's slowest timed test, by its last duration (FTR-058): for one item.
+                if code.is_some()
+                    && let Some(line) = r["code"]
+                        .as_str()
+                        .and_then(|c| {
+                            kanbanr_core::timings::last_view(client.store(), &p, Some(c)).ok()
+                        })
+                        .and_then(|v| slowest_line(&v))
+                {
+                    println!("  {line}");
                 }
                 // The documents `docs-folded` waits on (DEF-033): information, not a refusal.
                 let unbuilt = r["docs_unbuilt"].as_array().cloned().unwrap_or_default();
@@ -10175,7 +10411,13 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             if cli.json {
                 println!("{}", pretty(&resp));
             } else {
-                println!("{resp}");
+                // Each timed test's last duration (FTR-058), from the kept runs.
+                let timings: Value = client
+                    .get(&format!("/projects/{p}/timings?code={}", urlencode(code)))
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or(Value::Null);
+                println!("{}", with_durations(&resp, &timings));
             }
             Ok(())
         }
@@ -14828,6 +15070,41 @@ Refs: kanbanr:FEAT-082/R-1""#;
             may_claim: false,
         };
         assert!(capture_plan(&run, &p, &dead, Caller::Agent, Some("abc")).is_empty());
+    }
+
+    /// FTR-058 R-6: an agent's capture keeps only its own item's durations: another item's timed
+    /// ops are dropped, a timing-only one (nothing else changed) included.
+    #[test]
+    fn an_agents_capture_keeps_only_its_own_items_durations() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let mut p = capture_project();
+        // FEAT-002's test already holds this result at this revision: its op would carry only the
+        // duration.
+        let other = &mut p.features[1].definition.as_mut().unwrap().requirements[0].tests[0];
+        other.state = kanbanr_core::models::TestState::Green;
+        other.checked_rev = "abc".into();
+        let run = json!({
+            "agent_id": "a1",
+            "cwd": "/x",
+            "tool_response": {"stdout": "    PASS [   0.004s] (1/2) shop cart::keeps\n    \
+                PASS [   0.031s] (2/2) shop pay::charges\n"},
+        });
+        // The coordinator's run keeps both durations, the timing-only op included.
+        let all = capture_plan(
+            &run,
+            &p,
+            &ProcessScope::Unscoped,
+            Caller::Coordinator,
+            Some("abc"),
+        );
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!(all.iter().all(|op| op["ms"].is_u64()), "{all:?}");
+        let scope = ProcessScope::Scoped(build_scope("FEAT-001"));
+        let ops = capture_plan(&run, &p, &scope, Caller::Agent, Some("abc"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(ops[0]["feature"], "FEAT-001");
+        assert_eq!(ops[0]["test"], "cart::keeps");
+        assert_eq!(ops[0]["ms"], 4);
     }
 
     /// A scratch worktree's facts: enough for the guard's command rules, which read no folder.

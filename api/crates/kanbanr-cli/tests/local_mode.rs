@@ -15454,3 +15454,296 @@ fn feature_define_refuses_a_second_manual_test() {
     assert_eq!(tests[0]["name"], first);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A temporary board with one item tracking `cart::keeps` and `pay::charges` (FTR-058), and the
+/// CLI run in a code folder beside it, never under the repository (L-41).
+struct TimedBoard {
+    base: PathBuf,
+    home: PathBuf,
+    work: PathBuf,
+}
+
+impl TimedBoard {
+    fn new(name: &str) -> TimedBoard {
+        let base =
+            std::env::temp_dir().join(format!("kanbanr-timed-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let b = TimedBoard {
+            home: base.join("home"),
+            work: base.join("code").join("shop"),
+            base,
+        };
+        std::fs::create_dir_all(&b.home).unwrap();
+        std::fs::create_dir_all(&b.work).unwrap();
+        b.run(&[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ]);
+        // The board is this test's own, never the repository's (L-41).
+        assert!(
+            b.board()
+                .canonicalize()
+                .unwrap()
+                .starts_with(b.base.canonicalize().unwrap()),
+            "{:?}",
+            b.board()
+        );
+        b.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+        b.run(&[
+            "feature",
+            "add",
+            "--title",
+            "Basket",
+            "--milestone",
+            "MS-001",
+        ]);
+        let def = b.base.join("def.yaml");
+        std::fs::write(
+            &def,
+            "statement: Keep a basket's items\n\
+             requirements:\n  - kind: functional\n    text: \"WHEN an item is added, THE SYSTEM SHALL keep it.\"\n\
+             \x20   tests:\n      - name: cart::keeps\n        kind: unit\n        state: planned\n\
+             \x20     - name: pay::charges\n        kind: unit\n        state: planned\n",
+        )
+        .unwrap();
+        b.run(&[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ]);
+        b
+    }
+
+    fn exec(&self, args: &[&str], stdin: Option<&str>) -> Output {
+        use std::io::Write;
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().expect("spawn kanbanr CLI");
+        let mut input = child.stdin.take().unwrap();
+        input.write_all(stdin.unwrap_or("").as_bytes()).unwrap();
+        drop(input);
+        child.wait_with_output().expect("run kanbanr CLI")
+    }
+
+    fn run(&self, args: &[&str]) -> String {
+        let o = self.exec(args, None);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+
+    fn board(&self) -> PathBuf {
+        PathBuf::from(self.run(&["where"]).trim())
+    }
+
+    /// The kept run files, by name.
+    fn timings(&self) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(self.board().join("projects/shop/timings"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        files.sort();
+        files
+    }
+
+    /// A PostToolUse payload of a Bash run of `command` that printed `stdout`.
+    fn capture(&self, command: &str, stdout: &str) -> Output {
+        let payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "tool_response": {"stdout": stdout, "stderr": ""},
+        })
+        .to_string();
+        let o = self.exec(&["capture"], Some(&payload));
+        assert!(
+            o.status.success(),
+            "capture failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        o
+    }
+}
+
+impl Drop for TimedBoard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// FTR-058 R-4: the hook fed a nextest transcript records the states and keeps one timings file
+/// with the durations.
+#[test]
+fn capture_records_results_from_a_nextest_run() {
+    let b = TimedBoard::new("nextest");
+    let o = b.capture(
+        "cargo nextest run",
+        "    PASS [   0.004s] (1/2) shop cart::keeps\n    FAIL [   2.504s] (2/2) shop pay::charges\n",
+    );
+    let said = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        said.contains("kanbanr: recorded 2 test result(s) and 2 duration(s) from this run"),
+        "{said}"
+    );
+    let shown = b.run(&["feature", "show", "FEAT-001"]);
+    assert!(shown.contains("- [x] `cart::keeps`"), "{shown}");
+    assert!(shown.contains("- [~] `pay::charges`"), "{shown}");
+    let files = b.timings();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let kept = std::fs::read_to_string(&files[0]).unwrap();
+    assert!(kept.contains("test: cart::keeps"), "{kept}");
+    assert!(kept.contains("ms: 4\n"), "{kept}");
+    assert!(kept.contains("ms: 2504\n"), "{kept}");
+}
+
+/// FTR-058 R-5: a cargo test run prints no duration; its results are recorded and no timings
+/// file is kept.
+#[test]
+fn a_cargo_test_run_records_results_and_keeps_no_timing() {
+    let b = TimedBoard::new("cargo");
+    let o = b.capture(
+        "cargo test",
+        "test cart::keeps ... ok\ntest pay::charges ... FAILED\n",
+    );
+    let said = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        said.contains("kanbanr: recorded 2 test result(s) and 0 duration(s) from this run"),
+        "{said}"
+    );
+    let shown = b.run(&["feature", "show", "FEAT-001"]);
+    assert!(shown.contains("- [x] `cart::keeps`"), "{shown}");
+    assert!(shown.contains("- [~] `pay::charges`"), "{shown}");
+    assert!(b.timings().is_empty(), "{:?}", b.timings());
+    assert!(!shown.contains(" ms"), "{shown}");
+}
+
+/// FTR-058 R-7: `capture --junit <file> --rev <sha>` reads a nextest JUnit report, records the
+/// states at that revision and keeps one timings file; a report with no testcase is an error
+/// naming the file.
+#[test]
+fn capture_reads_a_junit_report_into_results_and_durations() {
+    let b = TimedBoard::new("junit");
+    let report = b.base.join("junit.xml");
+    std::fs::write(
+        &report,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" failures="1" errors="0">
+    <testsuite name="shop" tests="2" disabled="0" errors="0" failures="1">
+        <testcase name="cart::keeps" classname="shop" timestamp="2026-11-16T17:20:31.123+00:00" time="0.004">
+        </testcase>
+        <testcase name="pay::charges" classname="shop" timestamp="2026-11-16T17:20:31.130+00:00" time="2.504">
+            <failure type="test failure">thread &apos;pay::charges&apos; panicked</failure>
+        </testcase>
+    </testsuite>
+</testsuites>
+"#,
+    )
+    .unwrap();
+    let rev = "0123456789abcdef0123456789abcdef01234567";
+    let said = b.run(&["capture", "--junit", report.to_str().unwrap(), "--rev", rev]);
+    assert!(
+        said.contains(&format!(
+            "kanbanr: recorded 2 test result(s) and 2 duration(s) from {}",
+            report.display()
+        )),
+        "{said}"
+    );
+    let item: serde_json::Value =
+        serde_json::from_str(&b.run(&["--json", "feature", "show", "FEAT-001"])).unwrap();
+    let tests = &item["definition"]["requirements"][0]["tests"];
+    assert_eq!(tests[0]["name"], "cart::keeps", "{tests}");
+    assert_eq!(tests[0]["state"], "green", "{tests}");
+    assert_eq!(tests[0]["checked_rev"], rev, "{tests}");
+    assert_eq!(tests[1]["state"], "red", "{tests}");
+    let files = b.timings();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let name = files[0].file_name().unwrap().to_string_lossy().to_string();
+    assert!(name.ends_with("-0123456.yaml"), "{name}");
+    let kept = std::fs::read_to_string(&files[0]).unwrap();
+    assert!(
+        kept.contains("ms: 4\n") && kept.contains("ms: 2504\n"),
+        "{kept}"
+    );
+
+    // A report with no testcase is an error that names the file.
+    let empty = b.base.join("empty.xml");
+    std::fs::write(&empty, "<testsuites></testsuites>\n").unwrap();
+    let o = b.exec(&["capture", "--junit", empty.to_str().unwrap()], None);
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains(&empty.display().to_string()), "{err}");
+}
+
+/// FTR-058 R-8: `feature show` names each timed test's last duration and `check` the item's
+/// slowest; an untimed test shows none.
+#[test]
+fn feature_show_and_check_name_the_last_durations() {
+    let b = TimedBoard::new("show");
+    b.capture(
+        "cargo nextest run",
+        "    PASS [   0.004s] (1/1) shop cart::keeps\n",
+    );
+    b.capture(
+        "cargo nextest run",
+        "    PASS [   0.007s] (1/2) shop cart::keeps\n    PASS [   2.504s] (2/2) shop pay::charges\n",
+    );
+    let shown = b.run(&["feature", "show", "FEAT-001"]);
+    assert!(
+        shown.contains("- [x] `cart::keeps` (unit) · 7 ms"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("- [x] `pay::charges` (unit) · 2.50 s"),
+        "{shown}"
+    );
+    let checked = b.run(&["check", "FEAT-001"]);
+    assert!(
+        checked.contains("  slowest test: pay::charges 2.50 s (of 2 timed)"),
+        "{checked}"
+    );
+    // The report lists the slowest from the kept runs, and says when no release has shipped.
+    let report = b.run(&["report", "--tests", "--top", "1"]);
+    assert!(
+        report.contains("Slowest tests (from 2 kept run(s))"),
+        "{report}"
+    );
+    assert!(
+        report.contains("2.50 s  FEAT-001 R-1  pay::charges"),
+        "{report}"
+    );
+    assert!(!report.contains("cart::keeps"), "{report}");
+    assert!(
+        report.contains("No release has shipped yet, so nothing to compare with."),
+        "{report}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&b.run(&["--json", "report", "--tests"])).unwrap();
+    assert_eq!(json["slowest"][0]["ms"], 2504, "{json}");
+    assert!(json["baseline"].is_null(), "{json}");
+
+    // A test with no kept timing shows none, and an item with none timed has no slowest line.
+    let fresh = TimedBoard::new("show-untimed");
+    fresh.capture("cargo test", "test cart::keeps ... ok\n");
+    let shown = fresh.run(&["feature", "show", "FEAT-001"]);
+    assert!(shown.contains("- [x] `cart::keeps` (unit)\n"), "{shown}");
+    assert!(!fresh.run(&["check", "FEAT-001"]).contains("slowest test"));
+}
