@@ -625,6 +625,9 @@ pub struct Moved {
     /// (DEF-031).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sent_back: Option<crate::releases::SentBack>,
+    /// The release's draft notes were drafted again after the merge: the notes path (DEF-078).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_redrafted: Option<String>,
     /// Something to know, e.g. that the item has no branch, so nothing was merged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -666,6 +669,7 @@ pub fn move_item(
             forward_needed: None,
             forward_next: None,
             sent_back: None,
+            notes_redrafted: None,
             note,
             drift: Vec::new(),
         })
@@ -812,6 +816,21 @@ pub fn move_item(
             }
         }
     }
+    // A real merge into a release drafts its untouched draft notes again (DEF-078). The merge and
+    // the move are done: a failure here is said, never an error.
+    let mut notes_redrafted = None;
+    if let (Some(version), false) = (&forward_needed, already) {
+        match crate::releases::redraft_notes(store, id, version, repo, code) {
+            Ok(path) => notes_redrafted = path,
+            Err(e) => {
+                let first = config.cadence.stages().first().cloned().unwrap_or_default();
+                notes.push(format!(
+                    "the draft notes of {version} could not be drafted again: {e}; prepare it \
+                     again with `kanbanr release promote {version} {first}`"
+                ));
+            }
+        }
+    }
     let note = (!notes.is_empty()).then(|| notes.join("; "));
     // What the merge brought in may be named by docs and items that did not change with it. A
     // failure to read the history is no reason to fail a move that is already done.
@@ -829,6 +848,7 @@ pub fn move_item(
         forward_needed,
         forward_next,
         sent_back,
+        notes_redrafted,
         note,
     })
 }
