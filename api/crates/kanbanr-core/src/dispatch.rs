@@ -2910,7 +2910,8 @@ fn dispatch_routes(
                 label: query_param(query, "label"),
                 sprint: query_param(query, "sprint"),
             };
-            ser(&crate::retro::run(store, p, &wave)?)
+            // With the code repository at hand, the proofs naming a missing test (MNT-001 Q5).
+            ser(&crate::retro::run_in(store, p, &wave, repo)?)
         }
         ("GET", ["projects", p, "retro", "due"]) => ser(&crate::retro::due(store, p)?),
 

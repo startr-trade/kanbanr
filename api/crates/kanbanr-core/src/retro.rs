@@ -146,6 +146,11 @@ pub struct Evidence {
     pub proven_with_open_test: usize,
     /// Finished items whose requirements are not all proven: done by status, not by evidence.
     pub finished_unproven: Vec<String>,
+    /// Of the wave's green results, those whose test is no longer in the code, by the
+    /// reconciliation planner (MNT-001 Q5). Counted only when the project folder is at hand;
+    /// `proven` keeps its rule either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proofs_missing_test: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +162,33 @@ pub struct Estimate {
 
 /// Build the retro for one wave.
 pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
+    build(store, id, wave, None)
+}
+
+/// [`run`], with the project's code repository when the caller has one: the evidence then also
+/// says how many of the wave's proofs name a test no longer in the code (MNT-001 Q5).
+pub fn run_in(
+    store: &Store,
+    id: &str,
+    wave: &Wave,
+    repo: Option<&std::path::Path>,
+) -> Result<Retro> {
+    match repo {
+        Some(repo) => {
+            let locator = crate::evidence::GitLocator::new(repo, store.data_dir());
+            build(store, id, wave, Some(&locator))
+        }
+        None => build(store, id, wave, None),
+    }
+}
+
+/// The retro, with a locator for the code when the project folder is at hand.
+fn build(
+    store: &Store,
+    id: &str,
+    wave: &Wave,
+    locator: Option<&dyn crate::evidence::Locator>,
+) -> Result<Retro> {
     let project = store.load_meta(id)?;
     // The whole log, not a window: this is the fallback for items that finished before transitions
     // were recorded, and asking for a bounded slice is what made it silently useless (FEAT-066).
@@ -311,6 +343,18 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
                     .push(format!("{} ({unproven})", f.code));
             }
         }
+    }
+
+    // The same planner as `kanbanr tests`: a green whose test is gone proves nothing a person can
+    // re-run. Counted beside `proven`, which keeps its historical rule.
+    if let Some(locator) = locator {
+        let plan = crate::evidence::plan_reconciliation(&project, &[], None, locator);
+        retro.evidence.proofs_missing_test = Some(
+            plan.vanished
+                .iter()
+                .filter(|v| v.state == TestState::Green && wave_codes.contains(&v.code.as_str()))
+                .count(),
+        );
     }
 
     retro.cycle_time_days = percentiles(&mut cycle_times);
@@ -543,6 +587,12 @@ pub fn markdown(r: &Retro) -> String {
         "- requirements proven by a green test: {}/{}{open}",
         r.evidence.proven, r.evidence.requirements
     );
+    if let Some(n) = r.evidence.proofs_missing_test {
+        let _ = writeln!(
+            out,
+            "  - {n} proof(s) name a test no longer in the repository (`kanbanr tests`)"
+        );
+    }
     if !r.evidence.finished_unproven.is_empty() {
         let _ = writeln!(
             out,
@@ -779,6 +829,81 @@ mod tests {
             "{}",
             markdown(&r)
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-001 Q5: with the project folder at hand, the retro says how many of the wave's proofs
+    /// name a test no longer in the code, from the reconciliation planner; without it, nothing.
+    #[test]
+    fn the_retro_names_how_many_proofs_name_a_missing_test() {
+        use crate::evidence::{Location, Locator, RevFacts, TestKind};
+        struct OnlyHolds;
+        impl Locator for OnlyHolds {
+            fn find(&self, kind: &TestKind, _rev: Option<&str>) -> Vec<Location> {
+                match kind {
+                    TestKind::Rust { name, .. } if name == "holds" => vec![Location {
+                        path: "src/cart.rs".into(),
+                        line: 1,
+                    }],
+                    _ => Vec::new(),
+                }
+            }
+            fn revision(&self, _rev: &str) -> RevFacts {
+                RevFacts {
+                    known: true,
+                    on_head_line: true,
+                    behind: Some(0),
+                }
+            }
+            fn head(&self) -> String {
+                "abc".into()
+            }
+        }
+
+        let (store, dir) = fixture();
+        let f = store.add_feature("demo", "Cart", "", "MS-1", None).unwrap();
+        let test = |name: &str| TestRef {
+            name: name.into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "THE SYSTEM SHALL hold the cart.".into(),
+                        tests: vec![test("cart::holds"), test("cart::gone")],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        for name in ["cart::holds", "cart::gone"] {
+            store
+                .set_test_state("demo", &f.code, "R-1", name, TestState::Green, Some("abc"))
+                .unwrap();
+        }
+        complete(&store, &f.code);
+
+        let r = build(&store, "demo", &Wave::default(), Some(&OnlyHolds)).unwrap();
+        assert_eq!(r.evidence.proofs_missing_test, Some(1));
+        // `proven` keeps its rule: one green test proves the requirement.
+        assert_eq!((r.evidence.proven, r.evidence.requirements), (1, 1));
+        let text = markdown(&r);
+        assert!(
+            text.contains(
+                "proven by a green test: 1/1\n  - 1 proof(s) name a test no longer in the \
+                 repository (`kanbanr tests`)\n"
+            ),
+            "{text}"
+        );
+
+        let without = run(&store, "demo", &Wave::default()).unwrap();
+        assert_eq!(without.evidence.proofs_missing_test, None);
+        assert!(!markdown(&without).contains("proof(s) name a test"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

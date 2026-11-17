@@ -4488,7 +4488,8 @@ fn run_retro(
         if query.is_empty() { "" } else { "?" },
         query.join("&")
     );
-    let resp = client.get(&path)?;
+    // From the project folder the retro also counts proofs that name a missing test (MNT-001).
+    let resp = client.get_in(&path, code_repo().as_deref())?;
     if cli.json {
         println!("{}", pretty(&resp));
         return Ok(());
