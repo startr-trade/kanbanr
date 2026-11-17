@@ -515,8 +515,9 @@ fn unit_name(project: &Project) -> &'static str {
 /// Check decision `id` on `today`, changing nothing (R-6). Problems are reasons to decline: the
 /// target is frozen (a release shipped, superseded or at a stage; a closed sprint) or gone, an item
 /// is gone, finished or in a no-op status, or, taking items out of their sprint, an item is in
-/// none. Warnings are for Claude to judge: a dependency planned later or not at all, a sprint over
-/// its capacity, an item due after the sprint's end or the release's target. The nearest move is
+/// none or in a closed one (which can't change, as `sprints::unplan` refuses). Warnings are for
+/// Claude to judge: a dependency planned later or not at all, a sprint over its capacity, an item
+/// due before the sprint's end or the release's target (it would land too late). The nearest move is
 /// the next planned release for a frozen release, and the active, else the next planned, sprint
 /// for a closed one.
 pub fn assess(store: &Store, p: &str, id: &str, today: time::Date) -> Result<Assessment> {
@@ -633,10 +634,10 @@ pub fn assess(store: &Store, p: &str, id: &str, today: time::Date) -> Result<Ass
             if let Some(end) = crate::gantt::parse_ymd(&sprint.end) {
                 for f in &items {
                     if let Some((due, text)) = due_of(f)
-                        && due > end
+                        && due < end
                     {
                         out.warnings.push(format!(
-                            "{} is due {text}, after {} ends on {}",
+                            "{} is due {text}, before {} ends on {}",
                             f.code, sprint.code, sprint.end
                         ));
                     }
@@ -694,10 +695,10 @@ pub fn assess(store: &Store, p: &str, id: &str, today: time::Date) -> Result<Ass
             if let Some(target) = crate::gantt::parse_ymd(&release.target) {
                 for f in &items {
                     if let Some((due, text)) = due_of(f)
-                        && due > target
+                        && due < target
                     {
                         out.warnings.push(format!(
-                            "{} is due {text}, after {v}'s target of {}",
+                            "{} is due {text}, before {v}'s target of {}",
                             f.code, release.target
                         ));
                     }
@@ -706,8 +707,19 @@ pub fn assess(store: &Store, p: &str, id: &str, today: time::Date) -> Result<Ass
         }
         _ => {
             for f in &items {
-                if f.sprint.is_none() {
-                    out.problems.push(format!("{} is not in a sprint", f.code));
+                match f.sprint.as_deref() {
+                    None => out.problems.push(format!("{} is not in a sprint", f.code)),
+                    Some(s)
+                        if all_sprints
+                            .iter()
+                            .any(|x| x.code == s && x.state_on(today) == SprintState::Closed) =>
+                    {
+                        out.problems.push(format!(
+                            "{} sits in closed sprint {s}, which can't change",
+                            f.code
+                        ))
+                    }
+                    Some(_) => {}
                 }
             }
         }
@@ -1138,7 +1150,7 @@ mod tests {
         );
         assert_eq!(r.nearest, None);
 
-        // A dependency in a later sprint, the sprint over capacity (10 points), a due date after
+        // A dependency in a later sprint, the sprint over capacity (10 points), a due date before
         // the sprint ends: warnings, not problems.
         store
             .set_feature_attrs(
@@ -1146,7 +1158,7 @@ mod tests {
                 &a,
                 None,
                 None,
-                Some("2026-12-01".into()),
+                Some("2026-11-10".into()),
                 None,
                 None,
                 None,
@@ -1165,7 +1177,7 @@ mod tests {
             r.warnings,
             vec![
                 format!("{a} depends on {b}, planned into SP-002, after SP-001"),
-                format!("{a} is due 2026-12-01, after SP-001 ends on 2026-11-15"),
+                format!("{a} is due 2026-11-10, before SP-001 ends on 2026-11-15"),
             ],
             "nine of ten points is within capacity"
         );
@@ -1204,8 +1216,63 @@ mod tests {
         let r = assess(&store, "shop", "PD-6", today).unwrap();
         assert_eq!(r.problems, vec!["FEAT-404 no longer exists"]);
 
+        // A due date before the release's target is a warning; one on or after it holds.
+        all[0].state = releases::ReleaseState::Planned;
+        save_releases(&store, &all);
+        decide(&store, INTO_RELEASE, "v0.8.0", &[&a]).unwrap();
+        let r = assess(&store, "shop", "PD-7", today).unwrap();
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert_eq!(
+            r.warnings,
+            vec![
+                format!("{a} depends on {b}, which is in no release"),
+                format!("{a} is due 2026-11-10, before v0.8.0's target of 2026-11-30"),
+            ]
+        );
+        let due = |when: &str| {
+            store
+                .set_feature_attrs(
+                    "shop",
+                    &a,
+                    None,
+                    None,
+                    Some(when.into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+        };
+        due("2026-11-30");
+        let r = assess(&store, "shop", "PD-7", today).unwrap();
+        assert!(
+            !r.warnings.iter().any(|w| w.contains(" is due ")),
+            "due on the target holds: {:?}",
+            r.warnings
+        );
+        due("2026-11-15");
+        let r = assess(&store, "shop", "PD-4", today).unwrap();
+        assert!(
+            !r.warnings.iter().any(|w| w.contains(" is due ")),
+            "due on the sprint's end holds: {:?}",
+            r.warnings
+        );
+
+        // Out of a closed sprint: the item sits in it, and a closed sprint can't change.
+        sps[1].state = SprintState::Closed;
+        save_sprints(&store, &sps);
+        decide(&store, OUT_OF_SPRINT, "", &[&b]).unwrap();
+        let r = assess(&store, "shop", "PD-8", today).unwrap();
+        assert_eq!(
+            r.problems,
+            vec![format!(
+                "{b} sits in closed sprint SP-002, which can't change"
+            )]
+        );
+
         // The check changed nothing: every decision is still pending.
-        assert_eq!(list(&store, "shop", Some("pending")).unwrap().len(), 6);
+        assert_eq!(list(&store, "shop", Some("pending")).unwrap().len(), 8);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
