@@ -59,6 +59,9 @@ pub fn warm_routes(project: &str) -> Vec<String> {
         format!("/projects/{project}/index"),
         // The Review page's counts (FTR-038), so its first open after a change is warm.
         format!("/projects/{project}/review/summary"),
+        // The Overview and the Needs you badge (FTR-048), so the landing page opens warm.
+        format!("/projects/{project}/overview"),
+        format!("/projects/{project}/attention"),
     ]
 }
 
@@ -975,7 +978,9 @@ mod tests {
             warm_routes("demo"),
             vec![
                 "/projects/demo/index".to_string(),
-                "/projects/demo/review/summary".to_string()
+                "/projects/demo/review/summary".to_string(),
+                "/projects/demo/overview".to_string(),
+                "/projects/demo/attention".to_string()
             ]
         );
         let key = memo::canonical("/projects/demo/index");
