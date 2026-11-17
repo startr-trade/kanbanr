@@ -71,6 +71,25 @@ pub fn warm_routes(project: &str) -> Vec<String> {
     ]
 }
 
+/// The ids of the projects the served boards hold, the first board winning a repeated id (as the
+/// project list does). A board that cannot list its projects contributes none.
+fn served_projects(st: &AppState) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for board in st.boards.all() {
+        let Ok(summaries) =
+            kanbanr_core::dispatch::list_summaries_for(&board.store, Some(&board.name))
+        else {
+            continue;
+        };
+        for summary in summaries {
+            if !ids.contains(&summary.id) {
+                ids.push(summary.id);
+            }
+        }
+    }
+    ids
+}
+
 /// One project's background state.
 #[derive(Default)]
 struct ProjectState {
@@ -109,9 +128,10 @@ impl Drop for Background {
 }
 
 impl Background {
-    /// Spawn the worker on the current tokio runtime. `repos`: the projects with a code repository
-    /// (today the daemon's one `code_repo`). It schedules a first pass for every listed project at
-    /// start.
+    /// Spawn the worker on the current tokio runtime. It keeps every project the served boards hold
+    /// and schedules a first pass (warm-up, then drift where there is a repository) for each at
+    /// start. `repos`: the projects with a code repository (today the daemon's one `code_repo`); a
+    /// pair whose project no board holds is dropped.
     pub fn start(
         st: AppState,
         runner: Arc<dyn DriftRunner>,
@@ -128,19 +148,25 @@ impl Background {
         timing: Timing,
     ) -> Arc<Background> {
         let now = Instant::now();
-        let projects = repos
+        // Every project a served board holds is warmed (DEF-109); the folder marker's pairs only
+        // give a served project its code repository, and a pair for a project no board holds is
+        // dropped.
+        let mut projects: HashMap<String, ProjectState> = served_projects(&st)
             .into_iter()
-            .map(|(project, repo)| {
-                let seen_code_head = kanbanr_core::git::head_commit(&repo).unwrap_or_default();
+            .map(|project| {
                 let state = ProjectState {
-                    repo: Some(repo),
                     due: Some(now),
-                    seen_code_head,
                     ..ProjectState::default()
                 };
                 (project, state)
             })
             .collect();
+        for (project, repo) in repos {
+            if let Some(state) = projects.get_mut(&project) {
+                state.seen_code_head = kanbanr_core::git::head_commit(&repo).unwrap_or_default();
+                state.repo = Some(repo);
+            }
+        }
         let inner = Arc::new(Inner {
             st,
             runner,
@@ -1019,6 +1045,76 @@ mod tests {
             Some(&(0, true)),
             "the first drift run started after the index was put in the memo: {seen:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
+    /// A runner that counts its calls per project.
+    struct Counting {
+        projects: Mutex<Vec<String>>,
+    }
+
+    impl DriftRunner for Counting {
+        fn run(&self, _: &Store, project: &str, _: &Path) -> kanbanr_core::Result<Report> {
+            self.projects.lock().unwrap().push(project.to_string());
+            Ok(report(0))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_daemon_warms_the_projects_its_boards_hold() {
+        let (st, dir) = board("served");
+        let key = memo::canonical("/projects/demo/index");
+        let runner = Arc::new(Counting {
+            projects: Mutex::new(Vec::new()),
+        });
+        // The folder marker names no project this board holds, so `repos` is empty.
+        let bg = Background::start_with(st.clone(), runner.clone(), Vec::new(), FAST);
+        until("the board's index in the memo", || {
+            st.memo.get(&key, &memo::stamp_for(&st, &key)).is_some()
+        })
+        .await;
+        let latest = bg.latest("demo", false);
+        assert_eq!(latest.state, LatestState::Unavailable, "no repo, no drift");
+        assert_eq!(latest.reason, NEEDS_REPO);
+        assert!(runner.projects.lock().unwrap().is_empty());
+        drop(bg);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_marker_project_no_board_holds_is_neither_warmed_nor_warned_of() {
+        let (st, dir) = board("ghost");
+        let code = code_repo("ghost-code");
+        let key = memo::canonical("/projects/demo/index");
+        let ghost = memo::canonical("/projects/ghost/index");
+        let runner = Arc::new(Counting {
+            projects: Mutex::new(Vec::new()),
+        });
+        let bg = Background::start_with(
+            st.clone(),
+            runner.clone(),
+            vec![("ghost".into(), code.clone())],
+            FAST,
+        );
+        until("the board's index in the memo", || {
+            st.memo.get(&key, &memo::stamp_for(&st, &key)).is_some()
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !bg.inner.lock().contains_key("ghost"),
+            "a project no board holds has no entry"
+        );
+        assert!(
+            st.memo.get(&ghost, &memo::stamp_for(&st, &ghost)).is_none(),
+            "nothing is kept for it"
+        );
+        assert!(
+            runner.projects.lock().unwrap().is_empty(),
+            "the runner is never called for it"
+        );
+        drop(bg);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&code);
     }
