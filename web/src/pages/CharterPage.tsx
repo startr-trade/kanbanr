@@ -112,7 +112,7 @@ export default function CharterPage() {
       <Bullets title="Constraints" items={c.constraints} />
 
       {(lessons.data ?? []).length > 0 && (
-        <section className="section">
+        <section className="section" id="lessons">
           <h2>
             Lessons <span className="muted small">(confidence decays unless reaffirmed)</span>
           </h2>

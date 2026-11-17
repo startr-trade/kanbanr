@@ -71,7 +71,7 @@ export function cadenceSection(
             name: running.name ?? running.goal ?? "",
             dates: `${running.start} to ${running.end}`,
             // The board opens on the running sprint.
-            to: base,
+            to: `${base}/board`,
           }
         : null,
     };

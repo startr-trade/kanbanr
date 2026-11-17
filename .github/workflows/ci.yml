@@ -426,6 +426,11 @@ jobs:
       # row's item, and sits under Work (FTR-048).
       - name: The Items page reads its filters from the URL
         run: npm run check:items-page
+      # The project opens on its Overview and the Board moved to /board; every number on it links to
+      # its list or offers a sentence to ask Claude, empty sections ask Claude, and Home with one
+      # project opens it (FTR-048).
+      - name: The Overview is the project's landing and every number leads to its list
+        run: npm run check:overview
       # The item page says why an item changes no doc, as a plain line under Affects docs (DEF-075).
       - name: The item page shows why an item changes no docs
         run: npm run check:feature-no-docs

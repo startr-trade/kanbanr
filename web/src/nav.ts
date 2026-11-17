@@ -27,14 +27,14 @@ const base = (p: string) => `/p/${encodeURIComponent(p)}`;
 
 /** The v0.8.0 navigation. Each page item edits only its own line. */
 export const NAV: NavArea[] = [
-  // FTR-048 adds the Overview entry.
-  { key: "overview", label: "Overview", entries: [] },
+  // The project's landing: what needs the person and where the work stands (FTR-048).
+  { key: "overview", label: "Overview", entries: [{ key: "overview", label: "Overview", path: (p) => base(p) }] },
   {
     key: "work",
     label: "Work",
     entries: [
-      // FTR-048 moves Board to /p/{p}/board.
-      { key: "board", label: "Board", path: (p) => base(p), match: ["/feature/", "/state/"] },
+      // The Board moved to /p/{p}/board when the Overview took the project's root (FTR-048).
+      { key: "board", label: "Board", path: (p) => `${base(p)}/board`, match: ["/feature/", "/state/"] },
       // Review is Work's second entry, after Board (R-7).
       { key: "review", label: "Review", path: (p) => `${base(p)}/review` },
       // The Items list, filtered from the URL; right after Review, which stays second (FTR-048).
