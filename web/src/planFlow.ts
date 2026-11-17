@@ -61,3 +61,67 @@ function dateText(d: string): string {
 export function dateChips(plan: FlowPlan): string[] {
   return plan.dates.map((d) => `${d.what} ${dateText(d.date)} (set by the person)`);
 }
+
+/** One piece of a task's text: plain, `code`, or a link (only to `/p/…`, `http://` or `https://`). */
+export interface TaskTextPart {
+  kind: "text" | "code" | "link";
+  text: string;
+  href?: string;
+}
+
+/** The index of the `)` that closes a target starting at `from` (nested parens allowed), else -1. */
+function closingParen(text: string, from: number): number {
+  let depth = 0;
+  for (let j = from; j < text.length; j++) {
+    if (text[j] === "(") depth += 1;
+    else if (text[j] === ")") {
+      if (depth === 0) return j;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * A task's text as parts: `x` is code, [label](href) a link when href starts with `/p/`, `http://`
+ * or `https://` (any other target keeps only its label as text), unbalanced marks stay literal.
+ * Nothing is built as HTML: the caller renders each part as an element.
+ */
+export function taskTextParts(text: string): TaskTextPart[] {
+  const parts: TaskTextPart[] = [];
+  let plain = "";
+  const flush = () => {
+    if (plain) parts.push({ kind: "text", text: plain });
+    plain = "";
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end > i + 1) {
+        flush();
+        parts.push({ kind: "code", text: text.slice(i + 1, end) });
+        i = end + 1;
+        continue;
+      }
+    } else if (c === "[") {
+      const mid = text.indexOf("](", i + 1);
+      const close = mid > i ? closingParen(text, mid + 2) : -1;
+      const label = mid > i ? text.slice(i + 1, mid) : "";
+      if (close > 0 && label.length > 0 && !label.includes("[") && !label.includes("]")) {
+        const href = text.slice(mid + 2, close);
+        if (/^(\/p\/|https?:\/\/)/.test(href)) {
+          flush();
+          parts.push({ kind: "link", text: label, href });
+        } else plain += label;
+        i = close + 1;
+        continue;
+      }
+    }
+    plain += c;
+    i += 1;
+  }
+  flush();
+  return parts;
+}

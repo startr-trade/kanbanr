@@ -7,10 +7,11 @@
  *
  * Its critical path is over tasks; the timeline below marks the item-level one (FTR-043).
  */
+import { Link } from "react-router-dom";
 import { useQuery } from "../../data/useQuery";
 import { TAGS, urls } from "../../data/urls";
 import { Empty, ErrorState, LoadingState, Section } from "../../ui";
-import { dateChips, forecastRows, hoursText, statsLine, waitText } from "../../planFlow";
+import { dateChips, forecastRows, hoursText, statsLine, taskTextParts, waitText } from "../../planFlow";
 import type { FlowPlan, FlowRunning } from "../../types";
 
 /** Reads the running sprint's flow plan (else the open work's); a failed read shows here only. */
@@ -29,6 +30,48 @@ export function FlowPanel(p: { project: string }): JSX.Element {
 
 function runningTime(r: FlowRunning): string {
   return r.estimate_h != null ? `${hoursText(r.elapsed_h)} of ${hoursText(r.estimate_h)}` : `${hoursText(r.elapsed_h)} so far`;
+}
+
+/** A task's text with its `code` and links drawn as elements; no HTML is built from the string. */
+function TaskText(p: { text: string }): JSX.Element {
+  return (
+    <span style={{ overflowWrap: "anywhere" }}>
+      {taskTextParts(p.text).map((part, i) => {
+        if (part.kind === "code") return <code key={i} style={{ overflowWrap: "anywhere", whiteSpace: "normal" }}>
+            {part.text}
+          </code>;
+        if (part.kind === "link" && part.href?.startsWith("/p/"))
+          return (
+            <Link key={i} to={part.href}>
+              {part.text}
+            </Link>
+          );
+        if (part.kind === "link")
+          return (
+            <a key={i} href={part.href} rel="noopener noreferrer">
+              {part.text}
+            </a>
+          );
+        return <span key={i}>{part.text}</span>;
+      })}
+    </span>
+  );
+}
+
+/** Notes that list more than this many ids fold them behind a summary. */
+const FOLD_OVER = 5;
+
+/** One note naming ids: a plain line, or a closed `<details>` when the list is long. */
+function IdNote(p: { lead: string; ids: string[]; fold: string }): JSX.Element {
+  if (p.ids.length <= FOLD_OVER) return <li>{`${p.lead}: ${p.ids.join(", ")}`}</li>;
+  return (
+    <li>
+      <details>
+        <summary>{p.fold}</summary>
+        <p className="plan-flow-ids">{p.ids.join(", ")}</p>
+      </details>
+    </li>
+  );
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -61,14 +104,20 @@ export function FlowPanelBody(p: { project: string; plan: FlowPlan }): JSX.Eleme
     );
   }
 
-  const notes: string[] = [];
-  if (plan.unestimated.length > 0)
-    notes.push(`${plural(plan.unestimated.length, "task has", "tasks have")} no estimate (counted as 1 h): ${plan.unestimated.join(", ")}`);
-  if (plan.untasked_items.length > 0)
-    notes.push(`${plural(plan.untasked_items.length, "item has", "items have")} no tasks: ${plan.untasked_items.join(", ")}`);
-  if (plan.outside.length > 0)
-    notes.push(`${plural(plan.outside.length, "open task", "open tasks")} outside the scope that its tasks wait on: ${plan.outside.join(", ")}`);
-  notes.push(`build share ${plan.build_share} (${plan.build_share_measured ? "measured" : "assumed"})`);
+  const notes: JSX.Element[] = [];
+  if (plan.unestimated.length > 0) {
+    const lead = `${plural(plan.unestimated.length, "task has", "tasks have")} no estimate (counted as 1 h)`;
+    notes.push(<IdNote key="unestimated" lead={lead} ids={plan.unestimated} fold={`${lead} — show`} />);
+  }
+  if (plan.untasked_items.length > 0) {
+    const lead = `${plural(plan.untasked_items.length, "item has", "items have")} no tasks`;
+    notes.push(<IdNote key="untasked" lead={lead} ids={plan.untasked_items} fold={`${lead} — show`} />);
+  }
+  if (plan.outside.length > 0) {
+    const lead = `${plural(plan.outside.length, "open task", "open tasks")} outside the scope that its tasks wait on`;
+    notes.push(<IdNote key="outside" lead={lead} ids={plan.outside} fold={`${lead} — show`} />);
+  }
+  notes.push(<li key="share">{`build share ${plan.build_share} (${plan.build_share_measured ? "measured" : "assumed"})`}</li>);
 
   return (
     <div className="plan-flow">
@@ -88,7 +137,7 @@ export function FlowPanelBody(p: { project: string; plan: FlowPlan }): JSX.Eleme
               <ul>
                 {plan.running.map((r) => (
                   <li key={r.id}>
-                    <code>{r.id}</code> {r.text}
+                    <code>{r.id}</code> <TaskText text={r.text} />
                     {r.scope ? <span className="muted small"> {r.scope}</span> : null} <span>{runningTime(r)}</span>
                     {r.over ? (
                       <>
@@ -110,7 +159,7 @@ export function FlowPanelBody(p: { project: string; plan: FlowPlan }): JSX.Eleme
               <ul>
                 {plan.ready.map((r) => (
                   <li key={r.id}>
-                    <code>{r.id}</code> {r.text}
+                    <code>{r.id}</code> <TaskText text={r.text} />
                     {r.critical ? (
                       <>
                         {" "}
@@ -165,9 +214,7 @@ export function FlowPanelBody(p: { project: string; plan: FlowPlan }): JSX.Eleme
         </div>
 
         <ul className="plan-flow-notes muted small">
-          {notes.map((n) => (
-            <li key={n}>{n}</li>
-          ))}
+          {notes}
         </ul>
       </Section>
     </div>
