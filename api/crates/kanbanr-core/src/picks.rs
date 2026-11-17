@@ -236,7 +236,8 @@ fn resolve_item(cx: &Ctx<'_>, pick: &Pick, code: &str) -> Result<Picked> {
             )));
         }
     }
-    if let Some(sha) = coderepo::merge_commit_for(cx.repo, &cx.main, code)? {
+    let codes: Vec<&str> = feature.codes().collect();
+    if let Some(sha) = coderepo::merge_commit_for(cx.repo, &cx.main, &codes)? {
         let label = format!("{code} · merged @ {}", short(&sha));
         return Ok(cx.git(pick, sha, label, "merge found on main by its Refs trailer"));
     }
