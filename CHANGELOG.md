@@ -33,6 +33,9 @@ All notable changes to kanbanr are documented here. The format follows
   on dependency changes, nightly and before a release; compiling jobs set the CI build
   environment, a timeout and a main-only cache; `make ci` takes the machine's build lock and a
   memory cap; one toolchain is named once (MNT-007).
+- The monitor's tabs are grouped into areas (Overview, Work, Plan, Evidence, Architecture, Records),
+  and on a narrow screen they collapse into one menu, so every page can be reached on a phone
+  (FTR-047).
 
 ### Fixed
 
