@@ -629,9 +629,11 @@ fn check_field(kind: &str, f: &FieldSpec, v: &Value) -> Result<()> {
     let ok = match f.ty {
         FieldType::Text => text_of(v).is_some_and(|t| t.chars().count() <= MAX_TEXT),
         FieldType::Bool => v.is_boolean(),
-        FieldType::State => {
-            text_of(v).is_some_and(|t| crate::models::TestState::parse(t).is_some())
-        }
+        FieldType::State => text_of(v).is_some_and(|t| {
+            crate::models::TestState::parse(t).is_some()
+                // A manual test's result may be a retirement too (DEF-113).
+                || (kind == "manual-test" && t == crate::manual::RETIRED)
+        }),
     };
     if ok {
         return Ok(());
@@ -639,6 +641,9 @@ fn check_field(kind: &str, f: &FieldSpec, v: &Value) -> Result<()> {
     let what = match f.ty {
         FieldType::Text => format!("text of at most {MAX_TEXT} characters"),
         FieldType::Bool => "true or false".to_string(),
+        FieldType::State if kind == "manual-test" => {
+            "passed (green), failed (red) or retired".to_string()
+        }
         FieldType::State => "planned, red or green".to_string(),
     };
     Err(unsupported(format!(
@@ -884,9 +889,9 @@ pub fn prepare(
         }
         "manual-test" => {
             let state = fields.get("state").and_then(Value::as_str).unwrap_or("");
-            if !matches!(state, "green" | "red") {
+            if !matches!(state, "green" | "red" | crate::manual::RETIRED) {
                 return Err(unsupported(
-                    "a manual test's result is passed (green) or failed (red)".into(),
+                    "a manual test's result is passed (green), failed (red) or retired".into(),
                 ));
             }
             if !crate::dispatch::is_manual_test(
@@ -902,28 +907,53 @@ pub fn prepare(
                     subject.item, subject.requirement, subject.test
                 )));
             }
-            // Not before the item's build stage (DEF-076).
-            crate::manual::refuse_before_build(
-                &project,
-                &subject.item,
-                &subject.requirement,
-                &subject.test,
-                if state == "green" {
-                    crate::models::TestState::Green
-                } else {
-                    crate::models::TestState::Red
-                },
-            )?;
-            let checked = match fields.get("checked_rev").and_then(Value::as_str) {
-                Some(r) => r.to_string(),
-                None => repo
-                    .and_then(|r| crate::coderepo::rev_parse(r, "HEAD").ok())
-                    .unwrap_or_default(),
-            };
-            if !checked.is_empty() {
-                fields.insert("checked_rev".into(), Value::String(checked.clone()));
+            // A retirement keeps the person's reason and is of a check left on a shipped release
+            // (DEF-113); it records no code revision and needs no build stage.
+            if state == crate::manual::RETIRED {
+                if fields
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .is_none_or(|n| n.trim().is_empty())
+                {
+                    return Err(unsupported(
+                        "a retirement keeps its reason: pass --note".into(),
+                    ));
+                }
+                let releases = crate::releases::load(store, p)?;
+                let kept = crate::manual::results(store, p, None)?;
+                crate::manual::retirable(
+                    &project,
+                    &releases,
+                    &kept,
+                    &subject.item,
+                    &subject.requirement,
+                    &subject.test,
+                )?;
+                String::new()
+            } else {
+                // Not before the item's build stage (DEF-076).
+                crate::manual::refuse_before_build(
+                    &project,
+                    &subject.item,
+                    &subject.requirement,
+                    &subject.test,
+                    if state == "green" {
+                        crate::models::TestState::Green
+                    } else {
+                        crate::models::TestState::Red
+                    },
+                )?;
+                let checked = match fields.get("checked_rev").and_then(Value::as_str) {
+                    Some(r) => r.to_string(),
+                    None => repo
+                        .and_then(|r| crate::coderepo::rev_parse(r, "HEAD").ok())
+                        .unwrap_or_default(),
+                };
+                if !checked.is_empty() {
+                    fields.insert("checked_rev".into(), Value::String(checked.clone()));
+                }
+                checked
             }
-            checked
         }
         "promotion" => {
             let plan = plan
@@ -1364,6 +1394,8 @@ pub fn equivalent_command(r: &Prepared) -> String {
             flag(&mut words, "url", field_text(r, "url"));
             flag(&mut words, "note", field_text(r, "note"));
         }
+        // A retirement is the person's, on the Review page: no terminal command (DEF-113).
+        "manual-test" if field_text(r, "state") == crate::manual::RETIRED => return String::new(),
         "manual-test" => {
             words.extend([
                 "test".into(),
@@ -1516,6 +1548,22 @@ pub fn still_waiting(
                 })
                 .and_then(|q| q.tests.iter().find(|t| t.name == r.subject.test))
                 .map(|t| t.state);
+            if field_text(r, "state") == crate::manual::RETIRED {
+                let releases = crate::releases::load(store, p).map_err(|e| e.to_string())?;
+                let kept = crate::manual::results(store, p, None).map_err(|e| e.to_string())?;
+                return crate::manual::retirable(
+                    project,
+                    &releases,
+                    &kept,
+                    &r.subject.item,
+                    &r.subject.requirement,
+                    &r.subject.test,
+                )
+                .map_err(|e| match e {
+                    CoreError::Unsupported(m) => m,
+                    other => other.to_string(),
+                });
+            }
             let prepared = crate::models::TestState::parse(field_text(r, "state"));
             if now.is_some() && now == prepared {
                 return Err(format!("the test is already {}", field_text(r, "state")));
@@ -1955,6 +2003,17 @@ pub fn expand(
             (format!("/projects/{p}/gate-results"), v)
         }
         "manual-test" => {
+            if text("state") == crate::manual::RETIRED {
+                if text("note").trim().is_empty() {
+                    return Err(unsupported(
+                        "a retirement keeps its reason: give one".into(),
+                    ));
+                }
+                let v = serde_json::json!({
+                    "by": by, "note": text("note"), "prepared": id,
+                });
+                return finish_manual(p, s, v, id, by, origin, changed, "POST", "/retire");
+            }
             if !matches!(text("state").as_str(), "green" | "red") {
                 return Err(unsupported(
                     "a manual test's result is passed (green) or failed (red)".into(),
@@ -1968,7 +2027,7 @@ pub fn expand(
                     v[k] = Value::String(text(k));
                 }
             }
-            return finish_manual(p, s, v, id, by, origin, changed);
+            return finish_manual(p, s, v, id, by, origin, changed, "PUT", "");
         }
         "system-baseline" => (
             format!("/projects/{p}/catalog/baseline/accept"),
@@ -2014,6 +2073,8 @@ pub fn expand(
 
 /// A confirmed manual result goes to the tests route, as `kanbanr test` does (DEF-040): a PUT,
 /// with none of the pins a verdict route reads, and the record's id so the kept result names it.
+/// A retirement (DEF-113) is a POST to the same path with `/retire` after it.
+#[allow(clippy::too_many_arguments)]
 fn finish_manual(
     p: &str,
     s: &Subject,
@@ -2022,9 +2083,11 @@ fn finish_manual(
     by: String,
     origin: crate::origin::Origin,
     changed: Vec<FieldChange>,
+    method: &str,
+    suffix: &str,
 ) -> Result<Expanded> {
     let path = format!(
-        "/projects/{p}/features/{}/tests/{}/{}",
+        "/projects/{p}/features/{}/tests/{}/{}{suffix}",
         s.item,
         percent_encode(&s.requirement),
         percent_encode(&s.test)
@@ -2037,11 +2100,11 @@ fn finish_manual(
         at: crate::now_rfc3339(),
         changed,
         reason: String::new(),
-        made: format!("PUT {path}"),
+        made: format!("{method} {path}"),
         extra: Default::default(),
     };
     Ok(Expanded {
-        method: "PUT".into(),
+        method: method.into(),
         path,
         body,
         resolution,
@@ -3530,6 +3593,212 @@ mod tests {
         assert_eq!(
             v.iter().find(|x| x.record.id == again).unwrap().state,
             State::Stale
+        );
+    }
+
+    /// DEF-113 R-6: a retirement is prepared with its reason, only for a check left on a shipped
+    /// release, and confirmed by the person: the kept result is retired and the test's state stays.
+    #[test]
+    fn a_retirement_is_prepared_with_its_reason_and_confirmed_by_the_person() {
+        use crate::models::{Requirement, TestRef, TestState};
+        let (store, dir, shipped) = board_with_item(false);
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        store.set_cadence("demo", None, c).unwrap();
+        crate::releases::add(&store, "demo", "v0.6.0", "", "").unwrap();
+        crate::releases::add(&store, "demo", "v0.8.0", "", "").unwrap();
+        let manual = |name: &str| {
+            Some(crate::models::FeatureDefinition {
+                statement: "Keep a cart".into(),
+                requirements: vec![Requirement {
+                    id: "R-1".into(),
+                    text: "x".into(),
+                    tests: vec![TestRef {
+                        name: name.into(),
+                        kind: "manual".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        };
+        store
+            .set_feature_definition("demo", &shipped, manual("manual: the cart looks right"))
+            .unwrap();
+        let open = store
+            .add_feature("demo", "Till", "", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition("demo", &open, manual("manual: the till looks right"))
+            .unwrap();
+        let second = store
+            .add_feature("demo", "Till2", "", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition("demo", &second, manual("manual: the till feels right"))
+            .unwrap();
+        crate::releases::plan(&store, "demo", "v0.6.0", &[shipped.clone(), second.clone()])
+            .unwrap();
+        crate::releases::plan(&store, "demo", "v0.8.0", std::slice::from_ref(&open)).unwrap();
+        let file = store.project_dir("demo").join("releases.yaml");
+        let mut all = crate::releases::load(&store, "demo").unwrap();
+        for r in &mut all {
+            if r.version == "v0.6.0" {
+                r.state = crate::releases::ReleaseState::Shipped;
+            }
+        }
+        std::fs::write(&file, crate::yaml::to_string(&all).unwrap()).unwrap();
+
+        let body = |item: &str, test: &str, note: Option<&str>| {
+            let mut fields = serde_json::json!({"state": "retired"});
+            if let Some(n) = note {
+                fields["note"] = Value::String(n.into());
+            }
+            serde_json::json!({"kind": "manual-test",
+                "subject": {"item": item, "requirement": "R-1", "test": test},
+                "fields": fields,
+                "sources": [{"label": "conversation 17 Nov", "url": ""}],
+                "origin": "conversation"})
+        };
+        let test = "manual: the cart looks right";
+        // No reason, or an item that has not shipped, is refused.
+        let no_note = prepare(&store, "demo", &body(&shipped, test, None), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            no_note.contains("a retirement keeps its reason: pass --note"),
+            "{no_note}"
+        );
+        let blank = prepare(&store, "demo", &body(&shipped, test, Some("  ")), None);
+        assert!(blank.is_err());
+        let unshipped = prepare(
+            &store,
+            "demo",
+            &body(&open, "manual: the till looks right", Some("why")),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unshipped.contains("which has not shipped"), "{unshipped}");
+        // Passed and failed still say what they say.
+        let mut bad = body(&shipped, test, Some("why"));
+        bad["fields"]["state"] = Value::String("planned".into());
+        assert!(prepare(&store, "demo", &bad, None).is_err());
+
+        let id = prepare_as_claude(
+            &store,
+            body(&shipped, test, Some("shipped in v0.6.0; not judged")),
+        );
+        let view = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(view[0].state, State::Open);
+        // No terminal command: the person retires on the Review page.
+        assert_eq!(view[0].command, "");
+        let e = expand(
+            &store,
+            "demo",
+            &id,
+            &serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(e.method, "POST");
+        assert_eq!(
+            e.path,
+            format!(
+                "/projects/demo/features/{shipped}/tests/R-1/manual%3A%20the%20cart%20looks%20right/retire"
+            )
+        );
+        assert_eq!(e.body["note"], "shipped in v0.6.0; not judged");
+        assert_eq!(e.body["prepared"], id.as_str());
+        assert_eq!(e.body["by"], "Ada L");
+        assert_eq!(e.resolution.made, format!("POST {}", e.path));
+        // Claude cannot confirm it; the person can.
+        let by_claude = apply(
+            &store,
+            &dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id}/confirm"),
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Conversation,
+        );
+        assert!(by_claude.is_err());
+        confirm(&store, &dir, &id, serde_json::json!({"by": "Ada L"})).unwrap();
+        let kept = crate::manual::results(&store, "demo", Some(&shipped)).unwrap();
+        assert_eq!(kept.len(), 1);
+        let k = &kept[0];
+        assert_eq!(
+            (
+                k.state.as_str(),
+                k.by.as_str(),
+                k.origin.as_str(),
+                k.note.as_str(),
+                k.prepared.as_str()
+            ),
+            (
+                "retired",
+                "Ada L",
+                "monitor",
+                "shipped in v0.6.0; not judged",
+                id.as_str()
+            )
+        );
+        let state = store
+            .load("demo")
+            .unwrap()
+            .feature(&shipped)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .requirements[0]
+            .tests[0]
+            .state;
+        assert_eq!(state, TestState::Planned);
+        assert_eq!(resolution_of(&store, &id).verdict, Answer::Confirmed);
+        // A second record for the same check is stale.
+        let again = prepare(&store, "demo", &body(&shipped, test, Some("again")), None)
+            .unwrap_err()
+            .to_string();
+        assert!(again.contains("was retired by Ada L"), "{again}");
+        // A record waiting on another check goes stale when that check is retired first.
+        let later = prepare_as_claude(
+            &store,
+            body(&second, "manual: the till feels right", Some("not judged")),
+        );
+        crate::manual::retire(
+            &store,
+            "demo",
+            &crate::manual::ManualResult {
+                code: second.clone(),
+                requirement: "R-1".into(),
+                test: "manual: the till feels right".into(),
+                state: crate::manual::RETIRED.into(),
+                by: "Ada L".into(),
+                at: crate::now_rfc3339(),
+                note: "retired on the terminal".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let v = list(
+            &store,
+            "demo",
+            &ListQuery {
+                all: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let stale = v.iter().find(|x| x.record.id == later).unwrap();
+        assert_eq!(stale.state, State::Stale);
+        assert!(
+            stale.stale_why.contains("was retired by Ada L"),
+            "{}",
+            stale.stale_why
         );
     }
 

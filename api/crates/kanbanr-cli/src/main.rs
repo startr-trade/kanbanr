@@ -2037,11 +2037,19 @@ enum PrepareCmd {
         /// The manual test's name, as the definition has it.
         test: String,
         /// The check passed.
-        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        #[arg(
+            long,
+            conflicts_with_all = ["failed", "retired"],
+            required_unless_present_any = ["failed", "retired"]
+        )]
         passed: bool,
         /// The check failed.
         #[arg(long)]
         failed: bool,
+        /// The person retires this check of a shipped release without judging it; --note is their
+        /// reason. It stays not proven, and the person confirms it on the Review page.
+        #[arg(long, conflicts_with_all = ["passed", "failed", "rev"], requires = "note")]
+        retired: bool,
         /// A note kept with the result.
         #[arg(long)]
         note: Option<String>,
@@ -15534,12 +15542,20 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             test,
             passed: _,
             failed,
+            retired,
             note,
             rev,
             sources: s,
             batch: _,
         } => {
-            let mut fields = json!({"state": if *failed { "red" } else { "green" }});
+            let state = if *retired {
+                "retired"
+            } else if *failed {
+                "red"
+            } else {
+                "green"
+            };
+            let mut fields = json!({"state": state});
             if let Some(note) = note {
                 fields["note"] = json!(note);
             }
@@ -15553,7 +15569,11 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                     "fields": fields,
                     "sources": sources(s)?,
                 }),
-                format!("the result of {code} {requirement}"),
+                if *retired {
+                    format!("the retirement of {code} {requirement}")
+                } else {
+                    format!("the result of {code} {requirement}")
+                },
             )
         }
         PrepareCmd::SystemBaseline {

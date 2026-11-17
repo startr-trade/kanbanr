@@ -15,6 +15,10 @@ use std::path::PathBuf;
 /// The longest note a result keeps.
 pub const NOTE_MAX: usize = 4000;
 
+/// A kept result with this state says the person closed a check of a shipped release without
+/// judging it (DEF-113). It never touches the test's state, so the test stays not proven.
+pub const RETIRED: &str = "retired";
+
 /// One kept result.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -22,7 +26,7 @@ pub struct ManualResult {
     pub code: String,
     pub requirement: String,
     pub test: String,
-    /// `green` or `red`.
+    /// `green`, `red` or `retired`.
     pub state: String,
     pub by: String,
     /// RFC 3339, UTC.
@@ -255,11 +259,16 @@ fn state_name(s: TestState) -> &'static str {
 }
 
 fn check(r: &ManualResult) -> Result<()> {
-    if r.state != "green" && r.state != "red" {
+    if r.state != "green" && r.state != "red" && r.state != RETIRED {
         return Err(unsupported(format!(
-            "a manual result is green or red, not '{}'",
+            "a manual result is green, red or retired, not '{}'",
             r.state
         )));
+    }
+    if r.state == RETIRED && r.note.trim().is_empty() {
+        return Err(unsupported(
+            "a retirement keeps its reason: give one".into(),
+        ));
     }
     if r.by.trim().is_empty() {
         return Err(unsupported(
@@ -300,6 +309,92 @@ pub fn record(store: &Store, id: &str, r: &ManualResult) -> Result<PathBuf> {
     }
     crate::atomic::write(&path, crate::yaml::to_string(r)?)?;
     Ok(path)
+}
+
+/// The versions of the releases that have shipped, in file order (DEF-113). Empty when the
+/// project does not work in releases.
+pub fn shipped(store: &Store, id: &str) -> Result<Vec<String>> {
+    let project = store.load_meta(id)?;
+    if !project.config.cadence.releases {
+        return Ok(Vec::new());
+    }
+    Ok(crate::releases::load(store, id)?
+        .into_iter()
+        .filter(|r| r.state == crate::releases::ReleaseState::Shipped)
+        .map(|r| r.version)
+        .collect())
+}
+
+/// Whether this check may be retired (DEF-113): a manual test, not green, of an item in a shipped
+/// release, not already retired. `Unsupported` says why not.
+pub fn retirable(
+    project: &Project,
+    releases: &[crate::releases::Release],
+    kept: &[ManualResult],
+    code: &str,
+    requirement: &str,
+    test: &str,
+) -> Result<()> {
+    if !is_manual_test_in(project, code, requirement, test) {
+        return Err(unsupported(format!(
+            "{code} {requirement} has no manual test '{test}'"
+        )));
+    }
+    let f = project.feature(code)?;
+    let green = f
+        .definition
+        .as_ref()
+        .and_then(|d| d.requirements.iter().find(|r| r.id == requirement))
+        .and_then(|r| r.tests.iter().find(|t| t.name == test))
+        .is_some_and(|t| t.state == TestState::Green);
+    if green {
+        return Err(unsupported(format!(
+            "{code} {requirement} '{test}' is recorded passed: there is nothing to retire"
+        )));
+    }
+    let Some(version) = f.release.as_deref() else {
+        return Err(unsupported(format!(
+            "{code} is in no release: only a check left on a shipped release is retired. Judge it, or plan the item"
+        )));
+    };
+    let shipped = releases
+        .iter()
+        .any(|r| r.version == version && r.state == crate::releases::ReleaseState::Shipped);
+    if !shipped {
+        return Err(unsupported(format!(
+            "{code} is in {version}, which has not shipped: judge the check. Only a check left on a shipped release is retired"
+        )));
+    }
+    if let Some(k) = kept
+        .iter()
+        .rev()
+        .find(|k| f.answers_to(&k.code) && k.requirement == requirement && k.test == test)
+        && k.state == RETIRED
+    {
+        let day = k.at.get(..10).unwrap_or(&k.at);
+        return Err(unsupported(format!(
+            "{code} {requirement} '{test}' was retired by {} on {day}",
+            k.by
+        )));
+    }
+    Ok(())
+}
+
+/// Keep a retirement (DEF-113): the person's own closing of a check left on a shipped release.
+/// It never sets the test's state.
+pub fn retire(store: &Store, id: &str, r: &ManualResult) -> Result<PathBuf> {
+    if r.state != RETIRED {
+        return Err(unsupported(format!(
+            "a retirement has the state '{RETIRED}', not '{}'",
+            r.state
+        )));
+    }
+    check(r)?;
+    let project = store.load_meta(id)?;
+    let releases = crate::releases::load(store, id)?;
+    let kept = results(store, id, None)?;
+    retirable(&project, &releases, &kept, &r.code, &r.requirement, &r.test)?;
+    record(store, id, r)
 }
 
 /// Every kept result, oldest first, optionally of one item. A file that cannot be read is skipped.
@@ -391,6 +486,15 @@ pub fn waiting_in(
                 if !t.kind.eq_ignore_ascii_case("manual") || t.state == TestState::Green {
                     continue;
                 }
+                let last = kept
+                    .iter()
+                    .rev()
+                    .find(|k| f.answers_to(&k.code) && k.requirement == r.id && k.test == t.name)
+                    .cloned();
+                // DEF-113: a retired check is closed; a newer green or red result reopens it.
+                if last.as_ref().is_some_and(|k| k.state == RETIRED) {
+                    continue;
+                }
                 out.push(ManualWaiting {
                     code: f.code.clone(),
                     title: f.title.clone(),
@@ -400,13 +504,7 @@ pub fn waiting_in(
                     test: t.name.clone(),
                     state: state_name(t.state).into(),
                     checked_rev: t.checked_rev.clone(),
-                    last: kept
-                        .iter()
-                        .rev()
-                        .find(|k| {
-                            f.answers_to(&k.code) && k.requirement == r.id && k.test == t.name
-                        })
-                        .cloned(),
+                    last,
                     opens_at: opens.clone(),
                     release: f.release.clone().unwrap_or_default(),
                     holds: held
@@ -814,6 +912,301 @@ mod tests {
             "manual: looks right"
         ));
         assert!(!is_manual_test_in(&project, &code, "R-1", "cart::unit"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board with releases on, v0.6.0 shipped and v0.8.0 planned (DEF-113). Items, each with one
+    /// manual check (FTR-039: at most one per item): `shipped` and `sibling` (v0.6.0), `planned`
+    /// (v0.8.0), `loose` (no release).
+    fn retire_board() -> (Store, PathBuf, [String; 4]) {
+        let (store, dir) = fixture();
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        c.release_stages = vec!["candidate".into(), "main".into(), "production".into()];
+        store.set_cadence("demo", None, c).unwrap();
+        for v in ["v0.6.0", "v0.8.0"] {
+            crate::releases::add(&store, "demo", v, "", "").unwrap();
+        }
+        let mut codes = Vec::new();
+        for (title, v) in [
+            ("Shipped", Some("v0.6.0")),
+            ("Planned", Some("v0.8.0")),
+            ("Loose", None),
+            ("Sibling", Some("v0.6.0")),
+        ] {
+            let f = store.add_feature("demo", title, "", "MS-1", None).unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: "THE SYSTEM SHALL do it.".into(),
+                            tests: vec![
+                                test("unit::it", "unit"),
+                                test("manual: reads well", "manual"),
+                            ],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            if let Some(v) = v {
+                crate::releases::plan(&store, "demo", v, std::slice::from_ref(&f.code)).unwrap();
+            }
+            codes.push(f.code);
+        }
+        let file = store.project_dir("demo").join("releases.yaml");
+        let mut all = crate::releases::load(&store, "demo").unwrap();
+        for r in &mut all {
+            if r.version == "v0.6.0" {
+                r.state = crate::releases::ReleaseState::Shipped;
+            }
+        }
+        std::fs::write(&file, crate::yaml::to_string(&all).unwrap()).unwrap();
+        let codes: [String; 4] = codes.try_into().unwrap();
+        (store, dir, codes)
+    }
+
+    fn retirement(code: &str, name: &str, note: &str) -> ManualResult {
+        ManualResult {
+            code: code.into(),
+            requirement: "R-1".into(),
+            test: name.into(),
+            state: RETIRED.into(),
+            by: "Ada L".into(),
+            at: "2026-11-17T10:00:00Z".into(),
+            origin: "monitor".into(),
+            note: note.into(),
+            ..Default::default()
+        }
+    }
+
+    fn state_of(store: &Store, code: &str, name: &str) -> (TestState, String) {
+        let p = store.load_meta("demo").unwrap();
+        let t = p
+            .feature(code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap()
+            .requirements[0]
+            .tests
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap()
+            .clone();
+        (t.state, t.checked_rev)
+    }
+
+    /// DEF-113 R-3: a retirement is kept with its reason and leaves the test's state alone.
+    #[test]
+    fn a_retired_check_keeps_its_reason_and_leaves_its_state() {
+        let (store, dir, [shipped, ..]) = retire_board();
+        let before = state_of(&store, &shipped, "manual: reads well");
+        let path = retire(
+            &store,
+            "demo",
+            &retirement(
+                &shipped,
+                "manual: reads well",
+                "shipped in v0.6.0; not judged",
+            ),
+        )
+        .unwrap();
+        assert!(path.exists());
+        let kept = results(&store, "demo", Some(&shipped)).unwrap();
+        assert_eq!(kept.len(), 1);
+        let k = &kept[0];
+        assert_eq!(
+            (
+                k.state.as_str(),
+                k.note.as_str(),
+                k.by.as_str(),
+                k.at.as_str(),
+                k.origin.as_str()
+            ),
+            (
+                "retired",
+                "shipped in v0.6.0; not judged",
+                "Ada L",
+                "2026-11-17T10:00:00Z",
+                "monitor"
+            )
+        );
+        assert_eq!(state_of(&store, &shipped, "manual: reads well"), before);
+        assert_eq!(before.0, TestState::Planned);
+        assert_eq!(shipped_versions(&store), ["v0.6.0"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn shipped_versions(store: &Store) -> Vec<String> {
+        shipped(store, "demo").unwrap()
+    }
+
+    /// DEF-113 R-3: the retired check leaves the waiting list, its sibling stays, and a newer red
+    /// result brings it back.
+    #[test]
+    fn a_retired_check_is_not_waiting() {
+        let (store, dir, [shipped, _, _, sibling]) = retire_board();
+        let names = |store: &Store| -> Vec<String> {
+            waiting(store, "demo")
+                .unwrap()
+                .into_iter()
+                .filter(|w| w.code == shipped || w.code == sibling)
+                .map(|w| w.code)
+                .collect()
+        };
+        assert_eq!(names(&store), [shipped.clone(), sibling.clone()]);
+        retire(
+            &store,
+            "demo",
+            &retirement(&shipped, "manual: reads well", "not judged"),
+        )
+        .unwrap();
+        assert_eq!(names(&store), std::slice::from_ref(&sibling));
+        let mut red = retirement(&shipped, "manual: reads well", "");
+        red.state = "red".into();
+        red.at = "2026-11-17T11:00:00Z".into();
+        record(&store, "demo", &red).unwrap();
+        store
+            .set_test_state(
+                "demo",
+                &shipped,
+                "R-1",
+                "manual: reads well",
+                TestState::Red,
+                None,
+            )
+            .unwrap();
+        assert_eq!(names(&store), [shipped.clone(), sibling.clone()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-113 R-4: refused, nothing kept, each in its own words.
+    #[test]
+    fn a_check_is_retired_only_on_a_shipped_release_with_a_reason() {
+        let (store, dir, [shipped, planned, loose, sibling]) = retire_board();
+        let refuse = |code: &str, name: &str, note: &str, want: &str| {
+            let e = retire(&store, "demo", &retirement(code, name, note))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{e} should contain {want}");
+        };
+        refuse(
+            &planned,
+            "manual: reads well",
+            "why",
+            "which has not shipped: judge the check. Only a check left on a shipped release is retired",
+        );
+        refuse(&loose, "manual: reads well", "why", "is in no release");
+        refuse(&shipped, "unit::it", "why", "has no manual test 'unit::it'");
+        refuse(
+            &shipped,
+            "manual: reads well",
+            "  ",
+            "a retirement keeps its reason: give one",
+        );
+        refuse(&shipped, "manual: reads well", "", "keeps its reason");
+        store
+            .set_test_state(
+                "demo",
+                &sibling,
+                "R-1",
+                "manual: reads well",
+                TestState::Green,
+                None,
+            )
+            .unwrap();
+        refuse(
+            &sibling,
+            "manual: reads well",
+            "why",
+            "is recorded passed: there is nothing to retire",
+        );
+        assert!(results(&store, "demo", None).unwrap().is_empty());
+        // `record` refuses a retired result with no note too.
+        assert!(
+            record(
+                &store,
+                "demo",
+                &retirement(&shipped, "manual: reads well", " ")
+            )
+            .is_err()
+        );
+        // A second retirement.
+        retire(
+            &store,
+            "demo",
+            &retirement(&shipped, "manual: reads well", "why"),
+        )
+        .unwrap();
+        refuse(
+            &shipped,
+            "manual: reads well",
+            "again",
+            "'manual: reads well' was retired by Ada L on 2026-11-17",
+        );
+        assert_eq!(results(&store, "demo", None).unwrap().len(), 1);
+        // Only `retire` takes the state.
+        assert!(
+            retire(
+                &store,
+                "demo",
+                &ManualResult {
+                    state: "green".into(),
+                    ..retirement(&shipped, "manual: reads well", "x")
+                }
+            )
+            .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-113 R-5: a retired check is never proven.
+    #[test]
+    fn a_retired_check_is_never_proven() {
+        use crate::evidence::{Locator, RevFacts, TestKind};
+        struct None_;
+        impl Locator for None_ {
+            fn find(&self, _: &TestKind, _: Option<&str>) -> Vec<crate::evidence::Location> {
+                Vec::new()
+            }
+            fn revision(&self, _: &str) -> RevFacts {
+                RevFacts {
+                    known: false,
+                    on_head_line: false,
+                    behind: None,
+                }
+            }
+            fn head(&self) -> String {
+                "head".into()
+            }
+        }
+        let (store, dir, [shipped, ..]) = retire_board();
+        retire(
+            &store,
+            "demo",
+            &retirement(&shipped, "manual: reads well", "not judged"),
+        )
+        .unwrap();
+        let project = store.load_meta("demo").unwrap();
+        let f = project.feature(&shipped).unwrap();
+        assert_ne!(
+            state_of(&store, &shipped, "manual: reads well").0,
+            TestState::Green
+        );
+        assert!(
+            crate::readiness::open_manual_tests(f).contains(&"R-1: manual: reads well".to_string())
+        );
+        let releases = crate::releases::load(&store, "demo").unwrap();
+        let r = crate::evidence::plan_reconciliation(&project, &releases, None, &None_);
+        // Four items, one manual check each, all still open.
+        assert_eq!((r.manual.total, r.manual.open), (4, 4));
+        assert_eq!(r.manual.per_item.get(shipped.as_str()), Some(&1));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

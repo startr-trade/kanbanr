@@ -4199,6 +4199,13 @@
               "$ref": "#/components/schemas/ReviewRow"
             },
             "type": "array"
+          },
+          "shipped": {
+            "description": "The releases that have shipped ([`crate::manual::shipped`]): for `manual` only. The page\nsets the checks left on them apart, to retire (FTR-057's sections, DEF-113).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -5347,7 +5354,7 @@
             "type": "string"
           },
           "state": {
-            "description": "`green` or `red`.",
+            "description": "`green`, `red` or `retired`.",
             "type": "string"
           },
           "test": {

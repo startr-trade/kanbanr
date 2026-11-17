@@ -1386,7 +1386,9 @@ make; the person does the check and clicks Passed or Failed there. Tell them it 
 give them a `kanbanr test` command to run**, and never record a manual result yourself: kanbanr
 refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
-said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
+said>"` and tell them to confirm it on the Review page. To retire a check left on a shipped release
+that they will not judge, prepare `--retired --note "<their reason>"` instead; a retirement is theirs,
+never passed, and only they confirm it. A failed check is recorded red; ask the
 user whether to file a defect, and file one only when they say so. A manual check opens at the
 item's build stage; never prepare one before.
 
@@ -1791,7 +1793,7 @@ kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the d
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
-kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click
+kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click; --retired --note "<their reason>" prepares retiring a check of a shipped release
 kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions] [--rev COMMIT] [--no-batch]   # a guide's run, headless; its checks prepared as one batch, at the build's commit (a dirty build needs --rev)
 kanbanr walkthrough prepare --batch NAME RUN…   # one batch from several --no-batch runs of one build (both guides for a release)
 kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made

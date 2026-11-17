@@ -972,6 +972,24 @@ a release is being shipped. When an item has two or more prepared results, its h
 **Confirm 2 prepared for FTR-041**: the first press selects exactly those checks and asks, naming
 them; the second records them together, as one decision.
 
+The group starts with one line on what it is: a manual check is one only you can judge, and an item
+ships when its check is recorded passed (DEF-113). After the holding release, the rest are in
+collapsed sections by where each item stands: **Shipped without a judgement** (its release has
+shipped), **Later releases** and **Not planned** (in no release); an empty one is not drawn, and
+**Later releases** opens when no release is being shipped. A project with no release lists its
+items without sections.
+
+A check left on a release that has already shipped may never be judged. In **Shipped without a
+judgement**, tick the checks (or **Select all**) and press **Retire N**: the page asks, with one
+reason for all of them, and the second press retires them. A retirement is your verdict, like
+Passed and Failed: it is kept with its reason and who retired it, and the check leaves the group.
+It is not a pass: the test stays not proven, so readiness and the evidence report still count it
+as unproven. Only a check of a shipped release can be retired, never one of the release being cut
+or of an item in no release, and never a passed one. Claude is refused retiring; if you tell it to
+retire a check, it prepares the retirement (`kanbanr prepare test <CODE> <R-n> "<test>" --retired
+--note "<your reason>"`) and you confirm it in the row (**Record retired**) or with the group's
+**Confirm**.
+
 ### Prepared by Claude
 
 When Claude already has the evidence for a decision, it prepares the record instead of asking you
