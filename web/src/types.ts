@@ -1784,3 +1784,59 @@ export interface ProfileStatus {
     messages: string[];
   }[];
 }
+
+/** The person's planning decision, as a page recorded it (FTR-049): it changes no plan by itself. */
+export interface PlanningDecision {
+  /** `PD-<n>`. */
+  id: string;
+  action: "into-sprint" | "into-release" | "out-of-sprint";
+  /** The sprint code or the release version; empty for `out-of-sprint`. */
+  target: string;
+  items: string[];
+  by: string;
+  /** Where it was taken (`monitor`, `terminal`), stamped by the daemon. */
+  origin?: string;
+  at: string;
+  note?: string;
+}
+
+/** A move a declined decision could have been instead (FTR-049). */
+export interface PlanningNearest {
+  action: string;
+  target: string;
+}
+
+/** What became of a planning decision: carried out by Claude, or declined with a reason (FTR-049). */
+export interface PlanningOutcome {
+  decision: string;
+  outcome: "carried" | "declined";
+  by: string;
+  origin?: string;
+  at: string;
+  reason?: string;
+  nearest?: PlanningNearest;
+}
+
+/** One planning decision with its derived state: `GET /projects/{p}/planning` (FTR-049). */
+export interface PlanningView {
+  decision: PlanningDecision;
+  state: "pending" | "carried" | "declined";
+  outcome: PlanningOutcome | null;
+}
+
+/** What `GET /projects/{p}/planning/{id}/check` answers (FTR-049). */
+export interface PlanningAssessment {
+  decision: string;
+  /** Each a reason to decline. */
+  problems: string[];
+  /** Each for Claude to judge. */
+  warnings: string[];
+  nearest: PlanningNearest | null;
+}
+
+/** What `POST /projects/{p}/planning` takes (FTR-049). */
+export interface PlanningRequest {
+  action: PlanningDecision["action"];
+  target: string;
+  items: string[];
+}

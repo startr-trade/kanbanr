@@ -4,6 +4,7 @@ import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types"
 import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
+import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -405,6 +406,23 @@ export const api = {
       "take a group decision",
       "kanbanr review",
     ) as Promise<GroupDecisionAnswer>,
+  /**
+   * The person's planning decision (FTR-049): recorded as theirs, in one commit, and changing no
+   * plan; Claude checks it and carries it out with `--decision`, or declines it with a reason. On
+   * a read-only monitor the person can plan in a terminal instead (R-9).
+   */
+  recordPlanning: (id: string, body: PlanningRequest & { by: string; note?: string }) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/planning`,
+      body,
+      "record a planning decision",
+      planCommand(body),
+    ) as Promise<PlanningDecision>,
+  /** The planning decisions, oldest first, in one state when given (FTR-049). */
+  getPlanning: (id: string, state?: "pending" | "carried" | "declined") =>
+    getJson<PlanningView[]>(urls.planning(id, state)),
+  /** One decision's problems, warnings and nearest valid move (FTR-049). */
+  checkPlanning: (id: string, decision: string) => getJson<PlanningAssessment>(urls.planningCheck(id, decision)),
   // The engineering baseline (FTR-033): read by the Baseline page only, never by the whole-board fetch.
   /** The baseline: the packs followed, the areas and their answers, every revision, the charter's constraints. */
   getBaseline: (id: string) => getJson<BaselineView>(apiUrl(`/projects/${encodeURIComponent(id)}/baseline`)),
@@ -571,6 +589,15 @@ async function postWrite(url: string, body: unknown, command: string, method = "
     headers: { "content-type": "application/json", "x-kanbanr-token": token() },
     body: JSON.stringify(body),
   });
+}
+
+/** The CLI command that makes the same plan change as a planning request (FTR-049). */
+function planCommand(r: PlanningRequest): string {
+  // Built before the post is sent, so a malformed body still reaches the daemon's own refusal.
+  const items = Array.isArray(r?.items) ? r.items.join(" ") : "";
+  if (r?.action === "into-sprint") return `kanbanr sprint plan ${r.target} ${items}`;
+  if (r?.action === "into-release") return `kanbanr release plan ${r.target} ${items}`;
+  return `kanbanr sprint unplan ${items}`;
 }
 
 /**

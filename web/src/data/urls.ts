@@ -80,6 +80,11 @@ export const urls = {
         ["evidence", f.evidence],
       ])}`,
     ),
+  /** The person's planning decisions, oldest first, in one state when given (FTR-049). */
+  planning: (p: string, state?: "pending" | "carried" | "declined") =>
+    apiUrl(`${project(p)}/planning${query([["state", state]])}`),
+  /** One planning decision checked against frozen scope, dependencies, capacity and dates (FTR-049). */
+  planningCheck: (p: string, id: string) => apiUrl(`${project(p)}/planning/${enc(id)}/check`),
 };
 
 /** What `/attention` reads (FTR-048): items, releases, prepared records, manual tests, decisions, gates, docs, ADRs and config. */
@@ -127,4 +132,8 @@ export const TAGS = {
   overview: [...ATTENTION, "sprints", "milestones", "charter", "lessons", "activity"],
   /** The Items list (FTR-048). */
   items: ["items"],
+  /** The planning decisions (FTR-049): `planning/*` in the watcher's table. */
+  planning: ["planning"],
+  /** A decision's check reads the items, sprints and releases it names. */
+  planningCheck: ["planning", "items", "sprints", "releases"],
 } as const;
