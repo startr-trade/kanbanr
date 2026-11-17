@@ -773,3 +773,18 @@ summary:focus-visible,
   .needs-you { position: static; }
   .needs-you-drawer { left: 0; right: 0; width: auto; max-width: none; border-radius: 0; }
 }
+
+/* The Plan page (FTR-043): tokens only. */
+.plan-tab { display: flex; flex-direction: column; gap: var(--sp-4); }
+.plan-rows { display: flex; flex-direction: column; gap: var(--sp-2); }
+.plan-row-kind { color: var(--text-muted); font-size: var(--fs-1); font-weight: 600; }
+.plan-row-dates { color: var(--text-muted); font-size: var(--fs-1); font-weight: 400; }
+.plan-past-line { font-weight: 400; }
+.plan-row-items { display: flex; flex-direction: column; gap: var(--sp-3); }
+.plan-row-items h3 { margin: 0 0 var(--sp-1); font-size: var(--fs-2); color: var(--text-muted); }
+.plan-by-status { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--sp-3); }
+.plan-status { padding: var(--sp-2) var(--sp-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-2); }
+.plan-status ol, .plan-undated ul, .plan-carried ul { margin: 0; padding-left: var(--sp-4); }
+.plan-items { width: 100%; border-collapse: collapse; font-size: var(--fs-2); }
+.plan-items th { text-align: left; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); }
+.plan-items td { border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); vertical-align: top; }
