@@ -113,6 +113,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- `kanbanr signoff` and `kanbanr approve` name the record they wrote: a person's sign-off on an item whose latest earlier sign-off was delegated prints the person, not "under DLG-001" (DEF-107).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
