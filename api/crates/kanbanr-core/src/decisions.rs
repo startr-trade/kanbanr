@@ -1424,7 +1424,7 @@ pub fn view(
 }
 
 /// A delegated decision waiting for the person to keep or undo it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DelegatedDecision {
     /// `<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`.

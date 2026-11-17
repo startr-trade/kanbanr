@@ -26,6 +26,164 @@ pub struct Attention {
     /// In section order: decisions, releases, health, records.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<AttentionLine>,
+    /// What Claude holds and decided under a delegation, while one is in force or has just ended
+    /// (DEF-104). Absent in `monitor` mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated: Option<DelegatedAttention>,
+}
+
+/// A delegation ends "soon" within this many hours.
+pub const ENDING_SOON_HOURS: i64 = 72;
+/// The most delegated decisions an answer lists; `decided_total` says how many there are.
+pub const DECIDED_MAX: usize = 50;
+
+/// Needs you in delegated (autonomous) mode: what Claude decided and holds (DEF-104).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DelegatedAttention {
+    /// The delegations in force, in file order.
+    pub in_force: Vec<String>,
+    /// The verdicts Claude recorded that the person has not yet kept or undone, newest first, at
+    /// most [`DECIDED_MAX`].
+    pub decided: Vec<crate::decisions::DelegatedDecision>,
+    pub decided_total: usize,
+    /// The decisions each delegation in force still holds.
+    pub holds: Vec<DelegationHold>,
+    /// Delegations ending within [`ENDING_SOON_HOURS`], or ended or revoked within them.
+    pub ending: Vec<DelegationEnding>,
+}
+
+/// What one delegation in force still holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DelegationHold {
+    pub delegation: String,
+    pub until: String,
+    pub total: usize,
+    /// In the delegation's own `verdicts` order, zero counts left out.
+    pub verdicts: Vec<HeldCount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HeldCount {
+    /// `approve`, `ratify` or `signoff:<name>`.
+    pub verdict: String,
+    pub count: usize,
+}
+
+/// A delegation that ends soon, or just ended, and how many decisions return to the person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DelegationEnding {
+    pub delegation: String,
+    /// `granted` (ends soon), `ended` or `revoked`.
+    pub state: crate::decisions::DelegationState,
+    /// When it ends, ended or was revoked (RFC 3339).
+    pub at: String,
+    pub returns: usize,
+}
+
+/// The delegated part of the answer; `None` unless the mode is `delegated` and a delegation is in
+/// force or has an ending line (DEF-104).
+pub(crate) fn delegated_attention(
+    d: &crate::decisions::Decisions,
+    project: &crate::Project,
+    holds: &crate::reviewgroups::Holds,
+    now: &str,
+) -> Option<DelegatedAttention> {
+    use crate::decisions::DelegationState as St;
+    use time::format_description::well_known::Rfc3339;
+    if d.mode() != crate::decisions::Mode::Delegated {
+        return None;
+    }
+    let instant = |s: &str| time::OffsetDateTime::parse(s.trim(), &Rfc3339).ok();
+    let now_t = instant(now)?;
+    let window = time::Duration::hours(ENDING_SOON_HOURS);
+    let mut in_force = Vec::new();
+    let mut hold_lines = Vec::new();
+    let mut ending: Vec<DelegationEnding> = Vec::new();
+    for g in &d.delegations {
+        let held_by_it: Vec<&crate::reviewgroups::HeldDecision> =
+            holds.held.iter().filter(|h| h.delegation == g.id).collect();
+        let returned = holds
+            .returned
+            .iter()
+            .find(|(id, _)| *id == g.id)
+            .map_or(0, |(_, n)| *n);
+        match g.state(now) {
+            St::Granted => {
+                in_force.push(g.id.clone());
+                let verdicts: Vec<HeldCount> = g
+                    .verdicts
+                    .iter()
+                    .map(|v| v.trim())
+                    .map(|v| HeldCount {
+                        verdict: v.to_string(),
+                        count: held_by_it.iter().filter(|h| h.verdict == v).count(),
+                    })
+                    .filter(|c| c.count > 0)
+                    .collect();
+                let total: usize = verdicts.iter().map(|c| c.count).sum();
+                if total > 0 {
+                    hold_lines.push(DelegationHold {
+                        delegation: g.id.clone(),
+                        until: g.until.clone(),
+                        total,
+                        verdicts,
+                    });
+                }
+                if instant(&g.until).is_some_and(|u| u - now_t <= window) {
+                    ending.push(DelegationEnding {
+                        delegation: g.id.clone(),
+                        state: St::Granted,
+                        at: g.until.clone(),
+                        returns: held_by_it.len(),
+                    });
+                }
+            }
+            St::Ended => {
+                if instant(&g.until).is_some_and(|u| now_t - u <= window) {
+                    ending.push(DelegationEnding {
+                        delegation: g.id.clone(),
+                        state: St::Ended,
+                        at: g.until.clone(),
+                        returns: returned,
+                    });
+                }
+            }
+            St::Revoked => {
+                if let Some(r) = g
+                    .revoked
+                    .as_ref()
+                    .filter(|r| instant(&r.at).is_some_and(|t| t <= now_t && now_t - t <= window))
+                {
+                    ending.push(DelegationEnding {
+                        delegation: g.id.clone(),
+                        state: St::Revoked,
+                        at: r.at.clone(),
+                        returns: returned,
+                    });
+                }
+            }
+            St::Proposed => {}
+        }
+    }
+    if in_force.is_empty() && ending.is_empty() {
+        return None;
+    }
+    ending.sort_by(|a, b| crate::cmp_instants(&a.at, &b.at));
+    let mut decided = crate::decisions::to_review(project, d);
+    decided.reverse();
+    let decided_total = decided.len();
+    decided.truncate(DECIDED_MAX);
+    Some(DelegatedAttention {
+        in_force,
+        decided,
+        decided_total,
+        holds: hold_lines,
+        ending,
+    })
 }
 
 /// One kind of thing waiting, counted, with where to see it or what to ask Claude.
@@ -78,23 +236,32 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
     let mut health = Vec::new();
     let mut records = Vec::new();
 
-    match crate::reviewgroups::summary(store, p, repo) {
-        Ok(groups) => {
-            decisions.extend(
-                groups
-                    .into_iter()
-                    .filter(|g| g.count > 0)
-                    .map(|g| AttentionLine {
-                        to: Some(format!("/p/{p}/review?group={}", g.key)),
-                        kind: g.key,
-                        section: Section::Decisions,
-                        label: g.label,
-                        count: g.count,
-                        ask: None,
-                        tone: INFO.into(),
-                        yours: true,
-                    }),
-            )
+    let now = crate::now_rfc3339();
+    // An unreadable decisions.yaml reads as nothing delegated: every decision is the person's.
+    let delegations = crate::decisions::load(store, p).unwrap_or_default();
+    let mut holds = crate::reviewgroups::Holds::default();
+    match crate::reviewgroups::summary_with_holds(store, p, repo, &now) {
+        Ok((groups, held)) => {
+            holds = held;
+            let in_force = delegations.mode() == crate::decisions::Mode::Delegated
+                && delegations
+                    .delegations
+                    .iter()
+                    .any(|g| g.state(&now) == crate::decisions::DelegationState::Granted);
+            decisions.extend(groups.into_iter().filter(|g| g.count > 0).map(|g| {
+                AttentionLine {
+                    to: Some(format!("/p/{p}/review?group={}", g.key)),
+                    // Claude's verdicts are shown to check, not counted, while a delegation is in
+                    // force (DEF-104).
+                    yours: !(in_force && g.key == "delegated"),
+                    kind: g.key,
+                    section: Section::Decisions,
+                    label: g.label,
+                    count: g.count,
+                    ask: None,
+                    tone: INFO.into(),
+                }
+            }))
         }
         Err(e) => health.push(could_not_read("review groups", &e)),
     }
@@ -228,6 +395,10 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
     Ok(Attention {
         total: lines.iter().filter(|l| l.yours).map(|l| l.count).sum(),
         lines,
+        delegated: store
+            .load(p)
+            .ok()
+            .and_then(|project| delegated_attention(&delegations, &project, &holds, &now)),
     })
 }
 
@@ -508,6 +679,170 @@ mod tests {
         assert_eq!(line.tone, "info");
         assert!(!line.yours);
         assert_eq!(a.total, before.total, "not counted in the badge");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A board with item A (held), item B (the person's), and C and D approved by Claude under
+    /// DLG-001, in delegated mode. DLG-001 covers `approve` on A, C and D until `until`; `revoked_at`
+    /// revokes it then.
+    fn delegated_board(
+        until: &str,
+        revoked_at: Option<&str>,
+    ) -> (Store, std::path::PathBuf, [String; 4]) {
+        use crate::decisions::{Decisions, Delegation, Mode, ModeChange, Stamp};
+        let (store, dir) = board();
+        let a = awaiting_approval(&store, "Alpha");
+        let b = awaiting_approval(&store, "Beta");
+        let c = awaiting_approval(&store, "Gamma");
+        let d = awaiting_approval(&store, "Delta");
+        let stamp = |origin: &str, at: &str| Stamp {
+            by: "Ada".into(),
+            at: at.into(),
+            origin: origin.into(),
+            ..Default::default()
+        };
+        let decisions = Decisions {
+            modes: vec![ModeChange {
+                mode: Mode::Delegated,
+                by: "Ada".into(),
+                at: "2026-11-01T00:00:00+00:00".into(),
+                origin: "monitor".into(),
+                reason: String::new(),
+                extra: Default::default(),
+            }],
+            delegations: vec![Delegation {
+                id: "DLG-001".into(),
+                verdicts: vec!["approve".into()],
+                items: vec![a.clone(), c.clone(), d.clone()],
+                until: until.into(),
+                proposed: stamp("conversation", "2026-11-01T00:00:00+00:00"),
+                granted: Some(stamp("monitor", "2026-11-01T00:00:00+00:00")),
+                revoked: revoked_at.map(|at| stamp("monitor", at)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Claude approved C, then D, under DLG-001 (`at` set so the order is certain).
+        for (code, at) in [
+            (&c, "2026-11-10T09:00:00+00:00"),
+            (&d, "2026-11-12T09:00:00+00:00"),
+        ] {
+            store
+                .approve_feature_as("demo", code, "Claude", "delegated", "DLG-001", None)
+                .unwrap();
+            let mut item = store.load("demo").unwrap().feature(code).unwrap().clone();
+            for e in &mut item.definition.as_mut().unwrap().approvals {
+                e.at = at.into();
+            }
+            store.persist_feature_for_test("demo", &item).unwrap();
+        }
+        std::fs::write(
+            store.project_dir("demo").join("decisions.yaml"),
+            crate::yaml::to_string(&decisions).unwrap(),
+        )
+        .unwrap();
+        (store, dir, [a, b, c, d])
+    }
+
+    /// DEF-104 (supports R-4, R-5): in delegated mode the badge counts only what no delegation
+    /// holds; what Claude decided is listed newest first and not counted; each delegation lists
+    /// what it holds.
+    #[test]
+    fn delegated_mode_counts_only_the_persons_decisions() {
+        let (store, dir, [a, b, c, d]) = delegated_board("2099-12-04T00:00:00+00:00", None);
+        let at = attention(&store, "demo", None).unwrap();
+        let approve = at.lines.iter().find(|l| l.kind == "approve").unwrap();
+        assert_eq!(
+            (approve.count, approve.yours),
+            (1, true),
+            "only Beta is the person's"
+        );
+        let line = at
+            .lines
+            .iter()
+            .find(|l| l.kind == "delegated")
+            .unwrap_or_else(|| panic!("no delegated line: {at:#?}"));
+        assert!(
+            !line.yours,
+            "Claude's verdicts are shown to check, not counted"
+        );
+        assert_eq!(line.count, 2);
+        assert_eq!(at.total, 1, "{at:#?}");
+        let dg = at.delegated.as_ref().expect("a delegated part");
+        assert_eq!(dg.in_force, vec!["DLG-001".to_string()]);
+        assert_eq!(
+            dg.decided
+                .iter()
+                .map(|x| x.code.clone())
+                .collect::<Vec<_>>(),
+            vec![d, c],
+            "newest first"
+        );
+        assert_eq!(dg.decided_total, 2);
+        assert_eq!(dg.holds.len(), 1);
+        assert_eq!(dg.holds[0].delegation, "DLG-001");
+        assert_eq!(dg.holds[0].total, 1, "Alpha");
+        assert_eq!(
+            dg.holds[0].verdicts,
+            vec![HeldCount {
+                verdict: "approve".into(),
+                count: 1
+            }]
+        );
+        assert!(dg.holds[0].until.starts_with("2099-12-04"));
+        assert!(dg.ending.is_empty());
+        let _ = (a, b);
+        // Monitor mode: nothing is Claude's, there is no delegated part and the line counts.
+        std::fs::remove_file(store.project_dir("demo").join("decisions.yaml")).unwrap();
+        let at = attention(&store, "demo", None).unwrap();
+        assert!(at.delegated.is_none());
+        assert_eq!(
+            at.total, 4,
+            "Alpha and Beta, and Gamma and Delta to keep or undo, as before"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-104 R-6 (core half): a delegation that ends within three days, or was revoked within
+    /// them, is listed with how many decisions return to the person.
+    #[test]
+    fn a_delegation_ending_within_three_days_is_listed_with_what_returns() {
+        let at = |hours: i64| {
+            (time::OffsetDateTime::now_utc() + time::Duration::hours(hours))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        };
+        // Ends in two days: it still holds Alpha; one decision returns.
+        let (store, dir, _) = delegated_board(&at(48), None);
+        let a = attention(&store, "demo", None).unwrap();
+        let dg = a.delegated.unwrap();
+        assert_eq!(dg.ending.len(), 1, "{:?}", dg.ending);
+        let e = &dg.ending[0];
+        assert_eq!(e.delegation, "DLG-001");
+        assert_eq!(e.state, crate::decisions::DelegationState::Granted);
+        assert_eq!(e.returns, 1);
+        let _ = std::fs::remove_dir_all(dir);
+        // Ends in five days: no ending line.
+        let (store, dir, _) = delegated_board(&at(120), None);
+        let dg = attention(&store, "demo", None).unwrap().delegated.unwrap();
+        assert!(dg.ending.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+        // Revoked an hour ago: nothing is in force; Alpha, Gamma's and Delta's verdicts it held
+        // return... only the queue's: Alpha.
+        let (store, dir, _) = delegated_board(&at(500), Some(&at(-1)));
+        let a = attention(&store, "demo", None).unwrap();
+        let dg = a.delegated.expect("an ending line keeps the part");
+        assert!(dg.in_force.is_empty());
+        assert_eq!(dg.ending.len(), 1);
+        assert_eq!(
+            dg.ending[0].state,
+            crate::decisions::DelegationState::Revoked
+        );
+        assert_eq!(dg.ending[0].returns, 1, "Alpha returns to the person");
+        assert_eq!(
+            a.total, 4,
+            "Alpha and Beta are the person's again, and the two decided ones count again"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
