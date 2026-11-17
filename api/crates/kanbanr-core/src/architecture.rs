@@ -59,7 +59,12 @@ mod tests {
     }
 
     /// The calls that write the board outside `write::apply` (FEAT-214's `board-commit` rule).
-    const BOARD_COMMIT_CALLS: &[&str] = &["commit_local(", "push_pending(", "set_identity("];
+    const BOARD_COMMIT_CALLS: &[&str] = &[
+        "commit_local(",
+        "commit_write(",
+        "push_pending(",
+        "set_identity(",
+    ];
     /// The mark a gated board commit carries.
     const BOARD_COMMIT_MARK: &str =
         "// architecture: allowed because gated by outside_core_refusal";

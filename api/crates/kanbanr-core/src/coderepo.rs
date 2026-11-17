@@ -32,6 +32,9 @@ fn run_with(
     }
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(root);
+    // A read never takes git's optional locks, so it never rewrites the index under a writer's
+    // commit (DEF-102). Writes that must lock (plumbing) are not optional and are unaffected.
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -2088,6 +2091,61 @@ pub(crate) mod tests {
         assert_eq!(
             current_branch(&repo).as_deref(),
             Some("feat/FEAT-001-thing")
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-102 R-3: a read never takes git's optional locks, so it never rewrites the index. On
+    /// an index entry that is stat-dirty, `git status` rewrites the index unless told not to; the
+    /// control run shows that, and kanbanr's own run leaves the index's bytes alone.
+    #[test]
+    fn a_read_never_rewrites_the_index() {
+        let repo = std::env::temp_dir().join(format!("kanbanr-optlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        let plain = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        plain(&["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        plain(&["add", "a.txt"]);
+        let index = repo.join(".git").join("index");
+        // Touch the file after `git add`: the entry's stat data is stale, so a status refreshes it.
+        let make_stale = || {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(repo.join("a.txt"))
+                .unwrap();
+            file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+                .unwrap();
+        };
+
+        make_stale();
+        let before = std::fs::read(&index).unwrap();
+        git(&repo, &["status", "--porcelain"]).unwrap();
+        assert_eq!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "kanbanr's read left the index alone"
+        );
+
+        // The control: the same status without the variable rewrites the index.
+        let out = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .env_remove("GIT_OPTIONAL_LOCKS")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_ne!(
+            std::fs::read(&index).unwrap(),
+            before,
+            "the control rewrote the index"
         );
         let _ = std::fs::remove_dir_all(&repo);
     }

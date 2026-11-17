@@ -58,6 +58,9 @@ impl WriteError {
     }
 }
 
+/// A fault point of the write recipe (DEF-102). T4 gives it its body; until then it does nothing.
+pub(crate) fn fault(_step: &str) {}
+
 /// Run `f` holding the board's exclusive advisory write lock (FEAT-029). The OS releases it if the
 /// process dies. Reads are intentionally not locked.
 pub fn with_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T> {

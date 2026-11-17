@@ -110,6 +110,7 @@ pub mod validate;
 pub mod views;
 pub mod vocab;
 pub mod write;
+pub mod writejournal;
 pub mod writer;
 pub mod yaml;
 
