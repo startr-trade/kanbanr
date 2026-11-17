@@ -214,9 +214,10 @@ async fn serve(
         background: Arc::new(OnceLock::new()),
         katalogr,
     };
-    // Drift in the background, for the project whose code repository the daemon was started in
-    // (FTR-045). Without one, nothing runs and the route answers `unavailable`. A list of boards
-    // has no code repository (FTR-040), so it gives no (project, repo) pair.
+    // The background worker warms every project the served boards hold (DEF-109). The pair below
+    // feeds drift only: the project whose code repository the daemon was started in (FTR-045).
+    // Without one, no drift runs and the route answers `unavailable`. A list of boards has no code
+    // repository (FTR-040), so it gives no (project, repo) pair.
     let repos: Vec<(String, PathBuf)> = state.code_repo.iter().cloned().collect();
     let _ = state.background.set(background::Background::start(
         state.clone(),

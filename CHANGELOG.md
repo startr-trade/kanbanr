@@ -113,6 +113,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The daemon's background warm-up covers every project the served boards hold, not the folder marker's project: a daemon started in a folder whose project the board lacks no longer warns `project not found`, and a daemon serving several boards warms them all (DEF-109).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
