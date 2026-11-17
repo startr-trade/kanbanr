@@ -191,6 +191,8 @@ export interface FeatureDefinition {
   design_doc?: string;
   /** Board docs this item's design changes (FEAT-180); `docs_updated` checks each changed. */
   affects_docs?: string[];
+  /** Catalog rows this item's design changes (FTR-006), named; absent when none. */
+  affects_views?: string[];
   /** Why this item changes no doc, recorded when the person confirms it (DEF-075); absent if unset. */
   affects_no_docs?: string;
   requirements?: Requirement[];
@@ -378,6 +380,10 @@ export interface PendingReview {
   sprint?: string;
   /** When the item last changed: its `updated_at` (FTR-038). */
   changed_at?: string;
+  /** The system-baseline rows this design changes, when design-review is asked (FTR-006). */
+  system_baseline_rows?: SystemBaselineRow[];
+  /** The catalog rows the design changes: its docs and its named rows (FTR-006). */
+  views_changed?: string[];
 }
 
 /** One decision group, counted: a tab on the Review page (FTR-038, `GET /review/summary`). */
@@ -2211,6 +2217,73 @@ export interface RowStatus {
   state: SourceState;
   applies: CatalogApplicability;
   protections: ProtectionStatus[];
+  href?: string;
+}
+
+// ---- The system baseline (FTR-006) ----
+
+/** Where the system baseline stands. */
+export type SystemBaselineKind = "not_initialised" | "awaiting" | "accepted" | "changed";
+
+/** One system row's source as an acceptance saw it; `rev` is empty when it cannot be pinned. */
+export interface SystemBaselinePin {
+  row: string;
+  source: string;
+  rev: string;
+}
+
+/** One acceptance of the system baseline, by the person. */
+export interface SystemBaselineAcceptance {
+  at: string;
+  by: string;
+  origin: string;
+  note?: string;
+  /** The prepared record confirmed, when one was. */
+  prepared?: string;
+  rev: string;
+  pins: SystemBaselinePin[];
+}
+
+/** One row that differs from the latest acceptance; `pinned` is empty for a row switched on since. */
+export interface SystemBaselineChange {
+  row: string;
+  source: string;
+  pinned: string;
+  now: string;
+  missing: boolean;
+}
+
+/** The system baseline as it stands, derived from the file, the catalog and the sources. */
+export interface SystemBaselineState {
+  kind: SystemBaselineKind;
+  rows: string[];
+  accepted?: SystemBaselineAcceptance;
+  accepted_count: number;
+  changes?: SystemBaselineChange[];
+  /** Rows whose source cannot be pinned (a `katalogr:` view, an enforced source). */
+  unpinned?: string[];
+  /** Applying system rows whose written source is missing. */
+  missing?: string[];
+  can_accept: boolean;
+  cannot_accept_why?: string;
+  /** The hash of the pins now: what an acceptance is pinned to. */
+  pins_rev: string;
+}
+
+/** `GET /projects/{p}/catalog/baseline`: the state and the open prepared acceptance, if any. */
+export interface SystemBaselineReview {
+  state: SystemBaselineState;
+  prepared?: Prepared;
+}
+
+/** One system-baseline row a design changes, as the design-review entry lists it. */
+export interface SystemBaselineRow {
+  row: string;
+  source: string;
+  /** The latest acceptance's pin; empty when none was given or the row was not in it. */
+  pinned: string;
+  /** The source's hash now; empty when it cannot be pinned or is missing. */
+  now: string;
   href?: string;
 }
 

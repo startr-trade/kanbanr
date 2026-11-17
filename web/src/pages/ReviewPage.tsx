@@ -18,6 +18,8 @@ import { DelegationEvidence } from "./review/DelegationEvidence";
 import { EntryEvidence } from "./review/EntryEvidence";
 import { GroupView, REVIEW_TAGS } from "./review/GroupView";
 import { ManualEvidence } from "./review/ManualEvidence";
+import { SystemBaselineEvidence } from "./review/SystemBaselineEvidence";
+import { GROUP_KEY as SYSTEM_BASELINE_GROUP } from "../systemBaselineView";
 
 /**
  * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
@@ -313,6 +315,10 @@ export default function ReviewPage() {
       </p>
     );
   };
+  // The system baseline's own row (FTR-006): the project's one baseline, never an item's entry.
+  const baselineEvidence = () => (
+    <SystemBaselineEvidence project={project} writable={writable} who={who} onDecided={summary.reload} />
+  );
 
   const groups = summary.data ?? [];
   return (
@@ -375,7 +381,13 @@ export default function ReviewPage() {
               who={who}
               tick={tick}
               batches={batches(prepared.data)}
-              body={(row, slice: GroupSlice) => <RowBody project={project} group={slice.key} row={row} render={evidence} />}
+              body={(row, slice: GroupSlice) =>
+                slice.key === SYSTEM_BASELINE_GROUP ? (
+                  baselineEvidence()
+                ) : (
+                  <RowBody project={project} group={slice.key} row={row} render={evidence} />
+                )
+              }
               onDecided={summary.reload}
             />
           )}

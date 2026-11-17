@@ -6,11 +6,13 @@
  */
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { apiUrl } from "../runtimeConfig";
 import { LiveDot } from "../components/bits";
 import { Empty, ErrorState, LoadingState, Section } from "../ui";
 import { chips, factsLine, gapSentence, groupRows, hasCatalog, hasFacts, isOff, sourceHref, sourceText, type Chip } from "../catalogView";
-import type { CatalogStatus, FactsOrEmpty, RowStatus } from "../types";
+import { catalogChip } from "../systemBaselineView";
+import type { CatalogStatus, FactsOrEmpty, RowStatus, SystemBaselineReview, SystemBaselineState } from "../types";
 
 /** The watcher's slices the catalog's status is derived from: the catalog, the facts and the docs. */
 const CATALOG_TAGS = ["catalog", "facts", "docs", "config"] as const;
@@ -22,10 +24,20 @@ export default function CatalogPage() {
   const catalog = useQuery<CatalogStatus>(project, apiUrl(`/projects/${enc}/catalog`), CATALOG_TAGS);
   const facts = useQuery<FactsOrEmpty>(project, apiUrl(`/projects/${enc}/facts`), FACTS_TAGS);
 
+  // The system baseline's chips on the system rows (FTR-006); no chip while it is not read.
+  const baseline = useQuery<SystemBaselineReview>(project, urls.systemBaseline(project), TAGS.systemBaseline);
+
   if (catalog.loading && !catalog.data) return <LoadingState />;
   if (catalog.error && !catalog.data) return <ErrorState error={catalog.error} retry={catalog.reload} />;
   if (!catalog.data) return null;
-  return <CatalogBody project={project} status={catalog.data} facts={facts.loading ? undefined : facts.data} />;
+  return (
+    <CatalogBody
+      project={project}
+      status={catalog.data}
+      facts={facts.loading ? undefined : facts.data}
+      baseline={baseline.data?.state ?? null}
+    />
+  );
 }
 
 /** The page without its reads, so web::catalog can render it. `facts` undefined: not read yet. */
@@ -33,10 +45,13 @@ export function CatalogBody({
   project,
   status,
   facts,
+  baseline = null,
 }: {
   project: string;
   status: CatalogStatus;
   facts: FactsOrEmpty | null | undefined;
+  /** The system baseline's state, for the system rows' chips (FTR-006); null: none shown. */
+  baseline?: SystemBaselineState | null;
 }) {
   const groups = groupRows(status.rows);
   const gaps = gapSentence(status.gaps);
@@ -101,7 +116,7 @@ export function CatalogBody({
           {groups.map((g) => (
             <Section key={g.level} title={g.title}>
               {g.rows.map((r) => (
-                <RowLine key={r.id} project={project} row={r} />
+                <RowLine key={r.id} project={project} row={r} baseline={baseline} />
               ))}
             </Section>
           ))}
@@ -119,7 +134,8 @@ function chipClass(c: Chip): string {
 }
 
 /** One row: its title and id, what it answers for whom, its source (linked where it has a page), its chips. */
-function RowLine({ project, row }: { project: string; row: RowStatus }) {
+function RowLine({ project, row, baseline }: { project: string; row: RowStatus; baseline: SystemBaselineState | null }) {
+  const pill = catalogChip(row.id, baseline);
   const href = sourceHref(project, row);
   const source = sourceText(row);
   return (
@@ -140,6 +156,14 @@ function RowLine({ project, row }: { project: string; row: RowStatus }) {
             </span>
           </span>
         ))}
+        {pill ? (
+          <>
+            {" "}
+            <span className={pill.tone === "ok" ? "chip done" : pill.tone === "warn" ? "chip warn" : "chip"} title={pill.title}>
+              baseline: {pill.label}
+            </span>
+          </>
+        ) : null}
       </p>
     </div>
   );

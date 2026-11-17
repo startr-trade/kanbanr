@@ -16,6 +16,7 @@ import { PreparedPanel } from "../../components/PreparedPanel";
 import { approveBlocker, blockedSentence, type DiagramProblem } from "../../diagramCheck";
 import { outcomeLine, type Outcome } from "../../manualTests";
 import { editedWhileFlagged, openFor } from "../../prepared";
+import { catalogRowHref, entryRowsLine } from "../../systemBaselineView";
 import { docsFoldedOffer } from "../../textsToCheck";
 import { zachmanColumns } from "../../types";
 import type { DriftFlag, PendingReview, PreparedView, SettledText, SpecBrief } from "../../types";
@@ -278,6 +279,34 @@ export function EntryEvidence({
             : null}
       </p>
 
+      {entryRowsLine(item.system_baseline_rows) ? (
+        // What this design changes in the system baseline the person accepted (FTR-006).
+        <p className="small review-baseline-rows">
+          {entryRowsLine(item.system_baseline_rows)}
+          {(item.system_baseline_rows ?? []).some((r) => r.href) ? (
+            <>
+              {" · "}
+              {(item.system_baseline_rows ?? [])
+                .filter((r) => r.href)
+                .map((r) => (
+                  <Link key={r.row} to={r.href ?? ""}>
+                    {r.row}
+                  </Link>
+                ))}
+            </>
+          ) : null}
+        </p>
+      ) : null}
+      {(item.views_changed ?? []).length > 0 ? (
+        <div className="provenance">
+          <span className="muted">Views changed</span>
+          {(item.views_changed ?? []).map((v) => (
+            <Link key={v} className="chip" to={catalogRowHref(project, v)}>
+              {v}
+            </Link>
+          ))}
+        </div>
+      ) : null}
       {changes ? (
         <Changes
           item={item}

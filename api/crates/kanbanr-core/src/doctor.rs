@@ -216,6 +216,7 @@ pub fn run_project_in(store: &Store, id: &str, repo: Option<&std::path::Path>) -
     scan_baseline(store, &project, &mut report);
     scan_coverage(store, &project, &mut report);
     scan_catalog(store, &project, &mut report);
+    scan_affects_views(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_codes(&project, &mut report);
@@ -1256,6 +1257,53 @@ fn scan_coverage(store: &Store, project: &Project, report: &mut Report) {
 /// The project's facts and content catalog (FTR-005): one hint when the project has no facts
 /// record, an error per problem of an invalid catalog (naming the row), and a warning per applying
 /// row whose source is missing. Nothing else without a catalog.
+/// The catalog rows an item's design says it changes (`affects_views`, FTR-006): an id the catalog
+/// does not have is an error, like an unknown `affects_docs` path; without a catalog, naming any
+/// row at all is a warning.
+fn scan_affects_views(store: &Store, project: &Project, report: &mut Report) {
+    let catalog = crate::catalog::load(store, &project.id).ok().flatten();
+    for f in &project.features {
+        let Some(def) = f.definition.as_ref() else {
+            continue;
+        };
+        if def.affects_views.is_empty() {
+            continue;
+        }
+        let mut issue = |severity: Severity, message: String| {
+            report.issues.push(Issue {
+                severity,
+                project: project.id.clone(),
+                code: Some(f.code.clone()),
+                message,
+            });
+        };
+        match &catalog {
+            None => issue(
+                Severity::Warning,
+                format!(
+                    "{} affects_views names catalog rows but the project has no catalog: \
+                     `kanbanr catalog init`",
+                    f.code
+                ),
+            ),
+            Some(c) => {
+                for id in &def.affects_views {
+                    if c.row(id.trim()).is_none() {
+                        issue(
+                            Severity::Error,
+                            format!(
+                                "{} affects_views refers to {id}, which the catalog does not have \
+                                 (`kanbanr catalog` lists the rows)",
+                                f.code
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn scan_catalog(store: &Store, project: &Project, report: &mut Report) {
     let mut issue = |severity: Severity, message: String| {
         report.issues.push(Issue {
@@ -2728,6 +2776,82 @@ mod tests {
         let got = broken_doc_messages(&store);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, Severity::Error);
+    }
+
+    /// FTR-006 R-8: an `affects_views` id the catalog does not have is an Error naming the item;
+    /// on a project without a catalog any `affects_views` is a Warning.
+    #[test]
+    fn unknown_affects_views_reported() {
+        use crate::catalog::{Catalog, Level, Row, Source, SourceKind};
+        let (store, _dir) = fixture();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let set = |views: &[&str]| {
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        affects_views: views.iter().map(|v| v.to_string()).collect(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        };
+        let about = |store: &Store| {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| {
+                    i.code.as_deref() == Some(item.code.as_str())
+                        && i.message.contains("affects_views")
+                })
+                .map(|i| (i.severity, i.message))
+                .collect::<Vec<_>>()
+        };
+        // Nothing named: nothing said, with or without a catalog.
+        set(&[]);
+        assert!(about(&store).is_empty());
+        // Named, no catalog: a warning.
+        set(&["context"]);
+        let got = about(&store);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, Severity::Warning);
+        assert!(got[0].1.contains("no catalog"), "{}", got[0].1);
+        // A catalog with `context`: a known row is quiet, an unknown one is an error.
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![Row {
+                    id: "context".into(),
+                    title: "Context".into(),
+                    answers: vec!["what".into()],
+                    for_: vec!["architect".into()],
+                    level: Level::System,
+                    source: Source {
+                        kind: SourceKind::Written,
+                        path: "architecture/context.md".into(),
+                        ..Source::default()
+                    },
+                    ..Row::default()
+                }],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        assert!(about(&store).is_empty(), "{:?}", about(&store));
+        set(&["context", "nope"]);
+        let got = about(&store);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, Severity::Error);
+        assert!(
+            got[0].1.contains(&item.code) && got[0].1.contains("nope"),
+            "{}",
+            got[0].1
+        );
     }
 
     /// FEAT-180 R-4 (doctor): a declared doc the board does not have is an error; an item whose

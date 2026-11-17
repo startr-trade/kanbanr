@@ -17606,6 +17606,109 @@ fn catalog_init_writes_the_starter_and_refuses_twice() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-006 R-1: after `catalog baseline init` a move into the build stage is refused naming the
+/// acceptance, and `config method` shows the part on; `catalog baseline` says where it stands, an
+/// acceptance with system docs still unwritten is refused naming them, and `feature design
+/// --template` prints a kind's skeleton and writes nothing. On a temporary board (L-41).
+#[test]
+fn baseline_init_turns_the_build_gate_on() {
+    let (base, work) = togaf_scratch("baseline-init");
+    assert!(
+        base.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    // The method off, so only the system baseline stands between the item and the build stage.
+    ok(run_in(&base, &work, &["config", "method", "--off"]));
+    for phase in ["Business Arch", "System Design"] {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "move",
+                "FEAT-001",
+                phase,
+                "--override",
+                "not what this test is about",
+            ],
+        ));
+    }
+    let shown = ok(run_in(&base, &work, &["catalog", "baseline"]));
+    assert!(shown.contains("not initialised"), "{shown}");
+    let refused = run_in(&base, &work, &["catalog", "baseline", "init"]);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("kanbanr catalog init"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    ok(run_in(&base, &work, &["catalog", "init"]));
+    let initialised = ok(run_in(&base, &work, &["catalog", "baseline", "init"]));
+    assert!(
+        initialised.contains("the build stage waits"),
+        "{initialised}"
+    );
+    assert!(initialised.contains("awaiting acceptance"), "{initialised}");
+    let method = ok(run_in(&base, &work, &["config", "method"]));
+    assert!(
+        method.contains("system-baseline on: Implementation"),
+        "{method}"
+    );
+
+    let refused = run_in(&base, &work, &["move", "FEAT-001", "Implementation"]);
+    assert!(!refused.status.success(), "the build stage must wait");
+    let why = String::from_utf8_lossy(&refused.stderr).to_lowercase();
+    assert!(
+        why.contains("system baseline") && why.contains("not accepted"),
+        "{why}"
+    );
+
+    // The starter's system docs are not written yet: acceptance is refused, naming them.
+    let accept = run_in(
+        &base,
+        &work,
+        &["catalog", "baseline", "accept", "--note", "ok"],
+    );
+    assert!(!accept.status.success());
+    assert!(
+        String::from_utf8_lossy(&accept.stderr).contains("context"),
+        "{}",
+        String::from_utf8_lossy(&accept.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&ok(run_in(
+        &base,
+        &work,
+        &["--json", "catalog", "baseline"],
+    )))
+    .unwrap();
+    assert_eq!(json["state"]["kind"], "awaiting", "{json}");
+    assert_eq!(json["state"]["can_accept"], false, "{json}");
+
+    // A kind's skeleton, and nothing written.
+    let skeleton = ok(run_in(
+        &base,
+        &work,
+        &["feature", "design", "--template", "--kind", "defect"],
+    ));
+    assert!(
+        skeleton.contains("Cause") && skeleton.contains("Fix"),
+        "{skeleton}"
+    );
+    let bare = run_in(&base, &work, &["feature", "design"]);
+    assert!(!bare.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-005 R-8: a board without the facts and catalog files sees no catalog line from `feature
 /// add`, `move` or `doctor`; doctor gives its one facts hint.
 #[test]

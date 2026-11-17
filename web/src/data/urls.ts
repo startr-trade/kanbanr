@@ -110,6 +110,8 @@ export const urls = {
   plan: (p: string, scope: PlanScope) => apiUrl(`${project(p)}/plan?scope=${enc(scope)}`),
   /** One Plan row's items, read when the row is opened (FTR-043); the key `sprint:SP-004` is one segment. */
   planRow: (p: string, key: string) => apiUrl(`${project(p)}/plan/rows/${enc(key)}`),
+  /** The system baseline: its state and the open prepared acceptance (FTR-006). */
+  systemBaseline: (p: string) => apiUrl(`${project(p)}/catalog/baseline`),
   /** The last kept duration of each test, of one item when `code` is given (FTR-058). */
   timings: (p: string, code?: string) => apiUrl(`${project(p)}/timings${query([["code", code]])}`),
   /** The flow plan in agent-hours: the running sprint's, else the open work's, unless `scope` names one (FTR-061). */
@@ -182,4 +184,6 @@ export const TAGS = {
   planFlow: ["items", "sprints", "releases", "tasklog"],
   /** The kept test durations: the watcher maps `timings/*` to this tag (FTR-058). */
   timings: ["timings"],
+  /** The system baseline hashes the catalog's sources, the docs and what the generated rows read: any change re-reads it (FTR-006). */
+  systemBaseline: ["*"],
 } as const;

@@ -8345,6 +8345,13 @@
           "status": {
             "type": "string"
           },
+          "system_baseline_rows": {
+            "description": "The system-baseline rows this design changes, when `design-review` is among\n`signoffs_needed` and the project has a system baseline (FTR-006).",
+            "items": {
+              "$ref": "#/components/schemas/SystemBaselineRow"
+            },
+            "type": "array"
+          },
           "tests_only": {
             "description": "The change since the last decision touched only tests (FTR-039): set on `lapsed` and\n`added` entries, so a grouped approval of tests-only edits can be told apart.",
             "type": "boolean"
@@ -8356,6 +8363,13 @@
             "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not\noffered while any is left. `None` when the check was skipped (see `drift_skipped`) or the\nsign-off is not asked.",
             "items": {
               "$ref": "#/components/schemas/Flag"
+            },
+            "type": "array"
+          },
+          "views_changed": {
+            "description": "The catalog rows the design changes: its `affects_docs` and the docs linked under its\nAffects docs heading, and the rows its `affects_views` names (FTR-006).",
+            "items": {
+              "type": "string"
             },
             "type": "array"
           }
@@ -9811,6 +9825,36 @@
         },
         "required": [
           "state"
+        ],
+        "type": "object"
+      },
+      "SystemBaselineRow": {
+        "description": "One system-baseline row a design changes, as the design-review entry lists it (FTR-006): what\nthe latest acceptance pinned for the row and what its source reads now.",
+        "properties": {
+          "href": {
+            "description": "The doc page of a written source on the board; `None` for the rest.",
+            "type": "string"
+          },
+          "now": {
+            "description": "The source's hash now; empty when it cannot be pinned or is missing.",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "The pin of the latest acceptance; empty when none was given or the row was not in it.",
+            "type": "string"
+          },
+          "row": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "source",
+          "pinned",
+          "now"
         ],
         "type": "object"
       },

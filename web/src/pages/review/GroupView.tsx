@@ -36,6 +36,7 @@ import {
 import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
 import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
+import { ACCEPT_COMMAND, ACCEPT_SENTENCE } from "../../systemBaselineView";
 import { ManualGroupLive } from "./ManualGroup";
 import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
 
@@ -78,6 +79,8 @@ function sentenceOf(slice: GroupSlice): string {
       return "Keep lets a decision Claude took under a delegation stand; Undo withdraws it. To give a reason, open the row.";
     case "adr":
       return "Accepting needs every section answered. Rejecting needs a reason, so it is done in the row.";
+    case "system-baseline":
+      return ACCEPT_SENTENCE;
     default:
       return `Signing off records the ${slice.label.replace(/^Sign off /, "")} sign-off for each selected item, pinned to the definition and spec as shown.`;
   }
@@ -358,6 +361,12 @@ export function GroupPanel(p: {
             </span>
           ) : null}
         </div>
+        {slice.key === "system-baseline" && !p.writable ? (
+          // A read-only monitor shows the person's command, never a button (FTR-006).
+          <p className="muted small">
+            To accept it, run <code>{ACCEPT_COMMAND}</code> in your own terminal.
+          </p>
+        ) : null}
         {batchNames.map((name) => (
           <p className="muted small review-group-batch" key={name}>
             {slice.rows.filter((r) => r.batch === name).length} results from {name}

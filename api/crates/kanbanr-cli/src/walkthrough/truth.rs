@@ -636,6 +636,18 @@ pub fn board_claim(
                 )),
             })
         }
+        BoardClaim::SystemBaselineAccepted => {
+            let project = store.load_meta(project).map_err(|e| anyhow!("{e}"))?;
+            let state = kanbanr_core::systembaseline::state(&store, &project, None)
+                .map_err(|e| anyhow!("{e}"))?;
+            Ok(match state.kind {
+                kanbanr_core::systembaseline::StateKind::Accepted => Ok(()),
+                kind => Err(format!(
+                    "the system baseline is {kind:?}, not accepted ({} acceptance(s))",
+                    state.accepted_count
+                )),
+            })
+        }
     }
 }
 
@@ -927,6 +939,10 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(why.contains("no sprint is running"), "{why}");
+        let why = board_claim(&board, "shop", &BoardClaim::SystemBaselineAccepted)
+            .unwrap()
+            .unwrap_err();
+        assert!(why.contains("NotInitialised"), "{why}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

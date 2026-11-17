@@ -29,6 +29,8 @@ const DELEGATION: &str = "delegation";
 const DELEGATED: &str = "delegated";
 /// Proposed ADRs.
 const ADR: &str = "adr";
+/// The system baseline's acceptance (FTR-006): one project-level row, first in the order.
+const SYSTEM_BASELINE: &str = "system-baseline";
 /// The group key of the sign-off named `release`.
 const RELEASE_SIGNOFF: &str = "release-signoff";
 /// The prefix of a sign-off's group key other than the named ones.
@@ -170,6 +172,7 @@ fn label_and_action(key: &str) -> (String, &'static str) {
         DELEGATION => ("Delegations".into(), "Grant"),
         DELEGATED => ("Delegated decisions".into(), "Keep"),
         ADR => ("Proposed ADRs".into(), "Accept"),
+        SYSTEM_BASELINE => ("System baseline".into(), "Accept"),
         _ => match signoff_of_key(key) {
             Some(name) => (format!("Sign off {name}"), "Sign off"),
             None => (key.to_string(), ""),
@@ -181,7 +184,7 @@ fn label_and_action(key: &str) -> (String, &'static str) {
 fn is_known(key: &str) -> bool {
     matches!(
         key,
-        APPROVE | RATIFY | WHICH_RELEASE | MANUAL | DELEGATION | DELEGATED | ADR
+        SYSTEM_BASELINE | APPROVE | RATIFY | WHICH_RELEASE | MANUAL | DELEGATION | DELEGATED | ADR
     ) || signoff_of_key(key).is_some()
 }
 
@@ -226,6 +229,8 @@ struct Board {
     delegated: Vec<DelegatedDecision>,
     adrs: Vec<Adr>,
     prepared: Vec<PreparedView>,
+    /// The system baseline's state, read only when the project has a baseline file (FTR-006).
+    baseline: Option<crate::systembaseline::State>,
     mode: Mode,
     meta: crate::Project,
     releases: Vec<crate::releases::Release>,
@@ -234,7 +239,13 @@ struct Board {
 impl Board {
     fn load(store: &Store, p: &str, repo: Option<&Path>) -> Result<Board> {
         let decisions = crate::decisions::view(store, p, repo, None, &crate::now_rfc3339())?;
+        let meta = store.load_meta(p)?;
+        let baseline = match crate::systembaseline::load(store, p)? {
+            Some(_) => Some(crate::systembaseline::state(store, &meta, repo)?),
+            None => None,
+        };
         Ok(Board {
+            baseline,
             entries: crate::review::pending(store, p, repo)?,
             manual: crate::manual::waiting(store, p)?,
             delegations: decisions
@@ -254,13 +265,13 @@ impl Board {
                 repo,
             )?,
             mode: decisions.mode,
-            meta: store.load_meta(p)?,
+            meta,
             releases: crate::releases::load(store, p)?,
         })
     }
 
-    /// Every group key in the fixed order: approve, ratify, the sign-offs in the order the
-    /// process's gates name them, which-release, manual, delegation, delegated, adr.
+    /// Every group key in the fixed order: system-baseline, approve, ratify, the sign-offs in the
+    /// order the process's gates name them, which-release, manual, delegation, delegated, adr.
     fn keys(&self) -> Vec<String> {
         let config = &self.meta.config;
         let gates = config.effective_gates();
@@ -294,7 +305,11 @@ impl Board {
         for k in others {
             push(k);
         }
-        let mut keys = vec![APPROVE.to_string(), RATIFY.to_string()];
+        let mut keys = vec![
+            SYSTEM_BASELINE.to_string(),
+            APPROVE.to_string(),
+            RATIFY.to_string(),
+        ];
         keys.extend(signoffs);
         keys.extend(
             [WHICH_RELEASE, MANUAL, DELEGATION, DELEGATED, ADR]
@@ -556,6 +571,87 @@ impl Board {
         }
     }
 
+    /// The one row of the system-baseline group: shown while the baseline awaits its first
+    /// acceptance or an acceptance is prepared. Not blocked in conversation mode: the acceptance
+    /// is not an item verdict (FTR-006).
+    fn baseline_rows(&self) -> Vec<Built> {
+        let Some(state) = &self.baseline else {
+            return Vec::new();
+        };
+        let record = self.prepared.iter().find(|v| {
+            v.state == crate::prepared::State::Open && v.record.kind == "system-baseline"
+        });
+        if state.kind != crate::systembaseline::StateKind::Awaiting && record.is_none() {
+            return Vec::new();
+        }
+        let pinned = state
+            .rows
+            .len()
+            .saturating_sub(state.unpinned.len() + state.missing.len());
+        let what = match record {
+            Some(r) => {
+                let note = r
+                    .record
+                    .fields
+                    .get("note")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                if note.is_empty() {
+                    "prepared".to_string()
+                } else {
+                    format!("prepared: {note}")
+                }
+            }
+            None => format!(
+                "{}, {pinned} pinned: awaiting acceptance",
+                count_of(state.rows.len(), "row", "rows")
+            ),
+        };
+        let short: String = state.pins_rev.chars().take(7).collect();
+        let blocked = if state.can_accept {
+            String::new()
+        } else if state.missing.is_empty() {
+            state.cannot_accept_why.clone()
+        } else {
+            format!(
+                "Write the system docs first: {} have no source yet",
+                state.missing.join(", ")
+            )
+        };
+        let mut pills = Vec::new();
+        push_record_pills(&mut pills, record);
+        vec![Built {
+            row: ReviewRow {
+                key: SYSTEM_BASELINE.to_string(),
+                code: SYSTEM_BASELINE.to_string(),
+                title: "System baseline".into(),
+                what,
+                records: format!(
+                    "Records your acceptance of the system baseline as shown (pins rev `{short}`)"
+                ),
+                release: String::new(),
+                sprint: String::new(),
+                changed_at: state
+                    .accepted
+                    .as_ref()
+                    .map(|a| a.at.clone())
+                    .unwrap_or_default(),
+                blocked,
+                pills,
+                prepared: record.map(|r| r.record.id.clone()).unwrap_or_default(),
+                batch: record
+                    .and_then(|r| r.record.batch.clone())
+                    .unwrap_or_default(),
+                rev: state.pins_rev.clone(),
+                spec_rev: String::new(),
+                signoff: String::new(),
+                requirement: String::new(),
+                test: String::new(),
+            },
+            counted: true,
+        }]
+    }
+
     fn adr_row(&self, a: &Adr) -> Built {
         let blocked = if a.missing.is_empty() {
             String::new()
@@ -604,6 +700,7 @@ impl Board {
                 .map(|d| self.delegated_row(d))
                 .collect(),
             ADR => self.adrs.iter().map(|a| self.adr_row(a)).collect(),
+            SYSTEM_BASELINE => self.baseline_rows(),
             _ => self
                 .entries
                 .iter()
@@ -804,6 +901,23 @@ pub fn evidence(
                         .ok_or_else(missing)?,
                 );
             }
+        }
+        SYSTEM_BASELINE => {
+            if row != SYSTEM_BASELINE {
+                return Err(missing());
+            }
+            let review = crate::review::system_baseline_review(store, p, repo)?;
+            if review.prepared.is_none()
+                && review.state.kind != crate::systembaseline::StateKind::Awaiting
+            {
+                return Err(missing());
+            }
+            out.prepared = review.prepared.and_then(|r| {
+                crate::prepared::list(store, p, &crate::prepared::ListQuery::default(), repo)
+                    .ok()?
+                    .into_iter()
+                    .find(|v| v.record.id == r.id)
+            });
         }
         ADR => {
             out.adr = Some(
@@ -1049,6 +1163,8 @@ pub fn ops(
                     format!("/projects/{p}/adrs/{}/accept", segment(&row.key)),
                     json!({"by": by}),
                 ),
+                // The person's acceptance as they saw it: `rev` is the pins' hash they were shown.
+                SYSTEM_BASELINE => (format!("/projects/{p}/catalog/baseline/accept"), pins(item)),
                 MANUAL => {
                     return Err(refuse(format!(
                         "{} cannot be decided here: {DO_THE_CHECK}",
@@ -1196,6 +1312,8 @@ mod tests {
             sprint: String::new(),
             changed_at: String::new(),
             tests_only: false,
+            system_baseline_rows: Vec::new(),
+            views_changed: Vec::new(),
         }
     }
 
@@ -1579,5 +1697,179 @@ mod tests {
         let unread = blind.rows.iter().find(|r| r.code == code).unwrap();
         assert!(unread.blocked.is_empty(), "{unread:?}");
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-006 R-12: an awaiting baseline is one `system-baseline` group, first in the order, with
+    /// one row and the accept op; an accepted or changed one without a prepared record gives none;
+    /// the row is not blocked in conversation mode; a group decision from Claude, or any delegation,
+    /// is refused.
+    #[test]
+    fn the_system_baseline_acceptance_is_its_own_group() {
+        use crate::catalog::{Catalog, Level, Row, Source, SourceKind};
+        let (store, dir) = board();
+        let row = |id: &str| Row {
+            id: id.into(),
+            title: id.into(),
+            answers: vec!["what".into()],
+            for_: vec!["architect".into()],
+            level: Level::System,
+            source: Source {
+                kind: SourceKind::Written,
+                path: format!("architecture/{id}.md"),
+                ..Source::default()
+            },
+            ..Row::default()
+        };
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![row("context"), row("security")],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        // Needs an item waiting in another group, so "first" means something.
+        define(&store, "Plain", statement("Never approved"));
+        let keys = |store: &Store| -> Vec<String> {
+            summary(store, "demo", None)
+                .unwrap()
+                .into_iter()
+                .map(|g| g.key)
+                .collect()
+        };
+        assert_eq!(keys(&store), ["approve"], "no baseline file: no group");
+
+        crate::systembaseline::init(&store, "demo").unwrap();
+        // Init turns the build gate on and saves the config; the board is as it was otherwise.
+        let g = summary(&store, "demo", None).unwrap();
+        assert_eq!(g[0].key, "system-baseline", "{g:?}");
+        assert_eq!(
+            (g[0].label.as_str(), g[0].action.as_str()),
+            ("System baseline", "Accept")
+        );
+        assert_eq!((g[0].count, g[0].ready), (1, 0), "no source is written yet");
+        let slice0 = slice(&store, "demo", "system-baseline", None).unwrap();
+        assert_eq!(slice0.rows.len(), 1);
+        assert!(
+            slice0.rows[0]
+                .blocked
+                .starts_with("Write the system docs first: context, security"),
+            "{}",
+            slice0.rows[0].blocked
+        );
+
+        for id in ["context", "security"] {
+            store
+                .write_doc(
+                    "demo",
+                    &format!("architecture/{id}.md"),
+                    &format!("# {id}\n\n{}\n", "The system as it stands. ".repeat(4)),
+                )
+                .unwrap();
+        }
+        let slice1 = slice(&store, "demo", "system-baseline", None).unwrap();
+        let r = &slice1.rows[0];
+        assert!(r.blocked.is_empty(), "{}", r.blocked);
+        assert_eq!(r.what, "2 rows, 2 pinned: awaiting acceptance");
+        assert!(
+            r.records
+                .starts_with("Records your acceptance of the system baseline as shown (pins rev `")
+        );
+        let state =
+            crate::systembaseline::state(&store, &store.load_meta("demo").unwrap(), None).unwrap();
+        assert_eq!(r.rev, state.pins_rev);
+
+        // Not blocked in conversation mode, where an item row is.
+        let mut b = Board::load(&store, "demo", None).unwrap();
+        b.mode = Mode::Conversation;
+        assert!(b.baseline_rows()[0].row.blocked.is_empty());
+        assert_eq!(
+            blocked_sentence("approve", &entry("X", ApprovalKind::Missing, &[]), b.mode),
+            IN_CONVERSATION
+        );
+
+        // The accept op: the route is built from the group key, carrying the rev the person saw.
+        let decision = |by: &str| GroupDecision {
+            group: "system-baseline".into(),
+            action: "Accept".into(),
+            by: by.into(),
+            items: vec![DecisionItem {
+                key: "system-baseline".into(),
+                code: "system-baseline".into(),
+                rev: r.rev.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ops = ops(
+            &store,
+            "demo",
+            &decision("Ada"),
+            crate::origin::Origin::Monitor,
+            None,
+        )
+        .unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].path, "/projects/demo/catalog/baseline/accept");
+        assert_eq!(ops[0].body["rev"], r.rev.as_str());
+        assert_eq!(
+            crate::origin::verdict_of_route(&ops[0].method, &ops[0].path),
+            Some(crate::origin::Verdict::AcceptSystemBaseline)
+        );
+        // Claude is refused the group decision and the verdict it expands into, in every mode;
+        // no delegation covers either.
+        let ctx = crate::origin::DecisionContext::monitor_mode();
+        for verdict in [
+            crate::origin::Verdict::GroupDecision,
+            crate::origin::Verdict::AcceptSystemBaseline,
+        ] {
+            assert!(
+                crate::origin::verdict_refusal(verdict, crate::origin::Taker::Claude, &ctx)
+                    .is_some()
+            );
+        }
+        assert!(crate::decisions::is_person_only(
+            &ops[0].method,
+            &ops[0].path
+        ));
+
+        // Accepted: no group; changed: no group; a prepared acceptance brings it back.
+        crate::systembaseline::accept(&store, "demo", "Ada", "monitor", "", "", None).unwrap();
+        assert_eq!(keys(&store), ["approve"]);
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# context\n\nrevised in full. revised in full.\n",
+            )
+            .unwrap();
+        assert_eq!(
+            keys(&store),
+            ["approve"],
+            "a changed baseline waits for a prepared record"
+        );
+        crate::prepared::prepare(
+            &store,
+            "demo",
+            &serde_json::json!({
+                "kind": "system-baseline",
+                "fields": {"note": "re-accept at the milestone"},
+                "origin": "conversation",
+                "sources": [{"label": "the context doc", "url": "doc:architecture/context.md"}],
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(keys(&store)[0], "system-baseline");
+        let prepared = slice(&store, "demo", "system-baseline", None).unwrap();
+        assert_eq!(
+            prepared.rows[0].what,
+            "prepared: re-accept at the milestone"
+        );
+        assert!(!prepared.rows[0].prepared.is_empty());
+        assert!(prepared.rows[0].pills.contains(&"prepared".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

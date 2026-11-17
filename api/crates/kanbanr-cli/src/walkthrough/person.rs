@@ -51,6 +51,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/projects/{p}/decisions/reviews"),
     ("POST", "/projects/{p}/baseline/revisions/{id}/accept"),
     ("POST", "/projects/{p}/baseline/revisions/{id}/withdraw"),
+    ("POST", "/projects/{p}/catalog/baseline/accept"),
     ("POST", "/projects/{p}/review/decide"),
     ("POST", "/projects/{p}/planning"),
 ];
