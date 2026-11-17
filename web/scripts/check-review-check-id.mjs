@@ -2,13 +2,14 @@
 //
 // web::check_review_page_shows_a_results_check_id (DEF-089 R-3, R-5): each result a walkthrough
 // prepares carries the runbook's check id (MT-n), and the Review page shows it as a plain field row
-// "Check" beside Result, Note and Checked at; the batch summary names the batch's checks, as
+// "Check" beside Result, Note and Checked at; the batch's line in its Review group (FTR-038) names its checks, as
 // "(checks MT-1, MT-4)". The pure helpers are checked case by case; the page is read for where it
 // renders them.
 //
 // Usage: npm run check:review-check-id
 import { readFileSync } from "node:fs";
 import { batchChecks, fieldLabel } from "../src/prepared.ts";
+import { closeRender, render } from "./lib/render.mjs";
 
 const problems = [];
 const expect = (name, got, want) => {
@@ -49,17 +50,36 @@ expect("a batch whose records carry no check id names none", batchChecks({ name:
 const checks = batchChecks({ name: "b2", views: [view("a", "FTR-034", "MT-1"), view("b", "DEF-040", "MT-4")] });
 expect("the summary text", checks.length ? ` (checks ${checks.join(", ")})` : "", " (checks MT-1, MT-4)");
 
-const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
-const review = read("../src/pages/ReviewPage.tsx");
-const bar = (() => {
-  const a = review.indexOf("function BatchBar(");
-  const b = review.indexOf("\nfunction ", a + 1);
-  return a < 0 ? "" : review.slice(a, b < 0 ? review.length : b);
-})();
-if (!bar) problems.push("ReviewPage.tsx: no BatchBar");
-if (!/batchChecks\(/.test(bar)) problems.push("ReviewPage.tsx: BatchBar does not name the batch's checks (batchChecks)");
-if (!/\(checks \$\{checks\.join\(", "\)\}\)/.test(bar)) problems.push("ReviewPage.tsx: BatchBar's summary does not read \"(checks MT-1, MT-4)\"");
-if (/className="chip[^"]*"[^>]*>\s*\{?check/.test(bar)) problems.push("ReviewPage.tsx: the check id is a chip, not the decided plain text");
+// Since FTR-038 a batch is decided in its group: GroupPanel's sticky head shows one line per batch
+// in the slice, "<N> results from <batch> (checks MT-1, MT-4)", and the action for exactly that
+// batch reads "Confirm all N (checks MT-1, MT-4)". BatchBar, the old home, is gone.
+const review = readFileSync(new URL("../src/pages/ReviewPage.tsx", import.meta.url), "utf8");
+if (/function BatchBar\(/.test(review)) problems.push("ReviewPage.tsx: BatchBar is still drawn beside the groups");
+const row = (key, item, batch) => ({
+  key, code: item, title: item, what: "R-1: manual: x", records: "", release: "", sprint: "", changed_at: "",
+  blocked: "", pills: [], prepared: `P-${key}`, batch, rev: "", spec_rev: "", signoff: "", requirement: "R-1", test: "manual: x",
+});
+try {
+  const { document } = await render("src/pages/review/GroupView.tsx", "GroupPanel", {
+    project: "x",
+    slice: { key: "manual", label: "Manual checks", action: "Confirm", choices: [], rows: [row("a", "FTR-034", "b2"), row("b", "DEF-040", "b2")] },
+    batches: [{ name: "b2", views: [view("a", "FTR-034", "MT-1"), view("b", "DEF-040", "MT-4")] }],
+    writable: true,
+    who: "Alice <a@example.invalid>",
+    tick: 0,
+    body: () => "",
+  });
+  const head = document.querySelector(".review-group-head");
+  const lines = [...(head?.querySelectorAll(".review-group-batch") ?? [])];
+  expect("one line per batch in the group", lines.map((l) => l.textContent.trim()), ["2 results from b2 (checks MT-1, MT-4)"]);
+  if (lines.some((l) => l.querySelector(".chip"))) problems.push("GroupPanel: the check id is a chip, not the decided plain text");
+  const buttons = [...(head?.querySelectorAll("button") ?? [])].map((x) => x.textContent.trim());
+  if (!buttons.includes("Confirm all 2 (checks MT-1, MT-4)")) problems.push(`GroupPanel: the batch's action does not read "Confirm all 2 (checks MT-1, MT-4)": ${JSON.stringify(buttons)}`);
+} catch (e) {
+  problems.push(`rendering the group failed: ${e?.stack ?? e}`);
+} finally {
+  await closeRender();
+}
 
 if (problems.length) {
   for (const p of problems) console.error(`✗ web::check_review_page_shows_a_results_check_id — ${p}`);

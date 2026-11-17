@@ -17,6 +17,7 @@ import { api } from "../../api";
 import { AskFirst } from "../../components/AskFirst";
 import { blockedSentence } from "../../diagramCheck";
 import { guardInFlight } from "../../inFlight";
+import { type Batch, batchChecks } from "../../prepared";
 import { useQuery } from "../../data/useQuery";
 import { urls } from "../../data/urls";
 import type { Tag } from "../../data/cache";
@@ -123,6 +124,8 @@ export function GroupView(p: {
   writable: boolean;
   who: string | null;
   tick: number;
+  /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
+  batches?: Batch[];
   body(row: Row, slice: GroupSlice): ReactNode;
   onDecided?(): void;
 }): JSX.Element {
@@ -137,6 +140,7 @@ export function GroupView(p: {
       writable={p.writable}
       who={p.who}
       tick={p.tick}
+      batches={p.batches}
       body={(row) => p.body(row, q.data as GroupSlice)}
       onDecided={() => {
         reload();
@@ -154,6 +158,8 @@ export function GroupPanel(p: {
   writable: boolean;
   who: string | null;
   tick: number;
+  /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
+  batches?: Batch[];
   body(row: Row): ReactNode;
   onDecided?(): void;
 }): JSX.Element {
@@ -250,6 +256,16 @@ export function GroupPanel(p: {
   const rejectLabel =
     batchOf(slice, preparedSel) !== null ? `Reject all ${preparedSel.keys.size}` : `Reject ${preparedSel.keys.size} prepared`;
   const plan = slice.key === "which-release";
+  // Each batch in this group, with the runbook checks its results carry (DEF-089): one line each,
+  // and the checks named on the action that confirms exactly that batch.
+  const checksOf = (name: string) => {
+    const b = p.batches?.find((x) => x.name === name);
+    const checks = b ? batchChecks(b) : [];
+    return checks.length ? ` (checks ${checks.join(", ")})` : "";
+  };
+  const batchNames = [...new Set(slice.rows.map((r) => r.batch).filter((b) => b !== ""))];
+  const chosenBatch = batchOf(slice, sel);
+  const label = actionLabel(slice, sel, target) + (chosenBatch !== null ? checksOf(chosenBatch) : "");
 
   return (
     <div className="review-group">
@@ -311,7 +327,7 @@ export function GroupPanel(p: {
           {p.writable ? (
             <span className="review-group-actions">
               <AskFirst
-                label={actionLabel(slice, sel, target)}
+                label={label}
                 ask={askText(slice, sel, slice.rows, target)}
                 className={n > 0 ? "btn btn-primary" : "btn"}
                 disabled={n === 0 || inFlight || (plan && target === "")}
@@ -341,6 +357,12 @@ export function GroupPanel(p: {
             </span>
           ) : null}
         </div>
+        {batchNames.map((name) => (
+          <p className="muted small review-group-batch" key={name}>
+            {slice.rows.filter((r) => r.batch === name).length} results from {name}
+            {checksOf(name)}
+          </p>
+        ))}
         {outcome ? (
           <div className={`review-group-outcome ${outcome.ok ? "done" : "warn"}`} role="status">
             <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span>

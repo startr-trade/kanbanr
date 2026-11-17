@@ -141,6 +141,10 @@ const count = (re, s = src) => (s.match(re) ?? []).length;
   );
   expect(problems, "nothing makes no batch", batches(undefined), []);
 
+  // The page's old one-press BatchBar is gone: the group is the batch's one way, and it asks first.
+  const page = read("../src/pages/ReviewPage.tsx");
+  if (/function BatchBar\(|<BatchBar\b/.test(page)) problems.push("ReviewPage.tsx: BatchBar still offers the batch beside the groups");
+  if (/PreparedBatch\(/.test(page)) problems.push("ReviewPage.tsx: the page posts a batch route of its own");
   expect(problems, "GroupView posts the batch confirm route once", count(/api\.confirmPreparedBatch\(/g), 1);
   expect(problems, "GroupView posts the batch reject route once", count(/api\.rejectPreparedBatch\(/g), 1);
   // Nothing typed: the batch posts carry the identity and no reason the person would type.

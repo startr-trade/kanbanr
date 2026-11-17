@@ -5,7 +5,7 @@ import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { LiveDot } from "../components/bits";
 import type { Adr, GroupCount, GroupSlice, PendingReview, PlannedRelease, ReviewRow as Row, RowEvidence } from "../types";
-import { type Batch, batchChecks, batches } from "../prepared";
+import { batches } from "../prepared";
 import type { ManualRow, Outcome } from "../manualTests";
 import type { PreparedView } from "../types";
 import { useQuery } from "../data/useQuery";
@@ -204,37 +204,6 @@ export default function ReviewPage() {
       setBusy(null);
     }
   };
-  // A whole batch at once (FTR-037): a walkthrough run's checks, confirmed or rejected with one
-  // click; the single buttons stay for one result alone.
-  const answerBatch = async (batch: Batch, verdict: "confirm" | "reject") => {
-    if (!who) return;
-    const key = `batch:${batch.name}`;
-    setBusy(key);
-    try {
-      const answer =
-        verdict === "confirm"
-          ? await api.confirmPreparedBatch(project, batch.name, who)
-          : await api.rejectPreparedBatch(project, batch.name, who);
-      const failed = answer.results.filter((r) => r.error);
-      setDone((d) => ({
-        ...d,
-        [key]: {
-          ok: failed.length === 0,
-          text:
-            failed.length === 0
-              ? `${verdict === "confirm" ? "confirmed" : "rejected"} all ${answer.results.length}`
-              : `${answer.results.length - failed.length} of ${answer.results.length} ${verdict === "confirm" ? "confirmed" : "rejected"}; ${failed
-                  .map((r) => `${r.id}: ${r.error}`)
-                  .join("; ")}`,
-        },
-      }));
-    } catch (e) {
-      setDone((d) => ({ ...d, [key]: failure(e) }));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   // Which release a ready item ships in (FEAT-185): the same plan route `kanbanr release plan` uses.
   const planRelease = async (item: PendingReview, version: string) => {
     const code = item.code;
@@ -383,17 +352,6 @@ export default function ReviewPage() {
         <DecisionsHere project={project} view={decisions.data ?? null} error={decisions.error} writable={writable} who={who} />
       </details>
 
-      {batches(prepared.data).map((batch) => (
-        <BatchBar
-          key={batch.name}
-          batch={batch}
-          writable={writable}
-          busy={busy === `batch:${batch.name}`}
-          outcome={done[`batch:${batch.name}`]?.text}
-          onAnswer={(verdict) => answerBatch(batch, verdict)}
-        />
-      ))}
-
       {summary.error && !summary.data ? (
         <ErrorState error={`What is waiting could not be read: ${summary.error}`} retry={summary.reload} />
       ) : !summary.data ? (
@@ -416,6 +374,7 @@ export default function ReviewPage() {
               writable={writable}
               who={who}
               tick={tick}
+              batches={batches(prepared.data)}
               body={(row, slice: GroupSlice) => <RowBody project={project} group={slice.key} row={row} render={evidence} />}
               onDecided={summary.reload}
             />
@@ -445,57 +404,3 @@ function RowBody({
 }
 
 const manualKey = (m: ManualRow) => `manual:${m.row.code}:${m.row.requirement}:${m.row.test}`;
-
-/**
- * One batch of prepared records (FTR-037): what a walkthrough run observed, offered as one click —
- * "Confirm all N" or "Reject all N" — beside the single buttons each record keeps below. Nothing
- * to fill in; where the monitor cannot write, it says what the batch is and that the terminal
- * records one result at a time.
- */
-function BatchBar({
-  batch,
-  writable,
-  busy,
-  outcome,
-  onAnswer,
-}: {
-  batch: Batch;
-  writable: boolean;
-  busy: boolean;
-  outcome?: string;
-  onAnswer: (verdict: "confirm" | "reject") => void;
-}) {
-  const n = batch.views.length;
-  const kinds = Array.from(new Set(batch.views.map((v) => v.kind ?? "record")));
-  const items = Array.from(new Set(batch.views.map((v) => v.subject.item).filter(Boolean)));
-  const checks = batchChecks(batch);
-  return (
-    <section className="review-item batch-bar">
-      <h2>Batch {batch.name}</h2>
-      <p className="muted">
-        {n} {kinds.join(", ")} record{n === 1 ? "" : "s"} prepared together
-        {items.length ? ` for ${items.join(", ")}` : ""}
-        {checks.length ? ` (checks ${checks.join(", ")})` : ""}, by {batch.views[0]?.by || "Claude"}. Confirm or
-        reject them all with one click, or one alone below.
-      </p>
-      {outcome ? (
-        <span className={`chip ${outcome.startsWith("confirmed all") || outcome.startsWith("rejected all") ? "done" : "warn"}`}>
-          {outcome}
-        </span>
-      ) : writable ? (
-        <div className="review-actions">
-          <button className="btn btn-primary" disabled={busy} onClick={() => onAnswer("confirm")}>
-            {busy ? "recording…" : `Confirm all ${n}`}
-          </button>
-          <button className="btn" disabled={busy} onClick={() => onAnswer("reject")}>
-            {busy ? "recording…" : `Reject all ${n}`}
-          </button>
-        </div>
-      ) : (
-        <p className="small muted">This monitor is read-only; each result is recorded one at a time from the terminal.</p>
-      )}
-    </section>
-  );
-}
-
-
