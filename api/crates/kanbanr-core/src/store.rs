@@ -65,6 +65,114 @@ struct Pending {
     task_events: Vec<crate::tasklog::TaskEvent>,
 }
 
+/// What a task records besides its text and state (FTR-060), for [`Store::add_task`] and
+/// [`Store::edit_task`]. `None` leaves a field as it is; `Some(vec![])` and `Some(None)` clear it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskFields {
+    /// The tasks it waits on: `T3`, `TL-002/T3`, `CODE/TL-001/T3` or `project:CODE/TL-001/T3`.
+    pub depends_on: Option<Vec<String>>,
+    /// The files it writes: repository-relative, `/`-separated; a folder ends in `/`.
+    pub writes: Option<Vec<String>>,
+    /// The files it only reads, in the same form.
+    pub reads: Option<Vec<String>>,
+    /// Its estimate in agent-hours, more than 0.
+    pub estimate_h: Option<Option<f64>>,
+    /// Its text (edit only; on add the text is its own argument).
+    pub text: Option<String>,
+}
+
+impl TaskFields {
+    /// Check each field set and write it onto `task`, of item `code`, list `todo`, in `project`.
+    /// Refs are normalised, paths and the estimate checked; whether a ref resolves is the task
+    /// graph's question ([`Store::check_task_refs`]).
+    fn apply(&self, task: &mut Task, project: &str, code: &str, todo: &str) -> Result<()> {
+        if let Some(text) = &self.text {
+            task.text = text.clone();
+        }
+        if let Some(refs) = &self.depends_on {
+            task.depends_on = normalise_task_refs(refs, project, code, todo)?;
+        }
+        if let Some(paths) = &self.writes {
+            task.writes = validate_paths(paths)?;
+        }
+        if let Some(paths) = &self.reads {
+            task.reads = validate_paths(paths)?;
+        }
+        if let Some(estimate) = self.estimate_h {
+            if let Some(h) = estimate
+                && !(h.is_finite() && h > 0.0)
+            {
+                return Err(CoreError::Unsupported(format!(
+                    "estimate {h}: an estimate is a number of agent-hours more than 0"
+                )));
+            }
+            task.estimate_h = estimate;
+        }
+        Ok(())
+    }
+}
+
+/// A task's refs as stored (FTR-060): trimmed; `T3` and `TL-002/T3` as given; another item's as
+/// `CODE/TL-001/T3`, or `project:CODE/TL-001/T3` for another project; duplicates dropped, order
+/// kept. A ref no form reads (such as `CODE/T3`, a requirement in the `Refs:` grammar) is refused.
+fn normalise_task_refs(
+    refs: &[String],
+    project: &str,
+    code: &str,
+    todo: &str,
+) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for r in refs {
+        let r = r.trim();
+        let Some((p, c, l, k)) = crate::taskgraph::parse_task_ref(r, project, code, todo) else {
+            return Err(CoreError::UnknownDependency(format!(
+                "{r}: a task is named T3, TL-002/T3, CODE/TL-001/T3 or project:CODE/TL-001/T3"
+            )));
+        };
+        let stored = if p == project && c == code && r.split('/').count() <= 2 {
+            r.to_string()
+        } else {
+            let list = l.unwrap_or_else(|| "?".to_string());
+            if p == project {
+                format!("{c}/{list}/{k}")
+            } else {
+                format!("{p}:{c}/{list}/{k}")
+            }
+        };
+        if !out.contains(&stored) {
+            out.push(stored);
+        }
+    }
+    Ok(out)
+}
+
+/// The paths a task records (FTR-060), trimmed: each non-empty, `/`-separated (no `\`), relative
+/// (no leading `/`, no drive), with no `..` component and no leading `./`. A folder ends in `/`.
+pub fn validate_paths(paths: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for raw in paths {
+        let p = raw.trim();
+        let why = if p.is_empty() {
+            Some("a path is not empty")
+        } else if p.contains('\\') {
+            Some("a path is `/`-separated, with no `\\`")
+        } else if p.starts_with('/') || p.as_bytes().get(1) == Some(&b':') {
+            Some("a path is relative to the repository, not absolute")
+        } else if p.starts_with("./") {
+            Some("a path has no leading `./`")
+        } else if p.split('/').any(|c| c == "..") {
+            Some("a path has no `..` component")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return Err(CoreError::Unsupported(format!("{p:?}: {why}")));
+        }
+        out.push(p.to_string());
+    }
+    Ok(out)
+}
+
 /// What an agent reports with a task state change (FTR-061): kept on the change's task log
 /// event, never on the task.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -2386,7 +2494,9 @@ impl Store {
         Ok(list)
     }
 
-    /// Add a task to a specific todo-list of a feature.
+    /// Add a task to a specific todo-list of a feature, with what `fields` records about it
+    /// (FTR-060): the tasks it waits on, the files it writes and reads, its estimate. A ref that
+    /// does not resolve, or that closes a cycle, is refused and nothing is written.
     pub fn add_task(
         &self,
         id: &str,
@@ -2394,10 +2504,14 @@ impl Store {
         todo: &str,
         text: &str,
         key: Option<String>,
+        fields: &TaskFields,
     ) -> Result<Task> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let t = Self::add_task_on(&mut project, &mut pending, feature, todo, text, key)?;
+        let t = Self::add_task_on(&mut project, &mut pending, feature, todo, text, key, fields)?;
+        if fields.depends_on.as_ref().is_some_and(|d| !d.is_empty()) {
+            self.check_task_refs(id, &project, &[(feature, todo, &t.key)])?;
+        }
         self.flush(id, &project, &pending)?;
         Ok(t)
     }
@@ -2409,8 +2523,11 @@ impl Store {
         todo: &str,
         text: &str,
         key: Option<String>,
+        fields: &TaskFields,
     ) -> Result<Task> {
+        let pid = project.id.clone();
         let f = project.feature_mut(feature)?;
+        let code = f.code.clone();
         let list = f
             .todo_lists
             .iter_mut()
@@ -2424,7 +2541,7 @@ impl Store {
         if existing.iter().any(|k| k == &key) {
             return Err(CoreError::TaskExists(key, todo.to_string()));
         }
-        let task = Task {
+        let mut task = Task {
             extra: Default::default(),
             key,
             text: text.to_string(),
@@ -2435,10 +2552,88 @@ impl Store {
             reads: vec![],
             estimate_h: None,
         };
+        let fields = TaskFields {
+            text: None,
+            ..fields.clone()
+        };
+        fields.apply(&mut task, &pid, &code, todo)?;
         list.tasks.push(task.clone());
         f.updated_at = now_rfc3339();
         pending.persist_features.insert(f.code.clone());
         Ok(task)
+    }
+
+    /// Change what a task records (FTR-060): its text, the tasks it waits on, the files it writes
+    /// and reads, its estimate. A field `fields` leaves `None` stays; an empty value clears it. A
+    /// Completed task may still be edited; its state is never changed here. Paths and the estimate
+    /// are checked, and the refs resolved against the task graph: an unknown task or a cycle is
+    /// refused and nothing is written.
+    pub fn edit_task(
+        &self,
+        id: &str,
+        feature: &str,
+        todo: &str,
+        key: &str,
+        fields: &TaskFields,
+    ) -> Result<Task> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let t = Self::edit_task_on(&mut project, &mut pending, feature, todo, key, fields)?;
+        if fields.depends_on.is_some() {
+            self.check_task_refs(id, &project, &[(feature, todo, key)])?;
+        }
+        self.flush(id, &project, &pending)?;
+        Ok(t)
+    }
+
+    fn edit_task_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        feature: &str,
+        todo: &str,
+        key: &str,
+        fields: &TaskFields,
+    ) -> Result<Task> {
+        let pid = project.id.clone();
+        let f = project.feature_mut(feature)?;
+        let code = f.code.clone();
+        let list = f
+            .todo_lists
+            .iter_mut()
+            .find(|l| l.code == todo)
+            .ok_or_else(|| CoreError::TodoListNotFound(todo.to_string(), feature.to_string()))?;
+        let task = list
+            .tasks
+            .iter_mut()
+            .find(|t| t.key == key)
+            .ok_or_else(|| CoreError::TaskNotFound(key.to_string(), todo.to_string()))?;
+        let mut edited = task.clone();
+        fields.apply(&mut edited, &pid, &code, todo)?;
+        *task = edited.clone();
+        f.updated_at = now_rfc3339();
+        pending.persist_features.insert(f.code.clone());
+        Ok(edited)
+    }
+
+    /// The refs of each `(feature, todo, key)` task resolve in the task graph of `project` as it
+    /// stands in memory, and no cycle runs through them (FTR-060).
+    fn check_task_refs(
+        &self,
+        id: &str,
+        project: &Project,
+        tasks: &[(&str, &str, &str)],
+    ) -> Result<()> {
+        let graph = crate::taskgraph::TaskGraph::build(self, id, Some(project))?;
+        for (feature, todo, key) in tasks {
+            let code = project.feature(feature)?.code.clone();
+            graph.validate_task(&crate::taskgraph::TaskId {
+                project: id.to_string(),
+                code,
+                todo: todo.to_string(),
+                key: key.to_string(),
+            })?;
+        }
+        Ok(())
     }
 
     /// Set a task's state within a todo-list. When every task across all of the feature's
@@ -2895,6 +3090,9 @@ impl Store {
         let mut deferred: Vec<DeferredDoc> = Vec::new();
         // Items a `task.state` touched, and the op that did, for the end-of-batch advance.
         let mut finishing: Vec<(usize, String)> = Vec::new();
+        // Tasks whose refs a `task.add` or `task.edit` set, checked once every op has applied, so
+        // a task may name one a later op adds (FTR-060).
+        let mut task_refs: Vec<(usize, String, String, String)> = Vec::new();
 
         for (i, op) in ops.into_iter().enumerate() {
             let result: Result<serde_json::Value> = (|| match op {
@@ -3341,19 +3539,69 @@ impl Store {
                     todo,
                     text,
                     key,
+                    depends_on,
+                    writes,
+                    reads,
+                    estimate_h,
                 } => {
                     if skipped.contains(&feature) || skipped.contains(&todo) {
                         return Ok(skip("task.add", &feature));
                     }
+                    let (feature, todo) = (resolve(&aliases, &feature), resolve(&aliases, &todo));
+                    let refs = depends_on.as_ref().is_some_and(|d| !d.is_empty());
                     let t = Self::add_task_on(
                         &mut project,
                         &mut pending,
-                        &resolve(&aliases, &feature),
-                        &resolve(&aliases, &todo),
+                        &feature,
+                        &todo,
                         &text,
                         key,
+                        &TaskFields {
+                            depends_on,
+                            writes,
+                            reads,
+                            estimate_h: estimate_h.map(Some),
+                            text: None,
+                        },
                     )?;
+                    if refs {
+                        task_refs.push((i, feature, todo, t.key.clone()));
+                    }
                     Ok(serde_json::json!({"op":"task.add","key":t.key}))
+                }
+                TaskEdit {
+                    feature,
+                    todo,
+                    key,
+                    text,
+                    depends_on,
+                    writes,
+                    reads,
+                    estimate_h,
+                } => {
+                    if skipped.contains(&feature) || skipped.contains(&todo) {
+                        return Ok(skip("task.edit", &feature));
+                    }
+                    let (feature, todo) = (resolve(&aliases, &feature), resolve(&aliases, &todo));
+                    let refs = depends_on.is_some();
+                    let t = Self::edit_task_on(
+                        &mut project,
+                        &mut pending,
+                        &feature,
+                        &todo,
+                        &key,
+                        &TaskFields {
+                            depends_on,
+                            writes,
+                            reads,
+                            estimate_h,
+                            text,
+                        },
+                    )?;
+                    if refs {
+                        task_refs.push((i, feature, todo, t.key.clone()));
+                    }
+                    Ok(serde_json::json!({"op":"task.edit","key":t.key}))
                 }
                 TaskState {
                     feature,
@@ -3449,6 +3697,23 @@ impl Store {
                 // only on success, so those writes landed on disk OUTSIDE git, invisible to the
                 // history and swept into whatever unrelated commit came next.
                 Err(e) => return Err(CoreError::BatchOpFailed(i, e.to_string())),
+            }
+        }
+        // Every ref a task op set resolves, and none closes a cycle (FTR-060); a refusal names
+        // the op and changes nothing.
+        if let Some((first, ..)) = task_refs.first() {
+            let graph = crate::taskgraph::TaskGraph::build(self, id, Some(&project))
+                .map_err(|e| CoreError::BatchOpFailed(*first, e.to_string()))?;
+            for (i, feature, todo, key) in &task_refs {
+                let checked = project.feature(feature).and_then(|f| {
+                    graph.validate_task(&crate::taskgraph::TaskId {
+                        project: id.to_string(),
+                        code: f.code.clone(),
+                        todo: todo.clone(),
+                        key: key.clone(),
+                    })
+                });
+                checked.map_err(|e| CoreError::BatchOpFailed(*i, e.to_string()))?;
             }
         }
         // The batch is one change, so it finishes items as one change would (FEAT-156): each
@@ -4820,7 +5085,14 @@ mod tests {
         let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
         for text in ["one", "two"] {
             store
-                .add_task("demo", &f.code, &list.code, text, None)
+                .add_task(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    text,
+                    None,
+                    &TaskFields::default(),
+                )
                 .unwrap();
         }
         let hold = Some("the coordinator moves it");
@@ -4938,7 +5210,14 @@ mod tests {
             store.move_feature("demo", &f.code, "Scheduled").unwrap();
             let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
             store
-                .add_task("demo", &f.code, &list.code, "one", None)
+                .add_task(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "one",
+                    None,
+                    &TaskFields::default(),
+                )
                 .unwrap();
             (f.code, list.code)
         };
@@ -5249,6 +5528,243 @@ mod tests {
         .unwrap();
         store.apply_batch_with("demo", untimed, false).unwrap();
         assert_eq!(timings().len(), 3, "no duration, no run file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-060 R-1: a task records the tasks it waits on, the files it writes and reads, and an
+    /// estimate, on add and on edit; each is cleared by an empty value; a Completed task may still
+    /// be edited; a bad path, an estimate of 0 and an unknown ref are refused and change nothing.
+    #[test]
+    fn a_tasks_dependencies_footprint_and_estimate_are_recorded() {
+        let (store, dir) = atomic_board("taskfields");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the board is the test's own"
+        );
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+        let la = store.add_todo_list("demo", &a.code, "work", None).unwrap();
+        let lb = store.add_todo_list("demo", &b.code, "work", None).unwrap();
+        store
+            .add_task(
+                "demo",
+                &a.code,
+                &la.code,
+                "first",
+                None,
+                &TaskFields::default(),
+            )
+            .unwrap();
+        let other = store
+            .add_task(
+                "demo",
+                &b.code,
+                &lb.code,
+                "other",
+                None,
+                &TaskFields::default(),
+            )
+            .unwrap();
+        assert!(other.depends_on.is_empty() && !other.has_footprint());
+
+        // Added with every field; another item's ref is stored as CODE/TL/T, duplicates dropped.
+        let cross = format!("{}/{}/T1", b.code, lb.code);
+        let t2 = store
+            .add_task(
+                "demo",
+                &a.code,
+                &la.code,
+                "second",
+                None,
+                &TaskFields {
+                    depends_on: Some(vec![" T1 ".into(), format!("demo:{cross}"), "T1".into()]),
+                    writes: Some(vec!["api/src/store.rs".into(), "docs/".into()]),
+                    reads: Some(vec!["api/src/models.rs".into()]),
+                    estimate_h: Some(Some(1.5)),
+                    text: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(t2.key, "T2");
+        assert_eq!(t2.depends_on, vec!["T1".to_string(), cross.clone()]);
+        assert_eq!(t2.writes, vec!["api/src/store.rs", "docs/"]);
+        assert_eq!(t2.reads, vec!["api/src/models.rs"]);
+        assert_eq!(t2.estimate_h, Some(1.5));
+        let stored = || {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&a.code)
+                .unwrap()
+                .todo_lists[0]
+                .tasks[1]
+                .clone()
+        };
+        assert_eq!(stored().depends_on, t2.depends_on, "written to the board");
+
+        // Each field edited on its own; the others are left as they were.
+        let edit = |fields: TaskFields| store.edit_task("demo", &a.code, &la.code, "T2", &fields);
+        let t = edit(TaskFields {
+            text: Some("second, renamed".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(t.text, "second, renamed");
+        assert_eq!(t.writes, t2.writes, "an untouched field stays");
+        let t = edit(TaskFields {
+            depends_on: Some(vec!["TL-001/T1".into()]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            t.depends_on,
+            vec!["TL-001/T1"],
+            "a ref in this item is kept as given"
+        );
+        let t = edit(TaskFields {
+            writes: Some(vec!["web/src/types.ts".into()]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(t.writes, vec!["web/src/types.ts"]);
+        let t = edit(TaskFields {
+            reads: Some(vec!["README.md".into()]),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(t.reads, vec!["README.md"]);
+        let t = edit(TaskFields {
+            estimate_h: Some(Some(2.0)),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(t.estimate_h, Some(2.0));
+        assert_eq!(stored().estimate_h, Some(2.0));
+
+        // A Completed task may still be edited.
+        store
+            .set_task_state("demo", &a.code, &la.code, "T2", TaskState::Completed)
+            .unwrap();
+        let t = edit(TaskFields {
+            estimate_h: Some(Some(3.0)),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(t.estimate_h, Some(3.0));
+        assert_eq!(t.state, TaskState::Completed, "editing leaves the state");
+
+        // Refused, and the board unchanged: bad paths, an estimate of 0, an unknown ref.
+        let path = store.feature_path(
+            "demo",
+            &store.load("demo").unwrap().feature(&a.code).unwrap().status,
+            &a.code,
+        );
+        let before = std::fs::read(&path).unwrap();
+        for bad in [
+            "../up.rs",
+            "/abs.rs",
+            "./here.rs",
+            "a\\b.rs",
+            "",
+            "a/../b.rs",
+        ] {
+            let e = edit(TaskFields {
+                writes: Some(vec![bad.into()]),
+                ..Default::default()
+            });
+            assert!(e.is_err(), "{bad:?} is refused");
+            let e = edit(TaskFields {
+                reads: Some(vec![bad.into()]),
+                ..Default::default()
+            });
+            assert!(e.is_err(), "{bad:?} is refused as a read too");
+        }
+        for bad in [0.0, -1.0, f64::NAN] {
+            assert!(
+                edit(TaskFields {
+                    estimate_h: Some(Some(bad)),
+                    ..Default::default()
+                })
+                .is_err(),
+                "estimate {bad} is refused"
+            );
+        }
+        assert!(
+            edit(TaskFields {
+                depends_on: Some(vec!["T9".into()]),
+                ..Default::default()
+            })
+            .is_err(),
+            "an unknown task is refused"
+        );
+        assert!(
+            store
+                .add_task(
+                    "demo",
+                    &a.code,
+                    &la.code,
+                    "bad",
+                    None,
+                    &TaskFields {
+                        writes: Some(vec!["../x".into()]),
+                        ..Default::default()
+                    },
+                )
+                .is_err(),
+            "a bad path is refused on add"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+
+        // Each field cleared by an empty value.
+        let t = edit(TaskFields {
+            depends_on: Some(vec![]),
+            writes: Some(vec![]),
+            reads: Some(vec![]),
+            estimate_h: Some(None),
+            text: None,
+        })
+        .unwrap();
+        assert!(t.depends_on.is_empty() && t.writes.is_empty() && t.reads.is_empty());
+        assert_eq!(t.estimate_h, None);
+        let s = stored();
+        assert!(s.depends_on.is_empty() && !s.has_footprint() && s.estimate_h.is_none());
+
+        // The batch: task.add with fields, then task.edit, in one change.
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(json!([
+            {"op": "task.add", "feature": a.code, "todo": la.code, "text": "third",
+             "depends_on": ["T2"], "writes": ["CHANGELOG.md"], "estimate_h": 0.5},
+            {"op": "task.edit", "feature": a.code, "todo": la.code, "key": "T1",
+             "depends_on": ["T3"], "reads": ["Makefile"]},
+        ]))
+        .unwrap();
+        store.apply_batch("demo", ops).unwrap();
+        let f = store
+            .load("demo")
+            .unwrap()
+            .feature(&a.code)
+            .unwrap()
+            .clone();
+        let tasks = &f.todo_lists[0].tasks;
+        assert_eq!(tasks[2].depends_on, vec!["T2"]);
+        assert_eq!(tasks[2].writes, vec!["CHANGELOG.md"]);
+        assert_eq!(tasks[2].estimate_h, Some(0.5));
+        assert_eq!(tasks[0].depends_on, vec!["T3"]);
+        assert_eq!(tasks[0].reads, vec!["Makefile"]);
+        // A cycle made by a batch is refused, and the batch changes nothing.
+        let before = std::fs::read(store.feature_path("demo", &f.status, &f.code)).unwrap();
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(json!([
+            {"op": "task.edit", "feature": a.code, "todo": la.code, "key": "T2",
+             "depends_on": ["T1"]},
+        ]))
+        .unwrap();
+        assert!(
+            store.apply_batch("demo", ops).is_err(),
+            "T1 -> T3 -> T2 -> T1"
+        );
+        assert_eq!(
+            std::fs::read(store.feature_path("demo", &f.status, &f.code)).unwrap(),
+            before
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

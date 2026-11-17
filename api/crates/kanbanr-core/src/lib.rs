@@ -541,10 +541,24 @@ mod tests {
         assert_eq!(tl1.code, "TL-001");
         assert_eq!(tl2.code, "TL-002");
         let t1 = store
-            .add_task("demo", &f.code, &tl1.code, "do a", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &tl1.code,
+                "do a",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
-            .add_task("demo", &f.code, &tl2.code, "do b", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &tl2.code,
+                "do b",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         assert_eq!(t1.key, "T1");
         // Completing only list 1's task does not complete the feature (list 2 still open).
@@ -1370,7 +1384,14 @@ mod tests {
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         let tl = store.add_todo_list("demo", &f.code, "s1", None).unwrap();
         store
-            .add_task("demo", &f.code, &tl.code, "do a", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &tl.code,
+                "do a",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
 
         let done = store
@@ -1619,7 +1640,14 @@ mod tests {
         store.move_feature("demo", &f.code, "Out-of-Scope").unwrap();
         let tl = store.add_todo_list("demo", &f.code, "x", None).unwrap();
         store
-            .add_task("demo", &f.code, &tl.code, "t", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &tl.code,
+                "t",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         let updated = store
             .set_task_state("demo", &f.code, &tl.code, "T1", TaskState::Completed)
@@ -2046,7 +2074,14 @@ requirements:
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
         store
-            .add_task("demo", &f.code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         (f.code, list.code)
     }
@@ -2776,7 +2811,16 @@ requirements:
 
         // Work still open: a sign-off finishes nothing.
         let (open, list) = defined_in_progress(&store, "Open");
-        store.add_task("demo", &open, &list, "two", None).unwrap();
+        store
+            .add_task(
+                "demo",
+                &open,
+                &list,
+                "two",
+                None,
+                &crate::store::TaskFields::default(),
+            )
+            .unwrap();
         store
             .set_task_state(
                 "demo",
@@ -2852,10 +2896,24 @@ requirements:
             .unwrap();
         let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
         store
-            .add_task("demo", &f.code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
-            .add_task("demo", &f.code, &list.code, "two", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &list.code,
+                "two",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         crate::charter::save(
             &store,
@@ -4512,7 +4570,14 @@ requirements:
             .unwrap();
         let tl = store.add_todo_list("demo", &code, "work", None).unwrap();
         store
-            .add_task("demo", &code, &tl.code, "do it", None)
+            .add_task(
+                "demo",
+                &code,
+                &tl.code,
+                "do it",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         (store, d, code, tl.code)
     }
@@ -4881,7 +4946,14 @@ requirements:
             .unwrap();
         let tl = store.add_todo_list("demo", &code, "work", None).unwrap();
         store
-            .add_task("demo", &code, &tl.code, "do it", None)
+            .add_task(
+                "demo",
+                &code,
+                &tl.code,
+                "do it",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
 
         let (f, held) = store
@@ -7069,7 +7141,14 @@ requirements:
         let tl = store.add_todo_list(project, feature, "work", None).unwrap();
         for i in 0..total {
             let t = store
-                .add_task(project, feature, &tl.code, &format!("t{i}"), None)
+                .add_task(
+                    project,
+                    feature,
+                    &tl.code,
+                    &format!("t{i}"),
+                    None,
+                    &crate::store::TaskFields::default(),
+                )
                 .unwrap();
             if i < done {
                 store

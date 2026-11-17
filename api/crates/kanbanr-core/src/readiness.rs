@@ -2866,7 +2866,14 @@ mod tests {
             .add_todo_list("demo", &item.code, "build", None)
             .unwrap();
         store
-            .add_task("demo", &item.code, &list.code, "Write the parser", None)
+            .add_task(
+                "demo",
+                &item.code,
+                &list.code,
+                "Write the parser",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         (store, dir, item.code, list.code)
     }
@@ -3068,10 +3075,24 @@ mod tests {
         store.set_gates("demo", gates).unwrap();
         let list = store.add_todo_list("demo", &code, "work", None).unwrap();
         store
-            .add_task("demo", &code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
-            .add_task("demo", &code, &list.code, "two", None)
+            .add_task(
+                "demo",
+                &code,
+                &list.code,
+                "two",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(
@@ -3187,7 +3208,14 @@ mod tests {
             .add_todo_list("demo", &item.code, "work", None)
             .unwrap();
         let task = store
-            .add_task("demo", &item.code, &list.code, "build it", None)
+            .add_task(
+                "demo",
+                &item.code,
+                &list.code,
+                "build it",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(
