@@ -21,17 +21,23 @@ pub struct Project {
 }
 
 impl Project {
+    /// The item `code` names: its current code, else one of its earlier codes (FTR-056).
     pub fn feature(&self, code: &str) -> Result<&FeatureItem> {
-        self.features
-            .iter()
-            .find(|f| f.code == code)
-            .ok_or_else(|| CoreError::FeatureNotFound(code.to_string()))
+        crate::aliases::find(self, code).ok_or_else(|| CoreError::FeatureNotFound(code.to_string()))
     }
+    /// The same rule as `feature`: current code first, then aliases.
     fn feature_mut(&mut self, code: &str) -> Result<&mut FeatureItem> {
-        self.features
-            .iter_mut()
-            .find(|f| f.code == code)
-            .ok_or_else(|| CoreError::FeatureNotFound(code.to_string()))
+        let i = self
+            .features
+            .iter()
+            .position(|f| f.code == code)
+            .or_else(|| {
+                self.features
+                    .iter()
+                    .position(|f| f.aliases.iter().any(|a| a == code))
+            })
+            .ok_or_else(|| CoreError::FeatureNotFound(code.to_string()))?;
+        Ok(&mut self.features[i])
     }
     pub fn milestone(&self, code: &str) -> Result<&Milestone> {
         self.milestones
@@ -1040,6 +1046,7 @@ impl Store {
         let feature = FeatureItem {
             extra: Default::default(),
             code: code.clone(),
+            aliases: Vec::new(),
             title: title.to_string(),
             specification: specification.to_string(),
             status: project.config.default_status(),

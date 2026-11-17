@@ -119,6 +119,10 @@ impl TodoList {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FeatureItem {
     pub code: String,
+    /// The item's earlier codes, oldest first (FTR-056): a reference to one of them means this
+    /// item, and no other item is ever given one. Absent when the item was never renamed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     pub title: String,
     #[serde(default)]
     pub specification: String,
@@ -1147,6 +1151,16 @@ pub struct IssueLink {
 }
 
 impl FeatureItem {
+    /// This item's code or one of its earlier codes (FTR-056).
+    pub fn answers_to(&self, code: &str) -> bool {
+        self.code == code || self.aliases.iter().any(|a| a == code)
+    }
+
+    /// `code` then `aliases`, in order (FTR-056).
+    pub fn codes(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.code.as_str()).chain(self.aliases.iter().map(String::as_str))
+    }
+
     /// The merge commit recorded when the item was integrated (FTR-004): the newest transition
     /// that carries one. None on an item never integrated, or integrated before this version.
     pub fn merge_commit(&self) -> Option<&str> {
@@ -1240,6 +1254,7 @@ impl FeatureItem {
     pub fn meta(&self) -> FeatureMeta {
         FeatureMeta {
             code: self.code.clone(),
+            aliases: self.aliases.clone(),
             title: self.title.clone(),
             status: self.status.clone(),
             milestone: self.milestone.clone(),
@@ -1272,6 +1287,7 @@ impl FeatureItem {
     pub fn from_meta(meta: FeatureMeta, specification: String) -> FeatureItem {
         FeatureItem {
             code: meta.code,
+            aliases: meta.aliases,
             title: meta.title,
             specification,
             status: meta.status,
@@ -1307,6 +1323,9 @@ impl FeatureItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureMeta {
     pub code: String,
+    /// Earlier codes, oldest first (FTR-056); written directly after `code`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     pub title: String,
     pub status: Status,
     /// The milestone this feature belongs to (required).
@@ -1369,6 +1388,9 @@ pub struct FeatureMeta {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub code: String,
+    /// Earlier codes (FTR-056), a cache of the item file's `aliases`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     pub status: Status,
     pub milestone: String,
     #[serde(default)]
@@ -1403,6 +1425,7 @@ impl IndexEntry {
     pub fn from_feature(f: &FeatureItem) -> IndexEntry {
         IndexEntry {
             code: f.code.clone(),
+            aliases: f.aliases.clone(),
             status: f.status.clone(),
             milestone: f.milestone.clone(),
             kind: f.kind.clone(),
