@@ -1504,6 +1504,26 @@ impl Page<'_> {
         }
     }
 
+    /// Make the presses in turn on this page (FTR-063): a button that asks first, then its
+    /// confirmation or Cancel. The page settles (at most 5 s) before each later press. The first
+    /// press that fails stops the list; with several, its error names its place (`press 2 of 2: `).
+    pub fn press_in_turn(&self, presses: &[(&str, Option<&str>)]) -> Result<()> {
+        let n = presses.len();
+        for (i, (button, subject)) in presses.iter().enumerate() {
+            if i > 0 {
+                self.settle(Duration::from_secs(5))?;
+            }
+            if let Err(e) = self.press(button, *subject) {
+                return Err(if n > 1 {
+                    anyhow!("press {} of {n}: {e}", i + 1)
+                } else {
+                    e
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Save the page as a PNG.
     pub fn screenshot(&self, file: &Path) -> Result<()> {
         use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
@@ -2060,6 +2080,110 @@ pub(crate) mod tests {
                 let feature = monitor.feature("shop", "FEAT-001").unwrap();
                 assert_eq!(feature["definition"]["approval"]["origin"], "monitor");
                 assert!(!monitor.fingerprint("shop", &decision).unwrap().is_empty());
+            }
+        }
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Wait up to `max` for FEAT-001 on the scratch board to be approved as the monitor's identity.
+    fn approved_within(monitor: &Monitor, max: Duration) -> bool {
+        let deadline = Instant::now() + max;
+        while Instant::now() < deadline {
+            let feature = monitor.feature("shop", "FEAT-001").unwrap();
+            if feature["definition"]["approval"]["by"] == "Tester" {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        false
+    }
+
+    /// FTR-063 R-3: on a page whose Approve asks first, two presses in turn on one page approve
+    /// the item as the monitor's identity (that the first alone approves nothing is R-4's proof);
+    /// without a browser the test exercises the `NoBrowser` path and says so.
+    #[test]
+    fn two_presses_on_one_page_confirm_what_the_first_asked() {
+        let (_run, base, monitor) = scratch_board("ask-twice");
+        match Browser::open() {
+            Err(e) if is_no_browser(&e) => {
+                eprintln!("no browser on this machine: the presses are the finding {e}");
+            }
+            Err(e) => panic!("{e}"),
+            Ok(browser) => {
+                let page = browser.page(&monitor.page_url("shop", "ask")).unwrap();
+                page.press_in_turn(&[("Approve", Some("FEAT-001")), ("Approve", Some("FEAT-001"))])
+                    .unwrap();
+                assert!(
+                    approved_within(&monitor, Duration::from_secs(20)),
+                    "the second press approved FEAT-001 as the monitor's identity"
+                );
+                let feature = monitor.feature("shop", "FEAT-001").unwrap();
+                assert_eq!(feature["definition"]["approval"]["origin"], "monitor");
+            }
+        }
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FTR-063 R-4: Cancel after the asking press changes nothing: the item is still not
+    /// approved, and the card again offers Approve without the question.
+    #[test]
+    fn cancel_after_the_first_press_changes_nothing() {
+        let (_run, base, monitor) = scratch_board("ask-cancel");
+        match Browser::open() {
+            Err(e) if is_no_browser(&e) => {
+                eprintln!("no browser on this machine: the presses are the finding {e}");
+            }
+            Err(e) => panic!("{e}"),
+            Ok(browser) => {
+                let page = browser.page(&monitor.page_url("shop", "ask")).unwrap();
+                page.press_in_turn(&[("Approve", Some("FEAT-001")), ("Cancel", Some("FEAT-001"))])
+                    .unwrap();
+                assert!(
+                    !approved_within(&monitor, Duration::from_secs(3)),
+                    "Cancel left FEAT-001 unapproved"
+                );
+                let text = page.text().unwrap();
+                assert!(text.contains("Approve FEAT-001"), "{text}");
+                assert!(!text.contains("This records your approval"), "{text}");
+            }
+        }
+        monitor.stop();
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FTR-063 R-5: a later press the page does not offer stops the list with its place and what
+    /// the page offered, and the board is unchanged.
+    #[test]
+    fn a_later_press_the_page_does_not_offer_names_its_place() {
+        let (_run, base, monitor) = scratch_board("ask-missing");
+        match Browser::open() {
+            Err(e) if is_no_browser(&e) => {
+                eprintln!("no browser on this machine: the presses are the finding {e}");
+            }
+            Err(e) => panic!("{e}"),
+            Ok(browser) => {
+                let page = browser.page(&monitor.page_url("shop", "ask")).unwrap();
+                let err = page
+                    .press_in_turn(&[
+                        ("Approve", Some("FEAT-001")),
+                        ("Sign off release", Some("FEAT-001")),
+                    ])
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    err.starts_with("press 2 of 2: no button named \"Sign off release\""),
+                    "{err}"
+                );
+                assert!(
+                    err.contains("cancel"),
+                    "the offered buttons are named: {err}"
+                );
+                assert!(
+                    !approved_within(&monitor, Duration::from_secs(3)),
+                    "the board is unchanged"
+                );
             }
         }
         monitor.stop();

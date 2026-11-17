@@ -458,6 +458,50 @@ fn a_talk_expectation_over_a_span_passes_on_an_earlier_question() {
     let _ = std::fs::remove_dir_all(&w.root);
 }
 
+/// FTR-063 R-6 — a press list run without a browser is one `no-browser` finding for its step,
+/// naming every button in turn, and the step's check is failed, not unmeasured.
+#[cfg(unix)]
+#[test]
+fn a_press_list_without_a_browser_is_one_finding() {
+    let w = world("presslist");
+    let rb = runbook_file(
+        &w,
+        "presslist",
+        "  - id: \"2.3\"\n    press: [{page: review, button: Approve, subject: {item: newest}}, {button: Cancel}]\n    check: MT-W\n",
+    );
+    let out = run_walkthrough(&w, &rb, "p1");
+    let shown = text(&out);
+    let run = w.runs.join("p1");
+    let findings = std::fs::read_to_string(run.join("raw/findings.md"))
+        .unwrap_or_else(|_| panic!("no findings.md\n{shown}"));
+    let rows: Vec<&str> = findings
+        .lines()
+        .filter(|l| l.contains("step 2.3 no-browser"))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "one no-browser row for 2.3:\n{findings}\n{shown}"
+    );
+    assert!(
+        rows[0].contains("press \"Approve\", then \"Cancel\" on review"),
+        "{}",
+        rows[0]
+    );
+    let checks = std::fs::read_to_string(run.join("raw/checks.tsv"))
+        .unwrap_or_else(|_| panic!("no checks.tsv\n{shown}"));
+    // MT-W is placed on 2.2 and 2.3; one row reports the marker, failed by 2.3's finding.
+    let mt_w = checks
+        .lines()
+        .find(|l| l.starts_with("MT-W\t"))
+        .unwrap_or_else(|| panic!("no MT-W row\n{checks}\n{shown}"));
+    let cols: Vec<&str> = mt_w.split('\t').collect();
+    assert!(cols[1].split('+').any(|s| s == "2.3"), "{mt_w}");
+    assert_eq!(cols[2], "false", "failed, not unmeasured: {mt_w}");
+    assert!(cols[3].contains("2.3: no browser"), "{mt_w}");
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
 /// FTR-037 R-8 — `walkthrough: a run past its budget stops within one turn and still snapshots`:
 /// the turn that reaches the budget is the last one sent, the stop is a finding, and the captures
 /// (manifest, truth, tables) are still made.

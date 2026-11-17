@@ -310,7 +310,8 @@ impl Decision {
 }
 
 /// Press a button on the rendered page instead of posting the route (the person's choice, 15 Nov
-/// 2026: a step is `decide` or `press`, never both).
+/// 2026: a step is `decide` or `press`, never both). A step's presses are made in turn on one page
+/// (FTR-063): a button that asks first, then its confirmation or Cancel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Press {
     pub page: String,
@@ -491,7 +492,9 @@ pub struct Step {
     pub say: Option<String>,
     pub answers: Vec<AnswerRule>,
     pub decide: Option<Decision>,
-    pub press: Option<Press>,
+    /// The presses, in the order they are made on one page (FTR-063): `None` is no press;
+    /// `Some` of an empty list is `press: []`, which lint refuses. Read it through `presses()`.
+    pub press: Option<Vec<Press>>,
     pub offer: Option<Offer>,
     pub expect: Option<Expect>,
     pub push: Option<Push>,
@@ -505,6 +508,11 @@ pub struct Step {
 }
 
 impl Step {
+    /// The step's presses in order; empty when it has none (FTR-063).
+    pub fn presses(&self) -> &[Press] {
+        self.press.as_deref().unwrap_or(&[])
+    }
+
     /// Every item selector the step acts on, to read its names as codes.
     pub fn selectors_mut(&mut self) -> Vec<&mut ItemSel> {
         let mut sels: Vec<&mut ItemSel> = Vec::new();
@@ -517,7 +525,12 @@ impl Step {
                 _ => {}
             }
         }
-        sels.extend(self.press.as_mut().and_then(|p| p.subject.as_mut()));
+        sels.extend(
+            self.press
+                .iter_mut()
+                .flatten()
+                .filter_map(|p| p.subject.as_mut()),
+        );
         sels.extend(self.offer.as_mut().and_then(|o| o.subject.as_mut()));
         if let Some(e) = &mut self.expect {
             match &mut e.board {
@@ -1017,10 +1030,21 @@ struct RawExpect {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPress {
-    page: String,
+    /// Required on a single press and a list's first; a later press without one is on the
+    /// first's page (FTR-063). A missing first page is a lint error.
+    #[serde(default)]
+    page: Option<String>,
     button: String,
     #[serde(default)]
     subject: Option<RawItem>,
+}
+
+/// `press:` as one map, or a list of maps made in turn on one page (FTR-063).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawPresses {
+    One(RawPress),
+    Many(Vec<RawPress>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -1032,7 +1056,7 @@ struct RawStep {
     #[serde(default)]
     answers: Vec<AnswerRule>,
     decide: Option<RawDecision>,
-    press: Option<RawPress>,
+    press: Option<RawPresses>,
     offer: Option<RawOffer>,
     expect: Option<RawExpect>,
     push: Option<Push>,
@@ -1113,10 +1137,33 @@ impl Runbook {
             let id = s.id.unwrap_or_else(|| format!("#{}", i + 1));
             let decide = s.decide.map(|d| d.into_decision(&id)).transpose()?;
             let offer = s.offer.map(RawOffer::into_offer);
-            let press = s.press.map(|p| Press {
-                page: p.page,
-                button: p.button,
-                subject: p.subject.map(|s| s.item.into_sel()),
+            let raw_presses = match s.press {
+                None => None,
+                Some(RawPresses::One(p)) => Some(vec![p]),
+                Some(RawPresses::Many(ps)) => Some(ps),
+            };
+            // A later press without a page is on the first's; a first without one reads as ""
+            // and lint names it.
+            let mut first_page: Option<String> = None;
+            let press = raw_presses.map(|ps| {
+                ps.into_iter()
+                    .map(|p| {
+                        let page = match (&first_page, p.page) {
+                            (None, page) => {
+                                let page = page.unwrap_or_default();
+                                first_page = Some(page.clone());
+                                page
+                            }
+                            (Some(_), Some(page)) => page,
+                            (Some(first), None) => first.clone(),
+                        };
+                        Press {
+                            page,
+                            button: p.button,
+                            subject: p.subject.map(|s| s.item.into_sel()),
+                        }
+                    })
+                    .collect()
             });
             let expect = match s.expect {
                 None => None,
@@ -1208,7 +1255,7 @@ fn selectors(s: &Step) -> Vec<&ItemSel> {
             _ => {}
         }
     }
-    sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
+    sels.extend(s.presses().iter().filter_map(|p| p.subject.as_ref()));
     sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
     if let Some(e) = &s.expect {
         if let Some(BoardClaim::ItemStatus { item, .. } | BoardClaim::ItemExists(item)) = &e.board {
@@ -1273,14 +1320,20 @@ pub fn lint_warnings(rb: &Runbook) -> Vec<LintError> {
     for (i, s) in rb.steps.iter().enumerate() {
         // DEF-087 R-4: with no subject, a press clicks the first button on the whole page whose
         // label starts with its text ("Accept" can hit an ADR's Accept on the Review page).
-        if let Some(p) = &s.press
-            && p.page == "review"
-            && p.subject.is_none()
-        {
+        // FTR-063: one warning per such press of a list, naming its place when there are several.
+        for (k, p) in s.presses().iter().enumerate() {
+            if p.page != "review" || p.subject.is_some() {
+                continue;
+            }
+            let which = if s.presses().len() > 1 {
+                format!("press {} ", k + 1)
+            } else {
+                "a press ".to_string()
+            };
             out.push(LintError {
                 step: s.id.clone(),
                 message: format!(
-                    "a press on the review page with no subject clicks the first button whose label starts with \"{}\"; name the subject",
+                    "{which}on the review page with no subject clicks the first button whose label starts with \"{}\"; name the subject",
                     p.button
                 ),
             });
@@ -1330,7 +1383,7 @@ fn title_patterns(s: &Step) -> Vec<String> {
             _ => {}
         }
     }
-    sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
+    sels.extend(s.presses().iter().filter_map(|p| p.subject.as_ref()));
     sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
     sels.extend(
         s.expect
@@ -1409,7 +1462,7 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
         }
         let does_something = s.say.is_some()
             || s.decide.is_some()
-            || s.press.is_some()
+            || !s.presses().is_empty()
             || s.push.is_some()
             || s.expect.as_ref().is_some_and(|e| !e.is_empty());
         if !does_something {
@@ -1418,11 +1471,36 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
                 "the step has none of say, decide, press, push or expect".into(),
             ));
         }
-        if s.decide.is_some() && s.press.is_some() {
+        if s.decide.is_some() && !s.presses().is_empty() {
             out.push(err(
                 &s.id,
                 "a step is `decide` or `press`, never both".into(),
             ));
+        }
+        // FTR-063: a press list is presses in turn on the first press's page.
+        if s.press.as_ref().is_some_and(Vec::is_empty) {
+            out.push(err(&s.id, "a press list names at least one press".into()));
+        }
+        if let Some(first) = s.presses().first() {
+            if first.page.trim().is_empty() {
+                out.push(err(&s.id, "the press names no page".into()));
+            }
+            for (k, p) in s.presses().iter().enumerate() {
+                if p.button.trim().is_empty() {
+                    out.push(err(&s.id, format!("press {} names no button", k + 1)));
+                }
+                if k > 0 && p.page != first.page {
+                    out.push(err(
+                        &s.id,
+                        format!(
+                            "press {} is on page '{}', but a press list stays on one page: the first is on '{}'",
+                            k + 1,
+                            p.page,
+                            first.page
+                        ),
+                    ));
+                }
+            }
         }
         if s.decide.is_some() && s.offer.is_none() {
             out.push(err(
@@ -1644,7 +1722,7 @@ steps:
             })
         );
         assert_eq!(rb.steps[5].check.as_deref(), Some("MT-1"));
-        let press = rb.steps[6].press.as_ref().unwrap();
+        let press = &rb.steps[6].presses()[0];
         assert_eq!(press.button, "Sign off release");
         assert_eq!(press.subject, Some(ItemSel::TitleContains("basket".into())));
         let page = rb.steps[6].expect.as_ref().unwrap().page.as_ref().unwrap();
@@ -2134,6 +2212,95 @@ steps:
                 "step a: a press on the review page with no subject clicks the first button whose label starts with \"Accept\"; name the subject"
             ],
             "{w:?}"
+        );
+    }
+
+    /// FTR-063 R-1: `press` may be a list of presses made in turn on one page. A later press
+    /// without a page takes the first's and keeps its own subject; a single map is a one-press
+    /// list, read exactly as before.
+    #[test]
+    fn a_press_list_is_read_as_presses_on_one_page() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: w\nprocess: p\nsteps:\n  - id: \"4.3\"\n    press:\n      - {page: releases, button: \"Promote v0.1.0\", subject: {item: FEAT-001}}\n      - {button: Cancel, subject: {item: newest}}\n  - id: \"4.4\"\n    press: {page: review, button: Approve, subject: {item: FEAT-002}}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            rb.steps[0].presses(),
+            [
+                Press {
+                    page: "releases".into(),
+                    button: "Promote v0.1.0".into(),
+                    subject: Some(ItemSel::Code("FEAT-001".into())),
+                },
+                Press {
+                    page: "releases".into(),
+                    button: "Cancel".into(),
+                    subject: Some(ItemSel::Newest),
+                },
+            ]
+        );
+        assert_eq!(
+            rb.steps[1].presses(),
+            [Press {
+                page: "review".into(),
+                button: "Approve".into(),
+                subject: Some(ItemSel::Code("FEAT-002".into())),
+            }]
+        );
+        assert_eq!(lint(&rb), Vec::<LintError>::new());
+    }
+
+    /// FTR-063 R-2: lint refuses an empty press list, a press with no button, a first press with
+    /// no page, and a later press on a page other than the first's; a good list lints clean.
+    #[test]
+    fn a_press_list_that_leaves_its_page_is_refused() {
+        let lint_of = |press: &str| -> Vec<String> {
+            let text = format!(
+                "```yaml\nrunbook: w\nprocess: p\nsteps:\n  - id: s\n    say: \"go\"\n    press: {press}\n```"
+            );
+            lint(&Runbook::parse(&text).unwrap())
+                .iter()
+                .map(LintError::to_string)
+                .collect()
+        };
+        assert_eq!(
+            lint_of("[]"),
+            ["step s: a press list names at least one press"]
+        );
+        // With nothing else to do, the step's nothing-to-do error fires too: both are true.
+        let bare = "```yaml\nrunbook: w\nprocess: p\nsteps:\n  - id: s\n    press: []\n```";
+        let all: Vec<String> = lint(&Runbook::parse(bare).unwrap())
+            .iter()
+            .map(LintError::to_string)
+            .collect();
+        assert_eq!(
+            all,
+            [
+                "step s: the step has none of say, decide, press, push or expect",
+                "step s: a press list names at least one press",
+            ]
+        );
+        assert_eq!(
+            lint_of("[{page: review, button: Approve, subject: {item: FEAT-001}}, {button: \"\"}]"),
+            ["step s: press 2 names no button"]
+        );
+        assert_eq!(
+            lint_of("[{button: Approve, subject: {item: FEAT-001}}, {button: Cancel}]"),
+            ["step s: the press names no page"]
+        );
+        assert_eq!(
+            lint_of(
+                "[{page: review, button: Approve, subject: {item: FEAT-001}}, {page: releases, button: Cancel}]"
+            ),
+            [
+                "step s: press 2 is on page 'releases', but a press list stays on one page: the first is on 'review'"
+            ]
+        );
+        assert_eq!(
+            lint_of(
+                "[{page: review, button: Approve, subject: {item: FEAT-001}}, {page: review, button: Cancel, subject: {item: FEAT-001}}]"
+            ),
+            Vec::<String>::new()
         );
     }
 

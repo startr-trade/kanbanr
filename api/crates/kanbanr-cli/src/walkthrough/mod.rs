@@ -1099,7 +1099,7 @@ impl Running {
         }
         // The monitor starts once the first step has made the board.
         if (step.decide.is_some()
-            || step.press.is_some()
+            || !step.presses().is_empty()
             || step.expect.is_some()
             || step.say.is_some())
             && !self.ensure_monitor()
@@ -1308,42 +1308,62 @@ impl Running {
             }
             self.screenshot(&id, &offer.page, "after");
         }
-        if let Some(press) = &step.press {
-            let subject = match (&press.subject, self.monitor.as_ref()) {
-                (Some(sel), Some(m)) => match m.resolve(&project, sel) {
-                    Ok(found) => found.map(|i| i.code),
-                    Err(e) => {
-                        self.finding(
-                            &id,
-                            "ambiguous-selector",
-                            format!("press \"{}\"", press.button),
-                            e.to_string(),
-                        );
-                        step_ok = false;
-                        why.push("the press's subject was ambiguous".into());
-                        Some(String::new())
-                    }
-                },
-                _ => None,
-            };
-            // An ambiguous subject is never pressed for (the empty marker above).
-            let ambiguous = subject.as_deref() == Some("");
+        if let Some(first) = step.presses().first() {
+            // FTR-063: every press's subject is resolved first; an ambiguous one is never pressed
+            // for, and then no press of the list is made.
+            let mut subjects: Vec<Option<String>> = Vec::with_capacity(step.presses().len());
+            let mut ambiguous = false;
+            for press in step.presses() {
+                let subject = match (&press.subject, self.monitor.as_ref()) {
+                    (Some(sel), Some(m)) => match m.resolve(&project, sel) {
+                        Ok(found) => found.map(|i| i.code),
+                        Err(e) => {
+                            self.finding(
+                                &id,
+                                "ambiguous-selector",
+                                format!("press \"{}\"", press.button),
+                                e.to_string(),
+                            );
+                            step_ok = false;
+                            why.push("the press's subject was ambiguous".into());
+                            ambiguous = true;
+                            None
+                        }
+                    },
+                    _ => None,
+                };
+                subjects.push(subject);
+            }
+            // `press "<b1>", then "<b2>" on <page>`: one press reads as before.
+            let buttons = step
+                .presses()
+                .iter()
+                .map(|p| format!("\"{}\"", p.button))
+                .collect::<Vec<_>>()
+                .join(", then ");
+            let what = format!("press {buttons} on {}", first.page);
             let url = self
                 .monitor
                 .as_ref()
-                .map(|m| m.page_url(&project, &press.page))
+                .map(|m| m.page_url(&project, &first.page))
                 .unwrap_or_default();
             if !ambiguous {
+                let presses: Vec<(&str, Option<&str>)> = step
+                    .presses()
+                    .iter()
+                    .zip(&subjects)
+                    .map(|(p, s)| (p.button.as_str(), s.as_deref()))
+                    .collect();
                 let pressed = match self.browser() {
                     None => Err(None),
                     Some(b) => b
                         .page(&url)
-                        .and_then(|p| p.press(&press.button, subject.as_deref()))
+                        .and_then(|p| p.press_in_turn(&presses))
                         .map_err(Some),
                 };
                 match pressed {
                     Ok(()) => {
-                        eprintln!("step {id}: pressed \"{}\" on {}", press.button, press.page);
+                        eprintln!("step {id}: pressed {buttons} on {}", first.page);
                         // The click posts on its own; give the board a moment to change.
                         std::thread::sleep(Duration::from_secs(2));
                     }
@@ -1352,22 +1372,12 @@ impl Running {
                             .browser_absent
                             .clone()
                             .unwrap_or_else(|| "--no-browser".into());
-                        self.finding(
-                            &id,
-                            "no-browser",
-                            format!("press \"{}\" on {}", press.button, press.page),
-                            why_not,
-                        );
+                        self.finding(&id, "no-browser", what, why_not);
                         step_ok = false;
                         why.push("no browser".into());
                     }
                     Err(Some(e)) => {
-                        self.finding(
-                            &id,
-                            "press-failed",
-                            format!("press \"{}\" on {}", press.button, press.page),
-                            e.to_string(),
-                        );
+                        self.finding(&id, "press-failed", what, e.to_string());
                         step_ok = false;
                         why.push(e.to_string());
                     }
@@ -1480,7 +1490,7 @@ impl Running {
             // Measured by what the runbook asked of the step, even when an unbound name left it
             // undone: that is a failed check, not an unmeasured one.
             let measured = original.decide.is_some()
-                || original.press.is_some()
+                || !original.presses().is_empty()
                 || original.push.is_some()
                 || original.expect.as_ref().is_some_and(|e| !e.is_empty());
             self.checks.push(CheckResult {

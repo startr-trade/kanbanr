@@ -17,6 +17,8 @@ All notable changes to kanbanr are documented here. The format follows
 - The monitor has one set of shared components (tabs with counts, accordion rows, a sortable table
   with CSV, stat tiles, progress bars, severity pills, a matrix, a timeline and a stage stepper) on
   one set of design tokens, shown together at /ui (FTR-046).
+- A walkthrough step can press several buttons in turn on one page, such as a button that asks
+  first and then its confirmation or Cancel (FTR-063).
 
 ### Changed
 
