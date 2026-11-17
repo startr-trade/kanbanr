@@ -18731,3 +18731,257 @@ fn doctor_summarises_the_evidence_when_run_from_the_project_folder() {
     assert!(o.status.success(), "{o:?}");
     assert!(!outside.contains("evidence:"), "{outside}");
 }
+
+// ---- FTR-049: the person's planning decisions, carried out by the CLI ----------------------
+
+/// A board with sprints and releases on, FEAT-001 and FEAT-002, the sprint SP-001 and the release
+/// v1.0.0, everything committed. Returns the fixture and its board's data folder.
+fn planning_fixture(name: &str) -> (JsonFixture, PathBuf) {
+    let fx = JsonFixture::new(name);
+    fx.run(&[
+        "config",
+        "cadence",
+        "--releases",
+        "on",
+        "--git-model",
+        "off",
+    ]);
+    fx.run(&["config", "cadence", "--sprints", "on"]);
+    fx.run(&["release", "add", "v1.0.0"]);
+    fx.run(&["sprint", "add", "--start", "2026-11-16"]);
+    fx.run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart sharing",
+        "--milestone",
+        "MS-001",
+    ]);
+    let where_json = fx.json(&["--json", "where"]);
+    let board = PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    // The board is the test's own (L-41).
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(std::env::temp_dir().canonicalize().unwrap()),
+        "{}",
+        board.display()
+    );
+    (fx, board)
+}
+
+/// The person's planning decision, recorded as the monitor records it: through core's one write
+/// path from the monitor, which commits it.
+fn record_planning(board: &Path, action: &str, target: &str, items: &[&str]) -> String {
+    let store = kanbanr_core::store::Store::new(board);
+    let applied = kanbanr_core::write::apply_as(
+        &store,
+        board,
+        kanbanr_core::git::PushPolicy::Off,
+        "POST",
+        "/projects/shop/planning",
+        Some(&serde_json::json!({
+            "action": action, "target": target, "items": items, "by": "A",
+        })),
+        None,
+        &kanbanr_core::eventing::NullSender,
+        &kanbanr_core::agentscope::ProcessScope::Unscoped,
+        kanbanr_core::Origin::Monitor,
+    )
+    .unwrap_or_else(|e| panic!("record the decision: {e:?}"));
+    let d: serde_json::Value = serde_json::from_str(&applied.body).unwrap();
+    d["id"].as_str().unwrap().to_string()
+}
+
+/// The CLI run by Claude (`CLAUDECODE` set) or by the person (`CLAUDECODE` unset).
+fn planning_exec(fx: &JsonFixture, claude: bool, args: &[&str]) -> Output {
+    let mut c = Command::new(cli());
+    c.args(args)
+        .current_dir(&fx.work)
+        .env("HOME", &fx.home)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .stdin(std::process::Stdio::null());
+    if claude {
+        c.env("CLAUDECODE", "1");
+    } else {
+        c.env_remove("CLAUDECODE");
+    }
+    c.output().expect("run kanbanr CLI")
+}
+
+fn board_git(board: &Path, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .args(args)
+        .current_dir(board)
+        .output()
+        .expect("run git");
+    assert!(o.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+fn outcome_of(fx: &JsonFixture, id: &str) -> serde_json::Value {
+    let v = fx.json(&["--json", "planning", "show", id]);
+    v["outcome"].clone()
+}
+
+/// FTR-049 R-3: `kanbanr board` names the planning decisions waiting for Claude, with what each
+/// plans, when one is pending, and says nothing of them when none is.
+#[test]
+fn board_lists_pending_planning_decisions() {
+    let (fx, board) = planning_fixture("ftr049-board");
+    let said = fx.run(&["board"]);
+    assert!(!said.contains("Planning decisions waiting"), "{said}");
+
+    let id = record_planning(&board, "into-sprint", "SP-001", &["FEAT-001", "FEAT-002"]);
+    assert_eq!(id, "PD-1");
+    let said = fx.run(&["board"]);
+    assert!(
+        said.contains(
+            "Planning decisions waiting for Claude: PD-1 (into SP-001: FEAT-001, FEAT-002). \
+             Check each with `kanbanr planning check`, then carry it out or decline it."
+        ),
+        "{said}"
+    );
+    let listed = fx.run(&["planning", "list", "--state", "pending"]);
+    assert!(
+        listed.contains("PD-1 pending: into-sprint SP-001 FEAT-001, FEAT-002 (by A, "),
+        "{listed}"
+    );
+    assert!(listed.contains(", monitor)"), "{listed}");
+    let checked = fx.run(&["planning", "check", "PD-1"]);
+    assert!(
+        checked
+            .contains("carry it out: kanbanr sprint plan SP-001 FEAT-001 FEAT-002 --decision PD-1"),
+        "{checked}"
+    );
+
+    // Declined, it waits no more.
+    let o = planning_exec(
+        &fx,
+        true,
+        &[
+            "planning",
+            "decline",
+            "PD-1",
+            "--reason",
+            "superseded",
+            "--nearest",
+            "into-release:v1.0.0",
+        ],
+    );
+    assert!(o.status.success(), "{o:?}");
+    let said = fx.run(&["board"]);
+    assert!(!said.contains("Planning decisions waiting"), "{said}");
+    let out = outcome_of(&fx, "PD-1");
+    assert_eq!(out["outcome"], "declined", "{out}");
+    assert_eq!(out["by"], "Claude", "{out}");
+    assert_eq!(out["origin"], "conversation", "{out}");
+    assert_eq!(out["nearest"]["target"], "v1.0.0", "{out}");
+    let listed = fx.run(&["planning", "list", "--state", "declined"]);
+    assert!(listed.contains("PD-1 declined: "), "{listed}");
+}
+
+/// FTR-049 R-4: Claude carries out the person's decision with `sprint plan … --decision PD-n`: the
+/// plan change and the outcome land in one commit, and the outcome says it was Claude's.
+#[test]
+fn sprint_plan_with_a_decision_carries_it_out() {
+    let (fx, board) = planning_fixture("ftr049-carry");
+    let id = record_planning(&board, "into-sprint", "SP-001", &["FEAT-001"]);
+    let before = board_git(&board, &["rev-list", "--count", "HEAD"]);
+    let o = planning_exec(
+        &fx,
+        true,
+        &["sprint", "plan", "SP-001", "FEAT-001", "--decision", &id],
+    );
+    assert!(o.status.success(), "{o:?}");
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(said.contains("carrying out PD-1"), "{said}");
+    let after = board_git(&board, &["rev-list", "--count", "HEAD"]);
+    assert_eq!(
+        after.parse::<u32>().unwrap(),
+        before.parse::<u32>().unwrap() + 1,
+        "one commit"
+    );
+    let files = board_git(&board, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(files.contains("planning/PD-1.outcome.yaml"), "{files}");
+    assert!(files.contains("FEAT-001"), "{files}");
+    let shown = fx.json(&["--json", "feature", "show", "FEAT-001"]);
+    assert_eq!(shown["sprint"], "SP-001", "{shown}");
+    let out = outcome_of(&fx, &id);
+    assert_eq!(out["outcome"], "carried", "{out}");
+    assert_eq!(out["by"], "Claude", "{out}");
+    assert_eq!(out["origin"], "conversation", "{out}");
+    // Carried out, it can't be carried out again.
+    let again = planning_exec(
+        &fx,
+        true,
+        &["sprint", "plan", "SP-001", "FEAT-001", "--decision", &id],
+    );
+    assert!(!again.status.success(), "{again:?}");
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("PD-1 was already carried out"),
+        "{again:?}"
+    );
+}
+
+/// FTR-049 R-4: a plan command that does not match the decision it names (another target, other
+/// items) is refused, and nothing is written.
+#[test]
+fn a_plan_command_that_does_not_match_its_decision_is_refused() {
+    let (fx, board) = planning_fixture("ftr049-mismatch");
+    let id = record_planning(&board, "into-sprint", "SP-001", &["FEAT-001"]);
+    let head = board_git(&board, &["rev-parse", "HEAD"]);
+    let o = planning_exec(
+        &fx,
+        true,
+        &["release", "plan", "v1.0.0", "FEAT-001", "--decision", &id],
+    );
+    assert!(!o.status.success(), "{o:?}");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("PD-1 plans FEAT-001 into SP-001, not into v1.0.0"),
+        "{err}"
+    );
+    let o = planning_exec(
+        &fx,
+        true,
+        &["sprint", "plan", "SP-001", "FEAT-002", "--decision", &id],
+    );
+    assert!(!o.status.success(), "{o:?}");
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("PD-1 names FEAT-001, not FEAT-002"),
+        "{o:?}"
+    );
+    assert_eq!(board_git(&board, &["rev-parse", "HEAD"]), head);
+    assert_eq!(board_git(&board, &["status", "--porcelain"]), "");
+    let v = fx.json(&["--json", "planning", "show", &id]);
+    assert_eq!(v["state"], "pending", "{v}");
+    let shown = fx.json(&["--json", "feature", "show", "FEAT-001"]);
+    assert!(
+        shown["release"].is_null() || shown["release"] == "",
+        "{shown}"
+    );
+}
+
+/// FTR-049 R-9: the person may carry out their own decision in a terminal: with no `CLAUDECODE`
+/// set, the outcome's `by` is the board's identity and its origin `terminal`.
+#[test]
+fn the_person_may_carry_out_their_own_planning_decision() {
+    let (fx, board) = planning_fixture("ftr049-person");
+    let id = record_planning(&board, "into-release", "v1.0.0", &["FEAT-001"]);
+    let o = planning_exec(
+        &fx,
+        false,
+        &["release", "plan", "v1.0.0", "FEAT-001", "--decision", &id],
+    );
+    assert!(o.status.success(), "{o:?}");
+    let out = outcome_of(&fx, &id);
+    assert_eq!(out["outcome"], "carried", "{out}");
+    assert_eq!(out["by"], "A", "{out}");
+    assert_eq!(out["origin"], "terminal", "{out}");
+    let shown = fx.json(&["--json", "feature", "show", "FEAT-001"]);
+    assert_eq!(shown["release"], "v1.0.0", "{shown}");
+}
