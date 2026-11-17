@@ -6146,114 +6146,37 @@ fn run_commit(
     Ok(())
 }
 
-/// Check that every tracked test name still exists in the project (FEAT-053), modelled on
-/// `run_sources`. A test that has been renamed or deleted leaves its last result behind, and that
-/// stale green is the most misleading thing a board can hold: it reports a requirement as proven
-/// by something nobody can run. `--write` returns those to `planned` rather than deleting them —
-/// the requirement still needs a test, it just no longer has one.
+/// `kanbanr tests` (FEAT-053, MNT-001): the board's evidence reconciled with the code — results
+/// whose test is gone (with the revision they were last green at and a likely rename), greens at
+/// a revision that never held their test, tests never run or failing, open manual checks per item
+/// and per release, and finished items with no definition. The core route answers; this prints
+/// it. `--write` returns the vanished results to `planned` rather than deleting them — the
+/// requirement still needs a test, it just no longer has one.
 fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     let p = require_project(cli)?;
-    let project = get_project(client, &p)?;
-    let cwd = std::env::current_dir()?;
-    let root = project::project_root(&cwd, project::home_dir().as_deref());
-    // The board itself records every test name, and the data folder often sits inside the project
-    // — searching it would find every test in its own definition and report all of them present.
-    let board = project::resolve_data_dir(cli.data_dir.as_deref());
-
-    let plan = kanbanr_core::evidence::plan_stale_tests(&project, &|name| {
-        test_exists(&root, &board, name)
+    // The repository this runs in; outside one, the project folder, which the route walks
+    // instead and says it checked no revision.
+    let repo = code_repo().unwrap_or_else(|| {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        project::project_root(&cwd, project::home_dir().as_deref())
     });
-    let rows = serde_json::to_value(&plan.rows)?;
-    let rows = rows.as_array().cloned().unwrap_or_default();
+    let body = client.get_in(&format!("/projects/{p}/tests/reconcile"), Some(&repo))?;
+    let plan: kanbanr_core::evidence::Reconciliation = serde_json::from_str(&body)?;
 
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
-    } else if rows.is_empty() {
-        println!("(no tests are tracked yet)");
+        println!("{}", pretty(&body));
     } else {
-        for r in &rows {
-            println!(
-                "{:<12} {:<6} {:<8} {} {}",
-                r["code"].as_str().unwrap_or(""),
-                r["requirement"].as_str().unwrap_or(""),
-                r["state"].as_str().unwrap_or(""),
-                if r["found"].as_bool() == Some(true) {
-                    "found"
-                } else {
-                    "NOT IN THE REPO"
-                },
-                r["test"].as_str().unwrap_or(""),
-            );
-        }
+        print!("{}", plan.render());
     }
 
-    if let Some(batch) = plan.batch() {
+    if write && let Some(batch) = plan.batch() {
         let n = plan.ops.len();
-        if write {
-            client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
-            if !cli.json {
-                println!("returned {n} result(s) to planned");
-            }
-        } else if !cli.json {
-            println!(
-                "{n} recorded result(s) name a test that is not in the repo; \
-                 run `kanbanr tests --write` to return them to planned"
-            );
+        client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
+        if !cli.json {
+            println!("returned {n} result(s) to planned");
         }
     }
     Ok(())
-}
-
-/// Is this test name still in the project? A path-like name (`src/cart.test.ts`) is a file; any
-/// other name is searched for in the tracked sources. `git grep` is used when the folder is a git
-/// repo — it already knows what to skip — with a bounded walk as the fallback.
-fn test_exists(root: &std::path::Path, board: &std::path::Path, name: &str) -> bool {
-    if name.contains('/') && root.join(name).exists() {
-        return true;
-    }
-    // A cargo test path is `module::path::test_name`; the source only contains the last segment.
-    let needle = name.rsplit("::").next().unwrap_or(name);
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["grep", "-l", "-F", "--", needle])
-        .current_dir(root)
-        .output()
-    {
-        // 0 = matched, 1 = searched and found nothing, anything else (not a repo) = fall back.
-        match out.status.code() {
-            Some(0) => return !out.stdout.is_empty(),
-            Some(1) => return false,
-            _ => {}
-        }
-    }
-    walk_for(root, board, needle, 0)
-}
-
-fn walk_for(dir: &std::path::Path, board: &std::path::Path, needle: &str, depth: usize) -> bool {
-    if depth > 8 {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || matches!(&*name, "target" | "node_modules" | "dist") {
-            continue;
-        }
-        if path == board {
-            continue;
-        }
-        if path.is_dir() {
-            if walk_for(&path, board, needle, depth + 1) {
-                return true;
-            }
-        } else if std::fs::read_to_string(&path).is_ok_and(|text| text.contains(needle)) {
-            return true;
-        }
-    }
-    false
 }
 
 /// `kanbanr charter …` (FEAT-046). The charter is the root of a project's reasoning: goals get

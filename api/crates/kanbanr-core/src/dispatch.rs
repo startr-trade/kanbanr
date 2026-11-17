@@ -1095,6 +1095,12 @@ fn dispatch_routes(
                 repo,
             )?)
         }
+        // The board's evidence reconciled with the code (MNT-001): derived, never stored.
+        ("GET", ["projects", p, "tests", "reconcile"]) => {
+            let repo = repo
+                .ok_or_else(|| CoreError::Unsupported("run it from the project folder".into()))?;
+            ser(&crate::evidence::reconcile(store, p, repo)?)
+        }
         // Drift between the board and the branches (FEAT-191), on demand.
         ("GET", ["projects", p, "git", "doctor"]) => {
             let repo = repo.ok_or_else(|| {
