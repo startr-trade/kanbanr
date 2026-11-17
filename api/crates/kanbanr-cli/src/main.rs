@@ -1312,6 +1312,19 @@ enum TodoCmd {
     },
     /// List a feature's todo-lists (newest first).
     List { feature: String },
+    /// Mirror the item's Design implementation tasks into a todo-list (FTR-060): a dry run lists
+    /// each task as new, changed or unchanged; `--apply` adds and edits them in one batch. Never
+    /// changes a task's state, and never deletes a task the Design no longer names.
+    FromDesign {
+        code: String,
+        /// The list to mirror into. Default: the list whose description starts "Build (from the
+        /// Design", else the newest list, else a new one.
+        #[arg(long)]
+        todo: Option<String>,
+        /// Write the changes (one batch, one commit). Without it, only the plan is printed.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -12324,7 +12337,133 @@ fn run_todo(cli: &Cli, client: &Backend, cmd: &TodoCmd) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        TodoCmd::FromDesign { code, todo, apply } => {
+            run_todo_from_design(cli, client, &p, code, todo.as_deref(), *apply)
+        }
     }
+}
+
+/// `kanbanr todo from-design <CODE> [--todo TL] [--apply]` (FTR-060).
+fn run_todo_from_design(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    code: &str,
+    todo: Option<&str>,
+    apply: bool,
+) -> anyhow::Result<()> {
+    use kanbanr_core::designtasks::{self, Change};
+    let project = get_project(client, p)?;
+    let f = project.feature(code)?;
+    let mut tasks = designtasks::parse(&f.specification);
+    if tasks.is_empty() {
+        anyhow::bail!(
+            "{code}'s spec has no `Implementation tasks` heading with `- **T<n>**` tasks"
+        );
+    }
+    let unresolved = designtasks::resolve(&mut tasks, &project);
+    tasks.retain(|t| !unresolved.iter().any(|(k, _)| *k == t.key));
+    let list = match todo {
+        Some(tl) => Some(
+            f.todo_lists
+                .iter()
+                .find(|l| l.code == tl)
+                .ok_or_else(|| anyhow::anyhow!("{code} has no todo-list {tl}"))?,
+        ),
+        None => f
+            .todo_lists
+            .iter()
+            .find(|l| l.description.starts_with("Build (from the Design"))
+            .or_else(|| {
+                f.todo_lists
+                    .iter()
+                    .max_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)))
+            }),
+    };
+    let todo_code = match list {
+        Some(l) => l.code.clone(),
+        None => {
+            let existing: Vec<String> = f.todo_lists.iter().map(|l| l.code.clone()).collect();
+            kanbanr_core::validate::next_code("TL", &existing)
+        }
+    };
+    let (plan, others) = designtasks::compare(&tasks, list);
+    let ops = designtasks::batch_ops(code, &todo_code, list.is_some(), &plan);
+    if cli.json {
+        let rows: Vec<Value> = plan
+            .iter()
+            .map(|(t, c)| {
+                let (change, fields) = match c {
+                    Change::New => ("new", vec![]),
+                    Change::Changed(fs) => ("changed", fs.clone()),
+                    Change::Unchanged => ("unchanged", vec![]),
+                };
+                json!({"key": t.key, "change": change, "fields": fields, "text": t.text})
+            })
+            .collect();
+        let unresolved: Vec<Value> = unresolved
+            .iter()
+            .map(|(k, m)| json!({"key": k, "reason": m}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "feature": code, "todo": todo_code, "list_exists": list.is_some(),
+                "tasks": rows, "unresolved": unresolved, "not_in_design": others,
+                "ops": ops, "applied": apply && !ops.is_empty(),
+            }))?
+        );
+    } else {
+        let list_note = if list.is_some() { "" } else { " (new list)" };
+        println!(
+            "{code}/{todo_code}{list_note}: {} task(s) in the Design",
+            plan.len() + unresolved.len()
+        );
+        for (t, c) in &plan {
+            let what = match c {
+                Change::New => "new".to_string(),
+                Change::Changed(fs) => format!("changed: {}", fs.join(", ")),
+                Change::Unchanged => "unchanged".to_string(),
+            };
+            println!("  {:<6} {}", t.key, what);
+        }
+        for (k, m) in &unresolved {
+            println!("  {k:<6} {m}; not applied");
+        }
+        for k in &others {
+            println!("  {k:<6} on the board, not in the Design; kept");
+        }
+    }
+    if ops.is_empty() {
+        if !cli.json {
+            println!("nothing to change");
+        }
+        return Ok(());
+    }
+    if !apply {
+        if !cli.json {
+            println!(
+                "dry run: {} change(s); --apply writes them in one commit",
+                ops.len()
+            );
+        }
+        return Ok(());
+    }
+    client.write(
+        Method::Post,
+        &format!("/projects/{p}/batch"),
+        Some(json!({
+            "operations": ops,
+            "message": format!("todo from-design {code}/{todo_code}: mirror the Design's implementation tasks"),
+        })),
+    )?;
+    if !cli.json {
+        println!(
+            "applied {} change(s) to {code}/{todo_code} in one commit",
+            ops.len()
+        );
+    }
+    Ok(())
 }
 
 fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {

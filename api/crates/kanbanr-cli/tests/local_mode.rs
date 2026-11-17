@@ -18731,3 +18731,108 @@ fn doctor_summarises_the_evidence_when_run_from_the_project_folder() {
     assert!(o.status.success(), "{o:?}");
     assert!(!outside.contains("evidence:"), "{outside}");
 }
+
+/// FTR-060 R-7: `todo from-design` reads the item's Design task list; a dry run prints each task
+/// as new, changed or unchanged and writes nothing; `--apply` adds and edits them in one commit;
+/// no task's state changes; a board task the Design does not name is listed, never deleted.
+#[test]
+fn todo_from_design_mirrors_the_design_and_changes_no_state() {
+    let run = task_board("from-design");
+    let data = std::env::temp_dir()
+        .join(format!("kanbanr-from-design-{}", std::process::id()))
+        .join("data");
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let spec = "# Cart\n\n## Design\n\n### Implementation tasks\n\
+- **T1** `api/src/a.rs`: the model\n\
+- **T2** the store. Depends on T1. Writes: `api/src/store.rs`. [sonnet, 2 h]\n\
+- **T3** the docs. Writes: `docs/guide/`. [haiku, 1 h]\n\n\
+### Affects docs\n- none\n";
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart",
+        "--milestone",
+        "MS-1",
+        "--spec",
+        spec,
+    ]);
+    run(&["todo", "add", "FEAT-001", "--description", "build"]);
+    run(&[
+        "task",
+        "add",
+        "FEAT-001",
+        "TL-001",
+        "--text",
+        "`api/src/a.rs`: the model",
+        "--writes",
+        "api/src/a.rs",
+    ]);
+    run(&["task", "add", "FEAT-001", "TL-001", "--text", "store, old"]);
+    run(&[
+        "task", "add", "FEAT-001", "TL-001", "--key", "T9", "--text", "kept",
+    ]);
+    run(&["task", "state", "FEAT-001", "TL-001", "T1", "Completed"]);
+    let commits = || {
+        let o = Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .current_dir(&data)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let before_tasks = exported_tasks(&run, "FEAT-001");
+    let before = commits();
+
+    // The dry run names each task and writes nothing.
+    let out = run(&["todo", "from-design", "FEAT-001"]);
+    let line = |k: &str| {
+        out.lines()
+            .find(|l| l.trim_start().starts_with(&format!("{k} ")))
+            .unwrap_or_else(|| panic!("no {k} line: {out}"))
+            .to_string()
+    };
+    assert!(out.starts_with("FEAT-001/TL-001:"), "{out}");
+    assert!(line("T1").contains("unchanged"), "{out}");
+    assert!(
+        line("T2").contains("changed: text, depends_on, writes, estimate_h"),
+        "{out}"
+    );
+    assert!(line("T3").contains("new"), "{out}");
+    assert!(line("T9").contains("not in the Design; kept"), "{out}");
+    assert!(out.contains("dry run: 2 change(s)"), "{out}");
+    assert_eq!(commits(), before, "a dry run writes nothing");
+    assert_eq!(exported_tasks(&run, "FEAT-001"), before_tasks);
+
+    // --apply: one commit; T2 edited, T3 added, T9 kept; no state changed.
+    let out = run(&["todo", "from-design", "FEAT-001", "--apply"]);
+    assert!(
+        out.contains("applied 2 change(s) to FEAT-001/TL-001 in one commit"),
+        "{out}"
+    );
+    let n: u32 = commits().parse().unwrap();
+    assert_eq!(n, before.parse::<u32>().unwrap() + 1, "one commit");
+    let tasks = exported_tasks(&run, "FEAT-001");
+    let by = |k: &str| tasks.iter().find(|t| t["key"] == k).unwrap().clone();
+    assert_eq!(by("T1")["state"], "Completed");
+    assert_eq!(by("T2")["state"], "NotStarted");
+    assert_eq!(
+        by("T2")["text"],
+        "the store. Depends on T1. Writes: `api/src/store.rs`. [sonnet, 2 h]"
+    );
+    assert_eq!(by("T2")["depends_on"], serde_json::json!(["T1"]));
+    assert_eq!(by("T2")["writes"], serde_json::json!(["api/src/store.rs"]));
+    assert_eq!(by("T2")["estimate_h"], serde_json::json!(2.0));
+    assert_eq!(by("T3")["writes"], serde_json::json!(["docs/guide/"]));
+    assert_eq!(by("T3")["estimate_h"], serde_json::json!(1.0));
+    assert_eq!(by("T3")["state"], "NotStarted");
+    assert_eq!(by("T9")["text"], "kept");
+
+    // Mirrored: a second run has nothing to change.
+    let out = run(&["todo", "from-design", "FEAT-001", "--apply"]);
+    assert!(out.contains("nothing to change"), "{out}");
+    assert_eq!(commits(), n.to_string());
+}
