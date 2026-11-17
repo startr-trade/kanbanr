@@ -46,6 +46,7 @@ pub mod evidence;
 pub mod export;
 pub mod facts;
 pub mod flow;
+pub mod forecast;
 pub mod gantt;
 pub mod gates;
 pub mod git;
