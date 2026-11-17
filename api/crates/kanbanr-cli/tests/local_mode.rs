@@ -17337,3 +17337,309 @@ fn catalog_is_silent_without_one() {
     assert!(!base.join("data/projects/demo/facts.yaml").exists());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A board under `std::env::temp_dir()` (L-41) reached through `KANBANR_DATA_DIR`, with no code
+/// repository, for the task commands (FTR-060). Returns a runner that asserts success and gives
+/// stdout.
+fn task_board(tag: &str) -> impl Fn(&[&str]) -> String {
+    let base = std::env::temp_dir().join(format!("kanbanr-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let run = move |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(["--project", "demo"])
+            .args(args)
+            .current_dir(&base)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CLAUDECODE")
+            .env_remove("KANBANR_PROJECT")
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .env_remove("KANBANR_LOCAL")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["project", "init", "demo"]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-1"]);
+    run
+}
+
+/// The tasks of an item as `--json` export gives them.
+fn exported_tasks(run: &impl Fn(&[&str]) -> String, code: &str) -> Vec<serde_json::Value> {
+    let v: serde_json::Value =
+        serde_json::from_str(&run(&["export", code, "--format", "json"])).unwrap();
+    v["todo_lists"][0]["tasks"].as_array().unwrap().clone()
+}
+
+/// FTR-060 R-1: `task add` and `task edit` record the tasks a task waits on, its files and its
+/// estimate; `--estimate 90m` is 1.5 agent-hours; `task list` shows them; an empty value clears.
+#[test]
+fn task_add_and_edit_record_dependencies_files_and_estimate() {
+    let run = task_board("task-fields");
+    run(&["feature", "add", "--title", "Cart", "--milestone", "MS-1"]);
+    run(&["todo", "add", "FEAT-001", "--description", "build"]);
+    run(&["task", "add", "FEAT-001", "TL-001", "--text", "model"]);
+    let out = run(&[
+        "task",
+        "add",
+        "FEAT-001",
+        "TL-001",
+        "--text",
+        "store",
+        "--after",
+        "T1",
+        "--writes",
+        "api/src/store.rs,api/src/batch.rs",
+        "--reads",
+        "api/src/models.rs",
+        "--estimate",
+        "90m",
+    ]);
+    assert!(out.contains("added task T2 to FEAT-001/TL-001"), "{out}");
+    let tasks = exported_tasks(&run, "FEAT-001");
+    assert_eq!(tasks[1]["depends_on"], serde_json::json!(["T1"]));
+    assert_eq!(
+        tasks[1]["writes"],
+        serde_json::json!(["api/src/store.rs", "api/src/batch.rs"])
+    );
+    assert_eq!(tasks[1]["reads"], serde_json::json!(["api/src/models.rs"]));
+    assert_eq!(tasks[1]["estimate_h"], serde_json::json!(1.5));
+    // The first task records none of them.
+    assert!(tasks[0].get("depends_on").is_none(), "{:?}", tasks[0]);
+    assert!(tasks[0].get("estimate_h").is_none(), "{:?}", tasks[0]);
+
+    let list = run(&["task", "list", "FEAT-001"]);
+    let header = list.lines().find(|l| l.contains("KEY")).unwrap();
+    for col in ["AFTER", "WRITES", "ESTIMATE", "SCOPE"] {
+        assert!(header.contains(col), "{list}");
+    }
+    let t2 = list
+        .lines()
+        .find(|l| l.trim_start().starts_with("T2"))
+        .unwrap();
+    assert!(t2.contains(" T1 "), "{list}");
+    assert!(t2.contains(" 2 "), "the writes count: {list}");
+    assert!(t2.contains("1.5 h"), "{list}");
+    assert!(t2.ends_with("store"), "{list}");
+
+    // Edit each field; a bare number is hours, `2h` too.
+    let out = run(&[
+        "task",
+        "edit",
+        "FEAT-001",
+        "TL-001",
+        "T1",
+        "--text",
+        "the model",
+        "--writes",
+        "api/src/",
+        "--estimate",
+        "2h",
+    ]);
+    assert!(out.contains("edited task T1 of FEAT-001/TL-001"), "{out}");
+    run(&[
+        "task",
+        "edit",
+        "FEAT-001",
+        "TL-001",
+        "T2",
+        "--estimate",
+        "3",
+    ]);
+    let tasks = exported_tasks(&run, "FEAT-001");
+    assert_eq!(tasks[0]["text"], "the model");
+    assert_eq!(tasks[0]["writes"], serde_json::json!(["api/src/"]));
+    assert_eq!(tasks[0]["estimate_h"], serde_json::json!(2.0));
+    assert_eq!(tasks[1]["estimate_h"], serde_json::json!(3.0));
+
+    // An empty value clears each field; what is not named stays.
+    run(&[
+        "task",
+        "edit",
+        "FEAT-001",
+        "TL-001",
+        "T2",
+        "--after",
+        "",
+        "--reads",
+        "",
+        "--estimate",
+        "",
+    ]);
+    let tasks = exported_tasks(&run, "FEAT-001");
+    assert!(tasks[1].get("depends_on").is_none(), "{:?}", tasks[1]);
+    assert!(tasks[1].get("reads").is_none(), "{:?}", tasks[1]);
+    assert!(tasks[1].get("estimate_h").is_none(), "{:?}", tasks[1]);
+    assert_eq!(
+        tasks[1]["writes"],
+        serde_json::json!(["api/src/store.rs", "api/src/batch.rs"])
+    );
+    let list = run(&["task", "list", "FEAT-001"]);
+    let t2 = list
+        .lines()
+        .find(|l| l.trim_start().starts_with("T2"))
+        .unwrap();
+    assert!(!t2.contains(" T1 "), "{list}");
+}
+
+/// FTR-060 R-3: `ready --tasks` prints what runs, what can start now and why each other task
+/// waits; `--lanes` proposes tasks to start together; `--json` gives the readiness itself.
+#[test]
+fn ready_tasks_lists_the_tasks_free_to_start_and_why_others_wait() {
+    let run = task_board("ready-tasks");
+    run(&["feature", "add", "--title", "Cart", "--milestone", "MS-1"]);
+    run(&["feature", "add", "--title", "Later", "--milestone", "MS-1"]);
+    run(&["move", "FEAT-001", "In Progress"]);
+    run(&["todo", "add", "FEAT-001", "--description", "build"]);
+    run(&["todo", "add", "FEAT-002", "--description", "build"]);
+    let add = |text: &str, extra: &[&str]| {
+        let mut args = vec!["task", "add", "FEAT-001", "TL-001", "--text", text];
+        args.extend_from_slice(extra);
+        run(&args);
+    };
+    add(
+        "model",
+        &["--writes", "api/src/models.rs", "--estimate", "2h"],
+    );
+    add("store", &["--after", "T1", "--writes", "api/src/store.rs"]);
+    add("folder", &["--writes", "api/src/"]);
+    add("web", &["--writes", "web/src/types.ts", "--estimate", "1h"]);
+    run(&["task", "add", "FEAT-002", "TL-001", "--text", "later"]);
+    run(&["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"]);
+
+    let out = run(&["ready", "--tasks", "--lanes", "2"]);
+    let block = |title: &str| -> String {
+        let start = out
+            .find(&format!("{title}\n"))
+            .unwrap_or_else(|| panic!("{out}"));
+        let rest = &out[start + title.len() + 1..];
+        let end = ["Running\n", "Ready\n", "Waiting\n", "Start together"]
+            .iter()
+            .filter_map(|t| rest.find(t))
+            .min()
+            .unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    let running = block("Running");
+    assert!(running.contains("FEAT-001/TL-001/T1"), "{out}");
+    let ready = block("Ready");
+    assert!(ready.contains("FEAT-001/TL-001/T4"), "{out}");
+    assert!(ready.contains("chain 1 h"), "{out}");
+    assert!(!ready.contains("FEAT-001/TL-001/T2"), "{out}");
+    assert!(!ready.contains("FEAT-001/TL-001/T3"), "{out}");
+    let waiting = block("Waiting");
+    assert!(waiting.contains("waits on FEAT-001/TL-001/T1"), "{out}");
+    assert!(
+        waiting.contains("writes api/src/models.rs, which FEAT-001/TL-001/T1 is writing"),
+        "{out}"
+    );
+    assert!(
+        waiting.contains("FEAT-002 is in Planned, not at the build stage"),
+        "{out}"
+    );
+    assert!(
+        out.contains("Start together (2 lanes): FEAT-001/TL-001/T4"),
+        "{out}"
+    );
+
+    let v: serde_json::Value =
+        serde_json::from_str(&run(&["--json", "ready", "--tasks", "--lanes", "2"])).unwrap();
+    assert_eq!(v["running"][0]["id"], "FEAT-001/TL-001/T1");
+    assert_eq!(v["ready"][0]["id"], "FEAT-001/TL-001/T4");
+    assert_eq!(v["lanes"][0]["id"], "FEAT-001/TL-001/T4");
+    let waits: Vec<&str> = v["waiting"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        waits,
+        [
+            "FEAT-001/TL-001/T2",
+            "FEAT-001/TL-001/T3",
+            "FEAT-002/TL-001/T1"
+        ]
+    );
+}
+
+/// FTR-060 R-6: `scope drift` names a task whose commits touched a file it did not declare and,
+/// once it is Completed, a declared file no commit touched; `--brief` gives one line for it and
+/// `git doctor` warns with the same line.
+#[test]
+fn scope_drift_names_a_tasks_footprint_drift() {
+    let fx = ScopeFx::new("footprint");
+    fx.ok(
+        &fx.work,
+        &[
+            "task",
+            "edit",
+            "FEAT-001",
+            "TL-001",
+            "T1",
+            "--writes",
+            "t1.rs,missing.rs",
+        ],
+    );
+    fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--task", "T1"],
+    );
+    let wt = fx.worktree("agent-footprint");
+    fx.ok(&wt, &["scope", "claim", "SC-001"]);
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    for file in ["t1.rs", "other.rs"] {
+        std::fs::write(wt.join(file), "fn work() {}\n").unwrap();
+        fx.ok_git(&wt, &["add", file]);
+    }
+    fx.ok(&wt, &["commit", "-m", "work on T1"]);
+
+    let undeclared = "FEAT-001/TL-001/T1 touched other.rs, not in its files";
+    let untouched = "FEAT-001/TL-001/T1 is Completed and never touched missing.rs";
+    let drift = fx.ok(&fx.work, &["scope", "drift"]);
+    assert!(drift.contains(undeclared), "{drift}");
+    assert!(!drift.contains(untouched), "not Completed yet: {drift}");
+
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    );
+    let drift = fx.ok(&fx.work, &["scope", "drift"]);
+    assert!(
+        drift.contains(&format!("{undeclared}\n{untouched}")),
+        "{drift}"
+    );
+    let brief = fx.ok(&fx.work, &["scope", "drift", "--brief"]);
+    let one = format!("{undeclared}; {untouched}");
+    assert_eq!(
+        brief
+            .lines()
+            .filter(|l| l.contains("FEAT-001/TL-001/T1"))
+            .count(),
+        1,
+        "{brief}"
+    );
+    assert!(brief.contains(&one), "{brief}");
+    let doctor = fx.run(&fx.work, &["git", "doctor"]);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(doctor.contains(&one), "{doctor}");
+}

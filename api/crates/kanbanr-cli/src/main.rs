@@ -610,6 +610,14 @@ enum Command {
         /// Span every project (portfolio-wide) instead of just the current one.
         #[arg(long)]
         all_projects: bool,
+        /// List tasks instead of items: running, free to start now, and why the rest wait
+        /// (FTR-060).
+        #[arg(long, conflicts_with = "all_projects")]
+        tasks: bool,
+        /// With `--tasks`: propose up to N conflict-free tasks to start together, critical path
+        /// first.
+        #[arg(long, requires = "tasks")]
+        lanes: Option<usize>,
     },
     /// List features that are blocked (a dependency is not yet terminal). (FEAT-027)
     Blocked {
@@ -1275,6 +1283,36 @@ enum TaskCmd {
         text: String,
         #[arg(long)]
         key: Option<String>,
+        /// The tasks it waits on, comma-separated: `T1`, `TL-002/T2`, `FTR-041/TL-001/T1`
+        /// (FTR-060).
+        #[arg(long)]
+        after: Option<String>,
+        /// The files it writes, comma-separated, repository-relative; a folder ends in `/`.
+        #[arg(long)]
+        writes: Option<String>,
+        /// The files it only reads, in the same form.
+        #[arg(long)]
+        reads: Option<String>,
+        /// Its estimate in agent-hours: `90m`, `2h`, `1.5h` or a bare number of hours.
+        #[arg(long)]
+        estimate: Option<String>,
+    },
+    /// Change what a task records: its text, the tasks it waits on, its files, its estimate
+    /// (FTR-060). An empty value (`--after ""`) clears that field. Never its state.
+    Edit {
+        feature: String,
+        todo: String,
+        key: String,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long)]
+        writes: Option<String>,
+        #[arg(long)]
+        reads: Option<String>,
+        #[arg(long)]
+        estimate: Option<String>,
     },
     /// Set a task's state within a todo-list.
     State {
@@ -9984,7 +10022,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Portfolio(cmd) => run_portfolio(cli, &client, cmd),
-        Command::Ready { all_projects } => run_readiness(cli, &client, "ready", *all_projects),
+        Command::Ready {
+            tasks: true, lanes, ..
+        } => run_task_readiness(cli, &client, *lanes),
+        Command::Ready { all_projects, .. } => run_readiness(cli, &client, "ready", *all_projects),
         Command::Blocked { all_projects } => run_readiness(cli, &client, "blocked", *all_projects),
         Command::Graph {
             format,
@@ -10839,14 +10880,34 @@ fn scope_drift(
 fn scope_drift_text(client: &Backend, p: &str, brief: bool) -> anyhow::Result<String> {
     use std::fmt::Write as _;
     let drift = scope_drift(client, p, brief)?;
+    let footprints = scope_footprints(client, p);
     let mut out = String::new();
-    if drift.is_empty() && !brief {
+    if drift.is_empty() && footprints.is_empty() && !brief {
         out.push_str("no agent work is ahead of the board\n");
     }
     for d in &drift {
         let _ = writeln!(out, "{}", d.line());
     }
+    // A task whose commits touched files it did not declare, or left its files untouched
+    // (FTR-060): one line each under --brief, one per kind otherwise.
+    for f in &footprints {
+        if brief {
+            let _ = writeln!(out, "{}", f.line());
+        } else {
+            for l in f.lines() {
+                let _ = writeln!(out, "{l}");
+            }
+        }
+    }
     Ok(out)
+}
+
+/// The task footprints that drifted (FTR-060); none outside a git repository or when git cannot
+/// be read, as `scope drift --brief` treats branch drift.
+fn scope_footprints(client: &Backend, p: &str) -> Vec<kanbanr_core::agentscope::Footprint> {
+    scm::repo_root()
+        .and_then(|root| kanbanr_core::agentscope::footprints(client.store(), p, &root).ok())
+        .unwrap_or_default()
 }
 
 /// Search features with rich filters + full-text, in one project or across all. (FEAT-032)
@@ -11906,10 +11967,18 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
             todo,
             text,
             key,
+            after,
+            writes,
+            reads,
+            estimate,
         } => {
             let body = obj(vec![
                 ("text", Some(json!(text))),
                 ("key", key.clone().map(|k| json!(k))),
+                ("depends_on", after.as_deref().map(|v| json!(split_csv(v)))),
+                ("writes", writes.as_deref().map(|v| json!(split_csv(v)))),
+                ("reads", reads.as_deref().map(|v| json!(split_csv(v)))),
+                ("estimate_h", estimate_json(estimate.as_deref())?),
             ]);
             let resp = client.write(
                 Method::Post,
@@ -11951,6 +12020,31 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        TaskCmd::Edit {
+            feature,
+            todo,
+            key,
+            text,
+            after,
+            writes,
+            reads,
+            estimate,
+        } => {
+            let body = obj(vec![
+                ("text", text.clone().map(|t| json!(t))),
+                ("depends_on", after.as_deref().map(|v| json!(split_csv(v)))),
+                ("writes", writes.as_deref().map(|v| json!(split_csv(v)))),
+                ("reads", reads.as_deref().map(|v| json!(split_csv(v)))),
+                ("estimate_h", estimate_json(estimate.as_deref())?),
+            ]);
+            let resp = client.write(
+                Method::Patch,
+                &format!("/projects/{p}/features/{feature}/todos/{todo}/tasks/{key}"),
+                Some(body),
+            )?;
+            print_write(cli, &resp, format!("edited task {key} of {feature}/{todo}"));
+            Ok(())
+        }
         TaskCmd::List { feature, todo } => {
             let project = get_project(client, &p)?;
             let f = project.feature(feature)?;
@@ -11962,16 +12056,206 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&lists)?);
             } else {
+                let scopes = task_scopes(client, &p);
                 for l in lists {
                     println!("{} ({})", l.code, l.description);
+                    println!(
+                        "  {:<8} {:<12} {:<20} {:>6} {:>8} {:<8} TEXT",
+                        "KEY", "STATE", "AFTER", "WRITES", "ESTIMATE", "SCOPE"
+                    );
                     for t in &l.tasks {
-                        println!("  {:<8} {:<12?} {}", t.key, t.state, t.text);
+                        let after = if t.depends_on.is_empty() {
+                            "-".to_string()
+                        } else {
+                            t.depends_on.join(",")
+                        };
+                        let scope = scopes
+                            .get(&format!("{}/{}/{}", f.code, l.code, t.key))
+                            .map(String::as_str)
+                            .unwrap_or("-");
+                        println!(
+                            "  {:<8} {:<12} {:<20} {:>6} {:>8} {:<8} {}",
+                            t.key,
+                            format!("{:?}", t.state),
+                            after,
+                            t.writes.len(),
+                            t.estimate_h.map(fmt_hours).unwrap_or_else(|| "-".into()),
+                            scope,
+                            t.text
+                        );
                     }
                 }
             }
             Ok(())
         }
     }
+}
+
+/// A comma-separated flag value as a list (FTR-060): trimmed, empty parts dropped, so `""` is the
+/// empty list that clears a field.
+fn split_csv(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// An estimate in agent-hours (FTR-060): `90m`, `2h`, `1.5h`, `2 h` or a bare number of hours.
+fn parse_estimate(s: &str) -> anyhow::Result<f64> {
+    let t = s.trim().to_ascii_lowercase();
+    let (num, per_hour) = if let Some(m) = t.strip_suffix('m') {
+        (m.trim(), 60.0)
+    } else if let Some(h) = t.strip_suffix('h') {
+        (h.trim(), 1.0)
+    } else {
+        (t.as_str(), 1.0)
+    };
+    match num.parse::<f64>() {
+        Ok(n) if n.is_finite() => Ok(n / per_hour),
+        _ => {
+            anyhow::bail!("--estimate {s}: give agent-hours as 90m, 2h, 1.5h or a number of hours")
+        }
+    }
+}
+
+/// `--estimate` for a task write: absent leaves it, `""` clears it (`null`), else the hours.
+fn estimate_json(v: Option<&str>) -> anyhow::Result<Option<Value>> {
+    Ok(match v {
+        None => None,
+        Some(s) if s.trim().is_empty() => Some(Value::Null),
+        Some(s) => Some(json!(parse_estimate(s)?)),
+    })
+}
+
+/// Hours as the task commands print them: `1.5 h`.
+fn fmt_hours(h: f64) -> String {
+    format!("{} h", (h * 100.0).round() / 100.0)
+}
+
+/// The live scope working each task, `CODE/TL-001/T3` -> scope id (FTR-060): derived from the
+/// project's scopes, never stored on the task. Empty when the scopes cannot be read.
+fn task_scopes(client: &Backend, p: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(resp) = client.get(&format!("/projects/{p}/scopes")) else {
+        return out;
+    };
+    let Ok(Value::Array(scopes)) = serde_json::from_str::<Value>(&resp) else {
+        return out;
+    };
+    for s in scopes {
+        let live = matches!(s["state"].as_str(), Some("issued" | "active"));
+        if let (true, Some(item), Some(task), Some(id)) = (
+            live,
+            s["item"].as_str(),
+            s["task"].as_str(),
+            s["id"].as_str(),
+        ) {
+            out.insert(format!("{item}/{task}"), id.to_string());
+        }
+    }
+    out
+}
+
+/// `kanbanr ready --tasks [--lanes N]` (FTR-060): what runs, what can start now (critical path
+/// marked, with its chain), why the rest wait, and the tasks to start together.
+fn run_task_readiness(cli: &Cli, client: &Backend, lanes: Option<usize>) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let path = match lanes {
+        Some(n) => format!("/projects/{p}/ready/tasks?lanes={n}"),
+        None => format!("/projects/{p}/ready/tasks"),
+    };
+    let resp = client.get(&path)?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(&resp)?;
+    let scopes = task_scopes(client, &p);
+    let list = |k: &str| v[k].as_array().cloned().unwrap_or_default();
+    let line = |t: &Value| {
+        let id = t["id"].as_str().unwrap_or_default();
+        let mark = if t["critical"].as_bool().unwrap_or(false) {
+            "*"
+        } else {
+            " "
+        };
+        let chain = fmt_hours(t["chain_h"].as_f64().unwrap_or(0.0));
+        let scope = scopes
+            .get(id)
+            .map(|s| format!("  [{s}]"))
+            .unwrap_or_default();
+        format!(
+            "{mark} {id}  chain {chain}{scope}  {}",
+            t["text"].as_str().unwrap_or_default()
+        )
+    };
+    for (title, key) in [("Running", "running"), ("Ready", "ready")] {
+        println!("{title}");
+        let tasks = list(key);
+        if tasks.is_empty() {
+            println!("  (none)");
+        }
+        for t in &tasks {
+            println!("{}", line(t));
+        }
+    }
+    println!("Waiting");
+    let waiting = list("waiting");
+    if waiting.is_empty() {
+        println!("  (none)");
+    }
+    for w in &waiting {
+        let id = w["id"].as_str().unwrap_or_default();
+        println!("  {id}");
+        let item = id.split('/').next().unwrap_or(id);
+        for reason in w["waits"].as_array().into_iter().flatten() {
+            println!("    {}", wait_line(item, reason));
+        }
+    }
+    if let Some(n) = lanes {
+        let ids: Vec<&str> = v["lanes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["id"].as_str())
+            .collect();
+        let s = if n == 1 { "" } else { "s" };
+        if ids.is_empty() {
+            println!("Start together ({n} lane{s}): nothing is free to start");
+        } else {
+            println!("Start together ({n} lane{s}): {}", ids.join(", "));
+        }
+    }
+    Ok(())
+}
+
+/// One reason a task waits, as `ready --tasks` prints it. `item` is the waiting task's item.
+fn wait_line(item: &str, w: &Value) -> String {
+    if let Some(d) = w["Dependency"].as_str() {
+        return format!("waits on {d}");
+    }
+    if let Some(status) = w["ItemNotAtBuild"].as_str() {
+        return format!("{item} is in {status}, not at the build stage");
+    }
+    if let Some(t) = w["UnknownFootprint"].as_str() {
+        return format!("records no files, and {t} of its item is in progress");
+    }
+    if let Some(c) = w.get("Conflict") {
+        let task = c["task"].as_str().unwrap_or_default();
+        let paths: Vec<&str> = c["paths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str())
+            .collect();
+        return if paths.is_empty() {
+            format!("{task} of its item is in progress and records no files")
+        } else {
+            format!("writes {}, which {task} is writing", paths.join(", "))
+        };
+    }
+    w.to_string()
 }
 
 fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Result<()> {
