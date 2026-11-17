@@ -86,6 +86,42 @@ pub fn serve(scratch: &Scratch, data: &Path) -> String {
     panic!("the monitor did not come up on {bind}");
 }
 
+/// One read-only server over the boards at `boards`, in order (FTR-040's `run_boards`), with a
+/// page that has a head, on a free port. Returns its base URL.
+pub fn serve_boards(scratch: &Scratch, boards: &[&Path]) -> String {
+    let ui = scratch.0.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><title>t</title></head><body></body></html>",
+    )
+    .unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let bind = format!("127.0.0.1:{port}");
+    let (paths, addr, ui) = (
+        boards.iter().map(|b| b.to_path_buf()).collect::<Vec<_>>(),
+        bind.clone(),
+        ui.to_str().unwrap().to_string(),
+    );
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(kanbanr_server::run_boards(paths, addr, Some(ui)))
+            .unwrap();
+    });
+    let url = format!("http://{bind}");
+    for _ in 0..200 {
+        if ureq::get(&format!("{url}/healthz")).call().is_ok() {
+            return url;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("the monitor did not come up on {bind}");
+}
+
 /// The token in the page the monitor serves.
 pub fn page_token(url: &str) -> String {
     let html = ureq::get(&format!("{url}/"))
