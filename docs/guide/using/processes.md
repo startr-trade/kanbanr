@@ -754,8 +754,12 @@ kanbanr release add v1.0.1 --patch-of v1.0.0
 
 The patch records its parent, which must have been cut and tagged — any cut release, an older
 supported one included. `release/v1.0.1` is made from the parent's tag, not from where main has
-since gone, and the patch starts at candidate. A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. It goes through the same stages. Its notes say
-"Patch of v1.0.0", list what the patch adds, and what it keeps from the parent.
+since gone, and the patch starts at candidate. A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. It goes through the same stages. Its notes
+name the parent in one line, with a link to the parent's notes — "Patch of v1.0.0. Everything in
+[v1.0.0](v1.0.0.md) is included; this patch adds:" — and list only the patch's own items, never
+the parent's. While the notes are still kanbanr's untouched draft, they are drafted again when a
+planned fix merges into `release/v1.0.1`, and when the release is prepared again; the plan warns
+when the draft no longer names what would ship. Notes you wrote yourself are never rewritten.
 
 At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
 past the parent, main is left where it is. The patch's commits that the integration branch does

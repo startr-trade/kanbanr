@@ -1067,6 +1067,9 @@ branches; fix it before going on.
   still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
   to resolve them. Never hand the user the command. A patch starts at candidate when created; tell
   the person, and ask for the confirmation in conversation.
+- A patch's notes list only its own items, after one line naming its parent with a link to the
+  parent's notes (DEF-078). Its draft is redrafted when the fix merges. Read it and rewrite it with
+  `kanbanr release notes <V> --file <file>` before the cut.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Closing the sprint: leftover branches.** After `kanbanr sprint close` (and after a cut), run
