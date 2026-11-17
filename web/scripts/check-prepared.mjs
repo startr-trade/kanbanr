@@ -121,22 +121,23 @@ if (!/<PreparedPanel/.test(review)) problems.push("EntryEvidence.tsx: renders no
 if (!/label: `Sign off \$\{name\}`/.test(review) || !/label: `Ratify \$\{item\.code\}`/.test(review)) {
   problems.push("EntryEvidence.tsx: the panels are not labelled Sign off <name> and Ratify <code>");
 }
-const releases = read("../src/pages/ReleasesPage.tsx");
+// The release forms live in releases/ReleaseActions.tsx since FTR-041 T4.
+const releases = read("../src/pages/releases/ReleaseActions.tsx");
 const between = (src, from, to) => {
   const a = src.indexOf(from);
   const b = src.indexOf(to, a + 1);
   return a < 0 ? "" : src.slice(a, b < 0 ? src.length : b);
 };
-const recordResult = between(releases, "function RecordResult(", "function ReleaseNotesSection");
-if (!recordResult) problems.push("ReleasesPage.tsx: RecordResult no longer comes before ReleaseNotesSection");
+const recordResult = between(releases, "function RecordResult(", "function CutPreviewList(");
+if (!recordResult) problems.push("releases/ReleaseActions.tsx: RecordResult no longer comes before CutPreviewList");
 if (!/openFor\(prepared, "gate-result"/.test(recordResult) || !/<PreparedPanel/.test(recordResult)) {
-  problems.push("ReleasesPage.tsx: RecordResult does not render a prepared CI result in a PreparedPanel");
+  problems.push("releases/ReleaseActions.tsx: RecordResult does not render a prepared CI result in a PreparedPanel");
 }
 const button = between(releases, "function ReleaseButton(", "function TagPanel(");
 if (!/openFor\(prepared, "promotion"/.test(button) || !/<PreparedPanel/.test(button)) {
-  problems.push("ReleasesPage.tsx: the confirmation after the tag does not render a prepared promotion in a PreparedPanel");
+  problems.push("releases/ReleaseActions.tsx: the confirmation after the tag does not render a prepared promotion in a PreparedPanel");
 }
-if (!/expect: tip/.test(button)) problems.push("ReleasesPage.tsx: a prepared promotion is not pinned to the release tip shown");
+if (!/expect: tip/.test(button)) problems.push("releases/ReleaseActions.tsx: a prepared promotion is not pinned to the release tip shown");
 
 // A release tagged at the last stage waits for the tag workflow (DEF-049): the tag panel and a
 // ship button that stays off until the tag's result is passed; the page asks for no stage then.
@@ -163,7 +164,7 @@ const waiting = (state) => ({
 expect("a tagged release waits: no ship until a result", releaseAction(waiting("none"), true).enabled, false);
 expect("a failed result keeps it waiting", releaseAction(waiting("failed"), true).enabled, false);
 expect("a passed result offers Ship", [releaseAction(waiting("passed"), true).enabled, releaseAction(waiting("passed"), true).label], [true, "Ship v1"]);
-const awaitingPage = read("../src/pages/ReleasesPage.tsx");
+const awaitingPage = read("../src/pages/ReleasesPage.tsx") + "\n" + releases;
 if (!/plan\.data\.awaiting \? "" : plan\.data\.to/.test(awaitingPage)) {
   problems.push("ReleasesPage.tsx: a waiting release is promoted with a stage named, which the daemon refuses");
 }

@@ -66,12 +66,12 @@ expect("no repository: disabled", a.again?.enabled === false, a.again);
 a = releaseAction({ ...base, again: { ...offer, button: "Promote v0.3.0 to candidate again" } }, true);
 expect("a renamed label passes through", a.again?.label === "Promote v0.3.0 to candidate again", a.again);
 
-const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
-expect("the page renders action.again", page.includes("action.again") && page.includes("release-again"), "ReleasesPage.tsx");
+const page = readFileSync(new URL("../src/pages/releases/ReleaseActions.tsx", import.meta.url), "utf8");
+expect("the page renders action.again", page.includes("action.again") && page.includes("release-again"), "releases/ReleaseActions.tsx");
 expect(
   "the button promotes to the stage, pinned to the tip",
   /onPromote\(release,\s*action\.again!?\.stage,\s*plan\.data!?\.release_tip\)/.test(page),
-  "ReleasesPage.tsx",
+  "releases/ReleaseActions.tsx",
 );
 const types = readFileSync(new URL("../src/types.ts", import.meta.url), "utf8");
 expect("types.ts declares again?", /again\?:\s*AgainOffer/.test(types), "types.ts");

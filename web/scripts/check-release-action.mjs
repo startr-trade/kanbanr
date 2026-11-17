@@ -267,7 +267,7 @@ expect("web::release_action untested: another unmet condition offers no acceptan
 a = releaseAction(cut, true);
 expect("web::release_action untested: nothing untested, nothing to accept", a.accept === undefined && a.enabled, a);
 {
-  const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/releases/ReleaseActions.tsx", import.meta.url), "utf8");
   const box = page.indexOf('type="checkbox"');
   const guard = page.lastIndexOf("action.accept ?", box);
   expect(
@@ -331,7 +331,7 @@ const expectWhy = (name, cond, got) => {
   expectWhy("the again button: its first missing thing", a.again?.disabledWhy === reason, a);
   a = releaseAction({ ...base, again: { ...offer, ready: true, missing: [] } }, true);
   expectWhy("the again button enabled: nothing", a.again?.enabled && a.again.disabledWhy === "", a);
-  const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../src/pages/releases/ReleaseActions.tsx", import.meta.url), "utf8");
   expectWhy("the page: the primary button's title is the reason, else what it does", page.includes('title={why || action.does.join("; ")}'), {});
   expectWhy("the page: the ask-first primary button carries it", page.includes("disabledWhy={why}"), {});
   expectWhy("the page: the again button carries its own", page.includes("disabledWhy={action.again.disabledWhy}"), {});
