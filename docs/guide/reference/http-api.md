@@ -328,6 +328,19 @@ mixes verdicts, or one from Claude in any mode, is refused. The route exists onl
 path: `kanbanr` dispatch refuses it with "a group decision is taken through the write path, which
 records each verdict as the person".
 
+The Releases page reads its releases through three public routes (FTR-041), so it never reads the
+whole board: `GET /api/projects/{project}/releases/summary` counts the releases in each tab
+(`current`, `planned`, `past`) and names the tab the page opens on (`open`: `current` when a release
+is at a stage and not shipped, else `planned`, else `past`). It reads `releases.yaml` alone.
+`GET /api/projects/{project}/releases?scope=current|planned|past` answers one tab's releases, newest
+first by version; any other `scope` is a `400`, and without `scope` the route answers every release
+as before. `GET /api/projects/{project}/releases/{version}/items` answers one release's item table,
+read when its row is opened: each item's code, title, kind, status, sprint, tests green out of
+named, approval (`approved`, `lapsed`, `added` or `none`), its design-review and docs-folded
+sign-offs (`signed`, `lapsed` or empty) and where a carried item went. An unknown version is a
+`404`. Because `summary` is a route, no release can be called `summary`: `kanbanr release add
+summary` is refused.
+
 ## The OpenAPI document
 
 The document is generated, never edited by hand:

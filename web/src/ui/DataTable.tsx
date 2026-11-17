@@ -19,9 +19,18 @@ const FIRST_ROWS = 200;
 /** The breakpoint `styles.css` already uses. */
 const NARROW_QUERY = "(max-width: 720px)";
 
-/** True below the 720 px breakpoint; false on the server and where `matchMedia` is missing. */
+/** Whether the window is below the breakpoint now; false on the server and where `matchMedia` is missing. */
+function narrowNow(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
+  return window.matchMedia(NARROW_QUERY).matches;
+}
+
+/**
+ * True below the 720 px breakpoint; false on the server and where `matchMedia` is missing. The
+ * first draw already knows the width, so a narrow screen never draws the wide table first.
+ */
 function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(false);
+  const [narrow, setNarrow] = useState(narrowNow);
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
     const mq = window.matchMedia(NARROW_QUERY);

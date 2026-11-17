@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useQuery } from "../../data/useQuery";
-import { urls } from "../../data/urls";
+import { TAGS, urls } from "../../data/urls";
 import { ErrorBox, Loading } from "../../components/bits";
 import { releaseAction } from "../../releaseAction";
 import type { PreparedView, Release, ReleasePlan, TagResult } from "../../types";
@@ -70,7 +70,7 @@ export function ReleaseButton({
   const setAccepted = (v: boolean) => (onAccepted ? onAccepted(v) : setAcceptedHere(v));
   // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
   // fetch is needed (the monitor never fetches).
-  const plan = useQuery<ReleasePlan>(project, urls.releasePlan(project, release.version), ["releases", "items", "gates"]);
+  const plan = useQuery<ReleasePlan>(project, urls.releasePlan(project, release.version), TAGS.releasePlan);
   // Which prepared records this button's forms show (DEF-095), told to the page once the plan is
   // read, so the page lists the others under "Prepared, not required". None when the plan fails.
   const shownKey = plan.error ? "" : plan.data ? shownByButton(plan.data, writable, release.version, gates, prepared).join(",") : null;

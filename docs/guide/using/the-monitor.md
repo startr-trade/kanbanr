@@ -522,8 +522,54 @@ Every page shares one copy of each read, however many parts of it ask. The daemo
 read once per change to the board and gzips it. The browser then asks again only to be told
 nothing changed. When the CLI changes the board, the daemon says which parts changed, and the
 page re-reads just those parts. The Review page reads its group counts first, then the open
-group's rows, and a row's evidence only when the row is opened. The Releases and Schedule pages
-still read the whole board until their own rebuilds land.
+group's rows, and a row's evidence only when the row is opened. The Releases page reads its tab
+counts first, then the open tab's releases, and a release's items only when its row is opened (see
+[The Releases page](#the-releases-page)). The Schedule page still reads the whole board until its
+own rebuild lands.
+
+### The Releases page
+
+On a project that works in releases, the Releases page has three tabs (FTR-041), each labelled with
+its count:
+
+- **Current**: releases at a stage that are not shipped yet — a candidate, a release on main, one
+  tagged and waiting for its tag workflow, a patch in progress.
+- **Planned**: releases not yet at a stage.
+- **Released**: shipped releases, and superseded ones marked "Superseded by vX".
+
+The page opens on Current when a release is in flight, else on Planned, else on Released; an empty
+tab is hidden unless all are. Each tab lists its releases newest first by version (see **Promote** below).
+
+Each release is one row that opens like an accordion. A tab opens its first release and keeps the
+rest closed. The row's header has two lines:
+
+- **First line:** the version and name, then the chips — state, stage ("not yet a candidate"
+  before the first), target, shipped date, how much is finished ("3/4 finished (75%)"), how many
+  items were carried over, "Superseded by vX" and "tagged, not released yet" — and the stage
+  stepper: one dot per stage joined by a line, with the date and who under each stage reached. A
+  stage that was undone shows as not reached.
+- **Second line:** for a release that is not shipped, its next step: the button and what it will do
+  (see [Release actions](#release-actions)). A closed Planned release shows its next step as text
+  ("next: Promote v0.9.0 to candidate") and asks nothing of the code repository until you open it.
+
+The opened row's body starts with a full-width table of the release's items: ID (linked to the
+item), title, kind, status, sprint, tests green out of named, its approval, design-review and
+docs-folded sign-offs as pills, and where a carried item went. Titles get the width and do not
+wrap. Every column sorts, the table has its own filter, and **Export CSV** saves it. Below the
+table come **Remove** for a planned release that can still be removed, the rest of the release's
+button (what is missing with its fix, the cut preview, **Check again**, and the tag's panel once it
+is tagged), **Prepared, not required**, the **Release notes** section, collapsed until opened, and
+the link to the release's notes doc. A closed row reads none of this.
+
+The **Filter** box above the list filters the open releases' tables, and hides closed releases
+whose version or name does not match. It never reads a closed release's items to search them.
+
+On a narrow screen (below 720 px) the table keeps ID, title and status, and each row's **More**
+shows the other columns; below 640 px the header stacks into one column.
+
+The URL keeps the page as you left it, so a link can point at one release: `?tab=planned` is the
+tab, the hash lists the open releases (`#v0.8.0,v0.7.1`), `?q=` is the filter, and `?t.sort=` and
+`?t.dir=` the table's sort. `/p/<project>/releases?tab=current#v0.8.0` opens v0.8.0's row.
 
 ### Which kanbanr the monitor runs
 
@@ -554,8 +600,8 @@ same whichever you use. A read-only monitor shows the command instead.
   and you sign again. The item's page marks the sign-off "changed since sign-off".
 - **Promote.** The Releases page lists releases newest first by version (v0.10.0 above v0.9.0, a
   patch such as v0.5.1 above v0.5.0, a pre-release just below its release; versions that are not
-  numbers come last, in the order they were added), as `kanbanr release list` does. Each release
-  shows its stage, with the stage history on hover, and one button that names the release and its
+  numbers come last, in the order they were added), as `kanbanr release list` does. Each release's
+  header shows its stage on the stepper and, on its second line, one button that names the release and its
   next step — **Promote \<VERSION\> to \<next stage\>**, or **Cut \<VERSION\>** for the last —
   until it ships. This is `kanbanr release promote <VERSION>`. Beside the button, the page says
   what the step will do ("fast-forwards main to release/v0.3.0", "tags abc1234 …"); for the cut,
@@ -570,8 +616,8 @@ same whichever you use. A read-only monitor shows the command instead.
   `kanbanr release undo <VERSION> --reason …` while nothing is pushed or tagged. Until the plan is
   ready the button is disabled and says why beside it, in the same words as its tooltip: the first
   thing missing with its fix ("release/v0.2.0 already exists in … and is not main's tip: 2
-  commit(s) ahead, 0 behind. Delete it if it is a leftover …"). Below, the page lists everything
-  that is missing with its fix ("push main (`git push origin main`), then wait for CI"), with
+  commit(s) ahead, 0 behind. Delete it if it is a leftover …"). In the release's body, below its
+  item table, the page lists everything that is missing with its fix ("push main (`git push origin main`), then wait for CI"), with
   **Check again** to read the plan once more. The **again** button says why it is disabled the same
   way.
   A release with nothing planned into it shows no button, only how to plan into it. The steps act
@@ -579,21 +625,21 @@ same whichever you use. A read-only monitor shows the command instead.
   else, it says "the monitor was not started in the project folder" and names the CLI command. A
   read-only monitor shows the command and the plan, never the button.
 - **Shipping untested work.** When the cut's one missing condition is that some shipping
-  requirements have tests not run, the release card lists them (`FEAT-005/R-2`, …) with one
+  requirements have tests not run, the release's body lists them (`FEAT-005/R-2`, …) with one
   checkbox, "Ship these unverified; the notes will name them". Ticking it enables **Cut**, which
   sends exactly that list; if the list changed since the page read it, the cut is refused and you
   look again. The notes on the board gain a "Not verified in this release" section. This is
   `kanbanr release promote <VERSION> --accept-untested …`.
 - **Tagged, waiting for the tag workflow.** When the tag stage is the last and a gate judges the
-  tag, the cut leaves the release "tagged, not released yet". Its card keeps the tag's panel and a
-  button, "Waiting for the tag workflow", that stays off until a passed result is recorded for the
+  tag, the cut leaves the release "tagged, not released yet", still in Current. Its body keeps the
+  tag's panel, and its header a button, "Waiting for the tag workflow", that stays off until a passed result is recorded for the
   tag's commit. Confirming Claude's prepared result (or recording it with **Record result**) ships
   the release. A failed result keeps it tagged and the panel offers the patch release. This is
   `kanbanr gate record <gate> --passed --commit <tag>`, or `kanbanr release promote <VERSION>`.
-- **Prepared, not required.** A record Claude prepared for a release that no form on its card
+- **Prepared, not required.** A record Claude prepared for a release that no form on its row
   shows, such as a gate result for a gate no release stage asks for, or a confirmation for a stage
-  other than the next one, is listed in the release's card under **Prepared, not required**,
-  below its button and above its notes. A gate result no stage asks for reads "no stage asks for
+  other than the next one, is listed in the release's body under **Prepared, not required**,
+  below its item table and the rest of its button, and above its notes. A gate result no stage asks for reads "no stage asks for
   \<gate\>". Each has its own button (**Record \<gate\> passed on \<commit\>**), **Edit** and
   **Reject**, as in [Prepared by Claude](#prepared-by-claude), so nothing waits unseen. A prepared
   gate result goes stale once its release is cut after it was prepared, or its release branch

@@ -84,6 +84,9 @@ All notable changes to kanbanr are documented here. The format follows
   the revision they were last green at and a likely rename), greens at a revision that never held
   the test, tests never run, open manual checks per item and per release, and finished items with
   no definition; `kanbanr doctor` and the monitor's Workflow page carry the counts (MNT-001).
+- The Releases page has Current, Planned and Released tabs, newest first; each release is an
+  accordion whose header carries its chips, stage stepper and next step, and whose body is a
+  full-width, sortable table of its items, loaded only when opened (FTR-041).
 
 ### Fixed
 

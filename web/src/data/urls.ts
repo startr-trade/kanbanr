@@ -139,6 +139,8 @@ export const TAGS = {
   gitDoctor: ["*"],
   guards: ["*"],
   pendingReviews: ["*"],
+  /** A release's plan reads the code repository (its branches, tags and CI) as well as the board. */
+  releasePlan: ["*"],
   /** A root read: never invalidated by a project's change. */
   meta: [],
   /** Sent only by the daemon's background worker, after a drift run (FTR-045). */
