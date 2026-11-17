@@ -50,7 +50,8 @@ function docPath(template) {
     .split("/")
     .filter(Boolean)
     .map((s) => (s !== "${}" && s.endsWith("${}") ? s.slice(0, -3) : s));
-  const out = segs.map((s, i) => (s === "${}" ? name[segs[i - 1]] ?? "{param}" : s));
+  // plan/rows/{key} names its row by key; review/groups/{key}/rows/{row} by row (FTR-043).
+  const out = segs.map((s, i) => (s === "${}" ? (segs[i - 1] === "rows" && segs[i - 2] === "plan" ? "{key}" : name[segs[i - 1]] ?? "{param}") : s));
   return "/api/" + out.join("/");
 }
 
