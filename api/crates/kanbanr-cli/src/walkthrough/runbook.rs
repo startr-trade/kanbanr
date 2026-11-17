@@ -436,18 +436,33 @@ impl Expect {
 }
 
 impl Offer {
-    /// The verdict of an absent-offer claim, given whether the page offers the button for the
-    /// subject: `None` when it holds, else the finding's text.
-    pub fn judge_absent(&self, offered: bool) -> Option<String> {
+    /// The verdict of an absent-offer claim, given whether the subject resolves to an item and
+    /// whether the page offers the button for it: `None` when it holds, else the finding's kind
+    /// and text. A subject that resolves to no item is `subject-unknown`, not a pass: a
+    /// misspelt selector would prove nothing.
+    pub fn judge_absent(
+        &self,
+        subject_known: bool,
+        offered: bool,
+    ) -> Option<(&'static str, String)> {
+        let subject = self
+            .subject
+            .as_ref()
+            .map(ItemSel::describe)
+            .unwrap_or_else(|| "no subject".into());
+        if !subject_known {
+            return Some((
+                "subject-unknown",
+                format!("no item matches {subject}, so the absence proves nothing"),
+            ));
+        }
         offered.then(|| {
-            format!(
-                "\"{}\" is offered on the {} page for {}",
-                self.button,
-                self.page,
-                self.subject
-                    .as_ref()
-                    .map(ItemSel::describe)
-                    .unwrap_or_else(|| "no subject".into())
+            (
+                "offer-present",
+                format!(
+                    "\"{}\" is offered on the {} page for {subject}",
+                    self.button, self.page
+                ),
             )
         })
     }
@@ -2146,10 +2161,21 @@ steps:
                 subject: Some(ItemSel::Code("FEAT-002".into())),
             }
         );
-        assert_eq!(offer.judge_absent(false), None);
+        assert_eq!(offer.judge_absent(true, false), None);
         assert_eq!(
-            offer.judge_absent(true).as_deref(),
-            Some("\"Passed\" is offered on the review page for FEAT-002")
+            offer.judge_absent(true, true),
+            Some((
+                "offer-present",
+                "\"Passed\" is offered on the review page for FEAT-002".to_string()
+            ))
+        );
+        // Clarification Q3: a subject that resolves to no item is a finding, never a pass.
+        assert_eq!(
+            offer.judge_absent(false, false),
+            Some((
+                "subject-unknown",
+                "no item matches FEAT-002, so the absence proves nothing".to_string()
+            ))
         );
         // An offer under expect without `absent`, `absent` alone, no subject, a wrong page.
         let bad = Runbook::parse(
