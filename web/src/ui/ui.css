@@ -67,6 +67,9 @@
   font-size: var(--fs-1);
   line-height: 1.6;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border: 1px solid transparent;
 }
 .ui-pill-ok { color: var(--ok-fg); background: var(--ok-bg); }
@@ -137,7 +140,7 @@
 .ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; overflow-wrap: anywhere; }
 
 /* Tables (R-3): tools above, a caption, button headers carrying the sort. */
-.ui-table-wrap { overflow-x: auto; }
+.ui-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; }
 .ui-table-tools {
   display: flex;
   flex-wrap: wrap;
@@ -454,4 +457,12 @@ a.ui-progress:hover .ui-progress-bar { outline: 1px solid var(--accent); }
   color: var(--text-muted);
   font-size: var(--fs-1);
   overflow-wrap: anywhere;
+}
+
+/* Narrow (UX-8, 18 Nov 2026): a wide matrix scrolls inside its own frame, and the gallery's theme
+   panels are one column. */
+@media (max-width: 720px) {
+  .ui-matrix { display: block; overflow-x: auto; max-width: 100%; }
+  .ui-gallery-themes { grid-template-columns: minmax(0, 1fr); }
+  .ui-gallery-theme { min-width: 0; }
 }

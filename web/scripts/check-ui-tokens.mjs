@@ -34,9 +34,14 @@ let ok = true;
   const problems = [];
   const defined = new Set([...stripComments(tokensCss).matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
   const files = readdirSync(uiDir).filter((f) => f.endsWith(".css") && f !== "tokens.css");
-  // The Board's own rules (FTR-078) hold to the same tokens.
-  const boardCss = join(new URL("../src/pages/board", import.meta.url).pathname, "board.css");
-  const sources = [...files.map((f) => [f, read(f)]), ["board.css", readFileSync(boardCss, "utf8")]];
+  // Every page stylesheet (the Board's, FTR-078, and each page's own after it) holds to the same tokens.
+  const pagesDir = new URL("../src/pages", import.meta.url).pathname;
+  const pageCss = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+      e.isDirectory() ? pageCss(join(dir, e.name)) : e.name.endsWith(".css") ? [join(dir, e.name)] : [],
+    );
+  const pageSources = pageCss(pagesDir).map((f) => [f.slice(pagesDir.length + 1), readFileSync(f, "utf8")]);
+  const sources = [...files.map((f) => [f, read(f)]), ...pageSources];
   for (const [file, text] of sources) {
     const css = stripComments(text);
     for (const m of css.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) problems.push(`${file}: a hex colour ${m[0]} — use a token`);

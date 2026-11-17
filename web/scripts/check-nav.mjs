@@ -16,7 +16,12 @@
 //     areas fold behind one ≡ button, and the badge and the theme toggle stay outside them (R-4);
 //   web::check_nav_areas_with_several_pages_are_menu_buttons — one row of menu buttons above 720 px,
 //     no second row and no sidebar (R-6);
-//   web::check_nav_renders_a_one_page_area_as_a_link_named_for_the_area — never a one-entry menu (R-8).
+//   web::check_nav_renders_a_one_page_area_as_a_link_named_for_the_area — never a one-entry menu (R-8);
+//   web::check_narrow_top_bar_keeps_its_controls_on_one_row — at 390 px the brand's word is clipped
+//     away, the here label shrinks, and the toggle, badge and theme keep their size (R-4);
+//   web::check_narrow_pages_keep_wide_content_in_its_own_frame — the stylesheets give wide tables,
+//     the timeline, code and pills their own frame at 720 px and below, so no page scrolls
+//     sideways (R-4; the person's decision of 18 Nov 2026).
 //
 // The last four render the shell through scripts/lib/render.mjs (FTR-046).
 //
@@ -213,6 +218,24 @@ function declarations(css, selector) {
 
 const { narrow, wide } = splitNarrow(stylesCss);
 
+/** The body of every `@media (max-width: <px>px)` block in `css`. */
+function narrowBlock(css, px) {
+  const out = [];
+  const at = new RegExp(`@media\\s*\\(max-width:\\s*${px}px\\)\\s*\\{`, "g");
+  let m;
+  while ((m = at.exec(css)) !== null) {
+    let depth = 1;
+    let j = m.index + m[0].length;
+    for (; j < css.length && depth > 0; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}") depth--;
+    }
+    out.push(css.slice(m.index + m[0].length, j - 1));
+    at.lastIndex = j;
+  }
+  return out.join("\n");
+}
+
 try {
   // R-3: at /p/x/milestones, Work is a closed disclosure button marked current, and Milestones is the page.
   {
@@ -337,6 +360,89 @@ try {
     if (/Workflow/.test(document.body.textContent)) problems.push("the area item shows the page's own label, Workflow");
     if (!document.querySelector('button[aria-controls="nav-work"]')) problems.push("the fixture's two-page Work area is not a menu button");
     report("web::check_nav_renders_a_one_page_area_as_a_link_named_for_the_area", problems);
+  }
+
+  // R-4 (18 Nov 2026): at 390 px the top bar keeps one row.
+  {
+    const problems = [];
+    const { document } = await render("src/App.tsx", "default", {}, { url: `${root}/review` });
+    const word = document.querySelector(".brand a .brand-word");
+    if (!word) problems.push("the brand link has no .brand-word span around the word kanbanr");
+    else if (word.textContent.trim() !== "kanbanr") problems.push(`.brand-word reads "${word.textContent}", expected "kanbanr"`);
+    const brand = document.querySelector(".brand a");
+    if (brand && brand.getAttribute("aria-label") !== "kanbanr — all projects") problems.push("the brand link lost its accessible name");
+    const small = narrowBlock(stylesCss, 480);
+    const hide = declarations(small, ".brand-word");
+    if (!hide) problems.push("no .brand-word rule at @media (max-width: 480px)");
+    else {
+      if (/display:\s*none/.test(hide)) problems.push(".brand-word is display: none at 480 px, which drops the link's name; clip it instead");
+      if (!/clip(-path)?:/.test(hide) || !/position:\s*absolute/.test(hide)) problems.push(".brand-word is not hidden with the clip pattern (position: absolute plus clip)");
+    }
+    const here = declarations(narrow, ".nav-here");
+    if (!/min-width:\s*0/.test(here)) problems.push(".nav-here is not min-width: 0 at 720 px");
+    if (!/text-overflow:\s*ellipsis/.test(here)) problems.push(".nav-here has no ellipsis at 720 px");
+    if (!/flex:\s*1 1 auto/.test(here)) problems.push(".nav-here is not flex: 1 1 auto at 720 px");
+    for (const sel of [".nav-toggle", ".needs-you", ".theme-toggle"]) {
+      const d = declarations(narrow, sel) + ";" + declarations(wide, sel);
+      if (!/flex:\s*none/.test(d)) problems.push(`${sel} is not flex: none`);
+    }
+    report("web::check_narrow_top_bar_keeps_its_controls_on_one_row", problems);
+  }
+
+  // R-4 (18 Nov 2026): wide content scrolls in its own frame, never the page.
+  {
+    const problems = [];
+    const sheets = {
+      "styles.css": stylesCss,
+      "ui/ui.css": readFileSync(new URL("../src/ui/ui.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""),
+      "pages/board/board.css": readFileSync(new URL("../src/pages/board/board.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""),
+    };
+    // [file, selector, declaration pattern, where: "narrow" (inside 720 px) or "any"]
+    const want = [
+      ["styles.css", ".content", /min-width:\s*0/, "any"],
+      ["styles.css", ".overview-page", /min-width:\s*0/, "any"],
+      ["styles.css", ".overview-col", /min-width:\s*0/, "any"],
+      ["ui/ui.css", ".ui-table-wrap", /max-width:\s*100%/, "any"],
+      ["ui/ui.css", ".ui-table-wrap", /min-width:\s*0/, "any"],
+      ["ui/ui.css", ".ui-matrix", /display:\s*block/, "narrow"],
+      ["ui/ui.css", ".ui-matrix", /overflow-x:\s*auto/, "narrow"],
+      ["ui/ui.css", ".ui-matrix", /max-width:\s*100%/, "narrow"],
+      ["ui/ui.css", ".ui-pill", /max-width:\s*100%/, "any"],
+      ["ui/ui.css", ".ui-pill", /text-overflow:\s*ellipsis/, "any"],
+      ["ui/ui.css", ".ui-gallery-themes", /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "narrow"],
+      ["ui/ui.css", ".ui-gallery-theme", /min-width:\s*0/, "narrow"],
+      ["styles.css", ".plan-tab .ui-timeline", /overflow-x:\s*auto/, "narrow"],
+      ["styles.css", ".plan-tab .ui-timeline", /max-width:\s*100%/, "narrow"],
+      ["styles.css", ".markdown table", /display:\s*block/, "narrow"],
+      ["styles.css", ".markdown table", /overflow-x:\s*auto/, "narrow"],
+      ["styles.css", ".markdown table", /max-width:\s*100%/, "narrow"],
+      ["styles.css", ".markdown code", /overflow-wrap:\s*anywhere/, "any"],
+      ["styles.css", ".ui-table code", /overflow-wrap:\s*anywhere/, "any"],
+      ["styles.css", ".markdown pre", /overflow-x:\s*auto/, "any"],
+      ["styles.css", ".markdown pre", /max-width:\s*100%/, "any"],
+      ["styles.css", ".tasktext", /overflow-wrap:\s*anywhere/, "any"],
+      ["styles.css", ".tasktext", /min-width:\s*0/, "any"],
+      ["styles.css", ".per-page", /flex-wrap:\s*wrap/, "any"],
+      ["styles.css", ".per-page select", /max-width:\s*100%/, "any"],
+      ["styles.css", ".board", /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "narrow"],
+      ["styles.css", ".column", /min-width:\s*0/, "any"],
+      ["styles.css", ".activity-meta", /white-space:\s*normal/, "narrow"],
+      ["styles.css", ".todo-tile", /overflow-wrap:\s*anywhere/, "narrow"],
+      ["styles.css", ".activity-list", /overflow-wrap:\s*anywhere/, "narrow"],
+      ["styles.css", ".plan-flow", /overflow-wrap:\s*anywhere/, "narrow"],
+    ];
+    const parts = Object.fromEntries(Object.entries(sheets).map(([k, v]) => [k, splitNarrow(v)]));
+    for (const [file, sel, re, where] of want) {
+      const { narrow: n, wide: w } = parts[file];
+      const hit = where === "narrow" ? declarations(n, sel) : declarations(n, sel) + ";" + declarations(w, sel);
+      if (!re.test(hit)) problems.push(`${file}: ${sel} lacks ${re.source}${where === "narrow" ? " at 720 px and below" : ""}`);
+    }
+    // Review is FTR-038's: this task adds no Review rule to the shared stylesheets.
+    for (const [file, css] of Object.entries(sheets)) {
+      if (file === "styles.css" || file === "ui/ui.css") continue;
+      if (/\.review-|\.ui-row-/.test(css)) problems.push(`${file} holds a Review or row rule`);
+    }
+    report("web::check_narrow_pages_keep_wide_content_in_its_own_frame", problems);
   }
 } catch (e) {
   failed = true;

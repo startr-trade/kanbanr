@@ -17,6 +17,7 @@ a:hover { text-decoration: underline; }
 code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .app { min-height: 100vh; }
+.content { min-width: 0; }
 
 /* ---- top bar ---- */
 .topbar {
@@ -30,6 +31,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   top: 0;
   z-index: 10;
 }
+.brand { display: flex; align-items: center; }
 .brand a { font-weight: 700; color: var(--text); font-size: var(--fs-3); display: inline-flex; align-items: center; gap: 8px; }
 /* The k-mark (FEAT-133): a column of three cards for the stem, the thread for the arms. */
 .brand-mark { width: 22px; height: 22px; flex: none; }
@@ -220,7 +222,7 @@ summary:focus-visible,
   overflow-x: auto;
   padding-bottom: 8px;
 }
-.column { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.column { min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
 .column-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 10px 12px; font-weight: 700; color: var(--text);
@@ -383,7 +385,7 @@ summary:focus-visible,
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 1px 7px; font-size: var(--fs-1); color: var(--muted);
 }
-.tasktext { flex: 1; }
+.tasktext { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .taskbadge { font-size: var(--fs-1); border-radius: 12px; padding: 2px 9px; border: 1px solid var(--border); }
 .taskbadge.todo { color: var(--todo); }
 .taskbadge.wip { color: var(--wip); border-color: rgba(210,153,34,0.4); }
@@ -514,10 +516,11 @@ summary:focus-visible,
 .markdown h2 { font-size: var(--fs-4); }
 .markdown pre {
   background: var(--bg); border: 1px solid var(--border);
-  border-radius: 8px; padding: 12px; overflow-x: auto;
+  border-radius: 8px; padding: 12px; overflow-x: auto; max-width: 100%;
 }
-.markdown code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
-.markdown pre code { background: none; padding: 0; }
+.markdown code { background: var(--bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.ui-table code { overflow-wrap: anywhere; }
+.markdown pre code { background: none; padding: 0; overflow-wrap: normal; }
 .markdown table { border-collapse: collapse; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; }
 .markdown blockquote {
@@ -565,10 +568,10 @@ summary:focus-visible,
 .board-search:focus:not(:focus-visible) { outline: none; }
 
 /* ---- per-page selector ---- */
-.per-page { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); }
+.per-page { display: inline-flex; flex-wrap: wrap; max-width: 100%; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); }
 .per-page select {
   padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border-strong);
-  background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
+  background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer; max-width: 100%;
 }
 .per-page select:focus { border-color: var(--accent); }
 .per-page select:focus:not(:focus-visible) { outline: none; }
@@ -616,7 +619,7 @@ summary:focus-visible,
      on, the button, the badge and the theme toggle; the areas open below as a full-width panel,
      each a heading with all its pages, and the global views at its foot. */
   .nav { display: contents; }
-  .nav-here { display: inline; color: var(--muted); font-size: var(--fs-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .nav-here { display: inline; flex: 1 1 auto; color: var(--muted); font-size: var(--fs-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .nav-toggle { display: inline-block; margin-left: auto; flex: none; }
   .nav-areas { display: none; }
   .nav.open .nav-areas, .nav.no-project .nav-areas {
@@ -654,14 +657,25 @@ summary:focus-visible,
   .board {
     grid-auto-flow: row;
     grid-auto-columns: auto;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     overflow-x: visible;
   }
+  .activity-meta { white-space: normal; }
+  .todo-tile, .activity-list, .plan-flow { overflow-wrap: anywhere; }
+  .activity-msg { min-width: 0; }
+  /* Wide content scrolls inside its own frame, never the page (UX-8, 18 Nov 2026). */
+  .markdown table { display: block; overflow-x: auto; max-width: 100%; }
+  .plan-tab .ui-timeline, .plan-row-items .ui-timeline { overflow-x: auto; max-width: 100%; }
   .tiles { grid-template-columns: 1fr; }
   .board-search { min-width: 0; width: 100%; }
   .doc-article { padding: 8px 14px; }
   .activity-list li { flex-wrap: wrap; gap: 2px 12px; }
   .feature-meta { gap: 6px; }
+}
+
+/* The brand's word clips away on a phone, so the bar keeps one row; the link keeps its name. */
+@media (max-width: 480px) {
+  .brand-word { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 }
 
 /* ---- portfolio / program hierarchy (FEAT-030) ---- */
@@ -889,7 +903,7 @@ summary:focus-visible,
 }
 
 /* The project Overview (FTR-048): tokens only. Now is three columns, one under 720 px. */
-.overview-page { display: flex; flex-direction: column; gap: var(--sp-4); }
+.overview-page { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
 .overview-asof { margin: 0; }
 .overview-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
 .overview-more { font: inherit; text-align: left; cursor: pointer; }
