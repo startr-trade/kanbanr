@@ -384,6 +384,10 @@ export interface PendingReview {
   system_baseline_rows?: SystemBaselineRow[];
   /** The catalog rows the design changes: its docs and its named rows (FTR-006). */
   views_changed?: string[];
+  /** The verdicts this entry asks that a delegation in force holds (DEF-104). */
+  held?: Held[];
+  /** Nothing in this entry is the person's: every verdict it asks is held (DEF-104). */
+  claudes?: boolean;
 }
 
 /** One decision group, counted: a tab on the Review page (FTR-038, `GET /review/summary`). */
@@ -401,6 +405,8 @@ export interface GroupCount {
   ready: number;
   /** The rows with an open prepared record. */
   prepared: number;
+  /** The rows Claude holds under a delegation in force: listed, not in `count` (DEF-104). */
+  held?: number;
 }
 
 /** One row of a group: one decision waiting on one thing (FTR-038). */
@@ -430,6 +436,10 @@ export interface ReviewRow {
   signoff: string;
   requirement: string;
   test: string;
+  /** The delegation in force that holds this row's verdict; absent when it is the person's (DEF-104). */
+  held_by?: string;
+  /** When that delegation ends (RFC 3339). */
+  held_until?: string;
 }
 
 /** One group's rows, in the page's default order (FTR-038, `GET /review/groups/{key}`). */
@@ -582,6 +592,27 @@ export interface NextStageWire {
   immediate?: boolean;
   for_you?: number;
   checks?: CheckTally[];
+  /** The sign-off and approval gaps a delegation in force holds; absent from an older daemon (DEF-104). */
+  delegated?: DelegatedGap[];
+}
+
+/** A gap Claude holds under a delegation in force (DEF-104). */
+export interface DelegatedGap {
+  check: "signoff" | "approved";
+  /** The sign-off's name; empty for an approval. */
+  name: string;
+  /** The delegation that holds it, `DLG-001`. */
+  delegation: string;
+  /** When the delegation ends (RFC 3339). */
+  until: string;
+}
+
+/** A verdict a delegation in force holds on a pending item (DEF-104). */
+export interface Held {
+  /** `approve`, `ratify` or `signoff:<name>`. */
+  verdict: string;
+  delegation: string;
+  until: string;
 }
 
 /** One card's readiness; the fields after `next` are absent from an older daemon (FTR-078). */
@@ -1739,6 +1770,43 @@ export interface Attention {
   total: number;
   /** Absent when nothing is waiting. */
   lines?: AttentionLine[];
+  /** Present in delegated mode while a delegation is in force or has just ended (DEF-104). */
+  delegated?: DelegatedAttention;
+}
+
+/** The delegated part of Needs you: what Claude decided, what it holds, what returns (DEF-104). */
+export interface DelegatedAttention {
+  /** The delegations in force, in file order. */
+  in_force: string[];
+  /** Verdicts Claude took that the person has not kept or undone, newest first. */
+  decided: DelegatedDecision[];
+  decided_total: number;
+  holds: DelegationHold[];
+  ending: DelegationEnding[];
+}
+
+/** What one delegation in force still holds. */
+export interface DelegationHold {
+  delegation: string;
+  until: string;
+  total: number;
+  verdicts: HeldCount[];
+}
+
+export interface HeldCount {
+  /** `approve`, `ratify` or `signoff:<name>`. */
+  verdict: string;
+  count: number;
+}
+
+/** A delegation that ends soon or just ended, and how many decisions return to the person. */
+export interface DelegationEnding {
+  delegation: string;
+  /** `granted` (ends soon), `ended` or `revoked`. */
+  state: "granted" | "ended" | "revoked" | "proposed";
+  /** When it ends, ended or was revoked (RFC 3339). */
+  at: string;
+  returns: number;
 }
 
 export interface SprintNow {

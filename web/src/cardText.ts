@@ -6,7 +6,7 @@
  * waiting for a sign-off, or that it is ready — and nothing at all while the item's tasks are open,
  * since the tasks chip already says so and "ready" would not be true.
  */
-import type { CheckTally } from "./types";
+import type { CheckTally, DelegatedGap } from "./types";
 
 export interface NextStage {
   status: string;
@@ -24,6 +24,8 @@ export interface NextStage {
   for_you?: number;
   /** What the stage lacks by family; absent from an older daemon (FTR-078). */
   checks?: CheckTally[];
+  /** The gaps a delegation in force holds; absent from an older daemon (DEF-104). */
+  delegated?: DelegatedGap[];
 }
 
 export interface CardHint {
