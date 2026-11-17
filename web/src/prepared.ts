@@ -46,6 +46,19 @@ export function batches(views: PreparedView[] | null | undefined): Batch[] {
 }
 
 /**
+ * The check ids (the runbook's MT-n, DEF-089) a batch's records carry, in their prepared order and
+ * each once; empty when none carries one. The batch summary on the Review page names them.
+ */
+export function batchChecks(batch: Batch): string[] {
+  const out: string[] = [];
+  for (const v of batch.views) {
+    const c = (v.fields as Record<string, unknown> | undefined)?.check;
+    if (typeof c === "string" && c.trim() !== "" && !out.includes(c.trim())) out.push(c.trim());
+  }
+  return out;
+}
+
+/**
  * Where a source links: a board doc or an item on this monitor, an http(s) link outside it, or
  * nothing (a commit is shown as code; a bare label or anything else is text, never a link).
  */
@@ -86,6 +99,7 @@ const LABELS: Record<string, string> = {
   "manual-test.state": "Result",
   "manual-test.note": "Note",
   "manual-test.checked_rev": "Checked at",
+  "manual-test.check": "Check",
 };
 
 /** The label a kind's field is shown with. */
