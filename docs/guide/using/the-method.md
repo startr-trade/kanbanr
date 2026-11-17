@@ -161,6 +161,14 @@ method` says which parts of the method your project has on ([The method, on by
 default](processes.md#the-method-on-by-default)). A part you turn off is no longer asked for, but
 it is still good practice, and Claude never turns one off or on for you.
 
+**Design at three levels.** The system is designed once, before the first build, and agreed as the
+[system baseline](living-docs.md#the-system-baseline): you accept it on the Review page, and the
+build stage waits until you have. Each component then has a doc that describes it as built. Each
+item's spec holds its own Design, scaled by the item's kind (a defect's is its cause, its fix and
+its reproducing test; a feature's is the full build-ready design) and ending with the views it
+changes, so the design review reads the change against the system design that was agreed
+([The design stage](processes.md#the-design-stage-a-build-ready-design-in-the-spec)).
+
 **For a kind with its own path.** A process can leave method parts off for a kind: the built-in
 processes give chores a lighter path with no `design` and no `design-review`, so a chore isn't asked
 for a Design section or a design review. It is still asked for every other part, for the approval,

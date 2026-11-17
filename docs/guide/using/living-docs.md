@@ -260,6 +260,42 @@ travel with the process; coverage rules stay with the project.
 operations after its moves. Write the view doc in an earlier command, then run the batch that
 moves the item.
 
+### The system baseline
+
+The catalog's **system** rows (context, behaviour, components, data model, decisions, security and
+the rest that apply to your project) describe the system as a whole. The **system baseline** pins
+them: one entry per applying row with a hash of its source (a doc's file, or a generated view's
+content), recorded once you have agreed the system design, before anything is built. It is kept in
+`system-baseline.yaml` beside the catalog.
+
+```bash
+kanbanr catalog baseline            # where it stands, and what changed since it was accepted
+kanbanr catalog baseline init       # pin the applying system rows (needs the catalog)
+```
+
+**Accepting it is yours.** Once the system docs are written, Claude prepares the acceptance
+(`kanbanr prepare system-baseline`) and you accept it as its own group on the Review page
+(`/p/<project>/review?group=system-baseline`), or in your terminal with
+`kanbanr catalog baseline accept`. Claude never accepts it, in any mode, and no delegation covers
+it. Until you do, the build stage's gate (`system_baseline_accepted`) refuses the first item, so
+nothing is built before the system design is agreed. A new project has this on from the start; an
+existing one opts in with `kanbanr catalog baseline init`.
+
+A row whose written source is still missing blocks the acceptance, and names the row. A generated
+row that needs katalogr, or one that is enforced, is listed as not pinned and never blocks.
+
+**What changes it.** The baseline is a record, so a doc changing afterwards is a state, not an
+error. `kanbanr catalog baseline` lists each row changed since the acceptance (its pin and its hash
+now), and a build gate shows each as a warning that never blocks a move. The design review of an
+item that touches a baseline row shows it as "Changes the system baseline", with the pinned and
+current hashes, and the item page lists the **Views changed** by a design. An earlier acceptance
+is never rewritten.
+
+**Re-accepting at a milestone.** When the system design moved on purpose, review it with the
+milestone's architecture review ([above](#before-a-release-and-at-each-milestone)): Claude
+prepares a new acceptance and you accept it. It is added to the history; the latest one is what
+later changes are measured against.
+
 ### Before a release, and at each milestone
 
 Before an item is released, fold its Design into the component docs and views it named; the gate

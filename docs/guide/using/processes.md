@@ -178,7 +178,7 @@ paths:
   The board's columns don't change.
 - **`requires`** are conditions asked, as well as the entered stage's gate, of the first move off
   the starting stage. That is where a chore records why it exists and how it is verified.
-- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`)
+- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`, `system-baseline`)
   not asked of this kind. A path can drop a method part, never an approval or sign-off that the
   stage it enters asks for: those stay yours.
 
@@ -225,15 +225,20 @@ gates:
 
 ## The method, on by default
 
-Every built-in process asks for the same two disciplines, at whichever stages hold the roles:
+Every built-in process asks for the same disciplines, in six parts, at whichever stages hold the roles:
 
 | Part | Where | What it asks |
 |---|---|---|
 | `design` | the build stage | `spec_sections: [Design]`: the spec has its build-ready Design ([below](#the-design-stage-a-build-ready-design-in-the-spec)) |
 | `design-review` | the build stage | the `design-review` sign-off: a person reviewed that design |
+| `system-baseline` | the build stage | `system_baseline_accepted`: the person accepted the [system baseline](living-docs.md#the-system-baseline) once, before the first build |
 | `docs` | the integrate stage | `docs_updated`: each doc in `affects_docs` changed ([Living architecture docs](living-docs.md)) |
 | `docs-folded` | the integrate stage | the `docs-folded` sign-off: the design was folded into those docs |
 | `links` | everywhere | `kanbanr doctor` reports references to things the board does not have |
+
+The `design` part also asks for the subsections the item's kind needs
+([below](#the-design-stage-a-build-ready-design-in-the-spec)); that check, `design_sections`,
+travels with it and is not written into the gate.
 
 It is written as two role-addressed gates, `"@build"` and `"@integrate"`, so you see it in your
 exported workflow and in the working agreement, and it adds to each stage's own rules.
@@ -248,6 +253,13 @@ kanbanr config method --on design           # one part back
 Turning a part off takes its gates out and records the choice: applying a built-in process, or
 `kanbanr process update`, keeps it off, and drift does not report it as an edit. Saved processes
 of your own are never added to; they are only shaped by the choice.
+
+**The system baseline reaches an existing project by opt-in.** A new project has the
+`system-baseline` part on from the start, so its first item waits for the person's acceptance.
+A project that already builds is not stopped by an upgrade: it opts in with
+`kanbanr catalog baseline init` (which also needs the catalog, `kanbanr catalog init`) or
+`kanbanr config method --on system-baseline`. `kanbanr config method` shows the part as off, with
+that command, until then.
 
 **Projects from before the method** keep their workflow as it is. `kanbanr doctor` asks once —
 "this project predates the method" — until you choose either way. A project that recorded a
@@ -337,6 +349,24 @@ Write the section so a cheaper model can build from it. It ends with an implemen
 list: each task names its files, signatures, behaviour, tests (with the requirement each serves)
 and the tasks it depends on, and leaves no decision open. The tasks go into the item's todo-list,
 so a low-cost subagent can take them one at a time.
+
+**What the Design holds depends on the item's kind.** A defect's design is not a feature's. The
+`design_sections` check asks for the subsections of the item's kind, each a heading with content
+at any level in the spec; an item with no kind, or one the table does not list, is judged as a
+feature. `kanbanr feature design --template --kind <kind>` prints the skeleton to start from; it
+writes nothing.
+
+| Kind | The Design holds |
+|---|---|
+| feature | Design, Implementation tasks, Affects docs |
+| defect (`bug`) | Design, Cause, Fix, Affects docs |
+| chore (`refactor`, `recurring`) | Design, Affects docs |
+| docs | Design, Affects docs |
+| spike | Design, Question, What comes back |
+
+Every skeleton ends with **Views changed**: the catalog rows whose docs the change touches. They
+follow from `affects_docs` and the docs the Design links; a generated row with no doc is named in
+the definition's `affects_views`. The design review lists them against the system baseline.
 
 `spec_sections` passes when every named heading is in the spec with content under it. Content in
 a nested subsection counts, and a heading inside a code fence does not.

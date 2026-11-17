@@ -141,6 +141,16 @@ project"** (or anything equivalent):
    shows. A stub is a listed gap, so the plan says which sources it could not draft. Later,
    `kanbanr catalog on <row>` switches a dropped row back on when the user says it applies again.
 
+   **The system baseline follows the catalog** (FTR-006). After the catalog and its drafted docs,
+   the plan runs `kanbanr catalog baseline init`: it pins the system rows that apply, and from then
+   on the first item cannot enter the build role until the person has accepted the baseline. The
+   plan's last line says so: "the system baseline waits for your acceptance on the Review page
+   (`/p/<project>/review?group=system-baseline`)". Once the system docs are written, Claude
+   prepares it (`kanbanr prepare system-baseline --note "…" --source doc:<path>`) and tells the
+   person it waits. Claude never accepts it: `kanbanr catalog baseline accept` is the person's.
+   A project set up before this opts in with `kanbanr catalog baseline init` (or
+   `kanbanr config method --on system-baseline`); until then nothing waits.
+
    **Process, cadence and the rest**
    - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
      chosen in **a**; it needs no board otherwise) lists the processes the team saved on the board
@@ -238,6 +248,7 @@ project"** (or anything equivalent):
    kanbanr catalog init                            # the starter catalog
    kanbanr catalog off <row> --why "…"             # each row the user dropped; `catalog add <row>` for each added
    kanbanr doc add <path> --file <scratch>/<doc>.md   # a drafted source doc for each applying written row
+   kanbanr catalog baseline init                   # pin the system rows; the person accepts them on the Review page
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n.claude/worktrees/\n' >> .gitignore
@@ -523,11 +534,13 @@ organisation's own process file changes what you ask with nothing changed here:
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and each board doc the Design links under `Affects docs`, as built (a doc the Design only reads is marked `unchanged` on its line and needs no change), and draft that fold-in into the definition, saying which docs change; if the item names none and links none — `kanbanr check` then warns 'declares no docs' on the next stage — ask the person, before the move, whether it changes no doc. If they confirm, record their reason as `affects_no_docs` in the definition (`kanbanr feature define <CODE>`); otherwise name the docs |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
+| `system_baseline_accepted` | **never a question for you to answer**: the person accepts the system baseline on the Review page (`?group=system-baseline`). Say it waits; once the system docs are written, prepare it with `kanbanr prepare system-baseline`; never run `kanbanr catalog baseline accept` |
+| `design_sections` | **never a question**: write the subsections the item's kind asks for in its Design (`kanbanr feature design --template --kind <kind>` prints them) |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
 When you ask the person for a decision, link the group: `/p/<project>/review?group=<key>#<CODE>`;
-the keys are approve, ratify, design-review, docs-folded, release-signoff, which-release, manual,
-delegation, delegated, adr.
+the keys are system-baseline, approve, ratify, design-review, docs-folded, release-signoff,
+which-release, manual, delegation, delegated, adr.
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
@@ -756,7 +769,7 @@ default kanban, Scrum, TOGAF, PDCA or a process of the user's own.
 and `kanbanr process checks --json` lists the roles and the checks a gate can ask for. Find the
 status that holds each of design, build, integrate and release, and reason from that, never from a
 preset's name. `kanbanr config method` says which parts of the method this project has on
-(`design`, `design-review`, `docs`, `docs-folded`, `links`). A part that is off is not asked for by
+(`design`, `design-review`, `docs`, `docs-folded`, `links`, `system-baseline`). A part that is off is not asked for by
 the gates, but it is still good practice: keep doing it, and never turn a part off or on yourself.
 
 ### At the design role
@@ -770,7 +783,12 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   position, and `kanbanr doctor` checks it there; a path in backticks is listed but not checked.
   `docs-folded` is offered to the user only once those are built.
 - **Catalog rows**: name the rows of the project's catalog (`kanbanr catalog`) the change touches,
-  and put each one's written source doc in **Affects docs**.
+  and put each one's written source doc in **Affects docs**. End the Design with **Views changed**
+  and mirror a generated row the change affects (one with no doc to link) into the definition's
+  `affects_views`; the rows follow from `affects_docs` and the linked docs on their own.
+  `kanbanr feature show <CODE>` prints them. **design-review shows** which baseline rows the item
+  changes (pinned hash against now), so the person reads the change against the accepted system
+  design.
 - **Two docs folders in the repository**: the product guide, which the published book is built
   from, is `docs/guide`; the system representation (component docs as built, views) is
   `docs/system`, which branches with the code and is not a chapter of the book.
@@ -847,6 +865,22 @@ guessing:
   definition's `affects_docs`, which a `docs_updated` gate checks. Include the project's view
   docs — the Zachman matrix, the component catalog, the ADR index (`kanbanr config coverage`
   names them) — whenever the change adds an item, a component or a decision they list.
+
+**Design at three levels, scaled by kind** (FTR-006). The system level is the system baseline,
+accepted once before the first build; the component level is one doc per component, as built;
+the item level is this section. Start from the kind's skeleton:
+`kanbanr feature design --template --kind <kind>` (it prints, and writes nothing). The
+`design_sections` check asks for these subsections, each a heading with content, and an item with
+no kind or an unknown one is judged as a feature:
+- **feature**: Design, Implementation tasks, Affects docs (the full list above).
+- **defect** (also `bug`): Design, Cause, Fix, Affects docs. The Fix names the reproducing test,
+  written red first, then green.
+- **chore** (also `refactor`, `recurring`): Design, Affects docs, with what changes and the test plan.
+- **docs**: Design, Affects docs, naming the pages and what each says.
+- **spike**: Design, Question, What comes back. A spike returns a change to a definition, never code.
+
+Every skeleton ends with **Views changed**: the catalog rows whose docs are under Affects docs,
+plus any generated row the change affects, which also goes into `affects_views`.
 
 The definition's `how` and `where` lines are one-line summaries of this section, never a
 substitute for it. A section that does not apply says "n/a" and why. A spec that stays
@@ -1228,7 +1262,10 @@ policy says (`kanbanr remote push-policy`).
 Review the architecture as a whole: every component has a board doc that describes it as built,
 its front matter (`items`, `adrs`, `covers`) is current, and the views are updated. `kanbanr trace
 <MS> --zachman` reports a column nothing in scope answers. The gaps `kanbanr catalog` lists, and
-each applying row whose source is missing or a stub, are part of it. See "Architecture docs stay as
+each applying row whose source is missing or a stub, are part of it. So is
+`kanbanr catalog baseline`, which names the system rows changed since the baseline was accepted:
+prepare the re-acceptance (`kanbanr prepare system-baseline`) when the system design moved on
+purpose; the person accepts it on the Review page. See "Architecture docs stay as
 built" below.
 
 ## Code points back at the item that justifies it
@@ -1705,6 +1742,11 @@ kanbanr where [--json]            # which board folder this directory uses (+ su
 kanbanr charter show | set --file charter.yaml     # the project's purpose, goals, non-goals
 kanbanr facts [show] [--json] | set --languages L --runtimes R --production P --parts P --data D | set --from-file F | vocabulary   # what the project is
 kanbanr catalog [show] [--json]   # what the project must document: the gaps, then each row's source and protections
+kanbanr catalog baseline [show] [--json]   # the system baseline: state, rows changed since acceptance, rows not pinned
+kanbanr catalog baseline init                # pin the applying system rows; the build stage then waits for the person's acceptance
+kanbanr catalog baseline accept [--note "…"] # the person's own; refused in a Claude session. Prepare instead:
+kanbanr prepare system-baseline --note "…" --source doc:<path> [--batch <name>]
+kanbanr feature design --template [--kind feature|defect|chore|docs|spike]   # a kind's Design skeleton; writes nothing
 kanbanr catalog init [--force] [--print] | set --from-file F | add <row> | off <row> --why "…" | on <row>   # the catalog's rows
 kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that kind
 kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the definition
