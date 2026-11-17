@@ -221,8 +221,8 @@ and notes become visible to anyone.
 
 A project's pages are grouped into areas: **Overview, Work, Plan, Evidence, Architecture and
 Records** (FTR-047). On a wide screen the top bar is one line: an area with several pages is a
-menu button ("Work ▾") that opens its list under it, and an area with one page is a plain link
-named for the area ("Architecture"). Only one menu is open at a time; Escape, a click outside or
+menu button ("Work ▾", "Architecture ▾") that opens its list under it, and an area with one page
+is a plain link named for the area. Only one menu is open at a time; Escape, a click outside or
 following a link closes it. The area you are in is underlined, and the page you are on is marked
 in its menu. An area shows only once it has a page: Overview and Evidence have none yet, and
 **Releases** shows only on a project that works in releases.
@@ -232,7 +232,7 @@ flowchart LR
   Bar["Top bar — one item per area"]
   Work["Work ▾"]
   Plan["Plan ▾"]
-  Arch["Architecture"]
+  Arch["Architecture ▾"]
   Rec["Records ▾"]
   Board["Board — a column per displayed status"]
   Review["Review — what waits on you"]
@@ -241,6 +241,7 @@ flowchart LR
   Gantt["Gantt"]
   Rel["Releases — on a project in releases"]
   Wf["Workflow"]
+  Base["Baseline — the engineering baseline"]
   Charter["Charter"]
   Docs["Docs — folders as tiles, files as links"]
   Status["Status page"]
@@ -257,6 +258,7 @@ flowchart LR
   Plan --> Gantt
   Plan --> Rel
   Arch --> Wf
+  Arch --> Base
   Rec --> Charter
   Rec --> Docs
   Board --> Status --> Feature
@@ -412,6 +414,18 @@ The git model and git doctor read the code repository. Start `kanbanr serve` in 
 and the page shows the branches it found there. A monitor started anywhere else shows the model
 from the cadence alone, without git doctor, and says so. Whether the git hooks are installed is the
 CLI's to read: the page shows it as not known and names `kanbanr git status`, which tells.
+
+### The Baseline page
+
+The Baseline page, under **Architecture**, shows the project's engineering baseline (FTR-033): the
+practice packs it follows, each `current`, `changed` in its library or `removed`; each proposed
+revision as a panel with its answers, the entries it adds and replaces, the release-stage gates it
+adds and what depends on them; the areas grouped accepted, proposed, open (deferred ones marked
+"decide later") and not applicable with the reason, each entry with its kind, its ADR and the items
+that name it; the charter's own constraints under **Also in the charter**; and the history of
+accepted revisions. **Accept** on a proposed revision is the page's one decision, and a revision
+can be withdrawn with a reason. On a read-only monitor the panel names the command instead
+(`kanbanr baseline accept REV-n`). See [The engineering baseline](baseline.md).
 
 ### How the monitor stays fast
 

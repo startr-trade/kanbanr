@@ -150,7 +150,10 @@ an implementation task list that a cheaper model can build one task at a time. T
 **Affects docs**, links to the board docs the change touches, mirrored into the definition's
 `affects_docs`. Every reference is a live link ([Tying code to the reason for
 it](traceability.md)). Decisions are drafted as proposed ADRs and put to you at once, and a question
-the design leaves open comes to you, never to a subagent. Leaving the role, the build stage asks for
+the design leaves open comes to you, never to a subagent. A design that touches the project's
+[engineering baseline](baseline.md) names each entry it touches under `### Baseline`, with a test
+or a reason; a baseline area it touches that is not answered yet is asked first, and its answer is
+proposed to the baseline rather than written into the item. Leaving the role, the build stage asks for
 the Design and your **design-review** sign-off. That sign-off covers the whole spec as it was when
 you gave it: if the spec changes afterwards, the item returns to the Review page showing only what
 changed.

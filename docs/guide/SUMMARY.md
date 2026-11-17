@@ -19,6 +19,7 @@
 - [Sharing and the live monitor](using/the-monitor.md)
 - [Configuring the workflow](using/workflow.md)
 - [Processes: presets, gates and sign-offs](using/processes.md)
+- [The engineering baseline: practice packs asked once](using/baseline.md)
 - [Documentation folders](using/documentation.md)
 - [Multiple projects](using/projects.md)
 - [Portfolio: work across several projects](using/portfolio.md)

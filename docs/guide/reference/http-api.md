@@ -146,6 +146,7 @@ that changed, taken from the paths of the changed files:
 | `index.yaml` | `items` |
 | `config.yaml`, `releases.yaml`, `sprints.yaml`, `charter.yaml`, `lessons.yaml`, `decisions.yaml`, `scopes.yaml` | `config`, `releases`, `sprints`, `charter`, `lessons`, `decisions`, `scopes` |
 | `system-baseline.yaml` | `catalog` |
+| `baseline.yaml`, `packs/…` | `baseline` |
 | `milestones/…` | `milestones` |
 | `prepared/…`, `manual/…`, `gates/…`, `pins/…`, `activity/…`, `events/…`, `timings/…` | the folder's name |
 | `docs/<path>` | `doc:<path>`, `docs`, and `adrs` under `docs/decisions/` |
