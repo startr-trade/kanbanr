@@ -129,6 +129,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The Items page reads its filters from the URL": LOCAL,
             "The item page shows why an item changes no docs": LOCAL,
             "Planning decisions from the pages": LOCAL,
+            "The Plan page": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

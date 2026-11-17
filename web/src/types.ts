@@ -1840,3 +1840,110 @@ export interface PlanningRequest {
   target: string;
   items: string[];
 }
+
+// ---- the Plan view (FTR-043) ----
+
+/** The tab a Plan row falls in: the same three words the Releases page uses (FTR-041). */
+export type PlanScope = "current" | "planned" | "past";
+
+/** The Plan page's counts per tab and the tab it opens on: `GET /projects/{p}/plan/summary`. */
+export interface PlanSummary {
+  current: number;
+  planned: number;
+  past: number;
+  /** `current` when anything runs today, else `planned`. */
+  open: string;
+  /** The day the counts are for, `YYYY-MM-DD` (UTC). */
+  today: string;
+}
+
+/** A span on a Plan lane: a sprint's dates, or a milestone's reach. */
+export interface PlanBand {
+  from: string;
+  to: string;
+  label: string;
+  /** `ok`, `info`, `warn`, `error` or `neutral`. */
+  tone: string;
+  /** The finished part, 0..1; null when there is nothing to count. */
+  progress?: number | null;
+}
+
+/** A point on a Plan lane: a release's target or ship date (`diamond`), or a stage change (`dot`). */
+export interface PlanMark {
+  at: string;
+  label: string;
+  kind: string;
+}
+
+/** One row of the Plan page: a sprint, a release or a milestone. */
+export interface PlanLane {
+  /** `sprint:SP-004`, `release:v0.8.0` or `milestone:MS-004`: the row's id in the URL. */
+  key: string;
+  /** `sprint`, `release` or `milestone`. */
+  kind: string;
+  label: string;
+  state: string;
+  /** The lane's first and last day; empty on an undated lane. */
+  from: string;
+  to: string;
+  bands: PlanBand[];
+  marks: PlanMark[];
+  done: number;
+  total: number;
+  points_done?: number | null;
+  points_total?: number | null;
+  carried: number;
+  /** The running sprint's burndown; null on every other lane. */
+  burndown?: SprintReport | null;
+}
+
+/** One Plan tab: `GET /projects/{p}/plan?scope=`. */
+export interface PlanSlice {
+  scope: PlanScope;
+  today: string;
+  from: string;
+  to: string;
+  lanes: PlanLane[];
+  /** Rows with no date to place them by. */
+  undated: PlanLane[];
+}
+
+/** One item of an opened Plan row, placed by the first rule that fits; never at a made-up date. */
+export interface PlacedItem {
+  code: string;
+  title: string;
+  status: string;
+  /** The item's first and last day; empty when undated. */
+  from: string;
+  to: string;
+  placed: "sprint" | "moves" | "start" | "undated" | string;
+  /** On the project's dependency critical path. */
+  critical: boolean;
+  /** The planning decisions waiting on the item (FTR-049); empty until then. */
+  pending: string[];
+}
+
+/** An opened Plan row: `GET /projects/{p}/plan/rows/{key}`. */
+export interface RowBody {
+  key: string;
+  items: PlacedItem[];
+  /** A milestone's item codes per displayed status, dependencies first; empty otherwise. */
+  by_status: [string, string[]][];
+  carried: { code: string; to: string; why?: string }[];
+}
+
+/** One project's row on the portfolio's timeline. */
+export interface PortfolioLane {
+  project: string;
+  label: string;
+  bands: PlanBand[];
+  marks: PlanMark[];
+}
+
+/** The portfolio's timeline, its window worked out by the daemon: `GET /portfolio/plan`. */
+export interface PortfolioPlan {
+  from: string;
+  to: string;
+  today: string;
+  lanes: PortfolioLane[];
+}

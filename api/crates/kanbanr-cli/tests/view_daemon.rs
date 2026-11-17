@@ -2763,9 +2763,11 @@ fn the_plan_summary_counts_each_tab() {
     let (code, _) = plan_get(&url, "/projects/nowhere/plan/summary");
     assert_eq!(code, 404);
 
-    let (code, lanes) = plan_get(&url, "/portfolio/plan");
-    assert_eq!(code, 200, "{lanes}");
-    let lanes = lanes.as_array().unwrap();
+    let (code, plan) = plan_get(&url, "/portfolio/plan");
+    assert_eq!(code, 200, "{plan}");
+    assert_eq!(plan["today"], s["today"], "{plan}");
+    assert!(plan["from"].is_string() && plan["to"].is_string(), "{plan}");
+    let lanes = plan["lanes"].as_array().expect("the lanes");
     assert_eq!(lanes.len(), 1, "{lanes:?}");
     assert_eq!(lanes[0]["project"], "shop");
     assert_eq!(lanes[0]["bands"].as_array().unwrap().len(), 1);

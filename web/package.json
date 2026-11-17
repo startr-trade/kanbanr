@@ -58,7 +58,8 @@
     "check:needs-you": "node scripts/check-needs-you.mjs",
     "check:items-page": "node scripts/check-items-page.mjs",
     "check:feature-no-docs": "node scripts/check-feature-no-docs.mjs",
-    "check:planning": "node scripts/check-planning.mjs"
+    "check:planning": "node scripts/check-planning.mjs",
+    "check:plan-page": "node scripts/check-plan-page.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

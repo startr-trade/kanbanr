@@ -429,6 +429,10 @@ jobs:
       # the nearest valid move on one press (FTR-049).
       - name: Planning decisions from the pages
         run: npm run check:planning
+      # The Plan page's tabs carry their counts and open on Current when work runs; the URL names
+      # the tab and the open rows, and /schedule and /gantt go to the Plan page (FTR-043).
+      - name: The Plan page
+        run: npm run check:plan-page
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
