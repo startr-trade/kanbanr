@@ -296,3 +296,28 @@ run "the_network_policy_admits_only_the_ingress_controller" {
     error_message = "the policy must select the site's pods"
   }
 }
+
+run "a_named_pull_secret_is_given_to_the_pod" {
+  command = plan
+
+  variables {
+    image_pull_secret = "registry-creds"
+  }
+
+  assert {
+    condition = (
+      length(kubernetes_deployment_v1.this.spec[0].template[0].spec[0].image_pull_secrets) == 1 &&
+      [for s in kubernetes_deployment_v1.this.spec[0].template[0].spec[0].image_pull_secrets : s.name] == ["registry-creds"]
+    )
+    error_message = "the pod must name the one pull secret it was given"
+  }
+}
+
+run "no_pull_secret_is_named_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(kubernetes_deployment_v1.this.spec[0].template[0].spec[0].image_pull_secrets) == 0
+    error_message = "the pod must name no pull secret when none is given"
+  }
+}

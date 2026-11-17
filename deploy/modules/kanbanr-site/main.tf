@@ -89,6 +89,13 @@ resource "kubernetes_deployment_v1" "this" {
         automount_service_account_token = false
         enable_service_links            = false
 
+        dynamic "image_pull_secrets" {
+          for_each = var.image_pull_secret == null ? [] : [var.image_pull_secret]
+          content {
+            name = image_pull_secrets.value
+          }
+        }
+
         # Every container runs as 10001, so each checkout's owner is the
         # monitor's user (libgit2's owner check).
         security_context {

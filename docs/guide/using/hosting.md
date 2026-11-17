@@ -35,6 +35,8 @@ feeding one server.
   Every container runs as user 10001, not root. Each has a read-only root file system, drops every
   capability and gets no service-account token. The sync containers use a pinned `alpine/git`
   image (git 2.54.1). The kanbanr image itself has no `git`.
+  A private registry's pull secret is named (`image_pull_secret`), not created: the module never
+  holds registry credentials.
 - **A ClusterIP Service** on port 80, in front of the monitor's port 8080.
 - **An Ingress** for an existing ingress controller, such as ingress-nginx, with one rule for the
   site's host. TLS and the load balancer belong to the controller.
@@ -70,6 +72,7 @@ specific to OpenTofu or Terraform, and needs version 1.8.0 or later of either. T
 | `ingress_annotations` | `{}` | Annotations for the controller, such as authentication and buffering (below). |
 | `ingress_tls_secret_name` | `null` | When set, the Ingress has a `tls` entry for the host, using this Secret. |
 | `image` | required | The kanbanr image on its registry, with a release tag of v0.8.0 or later. |
+| `image_pull_secret` | `null` | The name of a Secret of type `kubernetes.io/dockerconfigjson` that already exists in the namespace, for a private registry. The pod uses it to pull its images. |
 | `sync_image` | `alpine/git`, pinned by digest | The git image the clone and sync containers run. |
 | `network_policy_enabled` | `false` | Create a NetworkPolicy that admits only the ingress controller. |
 | `ingress_controller_namespace` | `"ingress-nginx"` | The controller's namespace, for the policy. |

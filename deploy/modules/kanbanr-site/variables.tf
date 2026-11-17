@@ -107,6 +107,12 @@ variable "image" {
   type        = string
 }
 
+variable "image_pull_secret" {
+  description = "The name of a Secret of type kubernetes.io/dockerconfigjson that already exists in the namespace, for a private registry. The module never creates it."
+  type        = string
+  default     = null
+}
+
 variable "sync_image" {
   description = "The pinned git image."
   type        = string
