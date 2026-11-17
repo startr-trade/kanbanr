@@ -5,9 +5,10 @@
  * fact. Read-only: nothing here moves the item.
  */
 import { Link } from "react-router-dom";
-import { badgeWords, cardFact, checksLeftText, CHECK_WORDS, milestoneFullName, milestoneName, stepperSteps } from "../../boardModel.ts";
+import { badgeWords, cardFact, checksLeftSegments, CHECK_WORDS, milestoneFullName, milestoneName, stepperSteps } from "../../boardModel.ts";
 import type { BoardItem } from "../../boardModel.ts";
 import { nextStageHint } from "../../cardText.ts";
+import { to } from "../../overviewLinks.ts";
 import type { CompactIndex } from "../../types.ts";
 import { ProgressBar } from "../../ui/ProgressBar.tsx";
 import { StageStepper } from "../../ui/StageStepper.tsx";
@@ -18,7 +19,8 @@ export function BoardCard(p: { project: string; b: BoardItem; index: CompactInde
   const titleId = `card-${i.code}`;
   const fact = cardFact(b, p.usual);
   const steps = b.next ? stepperSteps(b.next) : [];
-  const left = b.next ? checksLeftText(b.next) : null;
+  const leftParts = b.next ? checksLeftSegments(b.next) : null;
+  const left = leftParts ? leftParts.map((s) => s.text).join("") : null;
   const hint = b.next ? nextStageHint(b.next) : null;
   return (
     <article className="board-card" aria-labelledby={titleId}>
@@ -54,7 +56,17 @@ export function BoardCard(p: { project: string; b: BoardItem; index: CompactInde
           {left && (
             <details className="board-left">
               <summary>What is left</summary>
-              <p>{left}</p>
+              <p>
+                {leftParts?.map((s, k) =>
+                  s.delegation ? (
+                    <Link key={k} to={to.delegation(p.project, s.delegation)}>
+                      {s.text}
+                    </Link>
+                  ) : (
+                    s.text
+                  ),
+                )}
+              </p>
               {b.next.signoffs.length > 0 && <p>Sign-offs: {b.next.signoffs.join(", ")}</p>}
             </details>
           )}
