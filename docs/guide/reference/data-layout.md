@@ -66,8 +66,8 @@ written through.
 **Item codes** (FEAT-217). An item's file is named by its code. Where the project maps kinds to
 prefixes (`codes:` in `config.yaml`, set with `kanbanr config codes`), a new item's code says its
 kind — `DEF-001`, `MNT-004`, `FTR-012` — with a counter per prefix; otherwise every code is
-`FEAT-<n>`. Both kinds of code live side by side, and a code is never renamed when its item's kind
-changes.
+`FEAT-<n>`. Both kinds of code live side by side. A code does not change when its item's kind
+changes by itself; renaming one is a deliberate act that keeps the old code (see below).
 
 ```yaml
 codes:
@@ -77,6 +77,66 @@ codes:
     defect: DEF
     feature: FTR
 ```
+
+**Earlier codes: the alias format, version 1** (FTR-056). A rename (`kanbanr feature edit <CODE>
+--code <NEW>`, or the bulk `kanbanr feature recode`) keeps the code given up on the item, so
+nothing that names it stops resolving. This is the board's data contract with katalogr's index
+(ADR-0014); the rules below are what a reader can rely on.
+
+- **Where.** In the item's own file, `projects/<project>/features/<Status>/<CODE>.yaml`, the file
+  katalogr's board extractor already reads `code` from. It is a top-level key, `aliases`, written
+  directly after `code`.
+- **Type.** A YAML sequence of strings. When the key is absent or the list is empty, the item has no
+  earlier code.
+- **Each entry** is an earlier code of this item, in the same project, matching
+  `^[A-Z][A-Z0-9]*-[0-9]+$` (the shape of `code`). Entries are listed in the order the codes were
+  given up, oldest first.
+- **Rules.**
+  1. *A code names one item for ever.* Within a project, every item's `code` and every entry of every
+     item's `aliases` are distinct.
+  2. *Nothing is removed.* An item's set of codes (`code` plus `aliases`) only grows. Renaming back
+     to an earlier code moves that code out of `aliases` into `code`, and puts the code given up
+     into `aliases`.
+  3. *A reference to an alias means the item that carries it:* `kanbanr:<ALIAS>`,
+     `kanbanr:<ALIAS>/R-n`, `kanbanr:<ALIAS>/TL-n/Tn`, `<ALIAS> R-n`, and
+     `/p/<project>/feature/<ALIAS>`. Requirement, todo-list and task ids do not change in a rename.
+  4. *Scoped to the project.* `<project>:<ALIAS>` in another project's `depends_on`, or in a
+     qualified reference, resolves within `<project>`.
+  5. *The file is named by the current code.* The spec file is `features-spec/<code>.md`. Nothing
+     else in the item file changes meaning.
+  6. *`index.yaml`* rows carry the same `aliases` list, as a cache that is rebuilt from the item
+     files. Readers should take the item file as the source.
+- **Example.**
+
+  ```yaml
+  code: DEF-095
+  aliases:
+  - FEAT-150
+  title: The board drops a field
+  status: Completed
+  ```
+
+  `Refs: kanbanr:FEAT-150/R-1` means `DEF-095/R-1`.
+- **Versioning.** An additive key within board schema 5, with no `schema_version` bump (ADR-0012:
+  additions in a minor version). A reader that does not know `aliases` sees an earlier code as
+  unresolved, as before. A 0.7.0 kanbanr keeps the key when it writes the item back, but its code
+  counter does not see aliases, so it could give a retired number again to an item made with an
+  explicit `--code`. Put every machine that writes the board on 0.8.0 before a bulk recode.
+- **The example board for readers** is `api/crates/kanbanr-core/src/testdata/aliases-v1/`: two
+  items, one renamed twice, and `expected.json`, which maps each reference text to the current code
+  it means. katalogr's side can test against the same files.
+
+What kanbanr does with an earlier code, as built:
+- `Project::feature` and every route, `feature show`, `export`, `kanbanr why` and readiness answer
+  to it, and a write addressed by an earlier code acts on the item.
+- A rename rewrites the structured references the board owns in the same write: other items'
+  `depends_on` and `split_from` (and `<project>:<CODE>` ones in other projects). Spec texts and
+  other prose are not rewritten, since that would lapse a sign-off pinned to the text; an earlier
+  code in a link or a trailer resolves through the alias.
+- Records written once are kept as written (manual and prepared records, activity, events, pins,
+  scopes, delegations, release and sprint lists) and count for the item through its earlier codes.
+- The code counter skips numbers held as aliases, an explicit `--code` that is anyone's earlier code
+  is refused, and `kanbanr doctor` checks the contract (`aliases`).
 
 **Agent scopes** (FEAT-214). `scopes.yaml` holds every scope issued for the project: `id`, `role`
 (`design` or `build`), `item`, `operations`, `branch` and `base` (build), `issued_by`, `issued_at`,

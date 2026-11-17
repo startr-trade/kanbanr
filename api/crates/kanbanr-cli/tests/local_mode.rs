@@ -10964,6 +10964,180 @@ fn why_traces_a_commit_trailer_naming_an_old_code() {
     assert_eq!(item["requirements"][0]["id"], "R-1", "{text}");
 }
 
+impl JsonFixture {
+    /// The board folder, as `kanbanr where` prints it (the board is its own git repository).
+    fn board(&self) -> PathBuf {
+        let out = self.run(&["where"]);
+        let line = out
+            .lines()
+            .find(|l| l.contains("kanbanr-"))
+            .unwrap_or_else(|| panic!("where: {out}"));
+        let path = line
+            .split_whitespace()
+            .find(|w| w.contains("kanbanr-"))
+            .unwrap();
+        PathBuf::from(path)
+    }
+
+    /// The command as the person runs it in their own terminal: no `CLAUDECODE` in the environment.
+    fn exec_as_person(&self, args: &[&str]) -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env_remove("CLAUDECODE")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    }
+
+    fn board_git(&self, args: &[&str]) -> String {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(self.board())
+            .env("HOME", &self.home)
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    }
+}
+
+/// FTR-056 R-6: `feature recode` prints one line per rename and the plan's rev, and writes
+/// nothing: the board's HEAD and working tree are as they were.
+#[test]
+fn feature_recode_prints_the_plan_and_writes_nothing() {
+    let fx = JsonFixture::new("ftr056-plan");
+    fx.run(&[
+        "feature",
+        "add",
+        "--title",
+        "Dropped field",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "bug",
+    ]);
+    fx.run(&["config", "codes", "--set", "feature=FTR,bug=DEF"]);
+    let head = fx.board_git(&["rev-parse", "HEAD"]);
+    let out = fx.run(&["feature", "recode"]);
+    assert!(
+        out.contains("FEAT-001 \u{2192} FTR-001  feature  Cart recovery"),
+        "{out}"
+    );
+    assert!(
+        out.contains("FEAT-002 \u{2192} DEF-001  bug  Dropped field"),
+        "{out}"
+    );
+    assert!(out.contains("2 items; plan "), "{out}");
+    let j = fx.json(&["--json", "feature", "recode"]);
+    assert_eq!(j["renames"].as_array().unwrap().len(), 2);
+    assert!(out.contains(j["rev"].as_str().unwrap()), "{out}");
+    assert_eq!(fx.board_git(&["rev-parse", "HEAD"]), head, "no commit");
+    assert_eq!(fx.board_git(&["status", "--porcelain"]), "", "no change");
+    // Applying needs the plan's rev.
+    let o = fx.exec(&["feature", "recode", "--apply"]);
+    assert!(!o.status.success());
+}
+
+/// FTR-056 R-7: `feature recode --apply --rev` on a 150-item board renames every mismatched item
+/// in one board commit, with a trailer per new code; a stale rev is refused. The wall time is
+/// printed for the docs; the assertion is loose.
+#[test]
+fn feature_recode_apply_makes_one_board_commit() {
+    let fx = JsonFixture::new("ftr056-apply");
+    for i in 0..149 {
+        let kind = ["bug", "chore", "feature"][i % 3];
+        fx.run(&[
+            "feature",
+            "add",
+            "--title",
+            &format!("Item {i}"),
+            "--milestone",
+            "MS-001",
+            "--kind",
+            kind,
+        ]);
+    }
+    fx.run(&["config", "codes", "--set", "feature=FTR,bug=DEF,chore=MNT"]);
+    let plan = fx.json(&["--json", "feature", "recode"]);
+    let n = plan["renames"].as_array().unwrap().len();
+    assert_eq!(n, 150, "every item is mismatched: {n}");
+    let rev = plan["rev"].as_str().unwrap().to_string();
+    let before: u64 = fx
+        .board_git(&["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap();
+    let stale = fx.exec_as_person(&["feature", "recode", "--apply", "--rev", "0000000"]);
+    assert!(
+        String::from_utf8_lossy(&stale.stderr).contains("changed after the plan"),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    assert!(!stale.status.success(), "a stale plan is refused");
+    assert_eq!(
+        fx.board_git(&["rev-list", "--count", "HEAD"])
+            .parse::<u64>()
+            .unwrap(),
+        before,
+        "refused: no commit"
+    );
+    // Claude is refused, in every mode, and nothing changes.
+    let claude = Command::new(cli())
+        .args(["feature", "recode", "--apply", "--rev", &rev])
+        .current_dir(&fx.work)
+        .env("HOME", &fx.home)
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!claude.status.success(), "Claude may not apply a recode");
+    assert_eq!(
+        fx.board_git(&["rev-list", "--count", "HEAD"])
+            .parse::<u64>()
+            .unwrap(),
+        before
+    );
+    let t0 = std::time::Instant::now();
+    let o = fx.exec_as_person(&["feature", "recode", "--apply", "--rev", &rev]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    let took = t0.elapsed();
+    eprintln!("feature recode --apply of {n} items took {took:?}");
+    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    assert!(out.contains("recoded 150 items"), "{out}");
+    let after: u64 = fx
+        .board_git(&["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap();
+    assert_eq!(after, before + 1, "one board commit");
+    let log = fx.board_git(&["log", "-1", "--format=%B"]);
+    assert!(
+        log.contains("recode 150 items to their kinds' prefixes"),
+        "{log}"
+    );
+    assert_eq!(
+        log.matches("kanbanr:").count(),
+        150,
+        "a trailer per new code: {log}"
+    );
+    // The old code still names the item.
+    let shown = fx.run(&["feature", "show", "FEAT-001"]);
+    assert!(shown.starts_with("# FTR-001"), "{shown}");
+    assert!(shown.contains("**Earlier codes:** FEAT-001"), "{shown}");
+    assert_eq!(
+        fx.json(&["--json", "feature", "recode"])["renames"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "nothing is left to recode"
+    );
+}
+
 /// DEF-009 R-2: `why --json` names the requirement and the goal behind an annotated line.
 #[test]
 fn why_json_names_the_requirement_and_goal() {

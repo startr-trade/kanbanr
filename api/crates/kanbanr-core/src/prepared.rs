@@ -258,6 +258,9 @@ pub enum RevOf {
     /// The system baseline's pins now (`systembaseline::pins_rev`), read without a code
     /// repository so the monitor and the terminal agree (FTR-006).
     SystemBaselinePins,
+    /// The bulk recode plan's rev now (`aliases::recode_plan`), the hash of the renames it names
+    /// (FTR-056).
+    Recode,
 }
 
 /// A kind of prepared record: its subject's required keys, its fields and its `rev`.
@@ -365,6 +368,14 @@ pub const KINDS: &[KindSpec] = &[
         subject: &["target"],
         fields: &[text("note", false)],
         rev: RevOf::SystemBaselinePins,
+    },
+    // The person's confirmation of a bulk recode of codes to their kinds' prefixes (FTR-056): the
+    // project's one plan, so it names no subject. `plan` is the printed plan, set by kanbanr.
+    KindSpec {
+        kind: "recode",
+        subject: &[],
+        fields: &[fixed("plan", true)],
+        rev: RevOf::Recode,
     },
 ];
 
@@ -767,6 +778,17 @@ pub fn prepare(
             fields.insert(k.clone(), v);
         }
     }
+    // The plan is the board's own, never the caller's words: what the person reads is what the
+    // rev names (FTR-056).
+    let recode = (kind_name == "recode").then(|| crate::aliases::recode_plan(&project));
+    if let Some(plan) = &recode {
+        if plan.renames.is_empty() {
+            return Err(unsupported(
+                "every code already fits its kind's prefix: there is nothing to recode".into(),
+            ));
+        }
+        fields.insert("plan".into(), Value::String(plan.text()));
+    }
     for f in spec.fields.iter().filter(|f| f.required) {
         if !fields.contains_key(f.name) {
             return Err(unsupported(format!(
@@ -939,6 +961,10 @@ pub fn prepare(
             }
             st.pins_rev
         }
+        "recode" => recode
+            .as_ref()
+            .map(|plan| plan.rev.clone())
+            .unwrap_or_default(),
         _ => String::new(),
     };
     let origin = crate::origin::from_body(body);
@@ -1345,6 +1371,10 @@ pub fn equivalent_command(r: &Prepared) -> String {
             words.extend(["catalog".into(), "baseline".into(), "accept".into()]);
             flag(&mut words, "note", field_text(r, "note"));
         }
+        "recode" => {
+            words.extend(["feature".into(), "recode".into(), "--apply".into()]);
+            flag(&mut words, "rev", &r.rev);
+        }
         _ => return String::new(),
     }
     words.join(" ")
@@ -1531,6 +1561,14 @@ pub fn still_waiting(
             }
             if st.kind == crate::systembaseline::StateKind::Accepted {
                 return Err("the system baseline is already accepted as prepared".into());
+            }
+            Ok(())
+        }
+        "recode" => {
+            if crate::aliases::recode_plan(project).rev != r.rev {
+                return Err(
+                    "the board changed after the plan was prepared; prepare it again".into(),
+                );
             }
             Ok(())
         }
@@ -1897,6 +1935,10 @@ pub fn expand(
         "system-baseline" => (
             format!("/projects/{p}/catalog/baseline/accept"),
             serde_json::json!({"by": by, "note": text("note"), "prepared": id}),
+        ),
+        "recode" => (
+            format!("/projects/{p}/recode"),
+            serde_json::json!({"by": by, "rev": record.rev}),
         ),
         "promotion" => (
             format!("/projects/{p}/releases/{}/promote", s.release),
@@ -2694,6 +2736,118 @@ mod tests {
             .project_dir("demo")
             .join(format!("prepared/{id}.resolved.yaml"));
         crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// FTR-056 R-7: a prepared `recode` record carries the printed plan and pins its rev; it goes
+    /// stale when the plan changes; confirming it applies the recode as the person, in one commit;
+    /// Claude cannot confirm it.
+    #[test]
+    fn confirming_a_recode_plan_applies_it_as_the_person() {
+        let (store, dir, _code) = board_with_item(false);
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let t = crate::origin::Origin::Terminal;
+        for title in ["one", "two"] {
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/features",
+                serde_json::json!({"title": title, "milestone": "M", "kind": "bug"}),
+                t,
+            )
+            .unwrap();
+        }
+        let body = || {
+            serde_json::json!({"kind": "recode",
+                "sources": [{"label": "the plan the person was shown", "url": ""}]})
+        };
+        // Nothing mismatched yet: nothing to prepare.
+        let mut b = body();
+        b["origin"] = Value::String("conversation".into());
+        let e = prepare(&store, "demo", &b, None).unwrap_err().to_string();
+        assert!(e.contains("nothing to recode"), "{e}");
+        apply(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/config/codes",
+            serde_json::json!({"set": {"bug": "DEF"}}),
+            t,
+        )
+        .unwrap();
+        let plan = crate::aliases::recode_plan(&store.load("demo").unwrap());
+        assert_eq!(plan.renames.len(), 2, "{plan:?}");
+        let id = prepare_as_claude(&store, body());
+        let view = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(view[0].state, State::Open, "{view:#?}");
+        assert_eq!(view[0].page, "review");
+        assert_eq!(view[0].record.rev, plan.rev);
+        assert_eq!(
+            view[0].command,
+            format!("kanbanr feature recode --apply --rev {}", plan.rev)
+        );
+        let text = view[0].record.fields["plan"].as_str().unwrap();
+        assert_eq!(text, plan.text());
+        assert!(text.contains("FEAT-002 \u{2192} DEF-001"), "{text}");
+
+        // The plan changes after it was prepared: stale, and it cannot be confirmed.
+        apply(
+            &store,
+            &dir,
+            "PATCH",
+            "/projects/demo/features/FEAT-002",
+            serde_json::json!({"title": "one, renamed"}),
+            t,
+        )
+        .unwrap();
+        let all = ListQuery {
+            all: true,
+            ..Default::default()
+        };
+        let v = list(&store, "demo", &all, None).unwrap();
+        assert_eq!(v[0].state, State::Stale, "{v:#?}");
+        assert!(
+            v[0].stale_why
+                .contains("the board changed after the plan was prepared"),
+            "{}",
+            v[0].stale_why
+        );
+        assert!(confirm(&store, &dir, &id, serde_json::json!({"by": "Ada L"})).is_err());
+
+        let fresh = prepare_as_claude(&store, body());
+        let head = |d: &std::path::Path| crate::coderepo::git(d, &["rev-parse", "HEAD"]).unwrap();
+        let before = head(&dir);
+        // Claude cannot confirm it.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                &format!("/projects/demo/prepared/{fresh}/confirm"),
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        assert_eq!(head(&dir), before);
+        confirm(&store, &dir, &fresh, serde_json::json!({"by": "Ada L"})).unwrap();
+        let project = store.load("demo").unwrap();
+        assert!(project.features.iter().any(|f| f.code == "DEF-001"));
+        assert_eq!(project.feature("FEAT-002").unwrap().code, "DEF-001");
+        let r = resolution_of(&store, &fresh);
+        assert_eq!(r.verdict, Answer::Confirmed);
+        assert_eq!(r.made, "POST /projects/demo/recode");
+        assert_eq!(r.origin, "monitor");
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            log.contains("recode 2 items to their kinds' prefixes"),
+            "{log}"
+        );
+        assert!(log.contains("kanbanr:DEF-001"), "{log}");
+        // Applied: no plan is left to prepare.
+        let mut again = body();
+        again["origin"] = Value::String("conversation".into());
+        assert!(prepare(&store, "demo", &again, None).is_err());
     }
 
     /// FTR-006 R-3: a prepared system baseline carries the project's one target, reads open while

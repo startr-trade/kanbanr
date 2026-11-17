@@ -10,8 +10,10 @@ Scoping work, deciding on it and moving it all happen in the conversation: see
 | "Set up kanbanr for this project, states Backlog→Doing→Done, new features start in Backlog" | `kanbanr project init … --statuses Backlog,Doing,Done --default-state Backlog` |
 | "Add a Foundations milestone" | `kanbanr milestone add --name Foundations --code MS-001` |
 | "Track a feature for the login flow under MS-001 with a spec" | `kanbanr feature add --title "Login flow" --milestone MS-001 --spec "…"` |
-| "Log a defect: saving crashes" | `kanbanr feature add --title "Saving crashes" --milestone MS-001 --kind defect` (with `config codes` set, `--kind` chooses the code's prefix: `DEF-001`; a later kind change does not rename) |
+| "Log a defect: saving crashes" | `kanbanr feature add --title "Saving crashes" --milestone MS-001 --kind defect` (with `config codes` set, `--kind` chooses the code's prefix: `DEF-001`; a later kind change does not rename; renaming is the explicit step below) |
 | "Make defects read DEF and chores MNT" | `kanbanr config codes --set defect=DEF,bug=DEF,chore=MNT` |
+| "Rename FEAT-150 to DEF-095" | `kanbanr feature edit FEAT-150 --code DEF-095`: the old code stays on the item as an alias, so old links, commit trailers and records still reach it, and no new item is ever given it |
+| "Bring the old items to their kinds' prefixes" | `kanbanr feature recode` prints the plan (what each item becomes) and writes nothing; Claude shows it to you, runs `kanbanr prepare recode`, and you confirm it in the Review page's Recode group: one board commit, never applied by Claude |
 | "Start a todo-list for this session on FEAT-001" | `kanbanr todo add FEAT-001 --description "session 1"` (→ TL-001) |
 | "Add tasks to TL-001" | `kanbanr task add FEAT-001 TL-001 --text "…"` |
 | "Start task T2 in TL-001" / "T2 is done" | `kanbanr task state FEAT-001 TL-001 T2 InProgress` / `Completed` |

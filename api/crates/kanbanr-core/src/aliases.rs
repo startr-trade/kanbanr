@@ -68,11 +68,40 @@ pub struct Recode {
 }
 
 /// What a bulk recode would do, and the revision that names it: confirming applies exactly this.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RecodePlan {
     pub renames: Vec<Recode>,
     pub rev: String,
+}
+
+impl RecodePlan {
+    /// The plan as `kanbanr feature recode` prints it and a prepared `recode` record holds it:
+    /// one line per rename, `FEAT-150 → DEF-095  bug  The board drops a field`, then
+    /// `N items; plan <rev>`.
+    pub fn text(&self) -> String {
+        let mut out = String::new();
+        for r in &self.renames {
+            out.push_str(&format!(
+                "{} \u{2192} {}  {}  {}\n",
+                r.from,
+                r.to,
+                r.kind.as_deref().unwrap_or("feature"),
+                r.title
+            ));
+        }
+        out.push_str(&format!(
+            "{} {}; plan {}\n",
+            self.renames.len(),
+            if self.renames.len() == 1 {
+                "item"
+            } else {
+                "items"
+            },
+            self.rev
+        ));
+        out
+    }
 }
 
 /// The letters before a code's last `-`.

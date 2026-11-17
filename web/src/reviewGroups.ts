@@ -151,6 +151,7 @@ function listOf(names: string[]): string {
  */
 export function askText(slice: GroupSlice, sel: Selection, rows: ReviewRow[], target = ""): string {
   const names = listOf(chosen(slice, sel, rows).map(nameOf));
+  if (slice.key === "recode") return `Confirm ${chosen(slice, sel, rows).map((r) => r.title.toLowerCase()).join(" and ")} to their kinds' prefixes?`;
   if (isSignoff(slice)) return `${slice.label} for ${names}?`;
   if (isPlan(slice)) return target ? `Plan ${names} into ${target}?` : `Plan ${names}?`;
   return `${slice.action} ${names}?`;
