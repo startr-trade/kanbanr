@@ -67,11 +67,15 @@
   font-size: var(--fs-1);
   line-height: 1.6;
   white-space: nowrap;
+  flex-shrink: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   border: 1px solid transparent;
 }
+/* A row's meta is a shrinking flex item that already clips: a percentage there would squeeze the pills
+   to nothing, so they keep their own width inside it. */
+.ui-row-meta .ui-pill { max-width: none; }
 .ui-pill-ok { color: var(--ok-fg); background: var(--ok-bg); }
 .ui-pill-info { color: var(--info-fg); background: var(--info-bg); }
 .ui-pill-warn { color: var(--warn-fg); background: var(--warn-bg); }

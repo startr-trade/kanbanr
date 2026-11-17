@@ -409,6 +409,8 @@ try {
       ["ui/ui.css", ".ui-matrix", /max-width:\s*100%/, "narrow"],
       ["ui/ui.css", ".ui-pill", /max-width:\s*100%/, "any"],
       ["ui/ui.css", ".ui-pill", /text-overflow:\s*ellipsis/, "any"],
+      ["ui/ui.css", ".ui-pill", /flex-shrink:\s*0/, "any"],
+      ["ui/ui.css", ".ui-row-meta .ui-pill", /max-width:\s*none/, "any"],
       ["ui/ui.css", ".ui-gallery-themes", /grid-template-columns:\s*minmax\(0,\s*1fr\)/, "narrow"],
       ["ui/ui.css", ".ui-gallery-theme", /min-width:\s*0/, "narrow"],
       ["styles.css", ".plan-tab .ui-timeline", /overflow-x:\s*auto/, "narrow"],
