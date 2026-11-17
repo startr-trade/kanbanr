@@ -14,7 +14,8 @@ import { CopyText } from "../ui/CopyText.tsx";
 import { SeverityPill } from "../ui/SeverityPill.tsx";
 import { ErrorState, LoadingState } from "../ui/States.tsx";
 import type { Tone } from "../ui/tone.ts";
-import { CLOSED, badgeLabel, drawerSections, needsYouReducer, type DrawerLine } from "../needsYouState.ts";
+import { CLOSED, badgeLabel, needsYouParts, needsYouReducer, type DrawerLine } from "../needsYouState.ts";
+import { DelegatedParts, EndingLines, useLastLook } from "./DelegatedParts.tsx";
 import type { Attention, DriftLatest } from "../types";
 
 const TONES: Tone[] = ["ok", "info", "warn", "error", "neutral"];
@@ -28,6 +29,8 @@ export function NeedsYouBadge(p: { project: string }): JSX.Element | null {
   const { pathname } = useLocation();
   const wrap = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  // A look at Needs you lasts while the drawer is open (DEF-104).
+  const seen = useLastLook(p.project, state.open);
 
   // Reaching another page closes the drawer.
   const lastPath = useRef(pathname);
@@ -69,6 +72,8 @@ export function NeedsYouBadge(p: { project: string }): JSX.Element | null {
       attention={attention.data}
       error={attention.error}
       drift={drift.data}
+      project={p.project}
+      seen={seen}
       open={state.open}
       onToggle={() => dispatch({ type: "toggle" })}
       onClose={() => dispatch({ type: "close" })}
@@ -85,6 +90,10 @@ export function NeedsYouView(p: {
   attention: Attention | null;
   error?: string | null;
   drift: DriftLatest | null;
+  /** The project's name, for the links and the last-look key. */
+  project: string;
+  /** When Needs you was last looked at in this browser; null for never (DEF-104). */
+  seen: string | null;
   open: boolean;
   onToggle(): void;
   onClose(): void;
@@ -108,7 +117,7 @@ export function NeedsYouView(p: {
       </button>
       {p.open &&
         (p.attention ? (
-          <NeedsYouDrawer attention={p.attention} drift={p.drift} onClose={p.onClose} />
+          <NeedsYouDrawer attention={p.attention} drift={p.drift} project={p.project} seen={p.seen} onClose={p.onClose} />
         ) : (
           <div id="needs-you" className="needs-you-drawer" role="dialog" aria-modal="false" aria-labelledby="needs-you-title">
             <h2 id="needs-you-title">Needs you</h2>
@@ -119,23 +128,53 @@ export function NeedsYouView(p: {
   );
 }
 
-/** The drawer: per section a heading and its lines, as links or as a sentence to copy. */
-export function NeedsYouDrawer(p: { attention: Attention; drift: DriftLatest | null; onClose(): void }): JSX.Element {
-  const sections = drawerSections(p.attention, p.drift, new Date());
+/**
+ * The drawer. Without a delegation in force: per section a heading and its lines, as links or as a
+ * sentence to copy. With one: Yours, what Claude decided since the last look, what Claude holds,
+ * then Health and Records (DEF-104).
+ */
+export function NeedsYouDrawer(p: { attention: Attention; drift: DriftLatest | null; project: string; seen: string | null; onClose(): void }): JSX.Element {
+  const parts = needsYouParts(p.project, p.attention, p.drift, new Date(), p.seen);
+  const section = (s: { key: string; title: string; lines: DrawerLine[] }) => (
+    <section key={s.key} className="needs-you-section" aria-labelledby={`needs-you-${s.key}`}>
+      <h3 id={`needs-you-${s.key}`}>{s.title}</h3>
+      <ul className="needs-you-lines">
+        {s.lines.map((l, i) => (
+          <DrawerItem key={`${l.kind}-${i}`} line={l} onClose={p.onClose} />
+        ))}
+      </ul>
+    </section>
+  );
   return (
     <div id="needs-you" className="needs-you-drawer" role="dialog" aria-modal="false" aria-labelledby="needs-you-title">
       <h2 id="needs-you-title">Needs you</h2>
-      {p.attention.total === 0 && <p className="needs-you-none">Nothing needs you right now.</p>}
-      {sections.map((s) => (
-        <section key={s.key} className="needs-you-section" aria-labelledby={`needs-you-${s.key}`}>
-          <h3 id={`needs-you-${s.key}`}>{s.title}</h3>
-          <ul className="needs-you-lines">
-            {s.lines.map((l, i) => (
-              <DrawerItem key={`${l.kind}-${i}`} line={l} onClose={p.onClose} />
-            ))}
-          </ul>
-        </section>
-      ))}
+      {parts.delegated ? (
+        <>
+          <section className="needs-you-part" aria-labelledby="needs-you-yours">
+            <h3 id="needs-you-yours">Yours</h3>
+            <EndingLines lines={parts.ending} onFollow={p.onClose} />
+            {parts.emptyYours ? (
+              <p className="needs-you-empty">{parts.emptyYours}</p>
+            ) : (
+              parts.yours.length > 0 && (
+                <ul className="needs-you-lines">
+                  {parts.yours.flatMap((s) => s.lines).map((l, i) => (
+                    <DrawerItem key={`${l.kind}-${i}`} line={l} onClose={p.onClose} />
+                  ))}
+                </ul>
+              )
+            )}
+          </section>
+          <DelegatedParts parts={parts} project={p.project} level={3} onFollow={p.onClose} />
+          {parts.others.map(section)}
+        </>
+      ) : (
+        <>
+          {p.attention.total === 0 && <p className="needs-you-none">Nothing needs you right now.</p>}
+          <EndingLines lines={parts.ending} onFollow={p.onClose} />
+          {parts.yours.map(section)}
+        </>
+      )}
     </div>
   );
 }

@@ -849,6 +849,13 @@ summary:focus-visible,
 .needs-you-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; }
 .needs-you-link { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text); }
 .needs-you-note { color: var(--muted); font-size: var(--fs-1); }
+/* Delegated mode (DEF-104): the three parts are information, never styled as a warning. */
+.needs-you-part { margin: 0 0 var(--sp-2); }
+.needs-you-decided .needs-you-line, .needs-you-held .needs-you-line { color: var(--text); }
+.needs-you-decided .needs-you-note a { color: inherit; }
+.needs-you-held summary, .needs-you-seen summary { cursor: pointer; color: var(--text-muted); }
+.needs-you-ending .needs-you-label { font-weight: 600; }
+.needs-you-empty { margin: 0; color: var(--text-muted); }
 .needs-you-ask { flex-basis: 100%; color: var(--text); font-style: italic; }
 @media (max-width: 720px) {
   .needs-you { position: static; }

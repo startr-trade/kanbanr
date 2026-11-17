@@ -10,7 +10,8 @@ import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { LiveDot } from "../components/bits";
 import { CopyText, DataTable, Empty, ErrorState, LoadingState, ProgressBar, Section, StageStepper, StatTile, Timeline, type Column, type Step, type Tone } from "../ui";
-import { drawerSections, type DrawerLine } from "../needsYouState";
+import { needsYouParts, type DrawerLine } from "../needsYouState";
+import { DelegatedParts, EndingLines, useLastLook } from "../components/DelegatedParts";
 import { ago } from "../driftAge";
 import { to } from "../overviewLinks";
 import type { CompactIndex, DriftLatest, GoalFacts, Overview, Recent } from "../types";
@@ -29,8 +30,11 @@ export default function OverviewPage() {
   const drift = useQuery<DriftLatest>(project, urls.driftLatest(project, false), TAGS.driftLatest);
   const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
   const cadence = index.data ? { sprints: index.data.config.cadence.sprints === true, releases: index.data.config.cadence.releases === true } : null;
+  // A look at the page counts as seeing what Claude decided (DEF-104).
+  const seen = useLastLook(project, true);
   return (
     <OverviewBody
+      seen={seen}
       project={project}
       name={index.data?.config.name || project}
       overview={overview}
@@ -67,30 +71,40 @@ export function cardLines(lines: DrawerLine[]): { shown: DrawerLine[]; more: num
   return { shown: lines.slice(0, MAX_CARDS - 1), more: lines.length - (MAX_CARDS - 1) };
 }
 
-function NeedsYouCards(p: { overview: Overview; drift: DriftLatest | null }): JSX.Element {
-  const sections = drawerSections(p.overview.attention, p.drift, new Date());
+function NeedsYouCards(p: { project: string; overview: Overview; drift: DriftLatest | null; seen: string | null }): JSX.Element {
+  const parts = needsYouParts(p.project, p.overview.attention, p.drift, new Date(), p.seen);
+  // In delegated mode the person's cards are Yours and then Health and Records, with the three
+  // parts below them; otherwise the sections as they were.
+  const sections = parts.delegated ? [...parts.yours, ...parts.others] : parts.yours;
   const lines = sections.flatMap((s) => [...s.lines].sort((a, b) => b.count - a.count));
-  if (lines.length === 0) return <Empty title="Nothing needs you right now." />;
   const { shown, more } = cardLines(lines);
   return (
-    <ul className="overview-cards">
-      {shown.map((l, i) => (
-        <li key={`${l.kind}-${i}`} className="overview-card">
-          {l.to ? (
-            <StatTile label={l.label} value={l.count} to={l.to} tone={toneOf(l.tone)} sub={l.note} />
-          ) : (
-            <AskTile label={l.label} value={l.count} tone={toneOf(l.tone)} sub={l.note} ask={l.ask ?? ""} />
+    <>
+      <EndingLines lines={parts.ending} />
+      {lines.length === 0 ? (
+        parts.ending.length === 0 && <Empty title={parts.emptyYours ?? "Nothing needs you right now."} />
+      ) : (
+        <ul className="overview-cards">
+          {shown.map((l, i) => (
+            <li key={`${l.kind}-${i}`} className="overview-card">
+              {l.to ? (
+                <StatTile label={l.label} value={l.count} to={l.to} tone={toneOf(l.tone)} sub={l.note} />
+              ) : (
+                <AskTile label={l.label} value={l.count} tone={toneOf(l.tone)} sub={l.note} ask={l.ask ?? ""} />
+              )}
+            </li>
+          ))}
+          {more > 0 && (
+            <li className="overview-card">
+              <button type="button" className="ui-tile overview-more" onClick={openDrawer}>
+                <span className="ui-tile-value">{more}</span> <span className="ui-tile-label">more in Needs you</span>
+              </button>
+            </li>
           )}
-        </li>
-      ))}
-      {more > 0 && (
-        <li className="overview-card">
-          <button type="button" className="ui-tile overview-more" onClick={openDrawer}>
-            <span className="ui-tile-value">{more}</span> <span className="ui-tile-label">more in Needs you</span>
-          </button>
-        </li>
+        </ul>
       )}
-    </ul>
+      <DelegatedParts parts={parts} project={p.project} level={3} />
+    </>
   );
 }
 
@@ -294,6 +308,8 @@ export function OverviewBody(p: {
   cadence: { sprints: boolean; releases: boolean } | null;
   /** Today's ISO date, the end of the Recent timeline. */
   today: string;
+  /** When Needs you was last looked at in this browser; null for never (DEF-104). */
+  seen?: string | null;
 }): JSX.Element {
   const o = p.overview.data;
   const head = (
@@ -318,7 +334,7 @@ export function OverviewBody(p: {
       {head}
       <p className="muted small overview-asof">{asOf}</p>
       <Section title="Needs you">
-        <NeedsYouCards overview={o} drift={p.drift} />
+        <NeedsYouCards project={p.project} overview={o} drift={p.drift} seen={p.seen ?? null} />
       </Section>
       <Section title="Now">
         <NowSection project={p.project} overview={o} cadence={p.cadence} />
