@@ -87,6 +87,36 @@
         ],
         "type": "object"
       },
+      "Adds": {
+        "additionalProperties": true,
+        "description": "What an option adds to the work.",
+        "properties": {
+          "gate": {
+            "description": "A readiness check (`kanbanr process checks`).",
+            "type": "string"
+          },
+          "release_gates": {
+            "description": "Gates a release stage requires once the answer is accepted.",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseGateAdd"
+            },
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tests": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "Adr": {
         "additionalProperties": true,
         "description": "An architecture decision record: front-matter plus the prose it belongs to.",
@@ -241,6 +271,34 @@
         "type": "object"
       },
       "Answer": {
+        "description": "One answer of a revision (or of an answers file).",
+        "properties": {
+          "area": {
+            "type": "string"
+          },
+          "explained": {
+            "description": "The person picked after \"Explain the options\".",
+            "type": "boolean"
+          },
+          "later": {
+            "type": "boolean"
+          },
+          "not_applicable": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/Chosen"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "area"
+        ],
+        "type": "object"
+      },
+      "Answer2": {
         "description": "What the person answered.",
         "enum": [
           "confirmed",
@@ -369,6 +427,65 @@
           }
         ]
       },
+      "AreaView": {
+        "description": "One area as the Baseline page shows it.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/EntryView"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/Chosen"
+            },
+            "type": "array"
+          },
+          "pack": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "status": {
+            "description": "open | later | proposed | answered | not_applicable",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pack",
+          "title",
+          "question",
+          "status",
+          "options",
+          "value",
+          "reason",
+          "item",
+          "revision",
+          "entries"
+        ],
+        "type": "object"
+      },
       "AsOf": {
         "description": "The revisions and time a background drift result was computed at.",
         "properties": {
@@ -413,6 +530,43 @@
         "required": [
           "version",
           "shipped_at"
+        ],
+        "type": "object"
+      },
+      "BaselineView": {
+        "description": "The Baseline page's whole read.",
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/AreaView"
+            },
+            "type": "array"
+          },
+          "charter_constraints": {
+            "description": "The charter's constraints, shown read-only beside the baseline.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "packs": {
+            "items": {
+              "$ref": "#/components/schemas/PackView"
+            },
+            "type": "array"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/RevisionView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "packs",
+          "areas",
+          "revisions",
+          "charter_constraints"
         ],
         "type": "object"
       },
@@ -991,6 +1145,22 @@
         "required": [
           "target",
           "outcome"
+        ],
+        "type": "object"
+      },
+      "Chosen": {
+        "description": "One chosen option of an answer, with the value it carries when the option asks for one\n(`asks_value`). Written as the bare option id when it carries no value, so `options:\n[postgresql]` reads as before; a value is written `{option: component-library, value: MUI}`.\nIn a `many` area every chosen option carries its own value (coordinator, 17 Nov 2026).",
+        "properties": {
+          "option": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "option",
+          "value"
         ],
         "type": "object"
       },
@@ -1789,6 +1959,173 @@
           "warn"
         ],
         "type": "string"
+      },
+      "Entry": {
+        "additionalProperties": true,
+        "description": "One entry of the baseline: a requirement, constraint, non-goal or practice an answer records.",
+        "properties": {
+          "adds": {
+            "$ref": "#/components/schemas/Adds"
+          },
+          "adr": {
+            "description": "The ADR written at acceptance, for a constraint.",
+            "type": "string"
+          },
+          "area": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "iso25010": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "mentions": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "The area's other options' words, for the contradiction flag.",
+            "type": "object"
+          },
+          "option": {
+            "type": "string"
+          },
+          "pack": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "superseded_by": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "touches": {
+            "description": "Copied from the pack when proposed, so the checks never need the pack file.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pack",
+          "area",
+          "option",
+          "kind",
+          "text",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "EntryView": {
+        "additionalProperties": true,
+        "description": "One entry as the Baseline page shows it.",
+        "properties": {
+          "adds": {
+            "$ref": "#/components/schemas/Adds"
+          },
+          "adr": {
+            "description": "The ADR written at acceptance, for a constraint.",
+            "type": "string"
+          },
+          "area": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "in_force": {
+            "type": "boolean"
+          },
+          "iso25010": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "mentions": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": "The area's other options' words, for the contradiction flag.",
+            "type": "object"
+          },
+          "named_by": {
+            "description": "Live items whose Design names it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "not_accepted_through_kanbanr": {
+            "description": "Its acceptance is in the file but did not come through kanbanr, so it is not honoured.",
+            "type": "boolean"
+          },
+          "option": {
+            "type": "string"
+          },
+          "pack": {
+            "type": "string"
+          },
+          "pack_removed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "superseded_by": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "touches": {
+            "description": "Copied from the pack when proposed, so the checks never need the pack file.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pack",
+          "area",
+          "option",
+          "kind",
+          "text",
+          "revision",
+          "in_force",
+          "pack_removed",
+          "named_by",
+          "not_accepted_through_kanbanr"
+        ],
+        "type": "object"
       },
       "EstimateUnit": {
         "enum": [
@@ -3012,6 +3349,16 @@
         ],
         "type": "object"
       },
+      "Kind": {
+        "description": "The four kinds an answer records in the baseline.",
+        "enum": [
+          "nfr",
+          "constraint",
+          "non_goal",
+          "practice"
+        ],
+        "type": "string"
+      },
       "KindPath": {
         "description": "The path an item of one kind takes through a process (FTR-019): the stages it passes, what its\nfirst move asks, and the method parts that do not apply to it. A subset of the workflow's own\nstages in its own order, so no stage is invented and the board's columns do not change.",
         "properties": {
@@ -3808,6 +4155,48 @@
           "to",
           "reason",
           "origin"
+        ],
+        "type": "object"
+      },
+      "PackView": {
+        "additionalProperties": true,
+        "description": "A pack the project follows or followed, with what its library's copy says now.",
+        "properties": {
+          "adopted": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "library": {
+            "$ref": "#/components/schemas/Library"
+          },
+          "messages": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "removed": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "rev": {
+            "description": "[`ProfileFile::content_rev`] of what was applied.",
+            "type": "string"
+          },
+          "version": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "library",
+          "version",
+          "rev",
+          "adopted"
         ],
         "type": "object"
       },
@@ -4798,6 +5187,22 @@
         },
         "type": "object"
       },
+      "ReleaseGateAdd": {
+        "description": "A gate a release stage must then require.",
+        "properties": {
+          "gate": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "gate"
+        ],
+        "type": "object"
+      },
       "ReleasePlan": {
         "description": "What promoting a release would do, worked out with nothing changed (FEAT-212): what the button\nsays, each step and condition, and — for the cut — what ships.",
         "properties": {
@@ -4970,6 +5375,10 @@
           "branch": {
             "description": "The code branch, set when promoted to the first stage (`release/<V>`).",
             "type": "string"
+          },
+          "branch_adopted": {
+            "description": "The branch was adopted, not made: it existed already at the tip of the line kanbanr would\nhave made it from (DEF-071). `release undo` keeps an adopted branch.",
+            "type": "boolean"
           },
           "carried": {
             "items": {
@@ -5192,7 +5601,7 @@
             "type": "string"
           },
           "verdict": {
-            "$ref": "#/components/schemas/Answer"
+            "$ref": "#/components/schemas/Answer2"
           }
         },
         "required": [
@@ -5354,6 +5763,128 @@
           "rev",
           "in_progress",
           "finished"
+        ],
+        "type": "object"
+      },
+      "RevisionState": {
+        "description": "Where a revision stands.",
+        "enum": [
+          "proposed",
+          "accepted",
+          "withdrawn"
+        ],
+        "type": "string"
+      },
+      "RevisionView": {
+        "additionalProperties": true,
+        "description": "One revision with what accepting it does.",
+        "properties": {
+          "accepted": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "adds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "answers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "`kanbanr baseline accept REV-n`.",
+            "type": "string"
+          },
+          "depends_on": {
+            "description": "Items naming a replaced entry, their ADRs, and docs holding its id.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "entries": {
+            "description": "The entries it adds.",
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "item": {
+            "description": "The item whose design asked; empty at setup.",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "replaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "replaces_entries": {
+            "description": "The entries it replaces.",
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "type": "array"
+          },
+          "rev": {
+            "description": "What the person pins when accepting.",
+            "type": "string"
+          },
+          "stage_gates": {
+            "description": "(stage, gate) acceptance will require.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RevisionState"
+          },
+          "warnings": {
+            "description": "What the proposal or the acceptance noticed and did not refuse: an area whose `when` does\nnot hold, a non-goal that gave way to another choice, a stage gate waiting for releases.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "withdrawn": {
+            "$ref": "#/components/schemas/Stamp"
+          }
+        },
+        "required": [
+          "id",
+          "answers",
+          "proposed",
+          "state",
+          "rev",
+          "entries",
+          "replaces_entries",
+          "stage_gates",
+          "depends_on",
+          "command"
         ],
         "type": "object"
       },
@@ -6781,6 +7312,47 @@
           }
         },
         "summary": "The project's architecture decision records"
+      }
+    },
+    "/api/projects/{project}/baseline": {
+      "get": {
+        "operationId": "getProjectsBaseline",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's engineering baseline (FTR-033): the packs it follows with their drift, every area with its standing answer and entries, every revision with what accepting it does, and the charter's constraints"
       }
     },
     "/api/projects/{project}/charter": {

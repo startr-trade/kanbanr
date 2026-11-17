@@ -15051,3 +15051,47 @@ fn two_task_scopes_build_one_item_on_separate_branches() {
         .collect();
     assert_eq!(states, ["InProgress", "InProgress"]);
 }
+
+/// DEF-071 R-2: from the CLI, a release branch made by hand at main's tip is adopted: `--plan`
+/// shows the adopt step, the promotion says it adopted the branch, and the release records it.
+#[test]
+fn release_promote_adopts_an_identical_hand_made_branch() {
+    let (base, work) = release_scratch("adopt-hand-made");
+    assert!(
+        base.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(git_in(&base, &work, &["branch", "release/v1.0.0", "main"]));
+    let sha = rev(&base, &work, "release/v1.0.0");
+    let plan = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "--plan"],
+    ));
+    assert!(
+        plan.contains(&format!(
+            "adopts release/v1.0.0: it is at main's tip {}",
+            &sha[..7]
+        )),
+        "{plan}"
+    );
+    assert!(
+        plan.contains("ready: `kanbanr release promote v1.0.0 candidate`"),
+        "{plan}"
+    );
+    let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(
+        done.contains("adopted release/v1.0.0 (it was already at main's tip)"),
+        "{done}"
+    );
+    assert!(!done.contains("created release/v1.0.0"), "{done}");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["branch"], "release/v1.0.0");
+    assert_eq!(r["branch_adopted"], true);
+    assert_eq!(r["stage"], "candidate");
+    let _ = std::fs::remove_dir_all(&base);
+}
