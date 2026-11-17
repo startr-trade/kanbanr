@@ -98,6 +98,10 @@ pub struct GroupSlice {
     pub rows: Vec<ReviewRow>,
     /// The planned releases, in file order: for `which-release` only.
     pub choices: Vec<String>,
+    /// The releases whose items the page lists first, in order (FTR-057,
+    /// [`crate::manual::holding`]): for `manual` only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub holding: Vec<String>,
 }
 
 /// One row's full evidence: what the row's body shows when it is opened.
@@ -714,6 +718,11 @@ pub fn slice(store: &Store, p: &str, key: &str, repo: Option<&Path>) -> Result<G
         rows,
         choices: if key == WHICH_RELEASE {
             board.choices()
+        } else {
+            Vec::new()
+        },
+        holding: if key == MANUAL {
+            crate::manual::holding(store, p)?
         } else {
             Vec::new()
         },

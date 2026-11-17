@@ -66,6 +66,108 @@ pub struct ManualWaiting {
     /// The build stage the check opens at (DEF-076); empty when the check is due.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub opens_at: String,
+    /// The item's release (FTR-057); empty when it has none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release: String,
+    /// The button this check holds (FTR-057), for example "Promote v0.7.0 to main": set when the
+    /// item's release is one of [`holding`]'s and its next forward promotion waits for this test
+    /// ([`crate::releases::tests_due`]). Derived, never stored (ADR-0002).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub holds: String,
+}
+
+/// The releases the Review page puts first (FTR-057): the versions of releases in flight (at a
+/// stage, not shipped, not superseded), newest first by version; when there are none, the one
+/// planned release with items and the lowest version, the next to ship. Empty when the project
+/// does not work in releases.
+pub fn holding(store: &Store, id: &str) -> Result<Vec<String>> {
+    let project = store.load_meta(id)?;
+    let releases = crate::releases::load(store, id)?;
+    Ok(holding_of(&project, &releases))
+}
+
+fn holding_of(project: &Project, releases: &[crate::releases::Release]) -> Vec<String> {
+    use crate::releases::{ReleaseState, version_key};
+    if !project.config.cadence.releases {
+        return Vec::new();
+    }
+    let open = |r: &&crate::releases::Release| {
+        r.state != ReleaseState::Shipped && r.superseded_by.is_empty()
+    };
+    let mut flight: Vec<&crate::releases::Release> = releases
+        .iter()
+        .filter(open)
+        .filter(|r| !r.stage.is_empty())
+        .collect();
+    if !flight.is_empty() {
+        flight.sort_by_cached_key(|r| std::cmp::Reverse(version_key(&r.version)));
+        return flight.into_iter().map(|r| r.version.clone()).collect();
+    }
+    releases
+        .iter()
+        .filter(open)
+        .filter(|r| r.stage.is_empty())
+        .filter(|r| {
+            project
+                .features
+                .iter()
+                .any(|f| f.release.as_deref() == Some(r.version.as_str()))
+        })
+        .min_by_key(|r| version_key(&r.version))
+        .map(|r| vec![r.version.clone()])
+        .unwrap_or_default()
+}
+
+/// What one holding release's next forward promotion waits for.
+struct Held {
+    version: String,
+    /// That promotion's button, e.g. "Promote v0.8.0 to main".
+    button: String,
+    /// The due tests, as (code, requirement, test).
+    due: Vec<(String, String, String)>,
+}
+
+/// The tests each holding release's next forward promotion waits for, with that promotion's
+/// button. One [`crate::releases::tests_due`] per holding release.
+fn held_by(
+    project: &Project,
+    releases: &[crate::releases::Release],
+    holding: &[String],
+) -> Vec<Held> {
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    if stages.is_empty() {
+        return Vec::new();
+    }
+    let last = stages.len() - 1;
+    let cut = cadence.cut_index();
+    let mut out = Vec::new();
+    for version in holding {
+        let Some(r) = releases.iter().find(|r| r.version == *version) else {
+            continue;
+        };
+        // One step forward, as `work_out` computes it: the stage after the release's, or the
+        // first for a release at no stage.
+        let next = if r.stage.is_empty() {
+            Some(0)
+        } else {
+            stages.iter().position(|s| *s == r.stage).map(|c| c + 1)
+        };
+        let Some(next) = next.filter(|&n| n <= last) else {
+            continue;
+        };
+        let due = crate::releases::tests_due(project, cadence, version, &[next], cut)
+            .into_iter()
+            .map(|d| (d.code, d.requirement, d.test))
+            .collect();
+        let button = crate::releases::button_text(&stages, cut, last, version, next);
+        out.push(Held {
+            version: version.clone(),
+            button,
+            due,
+        });
+    }
+    out
 }
 
 /// The build stage and the stages at or after it, in workflow order, no-ops excluded (FTR-018,
@@ -246,6 +348,8 @@ pub fn results(store: &Store, id: &str, code: Option<&str>) -> Result<Vec<Manual
 pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
     let project = store.load_meta(id)?;
     let kept = results(store, id, None)?;
+    let releases = crate::releases::load(store, id)?;
+    let held = held_by(&project, &releases, &holding_of(&project, &releases));
     let mut live = Vec::new();
     let mut done = Vec::new();
     let mut not_due = Vec::new();
@@ -282,6 +386,17 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
                         .find(|k| k.code == f.code && k.requirement == r.id && k.test == t.name)
                         .cloned(),
                     opens_at: opens.clone(),
+                    release: f.release.clone().unwrap_or_default(),
+                    holds: held
+                        .iter()
+                        .find(|h| {
+                            f.release.as_deref() == Some(h.version.as_str())
+                                && h.due.iter().any(|(c, req, test)| {
+                                    *c == f.code && *req == r.id && *test == t.name
+                                })
+                        })
+                        .map(|h| h.button.clone())
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -321,6 +436,44 @@ mod tests {
             kind: kind.into(),
             ..Default::default()
         }
+    }
+
+    /// FTR-057 R-2: the releases the Review page puts first are those in flight (at a stage),
+    /// newest first; with none in flight, the planned release with items and the lowest version;
+    /// with releases off, none.
+    #[test]
+    fn holding_releases_are_those_in_flight_else_the_next_planned() {
+        let (store, dir) = fixture();
+        assert_eq!(holding(&store, "demo").unwrap(), Vec::<String>::new());
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        c.release_stages = vec!["candidate".into(), "main".into(), "production".into()];
+        store.set_cadence("demo", None, c).unwrap();
+        assert_eq!(holding(&store, "demo").unwrap(), Vec::<String>::new());
+        for v in ["v0.9.0", "v0.7.1", "v0.8.0", "v0.6.0"] {
+            crate::releases::add(&store, "demo", v, "", "").unwrap();
+        }
+        // v0.6.0 has no items, so it is not the next to ship.
+        for (title, v) in [("A", "v0.9.0"), ("B", "v0.8.0"), ("C", "v0.7.1")] {
+            let code = store
+                .add_feature("demo", title, "", "MS-1", None)
+                .unwrap()
+                .code;
+            crate::releases::plan(&store, "demo", v, &[code]).unwrap();
+        }
+        assert_eq!(holding(&store, "demo").unwrap(), ["v0.7.1"]);
+        let file = store.project_dir("demo").join("releases.yaml");
+        let mut all = crate::releases::load(&store, "demo").unwrap();
+        for r in &mut all {
+            match r.version.as_str() {
+                "v0.8.0" => r.stage = "candidate".into(),
+                "v0.7.1" => r.stage = "main".into(),
+                _ => {}
+            }
+        }
+        std::fs::write(&file, crate::yaml::to_string(&all).unwrap()).unwrap();
+        assert_eq!(holding(&store, "demo").unwrap(), ["v0.8.0", "v0.7.1"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-040 R-2: the kept result says who checked, when, from where, and the note.

@@ -3597,6 +3597,13 @@
             },
             "type": "array"
           },
+          "holding": {
+            "description": "The releases whose items the page lists first, in order (FTR-057,\n[`crate::manual::holding`]): for `manual` only.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "key": {
             "type": "string"
           },
@@ -4543,6 +4550,10 @@
           "code": {
             "type": "string"
           },
+          "holds": {
+            "description": "The button this check holds (FTR-057), for example \"Promote v0.7.0 to main\": set when the\nitem's release is one of [`holding`]'s and its next forward promotion waits for this test\n([`crate::releases::tests_due`]). Derived, never stored (ADR-0002).",
+            "type": "string"
+          },
           "last": {
             "anyOf": [
               {
@@ -4556,6 +4567,10 @@
           },
           "opens_at": {
             "description": "The build stage the check opens at (DEF-076); empty when the check is due.",
+            "type": "string"
+          },
+          "release": {
+            "description": "The item's release (FTR-057); empty when it has none.",
             "type": "string"
           },
           "requirement": {
