@@ -1099,7 +1099,7 @@ impl Running {
         }
         // The monitor starts once the first step has made the board.
         if (step.decide.is_some()
-            || step.press.is_some()
+            || !step.press.is_empty()
             || step.expect.is_some()
             || step.say.is_some())
             && !self.ensure_monitor()
@@ -1149,7 +1149,7 @@ impl Running {
                 step_ok = false;
                 let mut s = step.clone();
                 s.decide = None;
-                s.press = None;
+                s.press.clear();
                 s.offer = None;
                 s.expect = None;
                 s
@@ -1308,7 +1308,7 @@ impl Running {
             }
             self.screenshot(&id, &offer.page, "after");
         }
-        if let Some(press) = &step.press {
+        if let Some(press) = step.press.first() {
             let subject = match (&press.subject, self.monitor.as_ref()) {
                 (Some(sel), Some(m)) => match m.resolve(&project, sel) {
                     Ok(found) => found.map(|i| i.code),
@@ -1480,7 +1480,7 @@ impl Running {
             // Measured by what the runbook asked of the step, even when an unbound name left it
             // undone: that is a failed check, not an unmeasured one.
             let measured = original.decide.is_some()
-                || original.press.is_some()
+                || !original.press.is_empty()
                 || original.push.is_some()
                 || original.expect.as_ref().is_some_and(|e| !e.is_empty());
             self.checks.push(CheckResult {
