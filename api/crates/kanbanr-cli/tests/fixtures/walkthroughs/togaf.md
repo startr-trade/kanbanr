@@ -25,6 +25,7 @@ checks:
   MT-5: {item: DEF-045, requirement: R-1, test: "manual: in a walkthrough, a release fix reaches the line with no command run by the person"}
   MT-9: {item: DEF-056, requirement: R-1, test: "walkthrough: the first release proposes release-prepare and the pipeline"}
   MT-10: {item: FTR-054, requirement: R-1, test: "walkthrough: the togaf and agile runbooks complete headlessly with zero stops and prepare the eight v0.6.0 checks"}
+  MT-11: {item: FTR-004, requirement: R-8, test: "walkthrough: a doc opened from an item, a sprint, a release and main shows the version each position holds"}
 answers:
   - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
   - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "Nothing yet: finish the setup, and I'll tell you what to build in a later step."}
@@ -77,6 +78,9 @@ steps:
     check: MT-9
   - id: "2.3"
     say: "Add a manual test to the saved basket: open the basket page, add an item, close the browser, reopen the page, and the item is still there."
+  # FTR-004 R-8: one document whose first line changes as the work moves on, read at four positions in 6.22a.
+  - id: "2.4"
+    say: "Write docs/guide/shop.md with the first line \"shop: item\" and a sentence on what the shop is for, and commit it on the sprint line before the saved basket's branch is cut."
   # 3 One item, phase by phase
   - id: "3.1"
     say: "Take the saved basket to Business Arch."
@@ -180,6 +184,8 @@ steps:
     offer: {page: review, button: "Sign off docs-folded"}
   - id: "6.3f"
     say: "Move every item in v0.1.0 on to Migration, if it has not moved already."
+  - id: "6.3g"
+    say: "Change the first line of docs/guide/shop.md to \"shop: release\" on the release line, and commit it there."
   - id: "6.4"
     decide: {promote: {release: v0.1.0, to: candidate}}
     offer: {page: releases, button: "Promote to candidate"}
@@ -268,6 +274,17 @@ steps:
     expect: {truth: {tag: {release: v0.1.0}}}
   - id: "6.22"
     say: "I pushed the tag. Bring the release forward into the sprint and tell me what you did."
+  # FTR-004 R-8: the document now holds a different first line at each position (item: the merge
+  # commit before 6.3g; release: the tag; sprint and main: the commits made here).
+  - id: "6.22a"
+    say: "Change the first line of docs/guide/shop.md to \"shop: sprint\" on the sprint line and commit it there, then to \"shop: main\" on main and commit it there; never change the tag. Then read the document with kanbanr doc show docs/guide/shop.md --at at the saved basket's code, at the sprint's code, at v0.1.0 and at main, and tell me, in that order, the first line each one gave and what its banner said it read."
+    expect: {talk: {said: "(?is)shop: item.*shop: sprint.*shop: release.*shop: main"}}
+  - id: "6.22b"
+    expect: {page: {url: "/p/{project}/repo/docs/guide/shop.md?at=v0.1.0", contains: ["shop: release", "from git"], absent: ["shop: main"]}}
+    check: MT-11
+  - id: "6.22c"
+    expect: {page: {url: "/p/{project}/repo/docs/guide/shop.md?at=main", contains: ["shop: main", "from git"], absent: ["shop: release"]}}
+    check: MT-11
   # 7 Closing the sprint
   - id: "7.1"
     say: "Close the sprint and do a retro."
