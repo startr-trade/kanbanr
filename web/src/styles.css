@@ -346,6 +346,12 @@ summary:focus-visible,
 .review-row-records { display: block; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-1); font-weight: 400; color: var(--text-muted); }
 .review-row-what { color: var(--text-muted); font-size: var(--fs-1); }
 .review-decisions-here > summary { cursor: pointer; font-weight: 600; padding: var(--sp-2) 0; }
+/* The Manual group by item (FTR-057): a section per release being shipped, each item's checks
+   indented under its heading. */
+.manual-groups { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-2); }
+.manual-section-items { display: flex; flex-direction: column; gap: var(--sp-1); }
+.manual-item-title { display: block; overflow: hidden; text-overflow: ellipsis; }
+.manual-item-rows { display: flex; flex-direction: column; gap: var(--sp-1); padding-left: var(--sp-3); }
 
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }

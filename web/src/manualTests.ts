@@ -1,7 +1,8 @@
 // The manual tests waiting for a person (DEF-040), as the Review page shows them. Pure, so the
 // page and web::manual_tests (scripts/check-manual-tests.mjs) use the same code.
 import { openFor } from "./prepared.ts";
-import type { ManualResult, ManualWaiting, PreparedView } from "./types";
+import type { Selection } from "./reviewGroups.ts";
+import type { GroupSlice, ManualResult, ManualWaiting, PreparedView, ReviewRow } from "./types";
 
 /** One manual test waiting, with the open record Claude prepared for it, if any. */
 export interface ManualRow {
@@ -89,6 +90,49 @@ export function manualGroups(rows: ManualRow[], holding: string[]): ManualSectio
   const sections = holding.map((version) => ({ version, items: holdsFirst(items.filter((g) => g.release !== "" && g.release === version)) }));
   const other = holdsFirst(items.filter((g) => !holding.includes(g.release) || g.release === ""));
   return { holding: sections, other, notDue };
+}
+
+/** A manual row's key in the Review page's Manual group (FTR-038): `<CODE>/<R-n>/<test>`. */
+export function manualRowKey(row: { code: string; requirement: string; test: string }): string {
+  return `${row.code}/${row.requirement}/${row.test}`;
+}
+
+/**
+ * The Manual group's rows as `manualGroups` takes them (FTR-057): each of the slice's `rows`, in
+ * their order, paired with its waiting check from `manual` (status, release, the button it holds,
+ * when it opens) by its key. A row the manual list does not name yet, or every row while the list
+ * is being read, stands alone with what the slice says.
+ */
+export function joinManual(rows: ReviewRow[], manual: ManualRow[] | null | undefined): ManualRow[] {
+  const byKey = new Map((manual ?? []).map((m) => [manualRowKey(m.row), m]));
+  return rows.map(
+    (r) =>
+      byKey.get(r.key) ?? {
+        row: {
+          code: r.code,
+          title: r.title,
+          status: "",
+          requirement: r.requirement,
+          requirement_text: "",
+          test: r.test,
+          state: "planned",
+          checked_rev: r.rev,
+          last: null,
+          release: r.release,
+        },
+      },
+  );
+}
+
+/**
+ * The selection an item's heading action "Confirm N prepared for <code>" makes (FTR-057, R-4):
+ * exactly that item's rows with a prepared result that can be decided, in the Manual group.
+ */
+export function itemPrepared(slice: GroupSlice, code: string): Selection {
+  return {
+    group: slice.key,
+    keys: new Set(slice.rows.filter((r) => r.code === code && r.prepared !== "" && r.blocked === "").map((r) => r.key)),
+  };
 }
 
 /** "failed by Ada on 12 Nov 2026", or "" when nothing was recorded. */

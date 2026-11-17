@@ -68,6 +68,9 @@ All notable changes to kanbanr are documented here. The format follows
   naming the kind to use. A judgement test never holds an item back from Completed: it is asked at
   the release's cut. An approval of a change to tests only is marked so on the Review page and
   recorded with that scope.
+- Manual checks on the Review page are grouped under their item, the release being shipped first
+  under `Holding v<V>`, with the checks that hold its next promotion marked; one item's prepared
+  results are confirmed together (FTR-057).
 
 ### Fixed
 

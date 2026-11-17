@@ -19,6 +19,10 @@ import type { ReviewRow as Row } from "../../types";
 export function ReviewRow(p: {
   project: string;
   row: Row;
+  /** The row's heading level; 3 unless it sits under an item's heading (FTR-057's Manual group: 4). */
+  level?: 3 | 4;
+  /** A pill drawn before the row's own, such as the check that holds a promotion (FTR-057). */
+  badge?: ReactNode;
   open: boolean;
   onToggle(open: boolean): void;
   /** The row's checkbox; absent on a read-only monitor. `disabled` is why it cannot be selected. */
@@ -33,6 +37,7 @@ export function ReviewRow(p: {
   return (
     <AccordionRow
       id={row.key}
+      level={p.level}
       open={p.open}
       onToggle={p.onToggle}
       select={p.select}
@@ -47,6 +52,7 @@ export function ReviewRow(p: {
       meta={
         <>
           <span className="review-row-what">{row.what}</span>
+          {p.badge}
           {pills.map((text, i) => (
             <span className="ui-pill ui-pill-neutral" key={`${i}-${text}`}>
               {text}
