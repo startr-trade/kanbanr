@@ -825,6 +825,13 @@ summary:focus-visible,
 .plan-items { width: 100%; border-collapse: collapse; font-size: var(--fs-2); }
 .plan-items th { text-align: left; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); }
 .plan-items td { border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); vertical-align: top; }
+/* Narrow (T7): below 640 px the timeline keeps a 40rem scale and scrolls sideways inside its frame,
+   and the row table drops Placed and Critical path, keeping Code, Title and Status. */
+@media (max-width: 640px) {
+  .plan-tab .ui-timeline, .plan-row-items .ui-timeline { overflow-x: auto; }
+  .plan-tab .ui-timeline svg, .plan-row-items .ui-timeline svg { min-width: 40rem; }
+  .plan-items .plan-col-placed, .plan-items .plan-col-critical { display: none; }
+}
 
 /* The project Overview (FTR-048): tokens only. Now is three columns, one under 720 px. */
 .overview-page { display: flex; flex-direction: column; gap: var(--sp-4); }
