@@ -15126,6 +15126,76 @@ fn capture_says_when_a_wrapper_condensed_a_test_run() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-059 R-1, R-8: in a tracked project whose kanbanr git hooks were installed, another tool
+/// writes its own `pre-commit` over kanbanr's, and another installer leaves `settings.json` with
+/// only its own SessionStart entry. `kanbanr doctor` warns about both, `kanbanr git status` lists
+/// the replaced hook under `hooks:`, and `kanbanr recover` holds the "kanbanr's hooks" section.
+#[test]
+fn doctor_git_status_and_recover_name_a_hook_another_tool_replaced() {
+    let (base, work) = recover_scratch("ftr059-health");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    ok(run_in(&base, &work, &["git", "install-hooks"]));
+    let status = ok(run_in(&base, &work, &["git", "status"]));
+    assert!(status.contains("hooks:   installed"), "{status}");
+
+    let hook = work.join(".git").join("hooks").join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\n# another tool's pre-commit\nexit 0\n").unwrap();
+    std::fs::create_dir_all(work.join(".claude")).unwrap();
+    std::fs::write(
+        work.join(".claude").join("settings.json"),
+        serde_json::json!({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "katalogr session-start"}]}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(doctor.contains("Warnings"), "{doctor}");
+    assert!(
+        doctor.contains("is another tool's hook, so kanbanr's pre-commit check does not run")
+            && doctor.contains("install-hooks --force")
+            && doctor.contains("pre-commit.pre-kanbanr"),
+        "{doctor}"
+    );
+    assert!(
+        doctor.contains("kanbanr's Claude Code SessionStart hook is not registered")
+            && doctor.contains("kanbanr hooks install"),
+        "{doctor}"
+    );
+
+    let status = ok(run_in(&base, &work, &["git", "status"]));
+    assert!(!status.contains("hooks:   installed"), "{status}");
+    let lines: Vec<&str> = status.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim_end() == "hooks:")
+        .unwrap_or_else(|| panic!("no bare hooks: line\n{status}"));
+    assert!(
+        lines[at + 1].starts_with("  ") && lines[at + 1].contains("pre-commit"),
+        "{status}"
+    );
+    assert!(
+        !status.contains("Claude Code"),
+        "git status names git hooks only\n{status}"
+    );
+
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    let at = recover
+        .find("### kanbanr's hooks")
+        .unwrap_or_else(|| panic!("no hooks section\n{recover}"));
+    let section = &recover[at..];
+    let git_line = section.find("pre-commit").expect("the git finding");
+    let claude_line = section
+        .find("kanbanr's Claude Code SessionStart hook")
+        .expect("the Claude Code finding");
+    assert!(git_line < claude_line, "git findings first\n{recover}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-060 R-5: two task scopes build one item at once, each in its own worktree on its own task
 /// branch: each records only its own task's state and commits only on its branch.
 #[test]
