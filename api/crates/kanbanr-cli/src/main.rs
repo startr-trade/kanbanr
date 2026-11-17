@@ -3,6 +3,7 @@
 //! (auto-detected when no server is configured but a data dir is present; forced with `--local`).
 
 mod backend;
+mod buildrun;
 mod editor;
 mod hookhealth;
 mod hooks;
@@ -644,6 +645,46 @@ enum Command {
     /// checked against it.
     #[command(subcommand)]
     Scope(ScopeCmd),
+    /// Builds shared across agents on one machine (FTR-062): a command run through `build run`
+    /// waits for one of the project's build slots, a task on the critical path first, and its
+    /// wait and run time go to the repository's build log. Nothing here writes the board.
+    #[command(subcommand)]
+    Build(BuildCmd),
+}
+
+#[derive(Subcommand)]
+enum BuildCmd {
+    /// Run a command once a build slot is free, and record it: `kanbanr build run -- cargo test
+    /// -p kanbanr-core`. Exits with the command's status.
+    Run {
+        /// The task the build is for, `CODE/TL-001/T3`. Default: the task of the agent scope
+        /// bound to this worktree, if any.
+        #[arg(long)]
+        task: Option<String>,
+        /// What the command is: build | check | test.
+        #[arg(long, default_value = "build", value_parser = ["build", "check", "test"])]
+        kind: String,
+        /// The command and its arguments, after `--`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        cmd: Vec<String>,
+    },
+    /// The build slots and who holds them, the builds waiting, and the waits that apply here.
+    Status,
+    /// The repository's build log, oldest first.
+    Log {
+        /// Only this task's runs, `CODE/TL-001/T3`.
+        #[arg(long)]
+        task: Option<String>,
+        /// Only runs from this time on: a date (`2026-11-17`) or an RFC 3339 time.
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// Wait p50 and p90, and run p50 and red runs by kind, from the build log.
+    Stats {
+        /// Only runs from this time on: a date or an RFC 3339 time.
+        #[arg(long)]
+        since: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1128,6 +1169,44 @@ enum ConfigCmd {
         /// Remove every entry and the default: back to FEAT for everything.
         #[arg(long, conflicts_with_all = ["set", "unset", "default"])]
         clear: bool,
+    },
+    /// How agents' builds share this machine (FTR-062): slots, jobs, the reserve kept free, the
+    /// compiler cache, the linker, the merge queue's batch and line check. With no flag, shows the
+    /// values builds use and where each came from. `""` clears a setting back to its default.
+    Build {
+        /// Builds that may run at once.
+        #[arg(long)]
+        slots: Option<String>,
+        /// Jobs each build may use.
+        #[arg(long)]
+        jobs_per_slot: Option<String>,
+        /// vCPUs kept free.
+        #[arg(long)]
+        reserve_cpus: Option<String>,
+        /// GiB of memory a build waits for (Linux).
+        #[arg(long)]
+        reserve_mem_gib: Option<String>,
+        /// The 1-minute load above which a build waits (Linux).
+        #[arg(long)]
+        max_load: Option<String>,
+        /// The project's compiler cache: auto | off.
+        #[arg(long)]
+        sccache: Option<String>,
+        /// The compiler cache's size in GiB.
+        #[arg(long)]
+        cache_gib: Option<String>,
+        /// default | mold.
+        #[arg(long)]
+        linker: Option<String>,
+        /// Cache the built monitor by its sources: on | off.
+        #[arg(long)]
+        web_cache: Option<String>,
+        /// Branches the merge queue checks together.
+        #[arg(long)]
+        queue_batch: Option<String>,
+        /// The command the merge queue's line check runs, e.g. "scripts/test.sh".
+        #[arg(long)]
+        line_check: Option<String>,
     },
     /// Architecture coverage rules (FEAT-197): every item at a stage, accepted ADR or doc under a
     /// folder is referenced from a view doc, or lists one. With no flag, shows each rule and how
@@ -2407,6 +2486,9 @@ fn command_access(cmd: &Command) -> Access {
             | ScopeCmd::Revoke { .. }
             | ScopeCmd::Renew { .. } => Core,
         },
+        // Builds keep their state on the machine and in the git directory, never on the board,
+        // and agents are meant to run them (FTR-062).
+        Command::Build(_) => Read,
     }
 }
 
@@ -7117,6 +7199,135 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
     }
 }
 
+/// `kanbanr build …` (FTR-062).
+fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
+    let store = kanbanr_core::Store::new(project::resolve_data_dir(cli.data_dir.as_deref()));
+    let p = project::resolve_project(cli.project.as_deref()).unwrap_or_default();
+    let cwd = std::env::current_dir()?;
+    let ms = |ms: u64| format!("{:.1} s", ms as f64 / 1000.0);
+    match cmd {
+        BuildCmd::Run { task, kind, cmd } => {
+            let req = buildrun::RunRequest {
+                cmd: cmd.clone(),
+                task: task.clone(),
+                kind: kind.clone(),
+                tier: None,
+            };
+            let code = buildrun::run(&store, &p, &cwd, &req)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        BuildCmd::Status => {
+            let s = buildrun::status(&store, &p, &cwd)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+                return Ok(());
+            }
+            let e = &s.effective;
+            println!(
+                "{} build slots × {} jobs ({} vCPUs kept free); state in {}",
+                e.slots, e.jobs, e.reserve_cpus, s.machine_dir
+            );
+            for slot in &s.slots {
+                let who = match (&slot.holder, slot.busy) {
+                    (_, false) => "free".to_string(),
+                    (None, true) => "busy".to_string(),
+                    (Some(h), true) => format!(
+                        "busy: {} {}{} since {} (pid {})",
+                        h.worktree,
+                        h.task
+                            .as_deref()
+                            .map(|t| format!("{t} "))
+                            .unwrap_or_default(),
+                        h.cmd.join(" "),
+                        h.since,
+                        h.pid
+                    ),
+                };
+                println!("  slot {}: {who}", slot.slot);
+            }
+            if s.waiting.is_empty() {
+                println!("no builds waiting");
+            } else {
+                println!("waiting, in the order they take a slot:");
+                for w in &s.waiting {
+                    let what = w
+                        .holder
+                        .as_ref()
+                        .map(|h| {
+                            format!(
+                                "{} {}{}",
+                                h.worktree,
+                                h.task
+                                    .as_deref()
+                                    .map(|t| format!("{t} "))
+                                    .unwrap_or_default(),
+                                h.cmd.join(" ")
+                            )
+                        })
+                        .unwrap_or_else(|| w.ticket.clone());
+                    println!("  [{}] {what}", w.priority);
+                }
+            }
+            for w in &s.waits {
+                println!("{w}");
+            }
+            Ok(())
+        }
+        BuildCmd::Log { task, since } => {
+            let rows = buildrun::log(&cwd, task.as_deref(), since.as_deref().unwrap_or(""));
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(());
+            }
+            if rows.is_empty() {
+                println!("no builds recorded");
+            }
+            for r in &rows {
+                println!(
+                    "{}  {:<5} {:<18} slot {}  waited {}  ran {}  exit {}  {}",
+                    r.at,
+                    r.kind,
+                    r.task.as_deref().unwrap_or("-"),
+                    r.slot,
+                    ms(r.queued_ms),
+                    ms(r.run_ms),
+                    r.exit,
+                    r.cmd.join(" ")
+                );
+            }
+            Ok(())
+        }
+        BuildCmd::Stats { since } => {
+            let rows = buildrun::log(&cwd, None, since.as_deref().unwrap_or(""));
+            let st = buildrun::stats(&rows);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&st)?);
+                return Ok(());
+            }
+            println!(
+                "{} runs, {} red; waited p50 {}, p90 {}",
+                st.runs,
+                st.red,
+                ms(st.wait_p50_ms),
+                ms(st.wait_p90_ms)
+            );
+            for k in &st.kinds {
+                println!(
+                    "  {:<6} {} runs, ran p50 {}, {} red",
+                    k.kind,
+                    k.runs,
+                    ms(k.run_p50_ms),
+                    k.red
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 fn get_project(client: &Backend, p: &str) -> anyhow::Result<Project> {
     let s = client.get(&format!("/projects/{p}"))?;
     Ok(serde_json::from_str(&s)?)
@@ -7153,6 +7364,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             return self_update::run(*check, tag.as_deref(), cli.json);
         }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
+        // Needs no backend: a build runs whether or not a board can be read (FTR-062).
+        Command::Build(cmd) => return run_build(cli, cmd),
         Command::Skill(cmd) => return run_skill(cli, cmd),
         // The hook, a lint of a runbook file, a run folder's manifest or tables, and the remotes
         // list need no board; a run prepares its batch on this board, so it goes below (FTR-037).
@@ -7276,7 +7489,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
         | Command::Editor(_)
-        | Command::Hooks(_) => {
+        | Command::Hooks(_)
+        | Command::Build(_) => {
             unreachable!()
         }
         Command::View {
@@ -10301,6 +10515,221 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             } else {
                 println!("{}", lines.join("\n"));
             }
+            Ok(())
+        }
+        ConfigCmd::Build {
+            slots,
+            jobs_per_slot,
+            reserve_cpus,
+            reserve_mem_gib,
+            max_load,
+            sccache,
+            cache_gib,
+            linker,
+            web_cache,
+            queue_batch,
+            line_check,
+        } => {
+            let mut body = Map::new();
+            // Whole numbers and the load go as JSON numbers; core checks each value's range.
+            let counts = [
+                ("slots", slots),
+                ("jobs_per_slot", jobs_per_slot),
+                ("reserve_cpus", reserve_cpus),
+                ("reserve_mem_gib", reserve_mem_gib),
+                ("cache_gib", cache_gib),
+                ("queue_batch", queue_batch),
+            ];
+            for (k, v) in counts {
+                let Some(v) = v else { continue };
+                let v = v.trim();
+                body.insert(
+                    k.to_string(),
+                    if v.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(v.parse::<u64>().map_err(|_| anyhow::anyhow!(
+                            "--{} takes a whole number: got '{v}'",
+                            k.replace('_', "-")
+                        ))?)
+                    },
+                );
+            }
+            if let Some(v) = max_load {
+                let v = v.trim();
+                body.insert(
+                    "max_load".into(),
+                    if v.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(
+                            v.parse::<f64>().map_err(|_| anyhow::anyhow!(
+                                "--max-load takes a number: got '{v}'"
+                            ))?
+                        )
+                    },
+                );
+            }
+            for (k, v) in [("sccache", sccache), ("linker", linker)] {
+                if let Some(v) = v {
+                    body.insert(k.to_string(), json!(v.trim()));
+                }
+            }
+            if let Some(v) = web_cache {
+                body.insert(
+                    "web_cache".into(),
+                    match v.trim() {
+                        "" => Value::Null,
+                        "on" => json!(true),
+                        "off" => json!(false),
+                        other => anyhow::bail!("--web-cache takes on or off: got '{other}'"),
+                    },
+                );
+            }
+            if let Some(v) = line_check {
+                let words = shell_words(v);
+                body.insert(
+                    "line_check".into(),
+                    if words.is_empty() {
+                        Value::Null
+                    } else {
+                        json!(words)
+                    },
+                );
+            }
+            let changing = !body.is_empty();
+            let config: kanbanr_core::config::BuildConfig = if changing {
+                let resp = client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/build"),
+                    Some(Value::Object(body)),
+                )?;
+                serde_json::from_str(&resp)?
+            } else {
+                get_project(client, &p)?.config.build
+            };
+            let cwd = std::env::current_dir()?;
+            let main_root = coderepo::worktree_facts(&cwd)
+                .map(|f| f.main_root)
+                .unwrap_or(cwd);
+            let cpus = std::thread::available_parallelism()
+                .map(|n| u32::try_from(n.get()).unwrap_or(u32::MAX))
+                .unwrap_or(1);
+            let e = config.effective(cpus, &main_root);
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "configured": config,
+                        "effective": e,
+                        "cpus": cpus,
+                    }))?
+                );
+                return Ok(());
+            }
+            let from = |set: bool, default: String| {
+                if set {
+                    "set".to_string()
+                } else {
+                    format!("default: {default}")
+                }
+            };
+            let c = &config;
+            let rows = [
+                (
+                    "slots",
+                    e.slots.to_string(),
+                    from(
+                        c.slots.is_some(),
+                        format!(
+                            "({cpus} vCPUs - {} kept free) / {} jobs, at least 1",
+                            e.reserve_cpus, e.jobs
+                        ),
+                    ),
+                ),
+                (
+                    "jobs_per_slot",
+                    e.jobs.to_string(),
+                    from(
+                        c.jobs_per_slot.is_some(),
+                        format!(
+                            "{}, at most the vCPUs not kept free",
+                            kanbanr_core::buildplan::DEFAULT_JOBS_PER_SLOT
+                        ),
+                    ),
+                ),
+                (
+                    "reserve_cpus",
+                    e.reserve_cpus.to_string(),
+                    from(
+                        c.reserve_cpus.is_some(),
+                        format!(
+                            "{}, at most vCPUs - 1",
+                            kanbanr_core::buildplan::DEFAULT_RESERVE_CPUS
+                        ),
+                    ),
+                ),
+                (
+                    "reserve_mem_gib",
+                    e.reserve_mem_gib.to_string(),
+                    from(c.reserve_mem_gib.is_some(), "6".into()),
+                ),
+                (
+                    "max_load",
+                    format!("{}", e.max_load),
+                    from(c.max_load.is_some(), "vCPUs not kept free".into()),
+                ),
+                (
+                    "sccache",
+                    if e.sccache { "auto" } else { "off" }.to_string(),
+                    from(c.sccache.is_some(), "auto".into()),
+                ),
+                (
+                    "sccache_port",
+                    e.sccache_port.to_string(),
+                    from(
+                        c.sccache_port.is_some(),
+                        "derived from the main checkout's path".into(),
+                    ),
+                ),
+                (
+                    "cache_gib",
+                    e.cache_gib.to_string(),
+                    from(c.cache_gib.is_some(), "10".into()),
+                ),
+                (
+                    "linker",
+                    if e.mold { "mold" } else { "default" }.to_string(),
+                    from(c.linker.is_some(), "the toolchain's own".into()),
+                ),
+                (
+                    "web_cache",
+                    if e.web_cache { "on" } else { "off" }.to_string(),
+                    from(c.web_cache.is_some(), "on".into()),
+                ),
+                (
+                    "queue_batch",
+                    e.queue_batch.to_string(),
+                    from(c.queue_batch.is_some(), "4".into()),
+                ),
+                (
+                    "line_check",
+                    e.line_check
+                        .as_ref()
+                        .map(|v| v.join(" "))
+                        .unwrap_or_else(|| "-".into()),
+                    from(
+                        c.line_check.is_some(),
+                        "scripts/test.sh when present, else cargo test --locked --workspace".into(),
+                    ),
+                ),
+            ];
+            let text = rows
+                .iter()
+                .map(|(k, v, src)| format!("{k:<16} {v:<10} {src}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            println!("{text}");
             Ok(())
         }
         ConfigCmd::Diagrams { strict } => {

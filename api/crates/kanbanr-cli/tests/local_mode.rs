@@ -15095,3 +15095,79 @@ fn release_promote_adopts_an_identical_hand_made_branch() {
     assert_eq!(r["stage"], "candidate");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-062 R-1: `config build` shows the values builds use and where each came from; flags set
+/// them (slots, linker) and `""` clears one back to its default, leaving `build` absent from
+/// config.yaml once nothing is set.
+#[test]
+fn config_build_shows_and_sets_the_build_settings() {
+    let (base, work) = diagram_scratch("config-build");
+    let ok = |args: &[&str]| {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let board = std::path::PathBuf::from(ok(&["where"]).trim());
+    // The test's own board, under its scratch folder, before the first write (L-41).
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{}",
+        board.display()
+    );
+    let config = || std::fs::read_to_string(board.join("projects/shop/config.yaml")).unwrap();
+    assert!(!config().contains("build:"), "absent until chosen");
+
+    let shown = ok(&["config", "build"]);
+    let line = |text: &str, key: &str| {
+        text.lines()
+            .find(|l| l.split_whitespace().next() == Some(key))
+            .unwrap_or_else(|| panic!("no {key} line in:\n{text}"))
+            .to_string()
+    };
+    assert!(line(&shown, "slots").contains("default:"), "{shown}");
+    assert!(
+        line(&shown, "jobs_per_slot").contains("default:"),
+        "{shown}"
+    );
+    assert!(line(&shown, "reserve_cpus").contains("default:"), "{shown}");
+    assert!(line(&shown, "linker").contains("default"), "{shown}");
+
+    let set = ok(&["config", "build", "--slots", "3", "--linker", "mold"]);
+    let slots = line(&set, "slots");
+    assert!(
+        slots.split_whitespace().nth(1) == Some("3") && slots.contains("set"),
+        "{set}"
+    );
+    let linker = line(&set, "linker");
+    assert!(
+        linker.split_whitespace().nth(1) == Some("mold") && linker.contains("set"),
+        "{set}"
+    );
+    assert!(config().contains("slots: 3"), "{}", config());
+    assert!(config().contains("linker: mold"), "{}", config());
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&["--json", "config", "build"])).unwrap();
+    assert_eq!(json["configured"]["slots"], 3);
+    assert_eq!(json["effective"]["slots"], 3);
+    assert_eq!(json["effective"]["mold"], true);
+
+    let bad = run_in(&base, &work, &["config", "build", "--linker", "gold"]);
+    assert!(!bad.status.success(), "an unknown linker is refused");
+    let bad = run_in(&base, &work, &["config", "build", "--slots", "two"]);
+    assert!(!bad.status.success(), "slots must be a number");
+    assert!(config().contains("slots: 3"), "a refusal changes nothing");
+
+    let cleared = ok(&["config", "build", "--slots", ""]);
+    assert!(line(&cleared, "slots").contains("default:"), "{cleared}");
+    assert!(line(&cleared, "linker").contains("set"), "{cleared}");
+    ok(&["config", "build", "--linker", ""]);
+    assert!(!config().contains("build:"), "absent again: {}", config());
+    let _ = std::fs::remove_dir_all(&base);
+}
