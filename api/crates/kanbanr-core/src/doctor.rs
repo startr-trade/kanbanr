@@ -203,7 +203,42 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_identity(store, id, &mut report);
     scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
+    scan_judgement(&project, &mut report);
     Ok(report)
+}
+
+/// Report an item whose manual tests break the judgement rule (FTR-039): more than one, or one
+/// that names what a run can check. A warning for items in any status, never an error: the rule
+/// refuses only a new or renamed manual test, so an item written before it keeps its tests until
+/// they are touched.
+fn scan_judgement(project: &Project, report: &mut Report) {
+    for f in &project.features {
+        let Some(line) = judgement_warning(f) else {
+            continue;
+        };
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: Some(f.code.clone()),
+            message: line,
+        });
+    }
+}
+
+/// "<CODE> has manual tests that break the judgement rule: <messages>", or `None` for an item
+/// whose manual tests keep the rule (FTR-039). `kanbanr check` prints the same line as a note.
+pub fn judgement_warning(f: &crate::models::FeatureItem) -> Option<String> {
+    let def = f.definition.as_ref()?;
+    let findings = crate::judgement::findings(def);
+    if findings.is_empty() {
+        return None;
+    }
+    let messages: Vec<String> = findings.iter().map(|x| x.message()).collect();
+    Some(format!(
+        "{} has manual tests that break the judgement rule: {}",
+        f.code,
+        messages.join("; ")
+    ))
 }
 
 /// Report a board further behind its remote than its push policy allows (FEAT-142). kanbanr's own
@@ -3184,6 +3219,108 @@ mod tests {
                 .any(|m| m.contains("ADR-0002") && m.contains("not a Zachman column")),
             "{said:?}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-039 R-6: one doctor warning per item whose manual tests break the judgement rule (two
+    /// of them, or wording a run can check), none for a clean item; a warning, never an error.
+    #[test]
+    fn doctor_reports_manual_tests_that_break_the_judgement_rule() {
+        let (store, dir) = fixture();
+        let define = |title: &str, names: &[&str]| -> String {
+            let code = store
+                .add_feature("demo", title, "", "M", None)
+                .unwrap()
+                .code;
+            store
+                .set_feature_definition(
+                    "demo",
+                    &code,
+                    Some(FeatureDefinition {
+                        statement: "Notes for the shopper, so that a release is understood".into(),
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: "THE SYSTEM SHALL write release notes".into(),
+                            tests: names
+                                .iter()
+                                .map(|n| TestRef {
+                                    name: n.to_string(),
+                                    kind: "unit".into(),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            code
+        };
+        // Items written before the rule: their tests become manual by hand, past the store, which
+        // would refuse them now.
+        let to_manual = |code: &str| {
+            let status = store
+                .load("demo")
+                .unwrap()
+                .feature(code)
+                .unwrap()
+                .status
+                .clone();
+            let path = store.feature_path("demo", &status, code);
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("kind: unit"), "{text}");
+            std::fs::write(&path, text.replace("kind: unit", "kind: manual")).unwrap();
+        };
+        let clean = define(
+            "Clean",
+            &["manual: the person judges whether the notes read clearly to a newcomer"],
+        );
+        let two = define(
+            "Two",
+            &[
+                "manual: the person judges whether the notes read clearly",
+                "manual: a newcomer judges whether the wording is clear",
+            ],
+        );
+        let observable = define(
+            "Observable",
+            &["manual: sha256sum -c passes over the manifest"],
+        );
+        for code in [&clean, &two, &observable] {
+            to_manual(code);
+        }
+        let report = run_project(&store, "demo").unwrap();
+        let rule: Vec<&Issue> = report
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("break the judgement rule"))
+            .collect();
+        assert_eq!(rule.len(), 2, "{rule:?}");
+        assert!(
+            rule.iter().all(|i| i.severity == Severity::Warning),
+            "{rule:?}"
+        );
+        let of = |code: &str| {
+            rule.iter()
+                .find(|i| i.code.as_deref() == Some(code))
+                .map(|i| i.message.clone())
+        };
+        let two_said = of(&two).expect("the item with two manual tests is named");
+        assert!(
+            two_said.starts_with(&format!(
+                "{two} has manual tests that break the judgement rule: "
+            )),
+            "{two_said}"
+        );
+        assert!(
+            two_said.contains("a newcomer judges whether the wording is clear"),
+            "{two_said}"
+        );
+        let observable_said = of(&observable).expect("the observable wording is named");
+        assert!(observable_said.contains("'sha256sum'"), "{observable_said}");
+        assert!(observable_said.contains("integration"), "{observable_said}");
+        assert_eq!(of(&clean), None, "a clean item is not reported");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

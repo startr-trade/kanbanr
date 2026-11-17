@@ -2489,35 +2489,46 @@ mod tests {
     fn a_batch_of_results_is_confirmed_or_rejected_at_once() {
         use crate::models::{Requirement, TestRef, TestState};
         let (store, dir, code) = board_with_item(false);
-        let tests: Vec<TestRef> = ["one", "two", "three", "alone"]
-            .iter()
-            .map(|n| TestRef {
-                name: format!("manual: check {n}"),
-                kind: "manual".into(),
-                ..Default::default()
-            })
-            .collect();
-        store
-            .set_feature_definition(
-                "demo",
-                &code,
-                Some(crate::models::FeatureDefinition {
-                    statement: "Keep a cart".into(),
-                    requirements: vec![Requirement {
-                        id: "R-1".into(),
-                        text: "x".into(),
-                        tests,
+        // An item has at most one judgement test (FTR-039): each test is on an item of its own,
+        // "one" on the board's item.
+        let names = ["one", "two", "three", "alone"];
+        let mut codes = std::collections::HashMap::new();
+        for n in names {
+            let item = if n == "one" {
+                code.clone()
+            } else {
+                store
+                    .add_feature("demo", &format!("Cart {n}"), "spec", "M", None)
+                    .unwrap()
+                    .code
+            };
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item,
+                    Some(crate::models::FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: "x".into(),
+                            tests: vec![TestRef {
+                                name: format!("manual: check {n} reads clearly"),
+                                kind: "manual".into(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
                         ..Default::default()
-                    }],
-                    ..Default::default()
-                }),
-            )
-            .unwrap();
-        // A manual check opens at the build stage (DEF-076).
-        store.move_feature("demo", &code, "Scheduled").unwrap();
+                    }),
+                )
+                .unwrap();
+            // A manual check opens at the build stage (DEF-076).
+            store.move_feature("demo", &item, "Scheduled").unwrap();
+            codes.insert(n, item);
+        }
         let body = |test: &str, batch: Option<&str>| {
             let mut b = serde_json::json!({"kind": "manual-test",
-                "subject": {"item": code, "requirement": "R-1", "test": format!("manual: check {test}")},
+                "subject": {"item": codes[test], "requirement": "R-1", "test": format!("manual: check {test} reads clearly")},
                 "fields": {"state": "green", "checked_rev": "abc1234"},
                 "sources": [{"label": format!("walkthrough run togaf-1 step {test}")}]});
             if let Some(name) = batch {
@@ -2596,7 +2607,7 @@ mod tests {
         );
         let state_of = |name: &str| {
             let p = store.load("demo").unwrap();
-            p.feature(&code)
+            p.feature(&codes[name])
                 .unwrap()
                 .definition
                 .as_ref()
@@ -2604,7 +2615,7 @@ mod tests {
                 .requirements[0]
                 .tests
                 .iter()
-                .find(|t| t.name == format!("manual: check {name}"))
+                .find(|t| t.name == format!("manual: check {name} reads clearly"))
                 .unwrap()
                 .state
         };

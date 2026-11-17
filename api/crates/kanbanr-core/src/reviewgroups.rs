@@ -1297,7 +1297,7 @@ mod tests {
                 requirements: vec![Requirement {
                     text: "THE SYSTEM SHALL do it".into(),
                     tests: vec![TestRef {
-                        name: "the person sees it".into(),
+                        name: "manual: the person judges whether it reads clearly".into(),
                         kind: "manual".into(),
                         ..Default::default()
                     }],
@@ -1385,7 +1385,7 @@ mod tests {
         assert_eq!(manual.rows[0].blocked, DO_THE_CHECK);
         assert_eq!(
             manual.rows[0].key,
-            format!("{checked}/R-1/the person sees it")
+            format!("{checked}/R-1/manual: the person judges whether it reads clearly")
         );
         let design = slice(&store, "demo", "design-review", None).unwrap();
         assert_eq!(design.rows[0].code, signed);

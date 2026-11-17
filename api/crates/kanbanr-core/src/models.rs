@@ -1517,7 +1517,7 @@ requirements:
     text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
     tests:
       - name: \"<a doc check in the project's test runner>\"
-        kind: manual
+        kind: unit
         state: planned
 "
         }
@@ -1527,10 +1527,8 @@ requirements:
   # Standing work: one statement, verified per occurrence by its checklist.
   - kind: functional
     text: \"THE SYSTEM SHALL <the standing obligation>\"
-    tests:
-      - name: \"<per-occurrence check>\"
-        kind: manual
-        state: planned
+    tests: []
+      # a manual test only for what a person must judge (one per item, FTR-039); a routine run is recorded with kanbanr test or kanbanr capture
 "
         }
         _ => {
@@ -2362,5 +2360,23 @@ mod tests {
                 .unwrap()
                 .contains("accepted_untested")
         );
+    }
+
+    /// FTR-039 R-7: no definition template offers a manual test: a judgement test is written only
+    /// when a person must judge, never as a template's placeholder.
+    #[test]
+    fn no_definition_template_offers_a_manual_test() {
+        for kind in ["feature", "defect", "chore", "docs", "recurring"] {
+            let template = definition_template(kind);
+            assert!(!template.contains("kind: manual"), "{kind}: {template}");
+            let def: FeatureDefinition = crate::yaml::from_str(&template).unwrap();
+            assert!(
+                def.requirements
+                    .iter()
+                    .flat_map(|r| &r.tests)
+                    .all(|t| !crate::judgement::is_judgement(t)),
+                "{kind}"
+            );
+        }
     }
 }
