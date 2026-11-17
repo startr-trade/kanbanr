@@ -390,6 +390,10 @@ jobs:
       # empty are distinct states, the empty one offering a sentence to copy (FTR-046).
       - name: The UI kit's figures and states say what they show in text
         run: npm run check:ui-figures
+      # The /ui gallery draws every component the kit exports, in both themes, routed in every build;
+      # pages are uncapped with prose at 80ch and rows one 36 px line (FTR-046).
+      - name: The UI kit's gallery shows every component, and pages are uncapped
+        run: npm run check:ui-gallery
       # The Review page's groups carry counts and open on the largest, a selection stays inside one
       # group, a prepared batch arrives selected, and the URL names the group and open rows (FTR-038).
       - name: The Review page groups decisions

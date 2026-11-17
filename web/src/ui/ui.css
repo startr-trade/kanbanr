@@ -31,3 +31,347 @@
 .ui-tab[aria-disabled="true"] { color: var(--text-muted); cursor: not-allowed; }
 .ui-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .ui-count { color: var(--text-muted); font-size: var(--fs-1); font-weight: 400; }
+
+/* A visually hidden word for a screen reader: the tone a pill's own text does not say, the timeline's
+   list of bands. Kept in the accessibility tree, taken out of the layout. */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A kit control is a `.btn` (FEAT-076): `.ui-btn` only keeps its label on one line. */
+.ui-btn { white-space: nowrap; }
+
+/* Tones: a part drawn in a tone's colour (progress segments, legend keys). */
+.ui-tone-ok { background: var(--ok-fg); }
+.ui-tone-info { background: var(--info-fg); }
+.ui-tone-warn { background: var(--warn-fg); }
+.ui-tone-error { background: var(--error-fg); }
+.ui-tone-neutral { background: var(--text-subtle); }
+
+/* Severity pills (R-4, R-10): the tone's fg on its 12% background, always with text. */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  border-radius: var(--r-2);
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.ui-pill-ok { color: var(--ok-fg); background: var(--ok-bg); }
+.ui-pill-info { color: var(--info-fg); background: var(--info-bg); }
+.ui-pill-warn { color: var(--warn-fg); background: var(--warn-bg); }
+.ui-pill-error { color: var(--error-fg); background: var(--error-bg); }
+.ui-pill-neutral { color: var(--text-muted); background: var(--surface-2); border-color: var(--border); }
+
+/* Accordion rows (R-2, R-11): one line of 36 px, the title cut with an ellipsis, properties as pills
+   on the same line. */
+.ui-row { border-bottom: 1px solid var(--border); }
+.ui-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--row-h);
+  white-space: nowrap;
+  padding: 0 var(--sp-2);
+}
+.ui-row-select { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
+.ui-row-reason { color: var(--text-muted); font-size: var(--fs-1); }
+.ui-row-title {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--fs-2);
+  font-weight: 600;
+}
+.ui-row-title > button {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: var(--sp-1) 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.ui-row-title > button::before { content: "▸ "; color: var(--text-muted); }
+.ui-row-title > button[aria-expanded="true"]::before { content: "▾ "; }
+.ui-row-meta, .ui-row-actions { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
+.ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; }
+
+/* Tables (R-3): tools above, a caption, button headers carrying the sort. */
+.ui-table-wrap { overflow-x: auto; }
+.ui-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-2);
+}
+.ui-table-tools input[type="search"] {
+  background: var(--control);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2);
+  font: inherit;
+  min-width: 12rem;
+}
+.ui-table-count { color: var(--text-muted); font-size: var(--fs-1); }
+.ui-table-error { color: var(--error-fg); font-size: var(--fs-2); }
+.ui-table { width: 100%; border-collapse: collapse; font-size: var(--fs-2); }
+.ui-table caption { text-align: left; font-weight: 600; padding-bottom: var(--sp-2); color: var(--text); }
+.ui-table th, .ui-table td {
+  text-align: left;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.ui-table th { color: var(--text-muted); font-size: var(--fs-1); font-weight: 600; white-space: nowrap; }
+.ui-table .ui-end { text-align: right; }
+.ui-sort {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-sort:hover { color: var(--text); }
+th[aria-sort="ascending"] .ui-sort::after { content: " ▲"; }
+th[aria-sort="descending"] .ui-sort::after { content: " ▼"; }
+.ui-table-select { width: 1%; white-space: nowrap; }
+.ui-table-reason { color: var(--text-muted); font-size: var(--fs-1); margin-left: var(--sp-1); }
+.ui-table-empty { color: var(--text-muted); padding: var(--sp-4) var(--sp-2); }
+.ui-table-detail summary { color: var(--text-muted); font-size: var(--fs-1); cursor: pointer; }
+.ui-table-detail dl { margin: var(--sp-1) 0 0; }
+.ui-table-detail dt { color: var(--text-muted); font-size: var(--fs-1); }
+.ui-table-detail dd { margin: 0 0 var(--sp-1); }
+
+/* Stat tiles (R-4): one number and what it counts; a link when it leads to its list. */
+.ui-tile {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 8rem;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  color: var(--text);
+}
+a.ui-tile:hover { border-color: var(--accent); text-decoration: none; }
+.ui-tile-value { font-size: var(--fs-5); font-weight: 600; line-height: 1.1; }
+.ui-tile-label { font-size: var(--fs-1); color: var(--text-muted); }
+.ui-tile-sub { font-size: var(--fs-1); color: var(--text-muted); }
+.ui-tile-warn { border-left: 3px solid var(--warn-fg); }
+.ui-tile-warn .ui-tile-label { color: var(--warn-fg); }
+.ui-tile-error { border-left: 3px solid var(--error-fg); }
+.ui-tile-error .ui-tile-label { color: var(--error-fg); }
+.ui-tile-ok { border-left: 3px solid var(--ok-fg); }
+.ui-tile-info { border-left: 3px solid var(--info-fg); }
+.ui-tile-spark { width: 60px; height: 16px; stroke: var(--accent); stroke-width: 1.5; }
+
+/* Progress bars (R-4): segments side by side, a legend in words under them. */
+.ui-progress { display: block; color: var(--text); }
+a.ui-progress:hover { text-decoration: none; }
+a.ui-progress:hover .ui-progress-bar { outline: 1px solid var(--accent); }
+.ui-progress-bar {
+  display: flex;
+  height: var(--sp-2);
+  overflow: hidden;
+  border-radius: var(--r-1);
+  background: var(--surface-2);
+}
+.ui-progress-seg { display: block; height: 100%; }
+.ui-progress-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  list-style: none;
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+  font-size: var(--fs-1);
+  color: var(--text-muted);
+}
+.ui-progress-legend li { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.ui-progress-key { display: inline-block; width: var(--sp-2); height: var(--sp-2); border-radius: var(--r-1); }
+
+/* The matrix (R-5): a real table; a tone as the cell's background, with a visible ⚠ for warn and
+   error. */
+.ui-matrix { border-collapse: collapse; font-size: var(--fs-2); }
+.ui-matrix caption { text-align: left; font-weight: 600; padding-bottom: var(--sp-2); }
+.ui-matrix th, .ui-matrix td { padding: var(--sp-1) var(--sp-2); border: 1px solid var(--border); }
+.ui-matrix th { color: var(--text-muted); font-size: var(--fs-1); font-weight: 600; text-align: left; white-space: nowrap; }
+.ui-matrix-cell { text-align: right; min-width: 3rem; }
+.ui-matrix-ok { background: var(--ok-bg); color: var(--ok-fg); }
+.ui-matrix-info { background: var(--info-bg); color: var(--info-fg); }
+.ui-matrix-warn { background: var(--warn-bg); color: var(--warn-fg); }
+.ui-matrix-error { background: var(--error-bg); color: var(--error-fg); }
+.ui-matrix-cell a { color: inherit; font-weight: 600; }
+
+/* The timeline (R-5): drawn in SVG; colours come from the tokens through fill and stroke. */
+.ui-timeline { width: 100%; }
+.ui-timeline svg { display: block; width: 100%; height: auto; }
+.ui-timeline text { fill: var(--text); font-size: var(--fs-1); }
+.ui-timeline .ui-tl-lane-label { fill: var(--text-muted); font-weight: 600; }
+.ui-tl-band rect { fill: var(--info-fg); stroke: var(--info-fg); }
+.ui-tl-band .ui-tl-rest { fill: var(--info-bg); }
+.ui-tl-ok rect { fill: var(--ok-fg); stroke: var(--ok-fg); }
+.ui-tl-ok .ui-tl-rest { fill: var(--ok-bg); }
+.ui-tl-warn rect { fill: var(--warn-fg); stroke: var(--warn-fg); }
+.ui-tl-warn .ui-tl-rest { fill: var(--warn-bg); }
+.ui-tl-error rect { fill: var(--error-fg); stroke: var(--error-fg); }
+.ui-tl-error .ui-tl-rest { fill: var(--error-bg); }
+.ui-tl-neutral rect { fill: var(--text-subtle); stroke: var(--text-subtle); }
+.ui-tl-neutral .ui-tl-rest { fill: var(--surface-2); }
+.ui-tl-pending rect { fill: var(--surface-2); stroke-width: 1.5; }
+.ui-tl-mark polygon, .ui-tl-mark circle { fill: var(--text); }
+.ui-tl-diamond polygon { fill: var(--accent); }
+.ui-tl-today line { stroke: var(--accent); }
+.ui-timeline .ui-tl-today text { fill: var(--accent); font-weight: 600; }
+
+/* The stage stepper (R-5): dots joined by a line, the state in words under each. */
+.ui-stepper {
+  display: flex;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-1);
+}
+.ui-step {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  text-align: center;
+  min-width: 0;
+  padding: 0 var(--sp-1);
+}
+.ui-step::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--sp-3) / 2 - 1px);
+  left: -50%;
+  width: 100%;
+  height: 2px;
+  background: var(--border-strong);
+  z-index: 0;
+}
+.ui-step:first-child::before { display: none; }
+.ui-step-done::before, .ui-step-current::before { background: var(--accent); }
+.ui-step-dot {
+  position: relative;
+  z-index: 1;
+  width: var(--sp-3);
+  height: var(--sp-3);
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  background: var(--surface);
+}
+.ui-step-done .ui-step-dot { background: var(--accent); border-color: var(--accent); }
+.ui-step-current .ui-step-dot { border-color: var(--accent); box-shadow: 0 0 0 3px var(--info-bg); }
+.ui-step-skipped .ui-step-dot { border-style: dashed; }
+.ui-step-label { color: var(--text); font-weight: 600; font-size: var(--fs-2); }
+.ui-step-state { color: var(--text-muted); }
+.ui-step-current .ui-step-state { color: var(--accent); font-weight: 600; }
+.ui-step-when { color: var(--text-muted); }
+
+/* The three states (R-6): loading, an error, empty. */
+.ui-loading { color: var(--text-muted); padding: var(--sp-4) 0; }
+.ui-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--error-fg);
+  border-radius: var(--r-2);
+  background: var(--error-bg);
+}
+.ui-error-text { color: var(--error-fg); }
+.ui-empty {
+  padding: var(--sp-5) var(--sp-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-2);
+  color: var(--text-muted);
+  text-align: center;
+}
+.ui-empty-title { margin: 0 0 var(--sp-2); color: var(--text); font-size: var(--fs-3); font-weight: 600; }
+.ui-empty-ask { margin: var(--sp-3) 0 0; }
+.ui-empty-sentence { color: var(--text); font-style: italic; }
+
+/* Copy: the button, the announcement, and the selected text where the clipboard is unavailable. */
+.ui-copy { display: inline-flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.ui-copy-text {
+  background: var(--control);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  padding: var(--sp-1) var(--sp-2);
+  font: inherit;
+  font-size: var(--fs-1);
+  min-width: 16rem;
+}
+.ui-copy-status { color: var(--text-muted); font-size: var(--fs-1); }
+
+/* Sections: a heading with its actions on the same line. */
+.ui-section { margin: 0 0 var(--sp-5); }
+.ui-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.ui-section-head > h2, .ui-section-head > h3 { margin: 0; }
+.ui-section-head > h2 { font-size: var(--fs-4); }
+.ui-section-head > h3 { font-size: var(--fs-3); }
+.ui-section-actions { display: inline-flex; gap: var(--sp-2); }
+
+/* The /ui gallery (R-8): the current theme beside the other one. */
+.ui-gallery-themes { display: grid; grid-template-columns: repeat(auto-fit, minmax(28rem, 1fr)); gap: var(--sp-5); }
+.ui-gallery-theme {
+  background: var(--bg);
+  color: var(--text);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  min-width: 0;
+}
+.ui-gallery-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.ui-gallery-swatch {
+  display: inline-block;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  vertical-align: middle;
+}
+.ui-gallery-scale td, .ui-gallery-scale th { padding: var(--sp-1) var(--sp-2); text-align: left; border-bottom: 1px solid var(--border); }
+.ui-gallery-space { display: inline-block; height: var(--sp-2); background: var(--accent); vertical-align: middle; }
+
+/* Below the 720 px breakpoint styles.css uses: tiles and the stepper wrap. */
+@media (max-width: 720px) {
+  .ui-stepper { flex-wrap: wrap; row-gap: var(--sp-3); }
+  .ui-tile { min-width: 6rem; }
+}

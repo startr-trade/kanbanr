@@ -119,6 +119,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The UI kit's table sorts, filters and exports correctly": LOCAL,
             "The UI kit's matrix, timeline and stepper draw their data correctly": LOCAL,
             "The UI kit's figures and states say what they show in text": LOCAL,
+            "The UI kit's gallery shows every component, and pages are uncapped": LOCAL,
             "The Review page groups decisions": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },

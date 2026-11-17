@@ -14,6 +14,9 @@ All notable changes to kanbanr are documented here. The format follows
   latest result at once, with the revisions and the time it was computed at (FTR-045).
 - `kanbanr walkthrough prepare --batch <name> <run>…` prepares one batch from several runs of one
   build, and `walkthrough run --no-batch` leaves it to that (DEF-089, for FTR-054).
+- The monitor has one set of shared components (tabs with counts, accordion rows, a sortable table
+  with CSV, stat tiles, progress bars, severity pills, a matrix, a timeline and a stage stepper) on
+  one set of design tokens, shown together at /ui (FTR-046).
 
 ### Changed
 

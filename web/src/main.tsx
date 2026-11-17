@@ -18,6 +18,7 @@ import WorkflowPage from "./pages/WorkflowPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
 import ReleasesPage from "./pages/ReleasesPage";
+import UiGalleryPage from "./pages/UiGalleryPage";
 import { loadConfig, routing } from "./runtimeConfig";
 
 const routes: RouteObject[] = [
@@ -27,6 +28,8 @@ const routes: RouteObject[] = [
     children: [
       { index: true, element: <HomePage /> },
       { path: "portfolio", element: <PortfolioPage /> },
+      // The UI kit's gallery (FTR-046): in every build, linked from nowhere.
+      { path: "ui", element: <UiGalleryPage /> },
       { path: "p/:project", element: <BoardPage /> },
       { path: "p/:project/state/:state", element: <StatusPage /> },
       { path: "p/:project/feature/:code", element: <FeaturePage /> },
