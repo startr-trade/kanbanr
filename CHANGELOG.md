@@ -58,6 +58,9 @@ All notable changes to kanbanr are documented here. The format follows
   and copies already in the changelog are removed and counted (DEF-088).
 - A walkthrough's results name the commit of the build it ran, and a dirty or unknown build is
   refused unless `--rev` names one; the Review page shows each result's check id (DEF-089).
+- A gate result prepared for a gate no release stage asks for is warned about and shown under
+  Prepared, not required on the Releases page, and a prepared result goes stale once its release
+  is cut or its branch moves on (DEF-095).
 - A delegation whose grant cannot be checked, because the board's git history cannot be read (for
   example a folder owned by another user), now says so and why, instead of reading as not granted
   through kanbanr (DEF-080).

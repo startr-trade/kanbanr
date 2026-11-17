@@ -1009,6 +1009,12 @@ branches; fix it before going on.
   with the gate, the run's link, and Passed or Failed. When it is missing, say what the plan names
   and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
+- **Prepare a gate result where a release stage asks for that gate** (`kanbanr release stages`).
+  If `prepare gate` warns that none does, tell the person it is under **Prepared, not required**
+  on the Releases page; it is recorded either way (DEF-095). A prepared result goes stale once its
+  release is cut after it, or its branch moves past its commit: prepare it again on the new tip.
+  An answered record names its release only by the tag commit, so `kanbanr prepare list --all
+  --release <V>` can miss an answered one whose commit is only on `release/<V>`.
 - **A release whose tag stage is last reads as tagged until its tag workflow has passed
   (DEF-049).** After the cut, tell the person to push main and the tag, then watch the workflow the
   tag started. When it ends, `kanbanr prepare gate <gate> --passed|--failed --commit <the tag's sha>
@@ -1597,7 +1603,7 @@ kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; 
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
 kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
-kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…] [--batch NAME]   # a CI result you read, for the person to confirm on the Releases page
+kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…] [--batch NAME]   # a CI result you read, for the person to confirm on the Releases page; warns when no release stage asks for the gate
 kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S… [--batch NAME]   # a sign-off's note and doc, for the Review page
 kanbanr prepare promotion <V> [--stage S] --checked "…" --source S… [--batch NAME]   # what was checked, for a stage confirmed after the tag
 kanbanr prepare ratify <CODE> --reason "…" --source S… [--batch NAME]   # why the work went ahead, for the person to ratify
