@@ -619,9 +619,14 @@ pub struct ProjectSummary {
     pub counts: BTreeMap<String, usize>,
     pub total_features: usize,
     pub has_docs: bool,
+    /// The board the project is served from, when the server runs over a list of boards
+    /// (FTR-040); absent from the CLI's `project list`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board: Option<String>,
 }
 
-fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
+/// Every project of `store` as the home page lists it, each tagged with `board` (FTR-040).
+pub fn list_summaries_for(store: &Store, board: Option<&str>) -> Result<Vec<ProjectSummary>> {
     let mut out = Vec::new();
     for id in store.list_projects()? {
         let Ok(project) = store.load(&id) else {
@@ -661,6 +666,7 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
             counts,
             total_features: project.features.len(),
             has_docs,
+            board: board.map(str::to_string),
         });
     }
     Ok(out)
@@ -1142,7 +1148,7 @@ fn dispatch_routes(
         }
 
         // ---- projects ----
-        ("GET", ["projects"]) => ser(&list_summaries(store)?),
+        ("GET", ["projects"]) => ser(&list_summaries_for(store, None)?),
         ("POST", ["projects"]) => {
             let name = str_field(b, "name").unwrap_or_default();
             let config = build_project_config(store, &name, b)?;
