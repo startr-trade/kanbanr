@@ -1147,8 +1147,8 @@ mod tests {
         let cases = [
             (
                 "hooks/session-start.sh",
-                "if ! kanbanr \"${PROJECT_ARGS[@]}\" recover 2>/dev/null; then",
-                "kanbanr \"${PROJECT_ARGS[@]}\" board",
+                "if ! kanbanr ${PROJECT_ARGS[@]+\"${PROJECT_ARGS[@]}\"} recover 2>/dev/null; then",
+                "kanbanr ${PROJECT_ARGS[@]+\"${PROJECT_ARGS[@]}\"} board",
                 "| head -c \"${KANBANR_SESSION_BUDGET:-8000}\"",
             ),
             (
@@ -1183,6 +1183,71 @@ mod tests {
         }
         #[cfg(target_os = "linux")]
         run_session_start_against_a_stub();
+    }
+
+    /// The 1-based lines of `script` that expand an array bare (`"${NAME[@]}"` or `${NAME[@]}`).
+    /// Under `set -u`, bash before 4.4 (macOS's `/bin/bash`) reports an empty array expanded that
+    /// way as unbound and stops; the safe form `${NAME[@]+"${NAME[@]}"}` is not flagged. Comment
+    /// lines are skipped.
+    fn bare_array_expansions(script: &str) -> Vec<usize> {
+        let mut lines = Vec::new();
+        for (i, line) in script.lines().enumerate() {
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            for (at, _) in line.match_indices("${") {
+                let after = &line[at + 2..];
+                let name_len = after
+                    .bytes()
+                    .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                    .count();
+                if name_len > 0
+                    && after[name_len..].starts_with("[@]}")
+                    && !line[..at].ends_with("+\"")
+                {
+                    lines.push(i + 1);
+                    break;
+                }
+            }
+        }
+        lines
+    }
+
+    /// DEF-101 R-1: under `set -u` no embedded hook script expands a possibly-empty array bare
+    /// (bash 3.2 stops on it, so the hook prints nothing on stock macOS), and none uses a bash
+    /// 4-only construct. The detector is proved on a fixture first.
+    #[test]
+    fn the_hook_scripts_expand_arrays_the_bash_3_2_way() {
+        let fixture =
+            "PA=()\necho \"${PA[@]}\"\necho ${PA[@]+\"${PA[@]}\"}\n# \"${PA[@]}\" in a comment\n";
+        assert_eq!(bare_array_expansions(fixture), vec![2]);
+
+        let mut checked = 0;
+        for (rel, bytes) in crate::skill::SKILL_FILES {
+            if !rel.starts_with("hooks/") || !rel.ends_with(".sh") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(bytes);
+            if !text.contains("set -u") {
+                continue;
+            }
+            checked += 1;
+            let bare = bare_array_expansions(&text);
+            assert!(
+                bare.is_empty(),
+                "{rel}: bare array expansion under set -u on lines {bare:?}; use ${{NAME[@]+\"${{NAME[@]}}\"}}"
+            );
+            for construct in ["mapfile", "readarray", "declare -A", ",,}", "^^}"] {
+                assert!(
+                    !text.contains(construct),
+                    "{rel}: `{construct}` needs bash 4 and macOS ships 3.2"
+                );
+            }
+        }
+        assert!(
+            checked >= 2,
+            "the session and stop hooks are checked, found {checked}"
+        );
     }
 
     /// Runs the embedded `session-start.sh` in a temp dir whose PATH starts with a stub

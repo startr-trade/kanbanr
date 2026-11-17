@@ -49,6 +49,8 @@ fi
 #    We only auto-recover when we have a *positive* signal that this directory
 #    is tracked, so we don't dump an unrelated project's board into the session.
 #    Positive signals: $KANBANR_PROJECT is set, or a `.kanbanr` marker exists.
+# Bash 3.2 (macOS /bin/bash) reports an empty array expanded under set -u as unbound, so every
+# expansion below uses the ${NAME[@]+"${NAME[@]}"} form (DEF-101), which expands to nothing when empty.
 PROJECT_ARGS=()
 if [ -n "${KANBANR_PROJECT:-}" ]; then
   # Explicit env override wins; let kanbanr use it directly.
@@ -71,19 +73,19 @@ fi
 #    kanbanr on PATH older than this script has no `recover`: it gets the 0.7.0
 #    sequence below, cut to the same budget. Guard EACH call: a failure here
 #    (e.g. data dir missing, project mis-resolved) should still exit 0.
-if ! kanbanr "${PROJECT_ARGS[@]}" recover 2>/dev/null; then
+if ! kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} recover 2>/dev/null; then
 {
 echo "## kanbanr — recovered project state (SessionStart)"
 echo
 
 echo "### Board"
-if ! kanbanr "${PROJECT_ARGS[@]}" board 2>/dev/null; then
+if ! kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} board 2>/dev/null; then
   echo "(kanbanr board unavailable — continuing without recovered board)"
 fi
 echo
 
 echo "### Recent activity"
-if ! kanbanr "${PROJECT_ARGS[@]}" activity 2>/dev/null; then
+if ! kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} activity 2>/dev/null; then
   echo "(kanbanr activity unavailable)"
 fi
 echo
@@ -91,7 +93,7 @@ echo
 # Lessons (FEAT-055): the few most-believed ones, so the next piece of work
 # starts from what this project already learned rather than rediscovering it.
 # Confidence decays, so this list stays short on its own.
-LESSONS="$(kanbanr "${PROJECT_ARGS[@]}" lessons 2>/dev/null | head -n 10 || true)"
+LESSONS="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} lessons 2>/dev/null | head -n 10 || true)"
 if [ -n "$LESSONS" ] && [ "$LESSONS" != "(nothing learned here yet)" ]; then
   echo "### Lessons this project has learned"
   printf '%s\n' "$LESSONS"
@@ -103,8 +105,8 @@ fi
 
 # Decisions waiting for the user (FEAT-159): offered as a review in the conversation, so agreeing
 # never needs the browser or a terminal.
-ITEMS="$(kanbanr "${PROJECT_ARGS[@]}" review --pending --json 2>/dev/null | grep -c '"code":' || true)"
-ADRS="$(kanbanr "${PROJECT_ARGS[@]}" adr list --json 2>/dev/null | grep -c '"status": "proposed"' || true)"
+ITEMS="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} review --pending --json 2>/dev/null | grep -c '"code":' || true)"
+ADRS="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} adr list --json 2>/dev/null | grep -c '"status": "proposed"' || true)"
 WAITING=$(( ${ITEMS:-0} + ${ADRS:-0} ))
 if [ "$WAITING" -gt 0 ]; then
   echo "### Waiting for the user"
@@ -115,8 +117,8 @@ if [ "$WAITING" -gt 0 ]; then
 fi
 
 # Agents at work (FEAT-214): the scopes in force, and any agent branch ahead of its item's tasks.
-SCOPES="$(kanbanr "${PROJECT_ARGS[@]}" scope list 2>/dev/null || true)"
-DRIFT="$(kanbanr "${PROJECT_ARGS[@]}" scope drift --brief 2>/dev/null || true)"
+SCOPES="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} scope list 2>/dev/null || true)"
+DRIFT="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} scope drift --brief 2>/dev/null || true)"
 if { [ -n "$SCOPES" ] && [ "$SCOPES" != "(no agent scopes in force)" ]; } || [ -n "$DRIFT" ]; then
   echo "### Agents at work"
   if [ -n "$SCOPES" ] && [ "$SCOPES" != "(no agent scopes in force)" ]; then
@@ -130,7 +132,7 @@ if { [ -n "$SCOPES" ] && [ "$SCOPES" != "(no agent scopes in force)" ]; } || [ -
 fi
 
 # A saved process that has moved on (FEAT-170): said once; applied only when the user says so.
-PROCESS="$(kanbanr "${PROJECT_ARGS[@]}" process status --if-changed 2>/dev/null || true)"
+PROCESS="$(kanbanr ${PROJECT_ARGS[@]+"${PROJECT_ARGS[@]}"} process status --if-changed 2>/dev/null || true)"
 if [ -n "$PROCESS" ]; then
   echo "### The project's process"
   echo "$PROCESS"
