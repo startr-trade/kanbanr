@@ -13,6 +13,15 @@
 //   web::check_board_last_look_is_kept_in_this_browser (R-13, model half)
 //   web::check_board_groups_order_by_closeness_newest_or_priority (R-15)
 //   web::check_board_renders_450_items_within_budget (R-19, the 20 ms half)
+// and the components' markup, rendered without a daemon (T7):
+//   web::check_board_groups_are_disclosure_buttons (R-5)
+//   web::check_board_closed_group_shows_its_count_and_oldest (R-5)
+//   web::check_board_lane_bar_has_a_table_and_filters (R-7)
+//   web::check_board_card_draws_tasks_and_the_next_stage_checks (R-10)
+//   web::check_board_cards_say_it_in_words (R-11)
+//   web::check_board_card_fact_follows_the_priority_order (R-12, render half)
+//   web::check_board_quiet_groups_draw_one_line_rows (R-14)
+//   web::check_board_is_keyboard_and_screen_reader_friendly (R-20)
 //
 // Usage: npm run check:board
 import {
@@ -35,6 +44,7 @@ import {
   SEEN_AFTER_MS,
 } from "../src/boardModel.ts";
 import { nextStageHint } from "../src/cardText.ts";
+import { render } from "./lib/render.mjs";
 
 let ok = true;
 function report(name, problems) {
@@ -473,6 +483,223 @@ function makeBoard(n) {
   eq(problems, "nothing left", checksLeftText(next({ missing: 0 })), null);
   eq(problems, "older daemon draws no stepper", stepperSteps(next()), []);
   report("web::check_board_model_helpers", problems);
+}
+
+// ---- T7: the components' markup -------------------------------------------------------------
+const text = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+/** The text of an element's children, each on its own as a reader announces them (static markup has no gaps). */
+const spoken = (el) => [...(el?.children ?? [])].map(text).filter(Boolean).join(" ");
+const CHECKS = [
+  { family: "definition", asked: true, missing: 0 },
+  { family: "approval", asked: false, missing: 0 },
+  { family: "signoffs", asked: true, missing: 3 },
+  { family: "tests", asked: true, missing: 9 },
+  { family: "docs", asked: true, missing: 6 },
+];
+const WITH_CHECKS = next({ status: "Completed", missing: 18, signoffs: ["design-review", "docs-folded"], checks: CHECKS });
+const GROUP = "src/pages/board/LaneGroups.tsx";
+const noop = () => {};
+/** The In Progress lane of a small board: you, ready, building (older first) and a stalled one. */
+function activeFixture() {
+  const items = [
+    item("B-1", "In Progress", { entered_on: day(2), done: 1, total: 4 }),
+    item("B-2", "In Progress", { entered_on: day(5) }),
+    item("B-3", "In Progress", { entered_on: day(23) }),
+    item("B-4", "In Progress", { entered_on: day(4) }),
+    item("B-5", "Completed"),
+  ];
+  const r = { "B-1": card([WAITING]), "B-2": card([READY]), "B-3": card([NEEDS]), "B-4": card([NEEDS]) };
+  const idx = index(items, { milestones: [{ code: "MS-1", name: "A pleasant developer path to a release" }] });
+  const lanes = boardLanes(input(idx, r));
+  return { idx, lanes, lane: laneOf(lanes, "In Progress") };
+}
+const groupProps = (lane, idx, over = {}) => ({ project: "p", lane, index: idx, open: new Set(), shut: new Set(), only: new Set(), onToggle: noop, onClear: noop, ...over });
+
+// R-5: each group is an h3 holding a disclosure button; attention open, quiet closed with no body.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx));
+  const heads = [...document.querySelectorAll("h3")];
+  eq(problems, "one h3 per group", heads.length, lane.groups.length);
+  for (const h of heads) {
+    const b = h.querySelector("button[aria-expanded][aria-controls]");
+    if (!b) problems.push(`no disclosure button in "${text(h)}"`);
+  }
+  const state = (key) => document.querySelector(`#${groupId("In Progress", key)}-head`)?.getAttribute("aria-expanded");
+  eq(problems, "you (attention) is open", state("you"), "true");
+  eq(problems, "ready (attention) is open", state("ready"), "true");
+  eq(problems, "building (quiet) is closed", state("building"), "false");
+  eq(problems, "a closed group has no body", text(document.getElementById(`${groupId("In Progress", "building")}-body`)), "");
+  if (document.querySelector(".pager")) problems.push("a pager is drawn");
+  report("web::check_board_groups_are_disclosure_buttons", problems);
+}
+
+// R-5: a closed group's header says its count and its oldest; an open list is a focusable region.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx));
+  const head = spoken(document.getElementById(`${groupId("In Progress", "building")}`)?.querySelector(".ui-row-head"));
+  if (!/Building · 2\b/.test(head)) problems.push(`the closed header lacks its count: "${head}"`);
+  if (!/oldest B-3, 23 days in In Progress/.test(head)) problems.push(`the closed header lacks its oldest: "${head}"`);
+  const opened = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open: new Set([groupId("In Progress", "building")]) }));
+  const region = opened.document.querySelector(`#${groupId("In Progress", "building")}-body [role="region"]`);
+  if (!region) problems.push("an open group's list is not role=region");
+  else {
+    eq(problems, "region name", region.getAttribute("aria-label"), "Building, 2 items");
+    eq(problems, "region tabindex", region.getAttribute("tabindex"), "0");
+  }
+  report("web::check_board_closed_group_shows_its_count_and_oldest", problems);
+}
+
+// R-7: the bar is a named picture, the legend entries are buttons, and a table gives the counts.
+{
+  const problems = [];
+  const { lane } = activeFixture();
+  const props = { lane, only: new Set(), onFilter: noop };
+  const { document } = await render("src/pages/board/LaneBar.tsx", "LaneBar", props);
+  const bar = document.querySelector('[role="img"]');
+  eq(problems, "the bar's name", bar?.getAttribute("aria-label"), "In Progress by group: Waiting on you 1, Ready to move 1, Building 2, of 4");
+  const legend = [...document.querySelectorAll(".board-legend button[aria-pressed]")].map(text);
+  eq(problems, "legend entries", legend.map((t) => t.replace(/^\S+ /, "")), ["Waiting on you 1", "Ready to move 1", "Building 2"]);
+  if (document.querySelector("table")) problems.push("the table is drawn before it is asked for");
+  const toggle = [...document.querySelectorAll("button")].find((b) => text(b) === "Show as table");
+  if (!toggle || toggle.getAttribute("aria-pressed") !== "false") problems.push("no unpressed 'Show as table' button");
+  // The pressed state of a filter.
+  const pressed = await render("src/pages/board/LaneBar.tsx", "LaneBar", { ...props, only: new Set([groupId("In Progress", "ready")]) });
+  eq(problems, "pressed entries", [...pressed.document.querySelectorAll(".board-legend button[aria-pressed=true]")].map((b) => text(b).replace(/^\S+ /, "")), ["Ready to move 1"]);
+  // The table view, through the component's own markup (state is local, so render it forced open).
+  const src = (await import("node:fs")).readFileSync(new URL("../src/pages/board/LaneBar.tsx", import.meta.url), "utf8");
+  if (!/<caption>\{name\}<\/caption>/.test(src) || !/Group<\/th>[\s\S]*Items<\/th>[\s\S]*Oldest \(days\)/.test(src)) problems.push("the table has no caption or its three columns");
+  report("web::check_board_lane_bar_has_a_table_and_filters", problems);
+}
+
+// R-10: the card draws its tasks and the next stage's checks in words.
+const CARD = "src/pages/board/BoardCard.tsx";
+const boardItem = (over = {}, itemOver = {}) => ({
+  item: item("C-1", "In Progress", { done: 3, total: 8, milestone: "MS-1", ...itemOver }),
+  card: card([WITH_CHECKS], { req_proven: 7, req_total: 9 }),
+  next: WITH_CHECKS,
+  known: true,
+  daysIn: 3,
+  blockedBy: null,
+  blockedByStatus: null,
+  agent: null,
+  critical: false,
+  idle: false,
+  changed: false,
+  ...over,
+});
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const { document } = await render(CARD, "BoardCard", { project: "p", b: boardItem(), index: idx, usual: 4 });
+  const tasks = document.querySelector('[role="img"]');
+  eq(problems, "tasks bar", tasks?.getAttribute("aria-label"), "Tasks: Done 3, Open 5, of 8");
+  const steps = [...document.querySelectorAll("ol.ui-stepper li")].map((li) => spoken(li));
+  eq(problems, "five steps", steps.length, 5);
+  eq(problems, "step words", steps, ["Definition met", "Approval not asked", "Sign-offs 3 to do", "Tests green 9 to do", "Docs 6 to do"]);
+  eq(problems, "stepper name", document.querySelector("ol.ui-stepper")?.getAttribute("aria-label"), "Checks for Completed");
+  eq(problems, "head line", text(document.querySelector(".board-next-head")), "Next: Completed · 18 checks left");
+  eq(problems, "head title", document.querySelector(".board-next-head")?.getAttribute("title"), "18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs");
+  eq(problems, "what is left", spoken(document.querySelector("details")), "What is left 18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs Sign-offs: design-review, docs-folded");
+  const ready = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: { ...WITH_CHECKS, missing: 0, checks: CHECKS.map((c) => ({ ...c, missing: 0 })) } }), index: idx, usual: 4 });
+  eq(problems, "ready head", text(ready.document.querySelector(".board-next-head")), "Next: Completed · nothing left but the move");
+  const none = await render(CARD, "BoardCard", { project: "p", b: boardItem({}, { total: 0, done: 0 }), index: idx, usual: 4 });
+  if (!/No tasks yet/.test(none.html)) problems.push("a card with no tasks does not say so");
+  const old = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: next({ missing: 4, ends: false, status: "In Progress" }) }), index: idx, usual: 4 });
+  if (old.document.querySelector("ol.ui-stepper")) problems.push("a stepper is drawn without checks");
+  if (!old.document.querySelector(".hint")) problems.push("without checks the card keeps nextStageHint's text");
+  report("web::check_board_card_draws_tasks_and_the_next_stage_checks", problems);
+}
+
+// R-11: words, not codes.
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const long = { ...idx, milestones: [{ code: "MS-1", name: "P6.1 — A pleasant developer path to a release that goes on and on and on and on" }] };
+  const b = boardItem({}, { priority: "High", assignee: "ana", labels: ["cart"], kind: "Feature" });
+  const { document } = await render(CARD, "BoardCard", { project: "p", b, index: long, usual: 4 });
+  const badges = [...document.querySelectorAll(".board-badge")].map(text);
+  eq(problems, "badges", badges, ["feature", "high priority", "assigned to ana", "label: cart"]);
+  eq(problems, "badge titles", [...document.querySelectorAll(".board-badge")].map((e) => e.getAttribute("title")), ["Kind", "Priority", "Assignee", "Label"]);
+  const ms = document.querySelector(".board-milestone");
+  if (/MS-1/.test(text(ms))) problems.push(`the milestone's code shows: "${text(ms)}"`);
+  if (!/^Milestone: P6\.1 — A pleasant developer path/.test(text(ms)) || !text(ms).endsWith("…")) problems.push(`the milestone is not named and cut: "${text(ms)}"`);
+  if (!ms?.getAttribute("title")?.endsWith("on and on and on and on")) problems.push("the full name is not in the title");
+  eq(problems, "the card's one link", [...document.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["/p/p/feature/C-1"]);
+  report("web::check_board_cards_say_it_in_words", problems);
+}
+
+// R-12: one fact on the card, by priority.
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const all = boardItem({ critical: true, blockedBy: "B-9", blockedByStatus: "In Progress", agent: { id: "SC-1" }, daysIn: 30, changed: true, card: card([WITH_CHECKS], { req_proven: 7, req_total: 9, doing: { task: "TL-001/T3", text: "Build the route" } }) });
+  const expect = [
+    ["critical", "On the critical path"],
+    ["blocked", "Waiting on B-9 (In Progress)"],
+    ["agent", "An agent is on it: T3 Build the route"],
+    ["stalled", "30 days in In Progress; the lane's usual is 4"],
+    ["changed", "Changed since you last looked"],
+    ["proof", "Requirements proven 7 of 9"],
+  ];
+  const drop = { critical: { critical: false }, blocked: { blockedBy: null }, agent: { agent: null }, stalled: { daysIn: 2 }, changed: { changed: false } };
+  let b = all;
+  for (const [kind, words] of expect) {
+    const { document } = await render(CARD, "BoardCard", { project: "p", b, index: idx, usual: 4 });
+    const facts = [...document.querySelectorAll(".board-fact")];
+    eq(problems, `${kind}: one fact`, facts.length, 1);
+    eq(problems, `${kind}: words`, text(facts[0]).replace(/^\S+ /, ""), words);
+    const icon = facts[0]?.querySelector("span");
+    if (icon?.getAttribute("aria-hidden") !== "true") problems.push(`${kind}: the icon is not aria-hidden`);
+    if (drop[kind]) b = { ...b, ...drop[kind] };
+  }
+  const bare = await render(CARD, "BoardCard", { project: "p", b: boardItem({ card: card([WITH_CHECKS]) }), index: idx, usual: 4 });
+  if (bare.document.querySelector(".board-fact")) problems.push("a fact is drawn when none holds");
+  report("web::check_board_card_fact_follows_the_priority_order", problems);
+}
+
+// R-14: attention groups draw cards, quiet groups (opened) and the finished lane draw rows.
+{
+  const problems = [];
+  const { idx, lanes, lane } = activeFixture();
+  const open = new Set([groupId("In Progress", "building")]);
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open }));
+  const inGroup = (key, sel) => document.querySelectorAll(`#${groupId("In Progress", key)}-body ${sel}`).length;
+  eq(problems, "you cards", [inGroup("you", "article.board-card"), inGroup("you", "li.board-row")], [1, 0]);
+  eq(problems, "ready cards", [inGroup("ready", "article.board-card"), inGroup("ready", "li.board-row")], [1, 0]);
+  eq(problems, "building rows", [inGroup("building", "article.board-card"), inGroup("building", "li.board-row")], [0, 2]);
+  const row = spoken(document.querySelector(`#${groupId("In Progress", "building")}-body li.board-row`));
+  if (!/^B-3 Title B-3 4 checks left 23 days$/.test(row)) problems.push(`a row is not one line of facts: "${row}"`);
+  const done = laneOf(lanes, "Completed");
+  const fin = await render(GROUP, "LaneGroups", groupProps(done, idx, { open: new Set([groupId("Completed", "done")]) }));
+  eq(problems, "finished rows", [fin.document.querySelectorAll("article.board-card").length, fin.document.querySelectorAll("li.board-row").length], [0, 1]);
+  report("web::check_board_quiet_groups_draw_one_line_rows", problems);
+}
+
+// R-20: every control is a button, link, select, summary or focusable region, and has a name.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const withInsight = { ...lane, insight: { rule: "idle", text: "3 of 4 have had no change in 7 days.", group: "blocked" } };
+  const header = await render("src/pages/board/LaneHeader.tsx", "LaneHeader", { lane: withInsight, only: new Set(), onFilter: noop });
+  const groups = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open: new Set([groupId("In Progress", "building")]) }));
+  for (const [what, { document }] of [["header", header], ["groups", groups]]) {
+    for (const el of document.querySelectorAll("button, a, summary, select, input, [tabindex], [role=region]")) {
+      const tag = el.tagName.toLowerCase();
+      const okTag = ["button", "summary", "select"].includes(tag) || (tag === "a" && el.hasAttribute("href")) || el.getAttribute("tabindex") === "0";
+      if (!okTag) problems.push(`${what}: <${tag}> is not a keyboard control`);
+      const name = el.getAttribute("aria-label") || text(el);
+      if (!name) problems.push(`${what}: <${tag}> has no accessible name`);
+    }
+  }
+  const pill = header.document.querySelector(".ui-pill");
+  if (!/warning/i.test(text(pill))) problems.push(`the warn pill does not say its tone: "${text(pill)}"`);
+  const steps = await render(CARD, "BoardCard", { project: "p", b: boardItem(), index: idx, usual: 4 });
+  for (const li of steps.document.querySelectorAll("li.ui-step")) if (!li.querySelector(".ui-step-state")?.textContent) problems.push("a step has no word");
+  report("web::check_board_is_keyboard_and_screen_reader_friendly", problems);
 }
 
 // ---- R-19: 450 items within 20 ms -----------------------------------------------------------

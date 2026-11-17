@@ -1,0 +1,48 @@
+/*
+ * The Board's lanes, groups, cards and rows (FTR-078). Tokens only: no raw colours, no px type
+ * sizes (`npm run check:ui-tokens` reads this file too).
+ */
+
+.board-lane-head { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
+.board-lane-bar { display: flex; flex-direction: column; gap: var(--sp-1); }
+.board-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); list-style: none; margin: 0; padding: 0; }
+.board-legend button, .board-table-toggle, .board-link-button {
+  background: none; border: 1px solid var(--border-strong); border-radius: var(--r-1);
+  color: var(--text); font: inherit; font-size: var(--fs-1); padding: 0 var(--sp-2); cursor: pointer;
+}
+.board-legend button[aria-pressed="true"], .board-table-toggle[aria-pressed="true"], .board-link-button[aria-pressed="true"] {
+  border-color: var(--accent); color: var(--accent);
+}
+.board-key { display: inline-block; width: var(--sp-2); height: var(--sp-2); border-radius: var(--r-1); }
+.board-table-toggle { align-self: flex-start; }
+.board-table { border-collapse: collapse; font-size: var(--fs-1); }
+.board-table caption { text-align: left; font-weight: 600; padding-bottom: var(--sp-1); }
+.board-table th, .board-table td { padding: var(--sp-1) var(--sp-2); border: 1px solid var(--border); text-align: left; }
+.board-flow, .board-insight, .board-muted, .board-rest { margin: 0; font-size: var(--fs-1); color: var(--text-muted); }
+.board-insight { color: var(--text); }
+
+.board-groups { display: flex; flex-direction: column; }
+.board-oldest { color: var(--text-muted); font-size: var(--fs-1); }
+.board-group-list { display: flex; flex-direction: column; gap: var(--sp-2); max-height: 70vh; overflow-y: auto; padding: var(--sp-1); }
+.board-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.board-rest { padding: var(--sp-2) var(--sp-3); }
+
+.board-card {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-2); padding: var(--sp-3);
+}
+.board-card-top { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-1); color: var(--text-muted); }
+.board-code { font-weight: 600; color: var(--text-muted); font-size: var(--fs-1); }
+.board-badge { border: 1px solid var(--border); border-radius: var(--r-1); padding: 0 var(--sp-1); }
+.board-card-title { margin: 0; font-size: var(--fs-2); }
+.board-card-title a { color: var(--text); }
+.board-next, .board-left { font-size: var(--fs-1); }
+.board-next-head { margin: 0 0 var(--sp-1); font-weight: 600; font-size: var(--fs-1); }
+.board-left summary { cursor: pointer; color: var(--text-muted); }
+.board-left p { margin: var(--sp-1) 0 0; }
+.board-milestone, .board-fact { margin: 0; font-size: var(--fs-1); color: var(--text-muted); }
+.board-fact { color: var(--text); }
+
+.board-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-1); }
+.board-row-title { color: var(--text); }
+.board-row-fact { color: var(--text-muted); }

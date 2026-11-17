@@ -34,8 +34,11 @@ let ok = true;
   const problems = [];
   const defined = new Set([...stripComments(tokensCss).matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
   const files = readdirSync(uiDir).filter((f) => f.endsWith(".css") && f !== "tokens.css");
-  for (const file of files) {
-    const css = stripComments(read(file));
+  // The Board's own rules (FTR-078) hold to the same tokens.
+  const boardCss = join(new URL("../src/pages/board", import.meta.url).pathname, "board.css");
+  const sources = [...files.map((f) => [f, read(f)]), ["board.css", readFileSync(boardCss, "utf8")]];
+  for (const [file, text] of sources) {
+    const css = stripComments(text);
     for (const m of css.matchAll(/#[0-9a-fA-F]{3,8}\b/g)) problems.push(`${file}: a hex colour ${m[0]} — use a token`);
     for (const m of css.matchAll(/\brgba?\(/g)) problems.push(`${file}: ${m[0]} — use a token`);
     for (const m of css.matchAll(/font-size\s*:\s*[0-9.]+px/g)) problems.push(`${file}: "${m[0]}" — use --fs-1 … --fs-5`);
