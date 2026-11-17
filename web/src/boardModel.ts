@@ -466,20 +466,38 @@ export function stepperSteps(next: NextStageWire, now: Date = new Date()): Step[
 }
 
 /** "18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs"; null when nothing is left. */
-export function checksLeftText(next: NextStageWire, now: Date = new Date()): string | null {
+/** A piece of the checks-left text; `delegation` marks "Claude, under DLG-n", which the card links (DEF-104). */
+export interface LeftSegment {
+  text: string;
+  delegation?: string;
+}
+
+/** The checks-left text as segments, so the card can link each delegation it names; null when nothing is left. */
+export function checksLeftSegments(next: NextStageWire, now: Date = new Date()): LeftSegment[] | null {
   if (next.missing === 0) return null;
   const head = `${plural(next.missing, "check")} left before ${next.status}`;
-  const parts = (next.checks ?? [])
+  const parts: LeftSegment[][] = (next.checks ?? [])
     .filter((c) => c.missing > 0)
     .map((c) => ({ c, order: FAMILY_ORDER.indexOf(c.family) }))
     .sort((a, b) => b.c.missing - a.c.missing || a.order - b.order)
     .map(({ c }) => {
       const words = `${c.missing} ${FAMILY_NOUN[c.family][c.missing === 1 ? 0 : 1]}`;
       const { held, ids } = heldIn(next, c.family, now);
-      if (held === 0) return words;
-      return `${words} (${held >= c.missing ? "" : `${held} `}Claude, under ${ids.join(" and ")})`;
+      if (held === 0) return [{ text: words }];
+      const holds = ids.flatMap((id, k): LeftSegment[] => [
+        ...(k > 0 ? [{ text: " and " }] : []),
+        { text: `Claude, under ${id}`, delegation: id },
+      ]);
+      return [{ text: `${words} (${held >= c.missing ? "" : `${held} `}` }, ...holds, { text: ")" }];
     });
-  return parts.length > 0 ? `${head}: ${parts.join(", ")}` : head;
+  if (parts.length === 0) return [{ text: head }];
+  const out: LeftSegment[] = [{ text: `${head}: ` }];
+  parts.forEach((p, k) => out.push(...(k > 0 ? [{ text: ", " }] : []), ...p));
+  return out;
+}
+
+export function checksLeftText(next: NextStageWire, now: Date = new Date()): string | null {
+  return checksLeftSegments(next, now)?.map((s) => s.text).join("") ?? null;
 }
 
 // ---- words, not codes -----------------------------------------------------------------------

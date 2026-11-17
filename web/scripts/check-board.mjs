@@ -637,6 +637,17 @@ const boardItem = (over = {}, itemOver = {}) => ({
   report("web::check_board_card_draws_tasks_and_the_next_stage_checks", problems);
 }
 
+// DEF-104 R-3 (T10): the checks-left text names a delegation's hold and links it, as the card's hint does.
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const held = { ...next({ status: "Completed", missing: 2, signoffs: ["design-review"] }), checks: [{ family: "signoffs", asked: true, missing: 2 }], delegated: [{ check: "signoff", name: "design-review", delegation: "DLG-001", until: "2099-01-01T00:00:00Z" }] };
+  const { document } = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: held }), index: idx, usual: 4 });
+  eq(problems, "the held words link their delegation", [...document.querySelectorAll(".board-left a")].map((a) => [a.getAttribute("href"), text(a)]), [["/p/p/review#DLG-001", "Claude, under DLG-001"]]);
+  eq(problems, "the words around the link are kept", text(document.querySelector(".board-left p")), "2 checks left before Completed: 2 sign-offs (1 Claude, under DLG-001)");
+  report("web::check_card_shows_delegated_gaps_as_claudes (board)", problems);
+}
+
 // R-11: words, not codes.
 {
   const problems = [];
