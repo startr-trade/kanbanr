@@ -72,6 +72,7 @@ pub mod origin;
 pub mod overview;
 pub mod passes;
 pub mod picks;
+pub mod planview;
 pub mod portfolio;
 pub mod position;
 pub mod prepared;

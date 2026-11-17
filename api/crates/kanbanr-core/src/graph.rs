@@ -227,6 +227,43 @@ pub fn waits_for_cut<'a>(
     item.release.as_deref().filter(|v| unshipped.contains(*v))
 }
 
+/// `codes` ordered by their dependencies, dependencies first (FTR-043; moved from the Schedule
+/// page's `orderByDeps`, same behaviour). Only dependencies inside `codes` count; otherwise the
+/// input order is kept. A cycle is broken where it is met, never an error, and every code appears
+/// once.
+pub fn order_by_deps<F>(codes: &[String], deps_of: F) -> Vec<String>
+where
+    F: Fn(&str) -> Vec<String>,
+{
+    fn visit<F: Fn(&str) -> Vec<String>>(
+        code: &str,
+        set: &BTreeSet<&str>,
+        deps_of: &F,
+        stack: &mut BTreeSet<String>,
+        seen: &mut BTreeSet<String>,
+        out: &mut Vec<String>,
+    ) {
+        if seen.contains(code) || stack.contains(code) {
+            return;
+        }
+        stack.insert(code.to_string());
+        for d in deps_of(code) {
+            if set.contains(d.as_str()) {
+                visit(&d, set, deps_of, stack, seen, out);
+            }
+        }
+        stack.remove(code);
+        seen.insert(code.to_string());
+        out.push(code.to_string());
+    }
+    let set: BTreeSet<&str> = codes.iter().map(String::as_str).collect();
+    let (mut seen, mut out) = (BTreeSet::new(), Vec::new());
+    for c in codes {
+        visit(c, &set, &deps_of, &mut BTreeSet::new(), &mut seen, &mut out);
+    }
+    out
+}
+
 impl DependencyView {
     /// Build the status-aware view across every project in the store. `overlay`, when given,
     /// substitutes the in-memory state of one project for its on-disk state (matches
