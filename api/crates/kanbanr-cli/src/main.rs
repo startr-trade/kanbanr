@@ -2170,6 +2170,10 @@ enum DocCmd {
     },
     Show {
         path: String,
+        /// Read PATH from the code repository at this position (FTR-004): `main`, `worktree`, an
+        /// item code, a sprint code, a release version or a commit. Without it, PATH is a board doc.
+        #[arg(long)]
+        at: Option<String>,
     },
     Rm {
         path: String,
@@ -15879,7 +15883,11 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
             println!("configured folder {path}");
             Ok(())
         }
-        DocCmd::Show { path } => {
+        DocCmd::Show {
+            path,
+            at: Some(pick),
+        } => run_doc_show_at(cli, client, &p, path, pick),
+        DocCmd::Show { path, at: None } => {
             let enc = urlencode(path);
             println!(
                 "{}",
@@ -15899,6 +15907,83 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// `doc show <PATH> --at <PICK>` (FTR-004): a code-repository doc read at a position, through
+/// `GET /repo-docs/content` with the repository this runs in. Prints the banner line, a blank line
+/// and the text; `--json` prints the answer. A doc missing there prints why and exits 1; a
+/// position the repository cannot give exits 6, as FTR-003's commands do.
+fn run_doc_show_at(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    path: &str,
+    pick: &str,
+) -> anyhow::Result<()> {
+    let route = format!(
+        "/projects/{p}/repo-docs/content?path={}&at={}",
+        urlencode(path),
+        urlencode(pick)
+    );
+    let resp = match client.get_in(&route, code_repo().as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(kanbanr_core::CoreError::PositionUnavailable { wanted, available }) =
+                e.downcast_ref::<kanbanr_core::CoreError>()
+            {
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "error": "position-unavailable",
+                            "wanted": wanted,
+                            "available": available,
+                        })
+                    );
+                } else {
+                    eprintln!("kanbanr: {e}");
+                }
+                std::process::exit(6);
+            }
+            return Err(e);
+        }
+    };
+    let doc: Value = serde_json::from_str(&resp)?;
+    if cli.json {
+        println!("{resp}");
+    }
+    if doc["missing"].as_bool() == Some(true) {
+        eprintln!("kanbanr: {}", doc["why"].as_str().unwrap_or_default());
+        std::process::exit(1);
+    }
+    if !cli.json {
+        let text = doc["text"].as_str().unwrap_or_default();
+        println!("{}\n", repo_doc_banner(&doc));
+        print!("{text}");
+        if !text.is_empty() && !text.ends_with('\n') {
+            println!();
+        }
+    }
+    Ok(())
+}
+
+/// What a repository doc was read from, in one line: `docs/x.md · at FTR-004 · feat/… @ 1a2b3c4 ·
+/// from git (branch tip)`, or `… · at working tree @ 6a973c6+1f3e… · from disk, with uncommitted
+/// changes` (FTR-004).
+fn repo_doc_banner(doc: &Value) -> String {
+    let path = doc["path"].as_str().unwrap_or_default();
+    let label = doc["label"].as_str().unwrap_or_default();
+    let source = match doc["source"].as_str() {
+        Some("disk") if doc["position"]["dirty"].is_string() => {
+            "from disk, with uncommitted changes".to_string()
+        }
+        Some("disk") => "from disk".to_string(),
+        _ => format!(
+            "from git ({})",
+            doc["resolved_from"].as_str().unwrap_or_default()
+        ),
+    };
+    format!("{path} · at {label} · {source}")
 }
 
 fn collect_docs(folder: &DocFolder, out: &mut Vec<String>) {
