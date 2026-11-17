@@ -22,7 +22,12 @@
 //     sticky at the top; a row is an AccordionRow whose only second line is its records line, with
 //     its properties as pills;
 //   web::check_review_rows_are_headed (R-10) — each row's title is inside an h3, and the page has
-//     one h1.
+//     one h1;
+// and each row's evidence (T6):
+//   web::check_review_reasoned_actions_stay_in_the_row (R-11) — actionLabel never offers ADR Reject
+//     or a manual Passed or Failed; the delegated group offers Keep N and Undo N; the rendered ADR
+//     body has Reject with a reason box, an unprepared manual body its own Passed and Failed, and a
+//     delegated body its Undo beside the reason.
 //
 // Usage: npm run check:review-groups
 import {
@@ -41,6 +46,7 @@ import {
 } from "../src/reviewGroups.ts";
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
 import { readFileSync } from "node:fs";
+import { JSDOM } from "jsdom";
 import { closeRender, render } from "./lib/render.mjs";
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
@@ -347,6 +353,86 @@ try {
     const page = read("../src/pages/ReviewPage.tsx");
     eq(problems, "the page has one h1", (page.match(/<h1[\s>]/g) ?? []).length, 1);
     ok = report("web::check_review_rows_are_headed", problems) && ok;
+  }
+
+  // R-11: actions that need a reason or the person's own observation stay in the opened row.
+  {
+    const problems = [];
+    const two = [row("ADR-0001", { code: "ADR-0001" }), row("ADR-0002", { code: "ADR-0002" })];
+    const both = (rows, group) => ({ group, keys: new Set(rows.map((r) => r.key)) });
+    const reasoned = /Reject|Passed|Failed/;
+    const adrs = slice("adr", "Proposed ADRs", "Accept", two);
+    const manualRows = [row("DEF-1/R-1/manual: a", { code: "DEF-1", requirement: "R-1", test: "manual: a" })];
+    const manual = slice("manual", "Manual checks", "Confirm", manualRows);
+    for (const [s, sel] of [
+      [adrs, both(two, "adr")],
+      [adrs, emptySelection("adr")],
+      [manual, both(manualRows, "manual")],
+      [manual, emptySelection("manual")],
+    ]) {
+      const label = actionLabel(s, sel);
+      if (reasoned.test(label)) problems.push(`the ${s.key} group's action offers a reasoned action: ${label}`);
+    }
+    eq(problems, "the ADR group accepts", actionLabel(adrs, both(two, "adr")), "Accept 2");
+    const delegatedRows = [row("FTR-1/approve/-/at", { code: "FTR-1" }), row("FTR-2/approve/-/at", { code: "FTR-2" })];
+    const delegated = slice("delegated", "Delegated decisions", "Keep", delegatedRows);
+    eq(problems, "the delegated group keeps", actionLabel(delegated, both(delegatedRows, "delegated")), "Keep 2");
+    const heads = async (s) => {
+      const { document } = await renderPanel(s);
+      return [...document.querySelectorAll(".review-group-head button")].map((b) => b.textContent.trim());
+    };
+    const keepUndo = await heads(delegated);
+    if (!keepUndo.some((t) => /^Keep \d+$/.test(t)) || !keepUndo.some((t) => /^Undo \d+$/.test(t))) {
+      problems.push(`the delegated group's header does not offer Keep N and Undo N: ${JSON.stringify(keepUndo)}`);
+    }
+    for (const s of [adrs, manual]) {
+      const got = await heads(s);
+      if (got.some((t) => reasoned.test(t))) problems.push(`the ${s.key} group's header offers a reasoned action: ${JSON.stringify(got)}`);
+    }
+
+    // The ADR's own body: Reject with a reason box, the button off until a reason is given. Its
+    // text is drawn by Markdown, whose sanitizer needs a DOM window when it is first loaded.
+    globalThis.window ??= new JSDOM("<!DOCTYPE html>").window;
+    const adr = await render("src/pages/review/AdrEvidence.tsx", "AdrEvidence", {
+      project: "x",
+      adr: { id: "ADR-0001", title: "Keep it simple", body: "# Keep it simple\n\nWe keep it simple.", path: "decisions/0001-keep.md", missing: [], affects: [] },
+      writable: true,
+      busy: false,
+      onRetry: () => {},
+      onDecide: () => {},
+    });
+    if (!adr.document.querySelector('input[aria-label="Reason for rejecting ADR-0001"]')) problems.push(`the ADR's body has no reason box: ${adr.html}`);
+    const reject = [...adr.document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Reject ADR-0001");
+    if (!reject) problems.push("the ADR's body has no Reject ADR-0001");
+    else if (!reject.hasAttribute("disabled")) problems.push("Reject is offered before a reason is given");
+
+    // An unprepared manual check's own body: Passed and Failed.
+    const check = await render("src/pages/review/ManualEvidence.tsx", "ManualEvidence", {
+      project: "x",
+      m: {
+        row: { code: "DEF-1", title: "Cart", status: "In Progress", requirement: "R-1", requirement_text: "THE SYSTEM SHALL keep it.", test: "manual: a", state: "planned", checked_rev: "", last: null },
+      },
+      writable: true,
+      busy: false,
+      onRetry: () => {},
+      onRecord: () => {},
+      onConfirm: async () => {},
+      onReject: async () => {},
+    });
+    const checkButtons = [...check.document.querySelectorAll("button")].map((b) => b.textContent.trim());
+    eq(problems, "an unprepared manual check's body has its own Passed and Failed", checkButtons, ["Passed", "Failed"]);
+
+    // A delegated decision's own body: Undo, with the reason box beside it.
+    const undo = await render("src/pages/review/DelegationEvidence.tsx", "DelegationEvidence", {
+      project: "x",
+      delegated: { decision: "FTR-1/approve/-/2026-11-16T10:00:00Z", code: "FTR-1", title: "One", verdict: "approve", delegation: "DLG-1", at: "2026-11-16T10:00:00Z", status: "Planned", undo_route: "" },
+      writable: true,
+      who: "Alice <a@example.invalid>",
+    });
+    if (!undo.document.querySelector('input[aria-label="Reason for FTR-1/approve/-/2026-11-16T10:00:00Z"]')) problems.push(`the delegated body has no reason box: ${undo.html}`);
+    const undoButtons = [...undo.document.querySelectorAll("button")].map((b) => b.textContent.trim());
+    eq(problems, "the delegated body has its own Keep and Undo", undoButtons, ["Keep", "Undo"]);
+    ok = report("web::check_review_reasoned_actions_stay_in_the_row", problems) && ok;
   }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);

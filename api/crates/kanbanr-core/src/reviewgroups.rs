@@ -1413,6 +1413,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// FTR-038 R-2, DEF-076 R-1: a manual check whose item has not reached its build stage
+    /// (`opens_at` set) is shown in the manual group with DEF-076's sentence, but is not counted
+    /// among the checks waiting for the person: not in the group's count, and a group holding only
+    /// such checks is absent from the summary.
+    #[test]
+    fn a_manual_check_not_yet_due_is_not_counted_in_its_group() {
+        let (store, dir) = board();
+        // Entering Scheduled makes the branch, so Scheduled is the build stage.
+        let mut config = store.read_project_config("demo").unwrap();
+        config
+            .gates
+            .get_mut("Scheduled")
+            .unwrap()
+            .on_enter
+            .push(crate::config::Action::Branch);
+        store.save_config("demo", &config).unwrap();
+        let checked = |title: &str| {
+            define(
+                &store,
+                title,
+                FeatureDefinition {
+                    requirements: vec![Requirement {
+                        text: "THE SYSTEM SHALL do it".into(),
+                        tests: vec![TestRef {
+                            name: "manual: the person judges whether it reads clearly".into(),
+                            kind: "manual".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..statement(title)
+                },
+            )
+        };
+        // Before its build stage: the check is not yet due.
+        let early = checked("Early");
+        let groups = summary(&store, "demo", None).unwrap();
+        assert!(
+            groups.iter().all(|g| g.key != "manual"),
+            "a group of checks not yet due is absent: {groups:#?}"
+        );
+        let manual = slice(&store, "demo", "manual", None).unwrap();
+        assert_eq!(manual.rows.len(), 1, "{manual:?}");
+        assert_eq!(manual.rows[0].code, early);
+        assert!(
+            manual.rows[0].blocked.contains("opens at Scheduled"),
+            "the row says when it opens: {:?}",
+            manual.rows[0]
+        );
+
+        // Another item at its build stage: its check is due and is the only one counted.
+        let built = checked("Built");
+        store.move_feature("demo", &built, "Scheduled").unwrap();
+        let groups = summary(&store, "demo", None).unwrap();
+        let group = groups
+            .iter()
+            .find(|g| g.key == "manual")
+            .unwrap_or_else(|| panic!("the due check is counted: {groups:#?}"));
+        assert_eq!(group.count, 1, "{group:?}");
+        assert_eq!(group.ready, 0, "nothing prepared: {group:?}");
+        let manual = slice(&store, "demo", "manual", None).unwrap();
+        assert_eq!(manual.rows.len(), 2, "{manual:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FTR-038 R-3: a group decision judges blocks exactly as the page does, against the code
     /// repository: a docs-folded row with a text left is blocked on the page and refused by the
     /// decision, with nothing to write; read without the repository the row would look ready.

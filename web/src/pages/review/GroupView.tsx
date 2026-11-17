@@ -17,6 +17,7 @@ import { api } from "../../api";
 import { AskFirst } from "../../components/AskFirst";
 import { blockedSentence } from "../../diagramCheck";
 import { guardInFlight } from "../../inFlight";
+import { type Batch, batchChecks } from "../../prepared";
 import { useQuery } from "../../data/useQuery";
 import { urls } from "../../data/urls";
 import type { Tag } from "../../data/cache";
@@ -24,6 +25,7 @@ import {
   TABLE_STATE_KEY,
   actionLabel,
   askText,
+  batchOf,
   decisionBody,
   emptySelection,
   preselected,
@@ -32,6 +34,7 @@ import {
   type Selection,
 } from "../../reviewGroups";
 import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
+import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
 import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
 
@@ -106,6 +109,14 @@ function outcomeOf(answer: GroupDecisionAnswer, word: string, n: number): GroupO
   return { ok: failed.length === 0, text: `${word} ${made} of ${n}`, failed };
 }
 
+/** A whole batch's answer (FTR-037), each record by its id: "confirmed all 3", or how many went through. */
+function batchOutcomeOf(answer: BatchAnswer, word: string): GroupOutcome {
+  const failed = answer.results.filter((r) => r.error).map((r) => ({ key: r.id, error: r.error ?? "" }));
+  const n = answer.results.length;
+  const made = n - failed.length;
+  return { ok: failed.length === 0, text: failed.length === 0 ? `${word} all ${n}` : `${word} ${made} of ${n}`, failed };
+}
+
 /** The open group, read through the shared cache; a read that fails says so, never "empty". */
 export function GroupView(p: {
   project: string;
@@ -113,6 +124,8 @@ export function GroupView(p: {
   writable: boolean;
   who: string | null;
   tick: number;
+  /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
+  batches?: Batch[];
   body(row: Row, slice: GroupSlice): ReactNode;
   onDecided?(): void;
 }): JSX.Element {
@@ -127,6 +140,7 @@ export function GroupView(p: {
       writable={p.writable}
       who={p.who}
       tick={p.tick}
+      batches={p.batches}
       body={(row) => p.body(row, q.data as GroupSlice)}
       onDecided={() => {
         reload();
@@ -144,6 +158,8 @@ export function GroupPanel(p: {
   writable: boolean;
   who: string | null;
   tick: number;
+  /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
+  batches?: Batch[];
   body(row: Row): ReactNode;
   onDecided?(): void;
 }): JSX.Element {
@@ -197,15 +213,27 @@ export function GroupPanel(p: {
   const guard = useRef<ReturnType<typeof guardInFlight<[() => Promise<void>]>> | null>(null);
   if (!guard.current) guard.current = guardInFlight((call: () => Promise<void>) => call());
 
-  // The second press of an ask-first step: one decision over the chosen rows.
+  // The second press of an ask-first step: one decision over the chosen rows. A selection that is
+  // exactly one prepared batch, confirmed or turned down, goes through FTR-037's batch route, so
+  // the batch is still one action and one commit (R-5); anything else is one group decision.
   const send = (action: string, chosen: Selection) => {
+    const batch = action === slice.action || action === "reject" ? batchOf(slice, chosen) : null;
     const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action);
     const n = body.items.length;
+    const by = p.who ?? "";
     void guard.current?.run(async () => {
       setInFlight(true);
       try {
-        const answer = await api.decideGroup(p.project, body);
-        setOutcome(outcomeOf(answer, past(action), n));
+        if (batch !== null) {
+          const answer =
+            action === "reject"
+              ? await api.rejectPreparedBatch(p.project, batch, by)
+              : await api.confirmPreparedBatch(p.project, batch, by);
+          setOutcome(batchOutcomeOf(answer, action === "reject" ? "rejected" : "confirmed"));
+        } else {
+          const answer = await api.decideGroup(p.project, body);
+          setOutcome(outcomeOf(answer, past(action), n));
+        }
         setSel(emptySelection(slice.key));
         p.onDecided?.();
       } catch (e) {
@@ -224,7 +252,20 @@ export function GroupPanel(p: {
     keys: new Set([...sel.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
   };
   const nothing = n === 0 ? "Select the rows to decide first" : "Recording…";
+  // Turning down every open record of one batch, and nothing else, is the batch's "Reject all N".
+  const rejectLabel =
+    batchOf(slice, preparedSel) !== null ? `Reject all ${preparedSel.keys.size}` : `Reject ${preparedSel.keys.size} prepared`;
   const plan = slice.key === "which-release";
+  // Each batch in this group, with the runbook checks its results carry (DEF-089): one line each,
+  // and the checks named on the action that confirms exactly that batch.
+  const checksOf = (name: string) => {
+    const b = p.batches?.find((x) => x.name === name);
+    const checks = b ? batchChecks(b) : [];
+    return checks.length ? ` (checks ${checks.join(", ")})` : "";
+  };
+  const batchNames = [...new Set(slice.rows.map((r) => r.batch).filter((b) => b !== ""))];
+  const chosenBatch = batchOf(slice, sel);
+  const label = actionLabel(slice, sel, target) + (chosenBatch !== null ? checksOf(chosenBatch) : "");
 
   return (
     <div className="review-group">
@@ -286,7 +327,7 @@ export function GroupPanel(p: {
           {p.writable ? (
             <span className="review-group-actions">
               <AskFirst
-                label={actionLabel(slice, sel, target)}
+                label={label}
                 ask={askText(slice, sel, slice.rows, target)}
                 className={n > 0 ? "btn btn-primary" : "btn"}
                 disabled={n === 0 || inFlight || (plan && target === "")}
@@ -305,7 +346,7 @@ export function GroupPanel(p: {
               ) : null}
               {preparedSel.keys.size > 0 ? (
                 <AskFirst
-                  label={`Reject ${preparedSel.keys.size} prepared`}
+                  label={rejectLabel}
                   ask={askText({ ...slice, action: "Reject what Claude prepared for" }, preparedSel, slice.rows)}
                   className="btn"
                   disabled={inFlight}
@@ -316,6 +357,12 @@ export function GroupPanel(p: {
             </span>
           ) : null}
         </div>
+        {batchNames.map((name) => (
+          <p className="muted small review-group-batch" key={name}>
+            {slice.rows.filter((r) => r.batch === name).length} results from {name}
+            {checksOf(name)}
+          </p>
+        ))}
         {outcome ? (
           <div className={`review-group-outcome ${outcome.ok ? "done" : "warn"}`} role="status">
             <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span>

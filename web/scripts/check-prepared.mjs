@@ -111,12 +111,15 @@ for (const m of panel.matchAll(/<(input|textarea|select)\b/g)) {
 }
 
 // The pages render it beside their buttons.
-const review = read("../src/pages/ReviewPage.tsx");
-if (!/openFor\(prepared, "signoff"/.test(review)) problems.push("ReviewPage.tsx: a sign-off does not look for its prepared record");
-if (!/openFor\(prepared, "ratification"/.test(review)) problems.push("ReviewPage.tsx: Ratify does not look for its prepared record");
-if (!/<PreparedPanel/.test(review)) problems.push("ReviewPage.tsx: renders no PreparedPanel");
+// Since FTR-038 an item's prepared panels are in its row's evidence (EntryEvidence), and the
+// granted delegations in Decisions here, each its own component.
+const review = read("../src/pages/review/EntryEvidence.tsx");
+const decisionsSrc = read("../src/pages/review/DecisionsHere.tsx");
+if (!/openFor\(prepared, "signoff"/.test(review)) problems.push("EntryEvidence.tsx: a sign-off does not look for its prepared record");
+if (!/openFor\(prepared, "ratification"/.test(review)) problems.push("EntryEvidence.tsx: Ratify does not look for its prepared record");
+if (!/<PreparedPanel/.test(review)) problems.push("EntryEvidence.tsx: renders no PreparedPanel");
 if (!/label: `Sign off \$\{name\}`/.test(review) || !/label: `Ratify \$\{item\.code\}`/.test(review)) {
-  problems.push("ReviewPage.tsx: the panels are not labelled Sign off <name> and Ratify <code>");
+  problems.push("EntryEvidence.tsx: the panels are not labelled Sign off <name> and Ratify <code>");
 }
 const releases = read("../src/pages/ReleasesPage.tsx");
 const between = (src, from, to) => {
@@ -189,23 +192,23 @@ expect(
   false,
 );
 if (!/<EditedWhileFlagged flag=\{f\}/.test(review) || !/<EditedWhileFlagged flag=\{t\.flag\}/.test(review)) {
-  problems.push("ReviewPage.tsx: the edits are not shown in both the left-to-check and the checked lists");
+  problems.push("EntryEvidence.tsx: the edits are not shown in both the left-to-check and the checked lists");
 }
 const editedBlock = between(review, "function EditedWhileFlagged(", "/** How a flag is named");
 if (!/Edited while flagged/.test(editedBlock) || !/<details>/.test(editedBlock) || !/<pre>\{edited\.diff\}/.test(editedBlock)) {
-  problems.push("ReviewPage.tsx: EditedWhileFlagged does not show 'Edited while flagged' and the diff in a <details>");
+  problems.push("EntryEvidence.tsx: EditedWhileFlagged does not show 'Edited while flagged' and the diff in a <details>");
 }
-if (/<input/.test(editedBlock)) problems.push("ReviewPage.tsx: EditedWhileFlagged renders an <input>: an edit settles nothing");
+if (/<input/.test(editedBlock)) problems.push("EntryEvidence.tsx: EditedWhileFlagged renders an <input>: an edit settles nothing");
 
 // DEF-060: a granted delegation names the Claude Code rule auto mode needs, in delegated mode only.
 const permProblems = [];
-const decisionsHere = between(review, "function DecisionsHere(", "\nfunction ");
+const decisionsHere = between(decisionsSrc, "function DecisionsHere(", "\nfunction ");
 const branch = decisionsHere.slice(decisionsHere.indexOf("permission_rules_checked") - 80);
 if (!/view\.mode === "delegated" && g\.permission_rules_checked/.test(decisionsHere)) {
-  permProblems.push("ReviewPage.tsx: the permission rule is not shown only in delegated mode, once checked");
+  permProblems.push("DecisionsHere.tsx: the permission rule is not shown only in delegated mode, once checked");
 }
 if (!/auto mode/.test(branch) || !/\.claude\/settings\.local\.json/.test(branch) || !/permission_rules_missing/.test(branch)) {
-  permProblems.push("ReviewPage.tsx: a granted delegation does not name the missing rule, auto mode and .claude/settings.local.json");
+  permProblems.push("DecisionsHere.tsx: a granted delegation does not name the missing rule, auto mode and .claude/settings.local.json");
 }
 const types = read("../src/types.ts");
 for (const f of ["permission_rules?: string[]", "permission_rules_checked?: boolean", "permission_rules_missing?: string[]"]) {

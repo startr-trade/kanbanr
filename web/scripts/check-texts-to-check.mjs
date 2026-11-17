@@ -24,14 +24,15 @@ expect("none left: offered", docsFoldedOffer({ to_check: [], settled: [settled] 
 expect("none left: what Claude settled is kept", docsFoldedOffer({ to_check: [], settled: [settled] }).settled.length, 1);
 expect("check skipped: offered", docsFoldedOffer({}).offer, true);
 
-const page = readFileSync(new URL("../src/pages/ReviewPage.tsx", import.meta.url), "utf8");
-if (/type="checkbox"/.test(page)) problems.push('ReviewPage.tsx: still has a type="checkbox"');
-if (/placeholder="DEF-/.test(page)) problems.push('ReviewPage.tsx: still has a placeholder="DEF-…" input');
-if (!/docsFolded\.offer/.test(page)) problems.push("ReviewPage.tsx: docs-folded is not offered by docsFoldedOffer");
+// Since FTR-038 an item's sign-offs are in its row's evidence, EntryEvidence.
+const page = readFileSync(new URL("../src/pages/review/EntryEvidence.tsx", import.meta.url), "utf8");
+if (/type="checkbox"/.test(page)) problems.push('EntryEvidence.tsx: still has a type="checkbox"');
+if (/placeholder="DEF-/.test(page)) problems.push('EntryEvidence.tsx: still has a placeholder="DEF-…" input');
+if (!/docsFolded\.offer/.test(page)) problems.push("EntryEvidence.tsx: docs-folded is not offered by docsFoldedOffer");
 if (!/Claude to settle them/.test(page) && !/settle them/.test(page)) {
-  problems.push('ReviewPage.tsx: does not say Claude settles the texts left ("settle them")');
+  problems.push('EntryEvidence.tsx: does not say Claude settles the texts left ("settle them")');
 }
-if (!/Checked by Claude/.test(page)) problems.push("ReviewPage.tsx: does not show what Claude checked");
+if (!/Checked by Claude/.test(page)) problems.push("EntryEvidence.tsx: does not show what Claude checked");
 
 if (problems.length) {
   for (const p of problems) console.error(`web::texts_to_check — ${p}`);
