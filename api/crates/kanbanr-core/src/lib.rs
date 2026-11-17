@@ -96,6 +96,7 @@ pub mod sprints;
 pub mod store;
 pub mod systembaseline;
 pub mod taskgraph;
+pub mod tasklog;
 pub mod timings;
 pub mod trace;
 pub mod validate;
