@@ -430,6 +430,31 @@ offers **All items** and **Unscheduled**, the items not yet in any sprint:
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
 
+### The Plan page's Flow panel
+
+The **Plan** page's Current tab opens on the **Flow** panel (FTR-061), above the timeline. It plans
+agent-built work by its task graph, in agent-hours, for the running sprint (else every open item),
+the same plan `kanbanr plan` prints:
+
+- one line of totals: the remaining work, the critical path's length and how many tasks it runs
+  over, and the most tasks that can run at once ("Remaining 46.5 agent-h · critical path 12.0 h
+  over 7 tasks · up to 6 at once"). Its critical path runs over tasks; the timeline below marks the
+  items' own;
+- **Running**, each task with its scope and its time against its estimate ("1.5 h of 2.0 h"),
+  marked **over** past it; **Ready**, the critical-path tasks marked, each with its remaining chain;
+  **Blocked**, each task with every reason it waits, in words (a task it waits on, files another
+  running task writes, its item not at the build stage);
+- the forecast: one row per lane count, "4 lanes · 2 build slots → 14.0 h" in hours from now, with
+  "(slots allow 2)" when the build slots bound the lanes that help, and the critical path as the
+  least it can take however many lanes run;
+- notes: the tasks with no estimate (counted as 1 h), the items with no tasks, and the build share
+  the forecast assumed or measured.
+
+A forecast is never a date. The only dates on the panel are the ones a person set, a running
+sprint's last day and a release's target, shown as chips labelled "(set by the person)". With no
+tasks to plan, the panel says so and offers the sentence to ask Claude to break the sprint's items
+into tasks.
+
 ### The Workflow page
 
 The Workflow page shows, in one place, how work moves from an item branch to a tagged release and

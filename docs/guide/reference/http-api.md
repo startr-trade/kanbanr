@@ -281,6 +281,13 @@ Each write appends to the activity log and commits the data repo. The **batch** 
 `feature.move`, `milestone.add`, `todo.add`, `task.add`, `task.state`, `doc.folder`, `doc.write`;
 created items may carry a `ref` alias later ops reference; the first failure names its index.
 
+`PUT /projects/{p}/features/{code}/todos/{todo}/tasks/{key}` sets a task's state (`state`, and
+`hold_advance`). It also takes what the agent reports with the change (FTR-061), each optional and
+kept in the task log entry the change writes: `tokens`, `cost_usd`, `model`, and `build`
+(`{ "runs", "red", "run_ms", "wait_ms" }`, the task's builds since it last went in progress); a
+malformed `build` is refused. The batch op `task.state` takes `tokens`, `cost_usd` and `model` the
+same way. A kanbanr older than 0.8.0 ignores these fields.
+
 `PUT /projects/{p}/config/build` sets how agents' builds share the machine (FTR-062): a JSON
 object of the `build` settings (`slots`, `jobs_per_slot`, `reserve_cpus`, `reserve_mem_gib`,
 `max_load`, `sccache`, `sccache_port`, `cache_gib`, `linker`, `web_cache`, `queue_batch`,
