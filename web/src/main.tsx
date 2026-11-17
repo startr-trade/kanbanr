@@ -16,6 +16,7 @@ import CharterPage from "./pages/CharterPage";
 import ReviewPage from "./pages/ReviewPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import BaselinePage from "./pages/BaselinePage";
+import ItemsPage from "./pages/ItemsPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
 import ReleasesPage from "./pages/ReleasesPage";
@@ -40,6 +41,7 @@ const routes: RouteObject[] = [
       { path: "p/:project/gantt", element: <GanttPage /> },
       { path: "p/:project/charter", element: <CharterPage /> },
       { path: "p/:project/review", element: <ReviewPage /> },
+      { path: "p/:project/items", element: <ItemsPage /> },
       { path: "p/:project/releases", element: <ReleasesPage /> },
       { path: "p/:project/workflow", element: <WorkflowPage /> },
       { path: "p/:project/baseline", element: <BaselinePage /> },
