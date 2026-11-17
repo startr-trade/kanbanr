@@ -1354,16 +1354,46 @@ pub fn still_waiting(
                 g.commit == r.subject.commit
                     && crate::cmp_instants(&g.at, &r.at) == std::cmp::Ordering::Greater
             });
-            match since {
-                Some(g) => Err(format!(
+            if let Some(g) = since {
+                return Err(format!(
                     "{} {} was recorded for {} by {} since",
                     g.name,
                     if g.passed { "passed" } else { "failed" },
                     g.commit.chars().take(7).collect::<String>(),
                     g.by
-                )),
-                None => Ok(()),
+                ));
             }
+            // DEF-095: the release the commit belongs to was cut since, or its branch moved on.
+            // Releases or git that cannot be read leave the record as it is.
+            let releases = crate::releases::load(store, p).unwrap_or_default();
+            let Some(release) = gate_release(&releases, repo, &r.subject.commit)
+                .and_then(|v| releases.iter().find(|x| x.version == v))
+            else {
+                return Ok(());
+            };
+            if release.state == crate::releases::ReleaseState::Shipped {
+                if crate::cmp_instants(&release.shipped_at, &r.at) == std::cmp::Ordering::Greater {
+                    return Err(format!(
+                        "{} was cut on {} after this was prepared",
+                        release.version,
+                        release.shipped_at.chars().take(10).collect::<String>()
+                    ));
+                }
+                return Ok(());
+            }
+            if let Some(repo) = repo {
+                let branch = branch_of(release);
+                if let Ok(tip) = crate::coderepo::rev_parse(repo, &branch)
+                    && tip != r.subject.commit
+                    && release.tag_commit != r.subject.commit
+                {
+                    return Err(format!(
+                        "{branch} has moved past {} since this was prepared",
+                        r.subject.commit.chars().take(7).collect::<String>()
+                    ));
+                }
+            }
+            Ok(())
         }
         "manual-test" => {
             if !crate::dispatch::is_manual_test(
@@ -3769,5 +3799,74 @@ mod tests {
         let out = post("ci");
         assert!(out.get("warning").is_none(), "{out:#}");
         assert_ne!(out["id"].as_str().unwrap(), id);
+    }
+
+    /// The view of record `id` among every record.
+    fn view_of(store: &Store, id: &str, repo: Option<&std::path::Path>) -> PreparedView {
+        every(store, None, repo)
+            .into_iter()
+            .find(|v| v.record.id == id)
+            .unwrap()
+    }
+
+    /// DEF-095 R-3: a gate result prepared before its release was cut reads as stale, saying so;
+    /// one prepared after the cut is not made stale by that rule.
+    #[test]
+    fn a_gate_result_from_before_the_cut_reads_as_stale() {
+        let (store, _dir, _repo, _base, tip) = release_board("cut");
+        let before = gate_on(&store, "local", &tip, "2026-11-16T10:00:00Z");
+        let after = gate_on(&store, "local", &tip, "2026-11-16T12:00:00Z");
+        let path = store.project_dir("demo").join("releases.yaml");
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[0].tag_commit = tip.clone();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        // Tagged, not yet cut: both wait.
+        assert_eq!(view_of(&store, &before, None).state, State::Superseded);
+        assert_eq!(view_of(&store, &after, None).state, State::Open);
+        let before = gate_on(&store, "ci", &tip, "2026-11-16T10:00:00Z");
+        assert_eq!(view_of(&store, &before, None).state, State::Open);
+        releases[0].state = crate::releases::ReleaseState::Shipped;
+        releases[0].shipped_at = "2026-11-16T11:00:00Z".into();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        let v = view_of(&store, &before, None);
+        assert_eq!(v.state, State::Stale, "{v:#?}");
+        assert!(
+            v.stale_why.contains("v1 was cut on 2026-11-16"),
+            "{}",
+            v.stale_why
+        );
+        assert_eq!(v.release, "v1");
+        let v = view_of(&store, &after, None);
+        assert_eq!(v.state, State::Open, "{v:#?}");
+        // The open listing leaves the stale one out.
+        let open = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(
+            open.iter()
+                .map(|v| v.record.id.as_str())
+                .collect::<Vec<_>>(),
+            [after.as_str()]
+        );
+    }
+
+    /// DEF-095 R-3: a gate result for a commit its release branch has moved past reads as stale;
+    /// without a repository nothing can say so, and it stays open.
+    #[test]
+    fn a_gate_result_for_a_commit_the_branch_moved_past_reads_as_stale() {
+        let (store, _dir, repo, _base, tip) = release_board("moved");
+        let id = gate_on(&store, "local", &tip, "2026-11-16T10:00:00Z");
+        assert_eq!(view_of(&store, &id, Some(&repo)).state, State::Open);
+        crate::coderepo::git(&repo, &["checkout", "-q", "release/v1"]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "fix2", "again\n", "another fix");
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let v = view_of(&store, &id, Some(&repo));
+        assert_eq!(v.state, State::Stale, "{v:#?}");
+        let sha7: String = tip.chars().take(7).collect();
+        assert!(
+            v.stale_why
+                .contains(&format!("release/v1 has moved past {sha7}")),
+            "{}",
+            v.stale_why
+        );
+        assert_eq!(view_of(&store, &id, None).state, State::Open);
     }
 }
