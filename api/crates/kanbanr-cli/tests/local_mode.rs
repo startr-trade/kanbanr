@@ -20414,3 +20414,466 @@ fn decisions_question_prints_the_tagged_question_only_in_conversation_mode() {
     let why = String::from_utf8_lossy(&refused.stderr).to_string();
     assert!(why.contains("monitor"), "{why}");
 }
+
+// ---- DEF-102: a board write is committed or undone ----
+
+/// A scratch board with `items` features, each with one requirement, two planned tests
+/// (`cart::keeps`, `pay::charges`) and one todo-list task, for the crash and stress tests of
+/// DEF-102. Under `std::env::temp_dir()`, never the repository (L-41).
+struct WriteBoard {
+    base: PathBuf,
+    home: PathBuf,
+    work: PathBuf,
+}
+
+impl WriteBoard {
+    fn new(name: &str, items: usize) -> WriteBoard {
+        let base = std::env::temp_dir().join(format!("kanbanr-wb-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let b = WriteBoard {
+            home: base.join("home"),
+            work: base.join("code").join("shop"),
+            base,
+        };
+        std::fs::create_dir_all(&b.home).unwrap();
+        std::fs::create_dir_all(&b.work).unwrap();
+        b.run(&[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ]);
+        // The board is this test's own, never the repository's (L-41).
+        assert!(
+            b.board()
+                .canonicalize()
+                .unwrap()
+                .starts_with(b.base.canonicalize().unwrap()),
+            "{:?}",
+            b.board()
+        );
+        b.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+        let def = b.base.join("def.yaml");
+        std::fs::write(
+            &def,
+            "statement: Keep a basket's items\n\
+             requirements:\n  - kind: functional\n    text: \"WHEN an item is added, THE SYSTEM SHALL keep it.\"\n\
+             \x20   tests:\n      - name: cart::keeps\n        kind: unit\n        state: planned\n\
+             \x20     - name: pay::charges\n        kind: unit\n        state: planned\n",
+        )
+        .unwrap();
+        for n in 1..=items {
+            let code = format!("FEAT-{n:03}");
+            b.run(&[
+                "feature",
+                "add",
+                "--title",
+                &format!("Basket {n}"),
+                "--milestone",
+                "MS-001",
+            ]);
+            b.run(&["feature", "define", &code, "--file", def.to_str().unwrap()]);
+            b.run(&["todo", "add", &code, "--description", "build"]);
+            b.run(&["task", "add", &code, "TL-001", "--text", "do it"]);
+        }
+        b
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_FAULT")
+            .env_remove("KANBANR_COMMIT_WAIT_MS")
+            .env_remove("KANBANR_LOCK_WAIT_SECS")
+            .stdin(std::process::Stdio::null());
+        cmd
+    }
+
+    fn exec(&self, args: &[&str]) -> Output {
+        self.command(args).output().expect("run kanbanr CLI")
+    }
+
+    fn run(&self, args: &[&str]) -> String {
+        let o = self.exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+
+    fn board(&self) -> PathBuf {
+        PathBuf::from(self.run(&["where"]).trim())
+    }
+
+    /// `git` on the board, success required.
+    fn git(&self, args: &[&str]) -> String {
+        wb_git(&self.board(), args)
+    }
+
+    fn head(&self) -> String {
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    /// The subjects of the commits after `base`, oldest first.
+    fn subjects_since(&self, base: &str) -> Vec<String> {
+        let range = format!("{base}..HEAD");
+        self.git(&["log", "--reverse", "--format=%s", &range])
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+impl Drop for WriteBoard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+fn wb_git(dir: &Path, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        o.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// R-5: for each step of the write recipe, a debug binary killed at that step leaves the board
+/// committed once (the step is at or after the commit) or put back by the next write, and the next
+/// write is in exactly one commit with only its own files. DEF-102.
+#[cfg(unix)]
+#[test]
+fn a_write_killed_at_each_step_is_committed_once_or_not_at_all() {
+    if !cfg!(debug_assertions) {
+        return; // the fault points exist only in a debug build
+    }
+    // `kanbanr_core::write::FAULT_STEPS`, which is crate-private.
+    let steps = [
+        "locked",
+        "journal",
+        "files",
+        "activity",
+        "staged",
+        "committed",
+        "done",
+    ];
+    for step in steps {
+        let b = WriteBoard::new(&format!("crash-{step}"), 1);
+        let base = b.head();
+        let first = b
+            .command(&["test", "FEAT-001", "R-1", "cart::keeps", "red"])
+            .env("KANBANR_FAULT", step)
+            .output()
+            .unwrap();
+        assert!(
+            !first.status.success(),
+            "{step}: the killed write must not exit 0"
+        );
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(
+                first.status.signal(),
+                Some(6),
+                "{step}: aborted, not refused: {}",
+                String::from_utf8_lossy(&first.stderr)
+            );
+        }
+
+        let second = b.exec(&["test", "FEAT-001", "R-1", "pay::charges", "red"]);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&second.stdout),
+            String::from_utf8_lossy(&second.stderr)
+        );
+        assert!(second.status.success(), "{step}: the next write: {said}");
+
+        let subjects = b.subjects_since(&base);
+        let first_commits = subjects
+            .iter()
+            .filter(|s| s.contains("cart::keeps"))
+            .count();
+        let second_commits = subjects
+            .iter()
+            .filter(|s| s.contains("pay::charges"))
+            .count();
+        let committed = matches!(step, "committed" | "done");
+        assert_eq!(
+            first_commits,
+            usize::from(committed),
+            "{step}: the killed write in {subjects:?}"
+        );
+        assert_eq!(second_commits, 1, "{step}: the next write in {subjects:?}");
+        assert_eq!(
+            subjects.len(),
+            first_commits + 1,
+            "{step}: nothing else was committed: {subjects:?}"
+        );
+        // Between the journal and the commit the dead write is put back, and the next write says
+        // so. At `locked` nothing had been journalled or changed; from `committed` on, nothing
+        // needs putting back.
+        let put_back = matches!(step, "journal" | "files" | "activity" | "staged");
+        assert_eq!(
+            said.contains("put back"),
+            put_back,
+            "{step}: the next write's output: {said}"
+        );
+
+        // The second write's commit holds its own item's files, the activity file and the
+        // index, never the dead write's.
+        let last = b.git(&["show", "--name-only", "--format=", "HEAD"]);
+        for file in last.lines() {
+            assert!(
+                file.contains("FEAT-001")
+                    || file.contains("activity/")
+                    || file.ends_with("index.yaml")
+                    || file.contains("tasklog/")
+                    || file.ends_with("writer.yaml"),
+                "{step}: unexpected file {file} in the next write's commit"
+            );
+        }
+        assert_eq!(
+            b.git(&["status", "--porcelain"]),
+            "",
+            "{step}: the board is clean"
+        );
+        // The killed write's result is on disk only when it was committed.
+        let shown: serde_json::Value =
+            serde_json::from_str(&b.run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+        let keeps_red = shown["definition"]["requirements"][0]["tests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == "cart::keeps" && t["state"] == "red");
+        assert_eq!(keeps_red, committed, "{step}: {shown}");
+        assert!(
+            !b.board().join(".git").join("kanbanr-write.json").exists(),
+            "{step}: the journal is gone"
+        );
+    }
+}
+
+/// R-2: a commit that cannot be made (git's index held past `KANBANR_COMMIT_WAIT_MS`) exits 1,
+/// says nothing was changed, and leaves the board as it was; once git lets go, the same write
+/// goes through. DEF-102.
+#[test]
+fn a_write_that_cannot_commit_exits_non_zero_and_changes_nothing() {
+    let b = WriteBoard::new("nocommit", 1);
+    let head = b.head();
+    let git_dir = PathBuf::from(b.git(&["rev-parse", "--absolute-git-dir"]));
+    let lock = git_dir.join("index.lock");
+    std::fs::write(&lock, b"held by another program").unwrap();
+
+    let started = std::time::Instant::now();
+    let refused = b
+        .command(&["test", "FEAT-001", "R-1", "cart::keeps", "green"])
+        .env("KANBANR_COMMIT_WAIT_MS", "200")
+        .output()
+        .unwrap();
+    let waited = started.elapsed();
+    let said = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert_eq!(refused.status.code(), Some(1), "{said}");
+    assert!(said.contains("nothing was changed"), "{said}");
+    assert!(said.contains("index.lock"), "names the file: {said}");
+    assert!(
+        waited >= std::time::Duration::from_millis(200),
+        "it waited for git first: {waited:?}"
+    );
+    assert_eq!(b.head(), head, "no commit was made");
+    std::fs::remove_file(&lock).unwrap();
+    assert_eq!(
+        b.git(&["status", "--porcelain"]),
+        "",
+        "the board is as it was"
+    );
+
+    let ok = b.exec(&["test", "FEAT-001", "R-1", "cart::keeps", "green"]);
+    assert!(
+        ok.status.success(),
+        "the same write, once git let go: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert_eq!(b.subjects_since(&head).len(), 1);
+    assert_eq!(b.git(&["status", "--porcelain"]), "");
+}
+
+/// R-6: six writers (each on its own item) run the binary six times while a thread holds git's
+/// index lock for 20 ms in every 60 ms and another loops `git status`. Every write that reports
+/// success is in exactly one commit that names it; every one that does not says nothing was
+/// changed and has no commit; the board ends clean. Prints p50, p99 and the longest write (which
+/// includes its wait for the board lock). DEF-102.
+#[test]
+fn concurrent_writers_and_readers_commit_every_write_exactly_once() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    const WRITERS: usize = 6;
+    let b = Arc::new(WriteBoard::new("stress", WRITERS));
+    let base = b.head();
+    let git_dir = PathBuf::from(b.git(&["rev-parse", "--absolute-git-dir"]));
+    let board = b.board();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    // Another program holding git's index lock 20 ms in every 60 ms.
+    let locker = {
+        let (stop, lock) = (stop.clone(), git_dir.join("index.lock"));
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                if std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock)
+                    .is_ok()
+                {
+                    std::thread::sleep(Duration::from_millis(20));
+                    let _ = std::fs::remove_file(&lock);
+                    std::thread::sleep(Duration::from_millis(40));
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        })
+    };
+    // A plain `git status` in a loop: it may refresh the index, as any tool in the folder would.
+    let reader = {
+        let (stop, board) = (stop.clone(), board.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let _ = Command::new("git")
+                    .arg("-C")
+                    .arg(&board)
+                    .args(["status", "--porcelain"])
+                    .output();
+            }
+        })
+    };
+
+    // (item index, succeeded, seconds, stderr)
+    type Timed = (usize, bool, f64, String);
+    let results: Arc<Mutex<Vec<Timed>>> = Arc::default();
+    let writers: Vec<_> = (1..=WRITERS)
+        .map(|n| {
+            let (b, results) = (b.clone(), results.clone());
+            std::thread::spawn(move || {
+                let code = format!("FEAT-{n:03}");
+                let plan: [Vec<&str>; 6] = [
+                    vec!["test", &code, "R-1", "cart::keeps", "red"],
+                    vec!["task", "state", &code, "TL-001", "T1", "InProgress"],
+                    vec!["test", &code, "R-1", "cart::keeps", "green"],
+                    vec!["test", &code, "R-1", "pay::charges", "red"],
+                    vec!["task", "state", &code, "TL-001", "T1", "NotStarted"],
+                    vec!["test", &code, "R-1", "pay::charges", "green"],
+                ];
+                for args in &plan {
+                    let t = Instant::now();
+                    let o = b.exec(args);
+                    let secs = t.elapsed().as_secs_f64();
+                    results.lock().unwrap().push((
+                        n,
+                        o.status.success(),
+                        secs,
+                        String::from_utf8_lossy(&o.stderr).to_string(),
+                    ));
+                }
+            })
+        })
+        .collect();
+    for w in writers {
+        w.join().unwrap();
+    }
+    stop.store(true, Ordering::Relaxed);
+    locker.join().unwrap();
+    reader.join().unwrap();
+    let _ = std::fs::remove_file(git_dir.join("index.lock"));
+
+    let results = results.lock().unwrap();
+    let subjects = b.subjects_since(&base);
+    let mut succeeded = 0;
+    for n in 1..=WRITERS {
+        let code = format!("FEAT-{n:03}");
+        let ok = results.iter().filter(|r| r.0 == n && r.1).count();
+        let commits = subjects.iter().filter(|s| s.contains(&code)).count();
+        assert_eq!(
+            commits, ok,
+            "{code}: every write that exited 0 is in exactly one commit that names it: {subjects:?}"
+        );
+        succeeded += ok;
+    }
+    for r in results.iter().filter(|r| !r.1) {
+        assert!(
+            r.3.contains("nothing was changed"),
+            "a write that failed must say nothing was changed: {}",
+            r.3
+        );
+    }
+    assert_eq!(
+        subjects.len(),
+        succeeded,
+        "the commits are exactly the writes that exited 0: {subjects:?}"
+    );
+    // Each commit holds its item plus the board's own bookkeeping, nothing of another item.
+    let log = b.git(&[
+        "log",
+        "--format=@%s",
+        "--name-only",
+        &format!("{base}..HEAD"),
+    ]);
+    let mut subject = String::new();
+    for line in log.lines().filter(|l| !l.is_empty()) {
+        if let Some(s) = line.strip_prefix('@') {
+            subject = s.to_string();
+            continue;
+        }
+        let item = (1..=WRITERS)
+            .map(|n| format!("FEAT-{n:03}"))
+            .find(|c| line.contains(c.as_str()));
+        if let Some(item) = item {
+            assert!(subject.contains(&item), "{line} in the commit `{subject}`");
+        } else {
+            assert!(
+                line.contains("activity/")
+                    || line.contains("tasklog/")
+                    || line.ends_with("index.yaml")
+                    || line.ends_with("writer.yaml"),
+                "{line} in the commit `{subject}`"
+            );
+        }
+    }
+    assert_eq!(
+        b.git(&["status", "--porcelain"]),
+        "",
+        "the board ends clean"
+    );
+
+    let mut secs: Vec<f64> = results.iter().map(|r| r.2).collect();
+    secs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let at = |q: f64| secs[(((secs.len() - 1) as f64) * q).round() as usize];
+    let (p50, p99, longest) = (at(0.5), at(0.99), *secs.last().unwrap());
+    println!(
+        "DEF-102 stress: {} writes ({} committed), p50 {p50:.3}s, p99 {p99:.3}s, longest {longest:.3}s",
+        results.len(),
+        succeeded
+    );
+    assert!(
+        kanbanr_core::write::LOCK_WAIT.as_secs_f64() >= 10.0 * p99,
+        "LOCK_WAIT {:?} must be at least 10 x p99 ({p99:.3}s)",
+        kanbanr_core::write::LOCK_WAIT
+    );
+}

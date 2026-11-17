@@ -221,3 +221,11 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr remote push-policy [auto\|off\|debounce:N]` | when this board is pushed: show it, or set it in the board's own git config |
 | `kanbanr mirror enable / disable / status / sync / link / pull` | one-way mirror of items to GitHub issues |
 | `kanbanr batch [--dry-run] [--file …]` | many changes in one call and one commit |
+
+## Environment variables for board writes
+
+| Variable | Default | What it does |
+|---|---|---|
+| `KANBANR_LOCK_WAIT_SECS` | `120` | How long a write waits for the board's write lock before it gives up with "the board is busy" and the holder's process, method and path. Nothing is changed when it gives up. |
+| `KANBANR_COMMIT_WAIT_MS` | `5000` | How long a write waits for git's index lock (held by another program) before it undoes itself with "nothing was changed". |
+| `KANBANR_FAULT` | unset | Debug builds only: abort at a step of the write (`locked`, `journal`, `files`, `activity`, `staged`, `committed`, `done`), as a killed process would. Used by the crash tests; a release build ignores it. |

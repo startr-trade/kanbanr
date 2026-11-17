@@ -117,6 +117,12 @@ All notable changes to kanbanr are documented here. The format follows
 - The daemon's background warm-up covers every project the served boards hold, not the folder marker's project: a daemon started in a folder whose project the board lacks no longer warns `project not found`, and a daemon serving several boards warms them all (DEF-109).
 - The session-start hook no longer stops on macOS's stock bash 3.2 when no project argument is passed: its empty project-argument array is expanded in a form bash 3.2 accepts under `set -u`, and a test lints the hook scripts for that and runs the hook on macOS too (DEF-101).
 - `kanbanr signoff` and `kanbanr approve` name the record they wrote: a person's sign-off on an item whose latest earlier sign-off was delegated prints the person, not "under DLG-001" (DEF-107).
+- A board write whose commit could not be made (another program held git's index) was reported as
+  done and left its files uncommitted, so later agent writes were refused; a write now waits for
+  git, and if it still cannot commit it changes nothing and says so. A write that dies part-way is
+  put back by the next one. kanbanr's reads no longer lock git's index. A text checked for a
+  docs-folded sign-off stays checked when its item records a task or a test, and lapses only when
+  the text changes (DEF-102).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
