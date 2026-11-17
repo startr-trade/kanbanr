@@ -9614,6 +9614,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if let Some(note) = reports.iter().find_map(|r| r["baseline_note"].as_str()) {
                 println!("\nnote: {note}");
             }
+            // A gate the baseline requires at a release stage that nothing records yet: said
+            // once (FTR-033).
+            if let Some(first) = reports.first() {
+                for note in first["baseline_gates_unrecorded"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    println!("\nnote: {}", note.as_str().unwrap_or_default());
+                }
+            }
             println!("\n{ready}/{} ready", reports.len());
             Ok(())
         }
@@ -15469,6 +15480,16 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         );
         if let Some(purpose) = s["purpose"].as_str() {
             println!("{:<14} {purpose}", "");
+        }
+        // The gates the engineering baseline requires here, with the entry that promised each
+        // (FTR-033).
+        for g in s["gates"].as_array().into_iter().flatten() {
+            println!(
+                "{:<14} requires `{}` (baseline {})",
+                "",
+                g["gate"].as_str().unwrap_or_default(),
+                g["from"].as_str().unwrap_or_default()
+            );
         }
     }
     Ok(())

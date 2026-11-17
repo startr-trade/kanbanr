@@ -16469,6 +16469,120 @@ fn promote_is_refused_until_the_baselines_gate_has_passed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A release board whose accepted baseline (`delivery: github-actions`, B-001) requires a passed
+/// `ci` result at stage main, with no gate result recorded yet.
+fn ftr033_release_with_baseline_gate(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = release_scratch_with(tag, false);
+    // The test's own board, never the repository's.
+    assert!(work.starts_with(std::env::temp_dir()));
+    let o = run_in(&base, &work, &["profile", "add", "core"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let answers = base.join("answers.yaml");
+    std::fs::write(
+        &answers,
+        "answers:\n  - {area: delivery, options: [github-actions]}\n",
+    )
+    .unwrap();
+    for args in [
+        &[
+            "baseline",
+            "propose",
+            "--answers",
+            answers.to_str().unwrap(),
+        ][..],
+        &["baseline", "accept", "REV-001"][..],
+    ] {
+        let o = run_in(&base, &work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+    (base, work)
+}
+
+/// FTR-033 R-3: `kanbanr release stages` shows a gate the baseline requires at a stage as
+/// "requires `ci` (baseline B-001)" under that stage, and `--json` carries it as the stage's
+/// `gates`.
+#[test]
+fn release_stages_show_the_baselines_stage_gate() {
+    let (base, work) = ftr033_release_with_baseline_gate("ftr033-stages");
+    let o = run_in(&base, &work, &["release", "stages"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let text = String::from_utf8(o.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    let main = lines
+        .iter()
+        .position(|l| l.starts_with("main "))
+        .unwrap_or_else(|| panic!("no main stage: {text}"));
+    assert!(
+        lines[main + 1..]
+            .iter()
+            .take_while(|l| l.starts_with(' '))
+            .any(|l| l.trim() == "requires `ci` (baseline B-001)"),
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("(baseline B-001)").count(),
+        1,
+        "only main requires it: {text}"
+    );
+    let o = run_in(&base, &work, &["--json", "release", "stages"]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let main = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "main")
+        .unwrap();
+    assert_eq!(main["gates"][0]["gate"], "ci", "{v}");
+    assert_eq!(main["gates"][0]["from"], "B-001", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-033 R-3: while no gate result of the baseline's gate exists on the board, `kanbanr check`
+/// says "the baseline requires the `ci` gate at main; nothing records it yet: …"; once one is
+/// recorded it no longer does.
+#[test]
+fn check_names_a_baseline_gate_nothing_records_yet() {
+    let (base, work) = ftr033_release_with_baseline_gate("ftr033-check-gate");
+    let made = run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Next",
+            "--milestone",
+            "MS-001",
+        ],
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let made: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    let said = String::from_utf8(run_in(&base, &work, &["check", &code]).stdout).unwrap();
+    assert!(
+        said.contains(
+            "note: the baseline requires the `ci` gate at main; nothing records it yet: add the \
+             pipeline step (see the practice text) or revise the entry"
+        ),
+        "{said}"
+    );
+    let tip = rev(&base, &work, "main");
+    let o = run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--passed", "--commit", &tip],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8(run_in(&base, &work, &["check", &code]).stdout).unwrap();
+    assert!(!said.contains("nothing records it yet"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The board pack the update test saves, at `version` 1 or 2: v2 adds the `cache` area and
 /// recommends `files` instead of `postgres`.
 fn ftr033_store_pack(v2: bool) -> String {

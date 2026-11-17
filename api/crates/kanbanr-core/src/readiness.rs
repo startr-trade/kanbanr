@@ -2357,6 +2357,10 @@ pub struct ItemCheck {
     /// When the baseline has revisions but none accepted: that the gates read nothing from it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_note: Option<String>,
+    /// Each gate the baseline requires at a release stage that no gate result on the board names
+    /// yet (FTR-033): the pipeline's to-do list before the first release. Never stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub baseline_gates_unrecorded: Vec<String>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -2416,6 +2420,7 @@ pub fn check_board(
     // The engineering baseline is judged with the project's context (FTR-033).
     let ctx = Context::load_in(store, p, &project.config, repo);
     let baseline_note = baseline_note(&ctx);
+    let baseline_gates_unrecorded = baseline_gates_unrecorded(store, p, &project.config.cadence);
     let items = features
         .into_iter()
         .map(|f| {
@@ -2472,6 +2477,7 @@ pub fn check_board(
                 open_manual: open_manual_tests(f),
                 open_areas: open_baseline_areas(f, &ctx),
                 baseline_note: baseline_note.clone(),
+                baseline_gates_unrecorded: baseline_gates_unrecorded.clone(),
             }
         })
         .collect();
@@ -2502,6 +2508,34 @@ fn baseline_note(ctx: &Context) -> Option<String> {
         if proposed.len() == 1 { "is" } else { "are" },
         if proposed.len() == 1 { "it" } else { "them" }
     ))
+}
+
+/// "the baseline requires the `sast` gate at main; nothing records it yet: …" for each gate a
+/// release stage requires through the engineering baseline (FTR-033's `ReleaseGate.gates`) of which
+/// no gate result exists for the project on the board, in stage order. Empty when releases are off.
+fn baseline_gates_unrecorded(
+    store: &crate::Store,
+    p: &str,
+    cadence: &crate::config::Cadence,
+) -> Vec<String> {
+    if !cadence.releases {
+        return Vec::new();
+    }
+    let mut notes = Vec::new();
+    for (stage, g) in cadence.effective_release_gates() {
+        for sg in &g.gates {
+            let recorded = crate::gates::results(store, p, Some(&sg.gate))
+                .is_ok_and(|r| r.iter().any(|r| r.name == sg.gate));
+            if !recorded {
+                notes.push(format!(
+                    "the baseline requires the `{}` gate at {stage}; nothing records it yet: add \
+                     the pipeline step (see the practice text) or revise the entry",
+                    sg.gate
+                ));
+            }
+        }
+    }
+    notes
 }
 
 /// What `kanbanr check --file` found in a definition that is not on a board (FEAT-052).

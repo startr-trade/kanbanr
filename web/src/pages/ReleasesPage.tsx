@@ -11,6 +11,7 @@ import { TAB_OF, defaultTab, initiallyOpen, releaseTabs, type ReleaseTab } from 
 import type { ProjectConfig, Release, ReleasesSummary, Scope } from "../types";
 import { ReleaseRow } from "./releases/ReleaseRow";
 import type { ReleaseCtx } from "./releases/ReleaseBody";
+import { BaselineStageGates } from "./releases/BaselineStageGates";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
@@ -66,6 +67,7 @@ export default function ReleasesPage() {
       // A read-only copy of the monitor (FEAT-178) never offers a promotion, whatever the daemon says.
       writable={!isReadOnly() && meta.data?.writes === true && who != null}
       who={who}
+      cadence={cadence}
     />
   );
 }
@@ -78,6 +80,8 @@ interface PageProps {
   notesPath: string;
   writable: boolean;
   who: string | null;
+  /** The project's cadence, for the baseline's stage gates (FTR-033 P13); absent in checks that don't need them. */
+  cadence?: ProjectConfig["cadence"];
 }
 
 /**
@@ -94,6 +98,7 @@ export function ReleasesBody(p: PageProps & { summary: ReleasesSummary }): JSX.E
         <h1>Releases</h1>
         <LiveDot />
       </div>
+      {p.cadence ? <BaselineStageGates project={p.project} cadence={p.cadence} /> : null}
       {none ? (
         <p className="muted">
           No releases yet — <code>kanbanr release add v0.1.0 --target YYYY-MM-DD</code>.
