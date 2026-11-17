@@ -1181,7 +1181,7 @@ mod tests {
                 .rfind(|l| !l.is_empty() && !l.starts_with('#'));
             assert_eq!(last, Some("exit 0"), "{rel} ends with exit 0");
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         run_session_start_against_a_stub();
     }
 
@@ -1251,9 +1251,9 @@ mod tests {
     }
 
     /// Runs the embedded `session-start.sh` in a temp dir whose PATH starts with a stub
-    /// `kanbanr`: no real board is read or written (L-41). Linux only: macOS's bash 3.2 stops at
-    /// the script's `"${PROJECT_ARGS[@]}"` of an empty array under `set -u`.
-    #[cfg(target_os = "linux")]
+    /// `kanbanr`: no real board is read or written (L-41). Unix only: bash 3.2 on macOS runs it
+    /// too, with an empty project-argument array under `set -u` (DEF-101).
+    #[cfg(unix)]
     fn run_session_start_against_a_stub() {
         use std::os::unix::fs::PermissionsExt;
         let dir = temp_claude_dir(false);

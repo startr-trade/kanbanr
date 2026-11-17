@@ -113,6 +113,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The session-start hook no longer stops on macOS's stock bash 3.2 when no project argument is passed: its empty project-argument array is expanded in a form bash 3.2 accepts under `set -u`, and a test lints the hook scripts for that and runs the hook on macOS too (DEF-101).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
