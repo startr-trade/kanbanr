@@ -87,6 +87,25 @@
         ],
         "type": "object"
       },
+      "ActivityLine": {
+        "description": "One activity entry, in plain words.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "words"
+        ],
+        "type": "object"
+      },
       "Adds": {
         "additionalProperties": true,
         "description": "What an option adds to the work.",
@@ -426,6 +445,37 @@
             "type": "string"
           }
         ]
+      },
+      "ArchCounts": {
+        "description": "Architecture records.",
+        "properties": {
+          "adrs": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "ADRs by status.",
+            "type": "object"
+          },
+          "component_docs": {
+            "description": "Board docs under `design/components/`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "design_docs": {
+            "description": "Board docs under `design/`, outside `design/components/`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "design_docs",
+          "component_docs"
+        ],
+        "type": "object"
       },
       "AreaView": {
         "description": "One area as the Baseline page shows it.",
@@ -1462,6 +1512,33 @@
           "tasks_total",
           "tasks_done",
           "percent"
+        ],
+        "type": "object"
+      },
+      "CoverageCounts": {
+        "description": "Requirement coverage, as the flow report counts it.",
+        "properties": {
+          "proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_items": {
+            "description": "The report's stale evidence entries (one per requirement whose green predates the code\nrepository's HEAD); 0 without a code repository.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "proven",
+          "total",
+          "stale_items"
         ],
         "type": "object"
       },
@@ -2734,6 +2811,46 @@
         ],
         "type": "object"
       },
+      "FlowCounts": {
+        "description": "Flow, as the flow report counts it.",
+        "properties": {
+          "completed": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cycle_p50_days": {
+            "format": "double",
+            "type": "number"
+          },
+          "cycle_p90_days": {
+            "format": "double",
+            "type": "number"
+          },
+          "defects": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "escaped": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rework": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "completed",
+          "rework",
+          "defects",
+          "escaped"
+        ],
+        "type": "object"
+      },
       "Gap": {
         "description": "One thing an item is missing.",
         "properties": {
@@ -2899,6 +3016,47 @@
         "required": [
           "id",
           "statement"
+        ],
+        "type": "object"
+      },
+      "GoalFacts": {
+        "description": "One charter goal, with the work serving it.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "items_done": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items_open": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "The goal's statement.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "items_done",
+          "items_open",
+          "req_proven",
+          "req_total"
         ],
         "type": "object"
       },
@@ -3071,6 +3229,42 @@
         "required": [
           "name",
           "lines"
+        ],
+        "type": "object"
+      },
+      "Holds": {
+        "description": "How much the board holds.",
+        "properties": {
+          "architecture": {
+            "$ref": "#/components/schemas/ArchCounts"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/CoverageCounts"
+          },
+          "flow": {
+            "$ref": "#/components/schemas/FlowCounts"
+          },
+          "items": {
+            "$ref": "#/components/schemas/ItemCounts"
+          },
+          "records": {
+            "$ref": "#/components/schemas/RecordCounts"
+          },
+          "requirements": {
+            "$ref": "#/components/schemas/RequirementCounts"
+          },
+          "tests": {
+            "$ref": "#/components/schemas/TestCounts"
+          }
+        },
+        "required": [
+          "items",
+          "requirements",
+          "tests",
+          "coverage",
+          "flow",
+          "architecture",
+          "records"
         ],
         "type": "object"
       },
@@ -3384,6 +3578,35 @@
           "repo",
           "number",
           "url"
+        ],
+        "type": "object"
+      },
+      "ItemCounts": {
+        "description": "Items by kind, as recorded: lower-cased and trimmed, no kind mapped onto another.",
+        "properties": {
+          "by_kind": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "untyped": {
+            "description": "Items with no kind, or an empty one.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "untyped"
         ],
         "type": "object"
       },
@@ -4015,6 +4238,34 @@
         ],
         "type": "object"
       },
+      "MilestoneNow": {
+        "description": "A milestone under way.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "done": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "done",
+          "total"
+        ],
+        "type": "object"
+      },
       "MilestoneRollup": {
         "properties": {
           "code": {
@@ -4240,6 +4491,27 @@
         ],
         "type": "object"
       },
+      "Now": {
+        "description": "What is happening now: the running sprint, the releases in flight, the milestones under way.",
+        "properties": {
+          "milestones": {
+            "items": {
+              "$ref": "#/components/schemas/MilestoneNow"
+            },
+            "type": "array"
+          },
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseNow"
+            },
+            "type": "array"
+          },
+          "sprint": {
+            "$ref": "#/components/schemas/SprintNow"
+          }
+        },
+        "type": "object"
+      },
       "OriginState": {
         "description": "The remote-tracking branch `pushed` was judged against, and whether it was fetched first.",
         "properties": {
@@ -4299,6 +4571,60 @@
           "to",
           "reason",
           "origin"
+        ],
+        "type": "object"
+      },
+      "Overview": {
+        "description": "The whole Overview of one project.",
+        "properties": {
+          "activity": {
+            "description": "Newest first, at most [`ACTIVITY`], in plain words.",
+            "items": {
+              "$ref": "#/components/schemas/ActivityLine"
+            },
+            "type": "array"
+          },
+          "attention": {
+            "$ref": "#/components/schemas/Attention"
+          },
+          "board_rev": {
+            "description": "The board's HEAD commit the numbers were read at; empty when the board has no commit.",
+            "type": "string"
+          },
+          "generated_at": {
+            "description": "When it was read, RFC 3339.",
+            "type": "string"
+          },
+          "goals": {
+            "description": "In charter order.",
+            "items": {
+              "$ref": "#/components/schemas/GoalFacts"
+            },
+            "type": "array"
+          },
+          "holds": {
+            "$ref": "#/components/schemas/Holds"
+          },
+          "now": {
+            "$ref": "#/components/schemas/Now"
+          },
+          "project": {
+            "type": "string"
+          },
+          "recent": {
+            "description": "Newest first, at most [`RECENT`].",
+            "items": {
+              "$ref": "#/components/schemas/Recent"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "generated_at",
+          "attention",
+          "now",
+          "holds"
         ],
         "type": "object"
       },
@@ -5197,6 +5523,70 @@
         ],
         "type": "object"
       },
+      "Recent": {
+        "description": "One recent decision, in words.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "code": {
+            "description": "The item or ADR it is about; absent for a release.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`adr`, `approval`, `signoff`, `ratify`, `release-stage` or `shipped`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The monitor page that shows it.",
+            "type": "string"
+          },
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "words",
+          "to"
+        ],
+        "type": "object"
+      },
+      "RecordCounts": {
+        "description": "Other records.",
+        "properties": {
+          "lessons": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "release_notes": {
+            "description": "Board docs under `releases/`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "releases": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retros": {
+            "description": "Board docs under `retros/`.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retros",
+          "release_notes",
+          "lessons",
+          "releases"
+        ],
+        "type": "object"
+      },
       "ReleaseAction": {
         "description": "What entering a release stage does. The order of the variants is the order a promotion applies\nthem in, whichever stages hold them.",
         "oneOf": [
@@ -5352,6 +5742,49 @@
         "required": [
           "stage",
           "gate"
+        ],
+        "type": "object"
+      },
+      "ReleaseNow": {
+        "description": "A release in flight, as a stage stepper.",
+        "properties": {
+          "finished": {
+            "description": "Of those, the ones finished.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items": {
+            "description": "Items planned into it or shipped in it.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/StepFact"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          },
+          "waits_on_tag": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "waits_on_tag",
+          "steps",
+          "items",
+          "finished"
         ],
         "type": "object"
       },
@@ -5710,6 +6143,48 @@
           "id",
           "kind",
           "text"
+        ],
+        "type": "object"
+      },
+      "RequirementCounts": {
+        "description": "Requirements by kind, EARS pattern and ISO 25010 tagging.",
+        "properties": {
+          "by_pattern": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "By the EARS pattern the requirement's text classifies as (`ubiquitous`, `event`, `state`,\n`optional`, `unwanted`); a requirement that conforms to none is not counted here.",
+            "type": "object"
+          },
+          "functional": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "iso_tagged": {
+            "description": "Requirements naming at least one ISO/IEC 25010 characteristic.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "nfr": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "functional",
+          "nfr",
+          "iso_tagged"
         ],
         "type": "object"
       },
@@ -6575,6 +7050,52 @@
         ],
         "type": "object"
       },
+      "SprintNow": {
+        "description": "The running sprint.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "committed": {
+            "description": "Items planned into it.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "days_left": {
+            "description": "Days to its last day, that day included; never below 0.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "done": {
+            "description": "Of those, the ones finished by the cadence rule (an end status, or a stage marked done).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "days_left",
+          "committed",
+          "done"
+        ],
+        "type": "object"
+      },
       "SprintReport": {
         "additionalProperties": true,
         "description": "A sprint as a report: its record, what it holds, and how it burned down.",
@@ -6798,6 +7319,33 @@
         ],
         "type": "object"
       },
+      "StepFact": {
+        "description": "One stage of a release: done (with when and by whom, where recorded), current, or next.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`done`, `current` or `next`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "state"
+        ],
+        "type": "object"
+      },
       "TagResult": {
         "description": "The newest result recorded for a release's tag (FTR-026), read from the board only.",
         "properties": {
@@ -6937,6 +7485,36 @@
           "Completed"
         ],
         "type": "string"
+      },
+      "TestCounts": {
+        "description": "Tests by state (`planned`, `red`, `green`) and kind (`none` when no kind is named).",
+        "properties": {
+          "by_kind": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "by_state": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "object"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "type": "object"
       },
       "TestRef": {
         "additionalProperties": true,
@@ -8765,6 +9343,47 @@
           }
         },
         "summary": "The manual tests waiting for a person: each one not yet green, with its requirement and the check to make, live work first, then finished work"
+      }
+    },
+    "/api/projects/{project}/overview": {
+      "get": {
+        "operationId": "getProjectsOverview",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity"
       }
     },
     "/api/projects/{project}/position": {
