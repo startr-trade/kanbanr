@@ -27,7 +27,13 @@
 //   web::check_review_reasoned_actions_stay_in_the_row (R-11) — actionLabel never offers ADR Reject
 //     or a manual Passed or Failed; the delegated group offers Keep N and Undo N; the rendered ADR
 //     body has Reject with a reason box, an unprepared manual body its own Passed and Failed, and a
-//     delegated body its Undo beside the reason.
+//     delegated body its Undo beside the reason;
+// and the tests-only pill (DEF-111):
+//   web::check_review_tests_only_rows_show_the_pill (R-1) — a rendered Approve row whose pills hold
+//     "tests only" shows that pill beside its others, and a row without it does not;
+//   web::check_review_tests_only_rows_select_together (R-2) — isTestsOnly picks the rows;
+//     selectTestsOnly ticks exactly the selectable ones and replaces an earlier selection; the
+//     rendered Approve group shows "Select tests only (N)" only with such rows and never read-only.
 //
 // Usage: npm run check:review-groups
 import {
@@ -40,10 +46,12 @@ import {
   defaultGroup,
   emptySelection,
   groupTabs,
+  isTestsOnly,
   preselected,
   reviewTabs,
   select,
   selectAll,
+  selectTestsOnly,
 } from "../src/reviewGroups.ts";
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
 import { readFileSync, readdirSync } from "node:fs";
@@ -304,6 +312,47 @@ try {
     }
     eq(problems, "an approve row says it is checking diagrams", checking?.querySelector(".ui-row-reason")?.textContent, "checking diagrams…");
     ok = report("web::check_review_undecidable_row_says_why_and_cannot_be_selected", problems) && ok;
+  }
+
+  // DEF-111 R-1: an Approve row whose approval lapsed through a test-only edit shows the pill.
+  {
+    const problems = [];
+    const lapsed = (key, extra = []) => row(key, { what: "approval lapsed", pills: ["approval lapsed", ...extra] });
+    const approve = slice("approve", "Approve", "Approve", [lapsed("FTR-1", ["tests only"]), lapsed("FTR-2")]);
+    const { document, html } = await renderPanel(approve);
+    const pills = (key) => [...(document.getElementById(key)?.querySelectorAll(".ui-row-head .ui-pill") ?? [])].map((e) => e.textContent);
+    eq(problems, "the tests-only row shows the pill after its others", pills("FTR-1"), ["approval lapsed", "tests only"]);
+    eq(problems, "a row without it does not", pills("FTR-2"), ["approval lapsed"]);
+    if (!html.includes("tests only")) problems.push("the page does not show the pill text");
+    ok = report("web::check_review_tests_only_rows_show_the_pill", problems) && ok;
+  }
+
+  // DEF-111 R-2: the group selects the tests-only rows together.
+  {
+    const problems = [];
+    const t = (key, extra = {}) => row(key, { pills: ["approval lapsed", "tests only"], ...extra });
+    const rows = [
+      t("FTR-1"),
+      t("FTR-2"),
+      row("FTR-3", { pills: ["approval lapsed"] }),
+      t("FTR-4", { blocked: "Claude settles 1 text first: ask Claude to check them." }),
+      t("FTR-5"),
+    ];
+    eq(problems, "isTestsOnly picks the rows", rows.map(isTestsOnly), [true, true, false, true, true]);
+    eq(problems, "a pill that only contains the text is not the pill", isTestsOnly(row("X", { pills: ["not tests only"] })), false);
+    const earlier = select(emptySelection("approve"), "approve", "FTR-3", true, rows);
+    const got = selectTestsOnly(earlier, rows, new Set(["FTR-5"]));
+    eq(problems, "exactly the tests-only rows that can be selected; the earlier selection is replaced", [got.group, keys(got)], ["approve", ["FTR-1", "FTR-2"]]);
+    eq(problems, "with none, the selection is empty", keys(selectTestsOnly(earlier, [rows[2]])), []);
+
+    const label = (doc) => [...doc.querySelectorAll(".review-group-tools button")].map((b) => b.textContent).filter((x) => /Select tests only/.test(x));
+    const approve = slice("approve", "Approve", "Approve", rows);
+    const shown = await renderPanel(approve);
+    eq(problems, "the Approve group with such rows offers the button", label(shown.document), ["Select tests only (0)"]);
+    eq(problems, "a read-only monitor does not", label((await renderPanel(approve, { writable: false })).document), []);
+    eq(problems, "an Approve group with no such rows does not", label((await renderPanel(slice("approve", "Approve", "Approve", [rows[2]]))).document), []);
+    eq(problems, "another group does not", label((await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", rows))).document), []);
+    ok = report("web::check_review_tests_only_rows_select_together", problems) && ok;
   }
 
   // R-9: single-line rows with pills; the group's action bar is sticky at its top.
