@@ -15720,6 +15720,12 @@ fn promote_release(
     } else if main_moved.is_some() {
         println!("  nothing was pushed: push main when you are ready");
     }
+    // What the tag saved of katalogr's views of the docs, or why it saved none (FTR-016).
+    if let Ok(snapshot) = serde_json::from_value::<kanbanr_core::katalogr::snapshot::ReleaseSnapshot>(
+        v["snapshot"].clone(),
+    ) {
+        println!("  {}", snapshot.sentence());
+    }
     if let Some(next) = v["next"].as_str() {
         println!("  {next}");
     }

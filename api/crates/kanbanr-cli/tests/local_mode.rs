@@ -19374,3 +19374,185 @@ fn todo_from_design_mirrors_the_design_and_changes_no_state() {
     assert!(out.contains("nothing to change"), "{out}");
     assert_eq!(commits(), n.to_string());
 }
+
+/// `run_in` with more of the environment: what a test says about where katalogr is (FTR-016).
+fn run_in_with(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    args: &[&str],
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Output {
+    let mut c = Command::new(cli());
+    c.args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env_remove("CLAUDECODE")
+        .stdin(std::process::Stdio::null());
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    c.output().expect("run kanbanr CLI")
+}
+
+/// FTR-016 R-7: with a `katalogr` on the machine, the cut that tags saves its snapshot in the
+/// same board commit as the release record, and the promote output names the folder and the repos
+/// to check before the board is pushed.
+#[cfg(unix)]
+#[test]
+fn a_cut_with_a_stub_katalogr_saves_the_snapshot_and_names_its_repos() {
+    use std::os::unix::fs::PermissionsExt;
+    let (base, work) = release_scratch("katalogr-stub");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let stub_dir = base.join("stub");
+    std::fs::create_dir_all(&stub_dir).unwrap();
+    let bin = stub_dir.join("katalogr");
+    std::fs::write(
+        &bin,
+        r##"#!/bin/sh
+out=''
+at=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) out="$2"; shift;;
+    --at) at="$2"; shift;;
+  esac
+  shift
+done
+mkdir -p "$out"
+cat > "$out/index.json" <<EOF
+{"schema":1,"positions":[{"repo":"shop","commit":"$at","dirty":null}],"repos":["shop","lib"],"blocks":[{"doc":"views.md","line":3,"source":"structure","view_id":"v1-aaaa"},{"doc":"views.md","line":9,"source":"cycles","view_id":"v1-bbbb"}]}
+EOF
+echo "# structure" > "$out/v1-aaaa.md"
+echo "# cycles" > "$out/v1-bbbb.md"
+"##,
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env: [(&str, &std::ffi::OsStr); 1] = [("KANBANR_KATALOGR_BIN", bin.as_os_str())];
+    let board = std::path::PathBuf::from(
+        String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout)
+            .unwrap()
+            .trim(),
+    );
+    assert!(
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {}",
+        board.display()
+    );
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0"],
+        &env,
+    ));
+    commit_on(&base, &work, "release/v1.0.0", "fixed on the release\n");
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+        &env,
+    ));
+    let o = ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+        &env,
+    ));
+    let said = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(
+        said.contains(
+            "system views: 2 block(s), 2 view(s) saved in docs/releases/v1.0.0/views — repos named: shop, lib (check before pushing the board)"
+        ),
+        "{said}"
+    );
+    let line = said.find("system views:").unwrap();
+    let next = said.find("next:");
+    assert!(next.is_none_or(|n| line < n), "before `next:`: {said}");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["snapshot"]["state"], "saved", "{r}");
+    assert_eq!(r["snapshot"]["at"], r["tag_commit"], "{r}");
+    assert_eq!(r["snapshot"]["repos"], serde_json::json!(["shop", "lib"]));
+    // One board commit holds the record, the snapshot's files and the release notes.
+    let changed = Command::new("git")
+        .args(["show", "--name-only", "--format=", "HEAD"])
+        .current_dir(&board)
+        .output()
+        .unwrap();
+    let changed = String::from_utf8_lossy(&changed.stdout).to_string();
+    for needle in [
+        "releases.yaml",
+        "docs/releases/v1.0.0/views/index.json",
+        "docs/releases/v1.0.0/views/v1-aaaa.md",
+        "docs/releases/v1.0.0.md",
+    ] {
+        assert!(changed.contains(needle), "{needle} not in {changed}");
+    }
+    let notes = ok(run_in(&base, &work, &["doc", "show", "releases/v1.0.0.md"]));
+    assert!(
+        String::from_utf8_lossy(&notes.stdout).contains("## System views"),
+        "{}",
+        String::from_utf8_lossy(&notes.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-016 R-8: with no katalogr the cut still ships; the CLI says why there are no system views
+/// and exits 0, and the plan warned of it beforehand.
+#[test]
+fn a_cut_without_katalogr_ships_with_a_warning() {
+    let (base, work) = release_scratch("katalogr-none");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let none = std::ffi::OsString::from("kanbanr-test-no-such-katalogr");
+    let env: [(&str, &std::ffi::OsStr); 1] = [("KANBANR_KATALOGR_BIN", none.as_os_str())];
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0"],
+        &env,
+    ));
+    commit_on(&base, &work, "release/v1.0.0", "fixed on the release\n");
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+        &env,
+    ));
+    let plan = ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production", "--plan"],
+        &env,
+    ));
+    let plan = String::from_utf8_lossy(&plan.stdout).to_string();
+    assert!(
+        plan.contains("katalogr is not installed: no system views are saved"),
+        "{plan}"
+    );
+    let o = ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+        &env,
+    ));
+    let said = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(
+        said.contains("no system views saved: katalogr is not installed"),
+        "{said}"
+    );
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "shipped");
+    assert_eq!(r["snapshot"]["state"], "skipped", "{r}");
+    let _ = std::fs::remove_dir_all(&base);
+}

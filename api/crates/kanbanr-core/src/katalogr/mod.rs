@@ -9,6 +9,7 @@ pub mod docviews;
 #[doc(hidden)]
 pub mod fake;
 pub mod query;
+pub mod snapshot;
 
 use serde::Serialize;
 
