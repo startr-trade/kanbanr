@@ -1433,6 +1433,39 @@ pub fn still_waiting(
     }
 }
 
+/// The warning for preparing `gate` when no stage asks for it (DEF-095), naming each stage with
+/// what it requires, e.g. "no release stage asks for gate local (candidate: nothing; main:
+/// items_finished; production: main_at_release, pushed): it is recorded, and shows under
+/// Prepared, not required on the Releases page until the person confirms or rejects it". None
+/// when a stage asks, or the project does not work in releases.
+pub fn unrequired_gate_warning(project: &crate::store::Project, gate: &str) -> Option<String> {
+    let cadence = &project.config.cadence;
+    if !cadence.releases || !cadence.stages_asking_gate(gate).is_empty() {
+        return None;
+    }
+    let stages = cadence
+        .effective_release_gates()
+        .into_iter()
+        .map(|(stage, g)| {
+            let requires = if g.requires.is_empty() {
+                "nothing".to_string()
+            } else {
+                g.requires
+                    .iter()
+                    .map(|c| c.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("{stage}: {requires}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "no release stage asks for gate {gate} ({stages}): it is recorded, and shows under \
+         Prepared, not required on the Releases page until the person confirms or rejects it"
+    ))
+}
+
 /// A release's code branch: the one it was given, else `release/<V>`.
 fn branch_of(release: &crate::releases::Release) -> String {
     if release.branch.is_empty() {
@@ -3684,5 +3717,57 @@ mod tests {
         let v = view(&every(&store, None, None), &promo);
         assert_eq!(v.release, "v1");
         assert!(v.required_by.is_empty());
+    }
+
+    /// DEF-095 R-1, R-4: preparing a gate result for a gate no release stage asks for is recorded
+    /// and answered with a warning naming each stage and what it requires; a gate a stage asks for
+    /// gets no warning.
+    #[test]
+    fn preparing_a_gate_no_stage_asks_for_warns_and_names_the_stages() {
+        let (store, dir, _repo, _base, tip) = release_board("warns");
+        crate::git::ensure_repo_as(&dir, Some(("Ada L", "ada@example.com")));
+        let post = |gate: &str| {
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared",
+                serde_json::json!({
+                    "kind": "gate-result",
+                    "subject": {"gate": gate, "commit": tip},
+                    "fields": {"passed": true},
+                    "sources": [{"label": "make ci on the release tip"}],
+                    "origin": "conversation",
+                }),
+                crate::origin::Origin::Conversation,
+            )
+            .unwrap()
+        };
+        let out = post("local");
+        let warning = out["warning"].as_str().unwrap_or_default();
+        assert!(
+            warning.starts_with("no release stage asks for gate local ("),
+            "{out:#}"
+        );
+        for stage in [
+            "candidate: nothing",
+            "main: items_finished",
+            "production: main_at_release, pushed, gate_passed",
+            "Prepared, not required",
+        ] {
+            assert!(warning.contains(stage), "{stage}: {warning}");
+        }
+        // The record is written all the same (R-4).
+        let id = out["id"].as_str().unwrap();
+        assert!(
+            store
+                .project_dir("demo")
+                .join(format!("prepared/{id}.yaml"))
+                .is_file()
+        );
+        // A gate a stage asks for: no warning.
+        let out = post("ci");
+        assert!(out.get("warning").is_none(), "{out:#}");
+        assert_ne!(out["id"].as_str().unwrap(), id);
     }
 }
