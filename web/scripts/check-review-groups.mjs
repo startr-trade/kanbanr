@@ -28,6 +28,10 @@
 //     or a manual Passed or Failed; the delegated group offers Keep N and Undo N; the rendered ADR
 //     body has Reject with a reason box, an unprepared manual body its own Passed and Failed, and a
 //     delegated body its Undo beside the reason;
+// and the state said once (DEF-112):
+//   web::check_review_a_row_names_its_state_once (R-1, R-2) — rowWhat is empty when a pill equals
+//     the row's `what` (exact match only); a rendered lapsed or added Approve row names its state
+//     once, as the pill, a never-approved row keeps its text, and every row's pills are as served;
 // and the tests-only pill (DEF-111):
 //   web::check_review_tests_only_rows_show_the_pill (R-1) — a rendered Approve row whose pills hold
 //     "tests only" shows that pill beside its others, and a row without it does not;
@@ -60,6 +64,9 @@ import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
 import { readFileSync, readdirSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { closeRender, load, render } from "./lib/render.mjs";
+
+// A .tsx module is loaded through Vite, as render does; Node cannot import it directly.
+const { rowWhat } = await load("src/pages/review/ReviewRow.tsx");
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -315,6 +322,36 @@ try {
     }
     eq(problems, "an approve row says it is checking diagrams", checking?.querySelector(".ui-row-reason")?.textContent, "checking diagrams…");
     ok = report("web::check_review_undecidable_row_says_why_and_cannot_be_selected", problems) && ok;
+  }
+
+  // DEF-112 R-1, R-2: a row's state is said once, as the pill; the served row is unchanged.
+  {
+    const problems = [];
+    const r = (what, pills) => ({ what, pills });
+    eq(problems, "a lapsed row's text is left out", rowWhat(r("approval lapsed", ["approval lapsed"])), "");
+    eq(problems, "a changed spec's text is left out", rowWhat(r("spec changed since sign-off", ["spec changed since sign-off", "prepared"])), "");
+    eq(problems, "a different pill keeps the text", rowWhat(r("waiting on docs-folded", ["approval lapsed"])), "waiting on docs-folded");
+    eq(problems, "only an exact match counts", rowWhat(r("never approved", ["not never approved"])), "never approved");
+    const rows = [
+      row("FTR-1", { what: "approval lapsed", pills: ["approval lapsed"] }),
+      row("FTR-2", { what: "added since approval", pills: ["added since approval"] }),
+      row("FTR-3", { what: "never approved", pills: [] }),
+    ];
+    const { document } = await renderPanel(slice("approve", "Approve", "Approve", rows));
+    const head = (key) => document.getElementById(key)?.querySelector(".ui-row-head");
+    const count = (text, hay) => hay.split(text).length - 1;
+    for (const [key, state] of [["FTR-1", "approval lapsed"], ["FTR-2", "added since approval"]]) {
+      const h = head(key);
+      if (!h) { problems.push(`${key}: no row head`); continue; }
+      eq(problems, `${key} names its state once`, count(state, h.textContent), 1);
+      eq(problems, `${key} has no what text`, h.querySelector(".review-row-what"), null);
+    }
+    eq(problems, "the never-approved row keeps its text", head("FTR-3")?.querySelector(".review-row-what")?.textContent, "never approved");
+    for (const x of rows) {
+      const got = [...(head(x.key)?.querySelectorAll(".ui-pill") ?? [])].map((e) => e.textContent);
+      eq(problems, `${x.key}'s pills are as served plus release and sprint`, got, [...x.pills, ...(x.release ? [x.release] : []), ...(x.sprint ? [x.sprint] : [])]);
+    }
+    ok = report("web::check_review_a_row_names_its_state_once", problems) && ok;
   }
 
   // DEF-111 R-1: an Approve row whose approval lapsed through a test-only edit shows the pill.
