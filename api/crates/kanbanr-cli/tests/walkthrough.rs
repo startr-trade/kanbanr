@@ -832,6 +832,43 @@ fn two_runs_prepare_one_batch() {
     let _ = std::fs::remove_dir_all(&w.root);
 }
 
+/// DEF-089 (lane 2 decision): a rerun leaves a walkthrough-kind result that already holds the
+/// same state at the same revision as it is, and says so; a run at another revision records it.
+#[cfg(unix)]
+#[test]
+fn a_rerun_skips_a_walkthrough_result_already_recorded_at_its_rev() {
+    const OTHER_SHA: &str = "fedcba9876543210fedcba9876543210fedcba98";
+    let w = world("rerun");
+    let rb = runbook_file(&w, "smoke", "");
+    let out = run_walkthrough(&w, &rb, "k1");
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    assert!(shown.contains("recorded walkthrough test: MT-W"), "{shown}");
+    assert_eq!(walkthrough_test(&w)["checked_rev"], FIXED_SHA);
+    // The same run's results again: the walkthrough-kind result is not written twice.
+    let out = prepare(&w, "b9", &["k1"]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    assert!(
+        shown.contains(&format!(
+            "R-1 walkthrough: the run pushed main to its own remote: already recorded at {FIXED_SHA}"
+        )),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("recorded walkthrough test: MT-W"),
+        "{shown}"
+    );
+    // Another build's run: recorded at its own revision.
+    let out = run_walkthrough_with(&w, &rb, "k2", &["--rev", OTHER_SHA]);
+    let shown = text(&out);
+    assert!(out.status.success(), "{shown}");
+    assert!(shown.contains("recorded walkthrough test: MT-W"), "{shown}");
+    assert!(!shown.contains("already recorded"), "{shown}");
+    assert_eq!(walkthrough_test(&w)["checked_rev"], OTHER_SHA);
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
 fn walk(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     fn go(dir: &Path, out: &mut Vec<String>) {
