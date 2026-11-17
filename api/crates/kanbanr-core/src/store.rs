@@ -551,7 +551,16 @@ impl Store {
             }
         }
         let entries = self.build_index_entries(id)?;
-        self.write_index(id, &entries)?;
+        // A board this process cannot write (a read-only mount) is served from the index built
+        // in memory: a read never fails on a write (ADR-0005, FTR-030).
+        if let Err(e) = self.write_index(id, &entries) {
+            crate::git::warn_once(
+                &format!("index-unwritable:{id}"),
+                &format!(
+                    "{id}/index.yaml could not be written ({e}); serving the index built in memory"
+                ),
+            );
+        }
         Ok(entries)
     }
 
@@ -4608,6 +4617,34 @@ mod tests {
         let after = std::fs::metadata(&path).unwrap().ino();
         assert_ne!(before, after, "the file was written in place");
         assert!(tmp_files(&dir).is_empty(), "{:?}", tmp_files(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-030 R-5: a board the monitor cannot write, with no `index.yaml`, still lists its
+    /// items: the index is built in memory and nothing is written (ADR-0005).
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_index_on_a_read_only_board_is_built_in_memory() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (store, dir) = atomic_board("ro-index");
+        // The board is this test's own, under the temp dir (L-41).
+        assert!(dir.starts_with(std::env::temp_dir()));
+        if std::fs::metadata(&dir).unwrap().uid() == 0 {
+            // Root writes through a read-only mode; the case cannot be made here.
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let index = store.index_path("demo");
+        let _ = std::fs::remove_file(&index);
+        let project = store.project_dir("demo");
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let got = store.load_index("demo");
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let entries = got.expect("a read-only board's index is served from memory");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].code, f.code);
+        assert!(!index.exists(), "nothing was written into the board");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
