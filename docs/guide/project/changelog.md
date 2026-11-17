@@ -13,6 +13,10 @@ All notable changes to kanbanr are documented here. The format follows
   worktrees, an opt-in mold linker, a content-keyed cache of the built monitor, checks chosen by
   what a change touches, a merge queue that integrates one checked batch at a time, and a bench that
   keeps before-and-after timings (FTR-062).
+- **A content catalog and the project's facts (FTR-005).** `kanbanr facts set` records what the
+  project is; `kanbanr catalog init` lists what it must document, by question and perspective, each
+  row with its source and drift protection, and a row that does not apply says why. The Catalog
+  page shows the list, gaps first.
 - A practice profile asks the stack and engineering questions once, at setup or at the first
   design that needs each; the answers form the project's engineering baseline, accepted by the
   person on the Baseline page, named by every design that touches an entry, and kept in step with

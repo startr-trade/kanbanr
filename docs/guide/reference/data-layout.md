@@ -27,6 +27,8 @@ sibling cannot be.
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
         ├── baseline.yaml               # the engineering baseline: packs followed, areas, entries, revisions (FTR-033)
         ├── packs/<name>.yaml           # the applied copy of each practice pack the project follows (FTR-033)
+        ├── facts.yaml                  # the project's facts: languages, runtimes, production, parts, data (FTR-005)
+        ├── catalog.yaml                # the content catalog: what the project must document, row by row (FTR-005)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)
         ├── scopes.yaml                 # agent scopes, oldest first, never trimmed (FEAT-214)
@@ -115,6 +117,44 @@ origin is a label for review, not proof of who was at the keyboard.
 **Side files, not new entities.** `charter.yaml`, `lessons.yaml` and `mirror.yaml` follow one
 pattern: absent means "none", empty removes the file, and none of them is part of `Project` — so
 `GET /projects/{p}` is unchanged by their presence and an older board loads without them.
+
+**The facts and the catalog** (FTR-005) are side files too, absent by default. Both carry
+`schema: 1` and keep keys they do not know. `facts.yaml` holds five lists, each trimmed,
+lower-cased, sorted and deduplicated on save, and `set_at`, stamped on save:
+
+```yaml
+schema: 1
+languages: [rust, typescript]          # vocabulary words, or other:<text>
+runtimes: [native, browser]
+production: [developer-machine]        # where the built thing runs
+parts: [cli, daemon, web-ui, library]
+data: [files]
+set_at: 2026-11-20T09:12:00Z
+```
+
+`catalog.yaml` holds the rows, and the starter version they were taken from:
+
+```yaml
+schema: 1
+starter: 1
+rows:
+  - id: context                 # ^[a-z0-9][a-z0-9-]*$, unique
+    title: System context
+    answers: [what, where]      # what | how | where | when | who | why
+    for: [sponsor, architect]   # sponsor | user | architect | builder | operator
+    level: system               # system | component | item
+    notation: mermaid
+    source:
+      kind: written             # written (path) | generated (generator) | enforced (test)
+      path: architecture/context.md   # a board doc, a folder ending "/", or repo:<path>
+    protection: [docs_updated, coverage:catalog]
+    when: {production: [server, container]}   # optional; absent = always applies
+    # applies: false            # an override, with why
+    # why: "a library has no deployment of its own"
+```
+
+What each row's state is (whether it applies, its source present, a stub or missing, its
+protections in force) and the gaps are derived on every read and never written to either file.
 
 **Everything else on an item is inline.** `definition`, `defect`, `split_from` and `history` live
 in the item's own yaml, because they then ride move/rename/index/flush for free and every consumer

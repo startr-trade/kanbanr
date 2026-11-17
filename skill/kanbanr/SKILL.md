@@ -45,15 +45,16 @@ project"** (or anything equivalent):
    only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
    `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
    its cadence (sprints, releases), whether the project has CI (only with releases on), the
-   commit identity (once, when git has none), and the charter (once). Each
+   commit identity (once, when git has none), the charter (once), the project's facts (once),
+   the engineering baseline and the catalog. Each
    usually has an obvious answer; recommend it as the first option, and let the user give it. Never
    write one of these into the plan as decided. **Ask them in order, each after the answer it
    depends on**: the process question only once the board is chosen (its options are that board's
    saved processes first), and the cadence question only once the process is chosen (it recommends
    the process's own setting). The name and description are not asked: read `suggested_name` and
    `suggested_description` from `kanbanr where --json` and ask only if they are null or unclear.
-   Collect three things: (a) board, process and cadence; (b) the identity, once; (c) the charter,
-   once.
+   Collect these: (a) board, process and cadence; (b) the identity, once; (c) the charter,
+   once; (d) the project's facts, once; (e) the engineering baseline; (f) the catalog.
 
    **a. Board**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
@@ -107,6 +108,13 @@ project"** (or anything equivalent):
    - Suggest a standing `G-0: the system stays operable and maintainable` for maintenance work,
      so chores link to something honest.
 
+   **d. Facts**: what the project is, which decides what it must document (FTR-005). Ask the five
+   facts questions **once**, together: its languages, runtimes, where it runs (`production`), its
+   parts and its data. Recommend `suggested_facts` from `kanbanr where --json` as the first option
+   of each, and offer the words `kanbanr facts vocabulary` lists (`languages`, `runtimes`,
+   `production`, `parts`, `data`; anything else is `other:<text>`). The plan runs
+   `kanbanr facts set --languages … --runtimes … --production … --parts … --data …`.
+
    **e. Engineering baseline**: the stack and engineering questions the project answers once
    (FTR-033).
    - In the project folder run `kanbanr profile ask --json`. It lists the setup areas the folder
@@ -123,6 +131,15 @@ project"** (or anything equivalent):
      packs and propose the draft (`kanbanr profile add <pack>` for each,
      `kanbanr baseline propose --answers <file>`). The person accepts it on the Baseline page after
      setup; say so.
+
+   **f. Catalog**: what the project must document, by question and perspective (FTR-005). Show the
+   rows of the starter catalog the facts make applicable (`kanbanr catalog init --print`, read
+   against the facts) and ask which to drop, each with the reason that goes in `--why`, or which
+   starter row to add. The plan runs `kanbanr catalog init`, then
+   `kanbanr catalog off <row> --why "…"` for each dropped row and `kanbanr catalog add <row>` for
+   each added one, and drafts a source doc for each applying written row from what the repository
+   shows. A stub is a listed gap, so the plan says which sources it could not draft. Later,
+   `kanbanr catalog on <row>` switches a dropped row back on when the user says it applies again.
 
    **Process, cadence and the rest**
    - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
@@ -215,8 +232,12 @@ project"** (or anything equivalent):
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
    kanbanr charter set --file <scratch>/charter.yaml
+   kanbanr facts set --languages … --runtimes … --production … --parts … --data …   # the facts answered once
    kanbanr profile add <pack>                      # each pack to follow: core, then each the user said yes to
    kanbanr baseline propose --answers <scratch>/answers.yaml   # the draft baseline; the user accepts it on the Baseline page
+   kanbanr catalog init                            # the starter catalog
+   kanbanr catalog off <row> --why "…"             # each row the user dropped; `catalog add <row>` for each added
+   kanbanr doc add <path> --file <scratch>/<doc>.md   # a drafted source doc for each applying written row
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n.claude/worktrees/\n' >> .gitignore
@@ -723,6 +744,8 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   heading, write each repository doc the change touches (guides, reference pages, `SECURITY.md`,
   `CHANGELOG.md`) as a path in backticks, one per bullet, and add a task for each document to
   build, naming its path. `docs-folded` is offered to the user only once those are built.
+- **Catalog rows**: name the rows of the project's catalog (`kanbanr catalog`) the change touches,
+  and put each one's written source doc in **Affects docs**.
 - **Two docs folders in the repository**: the product guide, which the published book is built
   from, is `docs/guide`; the system representation (component docs as built, views) is
   `docs/system`, which branches with the code and is not a chapter of the book.
@@ -1148,8 +1171,9 @@ policy says (`kanbanr remote push-policy`).
 
 Review the architecture as a whole: every component has a board doc that describes it as built,
 its front matter (`items`, `adrs`, `covers`) is current, and the views are updated. `kanbanr trace
-<MS> --zachman` reports a column nothing in scope answers. See "Architecture docs stay as built"
-below.
+<MS> --zachman` reports a column nothing in scope answers. The gaps `kanbanr catalog` lists, and
+each applying row whose source is missing or a stub, are part of it. See "Architecture docs stay as
+built" below.
 
 ## Code points back at the item that justifies it
 
@@ -1606,6 +1630,9 @@ kanbanr position [--json]         # the checkout's position: commit + hash of un
 kanbanr view docs [--at P] [--json]  # the docs drawn at a position; an ID only when exact
 kanbanr where [--json]            # which board folder this directory uses (+ suggestions with --json)
 kanbanr charter show | set --file charter.yaml     # the project's purpose, goals, non-goals
+kanbanr facts [show] [--json] | set --languages L --runtimes R --production P --parts P --data D | set --from-file F | vocabulary   # what the project is
+kanbanr catalog [show] [--json]   # what the project must document: the gaps, then each row's source and protections
+kanbanr catalog init [--force] [--print] | set --from-file F | add <row> | off <row> --why "…" | on <row>   # the catalog's rows
 kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that kind
 kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the definition
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building

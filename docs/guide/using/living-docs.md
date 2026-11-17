@@ -6,17 +6,111 @@ A design written into an item's spec explains one change. Six months later, nobo
 hundred specs to learn how the system works. They read the architecture docs, and those are only
 worth reading if every change that touched them updated them. kanbanr makes that a checked step.
 
+### What a project documents: the content catalog
+
+Notations are means. Before choosing a diagram, a project needs a list of what it must document,
+and that list depends on what the project is: a library has no deployment of its own, a service
+needs its configuration and observability written down. kanbanr keeps the list as the project's
+**content catalog**, and what the project is as **the project's facts**.
+
+**The facts** (`projects/<id>/facts.yaml`) answer five questions, each from a fixed vocabulary
+(`kanbanr facts vocabulary`) or as `other:<text>`:
+
+| Key | What it says | Words |
+|---|---|---|
+| `languages` | what it is written in | rust, go, python, typescript, javascript, java, kotlin, csharp, cpp, c, ruby, php, swift, shell, sql |
+| `runtimes` | what it runs on | native, jvm, node, browser, python, dotnet, wasm, container |
+| `production` | where the built thing runs | developer-machine, server, container, kubernetes, serverless, browser, mobile, embedded, library |
+| `parts` | what it is made of | cli, api, web-ui, desktop-ui, mobile-app, library, worker, daemon |
+| `data` | what it keeps | none, files, sql, nosql, object-store, queue, cache |
+
+Claude asks them once at setup, recommending what the folder's manifests suggest
+(`suggested_facts` in `kanbanr where --json`), and records them with `kanbanr facts set`.
+
+**The catalog** (`projects/<id>/catalog.yaml`) is a list of rows. Each row says:
+
+- what the content **answers**: one or more of the six questions what, how, where, when, who and
+  why (the Zachman columns);
+- whom it is **for**: one or more of five perspectives, each standing in for a Zachman row:
+
+  | Perspective | Zachman row | Reads the system as |
+  |---|---|---|
+  | `sponsor` | Executive (scope) | why it exists, what it is for, its boundary |
+  | `user` | Business management | what it does for whom, in which processes |
+  | `architect` | Architect (system logic) | its structure: context, parts, data, interfaces, decisions |
+  | `builder` | Engineer and Technician | its code: modules, dependencies, tests |
+  | `operator` | Enterprise (operations) | where and how it runs: deployment, configuration, releases |
+
+- its **level** (`system`, `component` or `item`) and its **notation** (prose, table, mermaid,
+  bpmn, openapi and so on);
+- its **source**, one of three kinds: **written** (a board doc, a board folder ending `/`, or a
+  repository doc `repo:<path>`), **generated** (a view kanbanr derives, such as `kanbanr:charter`
+  or `kanbanr:zachman`, or one katalogr serves, `katalogr:<op>`), or **enforced** (a test or rule
+  that keeps it true);
+- its **protection** against drift: `docs_updated`, `coverage:<rule>`, `drift`, `spec_sections`,
+  `design-review`, `view-id`, `test:<name>`, or `none` when drift is accepted;
+- when it **applies**: a `when` clause over the facts (`when: {production: [server, container]}`),
+  absent when it always applies.
+
+`kanbanr catalog init` writes the **starter catalog** kanbanr carries; every question has at least
+one row that always applies:
+
+| Row | Answers | For | Source | Applies when |
+|---|---|---|---|---|
+| `purpose` | why | sponsor, user | generated `kanbanr:charter` | always |
+| `goals` | why, when | sponsor | generated `kanbanr:trace` | always |
+| `roles` | who | sponsor, user | generated `kanbanr:charter` | always |
+| `context` | what, where | sponsor, architect | written `architecture/context.md` | always |
+| `behaviour` | how | user | written `architecture/behaviour.md` | always |
+| `requirements` | what, how | user | generated `kanbanr:requirements` | always |
+| `components` | what, how | architect | written `architecture/components.md` | always |
+| `component-docs` | what, how, where | builder | written folder `architecture/components/` | always |
+| `data-model` | what | architect, builder | written `architecture/data.md` | the data is not only `none` |
+| `interfaces` | how, where | architect, builder | written `architecture/interfaces.md` | the parts have an api or a library |
+| `code-structure` | what, how | builder | generated `katalogr:structure` | always |
+| `decisions` | why | architect, builder | generated `kanbanr:adr-index` | always |
+| `deployment` | where, when | operator | written `architecture/deployment.md` | it runs on a server, container, kubernetes, serverless, mobile or embedded |
+| `configuration` | how, where | operator | written `architecture/configuration.md` | it is not only a library |
+| `observability` | when, how | operator | written `architecture/observability.md` | it runs on a server, container, kubernetes or serverless |
+| `security` | who, where | architect, operator | written `architecture/security.md` | always |
+| `timeline` | when | sponsor | generated `kanbanr:gantt` | always |
+| `releases` | when | operator | generated `kanbanr:releases` | releases are on |
+| `tests` | how | builder | generated `kanbanr:evidence` | always |
+| `zachman-coverage` | all six | architect | generated `kanbanr:zachman` | always |
+| `item-design` | how, where | builder | written: every item's spec, `## Design` | always |
+
+The project can add rows, change notations and sources, and **switch a row off with a reason**:
+`kanbanr catalog off deployment --why "a library has no deployment of its own"`. A row is never
+silently dropped: it stays in the list, greyed, with its reason. `kanbanr catalog on <row>` lets
+its `when` clause decide again, and `kanbanr catalog add <row>` copies a row the starter gained
+since.
+
+`kanbanr catalog` derives each row's state on every read and stores none of it: whether it
+applies, whether its source is present, a stub or missing, which protections are in force, and
+the **gaps**, the question-and-perspective pairs no applying row answers. The Catalog page in the
+monitor shows the same, gaps first. `kanbanr doctor` warns when the project has no facts, and for
+each applying row whose source is missing. A project with neither file sees nothing of this
+beyond doctor's one hint.
+
 ### The architecture repository
 
-Keep it in the board's docs (`kanbanr doc add …`), beside the decisions:
+Keep it in the board's docs (`kanbanr doc add …`), beside the decisions. The folders below are the
+starter catalog's written rows; a project's own catalog decides which it keeps:
 
 ```text
 architecture/
-  overview.md          # the views: context, containers, how data flows
+  context.md           # the system in its surroundings
+  behaviour.md         # what it does, in which processes
+  components.md        # its parts and how they connect
   components/
     store.md           # one doc per component, describing it as built
     monitor.md
-  zachman.md           # which of the six columns the docs cover
+  data.md              # the data model, when it keeps data
+  interfaces.md        # its APIs, when it has one
+  deployment.md        # where it runs, when it is deployed
+  configuration.md
+  observability.md
+  security.md
 decisions/             # ADRs (kanbanr adr new …)
 ```
 

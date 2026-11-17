@@ -2086,4 +2086,54 @@ mod tests {
         assert!(views_changed(&repo, &strings(&["docs/system/context.md"]), &[]).is_empty());
         assert!(views_changed(&c, &[], &[]).is_empty());
     }
+
+    /// R-11: the skill's setup interview and the living-docs guide name the facts questions and
+    /// every catalog command, so Claude asks the facts once and the person can read what they do.
+    #[test]
+    fn the_skill_and_the_guide_name_the_facts_questions_and_the_catalog_commands() {
+        let skill = include_str!("../../../../skill/kanbanr/SKILL.md");
+        let guide = include_str!("../../../../docs/guide/using/living-docs.md");
+        for group in ["**d. Facts**", "**f. Catalog**"] {
+            assert!(skill.contains(group), "the skill's setup has no {group}");
+        }
+        let facts = skill.find("**d. Facts**").unwrap();
+        let baseline = skill.find("**e. Engineering baseline**").expect("group e");
+        let catalog = skill.find("**f. Catalog**").unwrap();
+        assert!(
+            facts < baseline && baseline < catalog,
+            "setup order is facts, baseline, catalog"
+        );
+        assert!(
+            guide.contains("### What a project documents: the content catalog"),
+            "the guide has no catalog section"
+        );
+        for command in [
+            "kanbanr facts set",
+            "kanbanr facts vocabulary",
+            "kanbanr catalog init",
+            "kanbanr catalog add",
+            "kanbanr catalog off",
+            "kanbanr catalog on",
+        ] {
+            assert!(
+                skill.contains(command),
+                "the skill does not name `{command}`"
+            );
+            assert!(
+                guide.contains(command),
+                "the guide does not name `{command}`"
+            );
+        }
+        for v in crate::facts::VOCABULARY.iter() {
+            let key = format!("`{}`", v.key);
+            assert!(
+                skill.contains(&key),
+                "the skill does not name the facts key {key}"
+            );
+            assert!(
+                guide.contains(&key),
+                "the guide does not name the facts key {key}"
+            );
+        }
+    }
 }
