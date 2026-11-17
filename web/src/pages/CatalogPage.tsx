@@ -13,7 +13,7 @@ import { chips, factsLine, gapSentence, groupRows, hasCatalog, hasFacts, isOff, 
 import type { CatalogStatus, FactsOrEmpty, RowStatus } from "../types";
 
 /** The watcher's slices the catalog's status is derived from: the catalog, the facts and the docs. */
-const CATALOG_TAGS = ["catalog", "facts", "docs"] as const;
+const CATALOG_TAGS = ["catalog", "facts", "docs", "config"] as const;
 const FACTS_TAGS = ["facts"] as const;
 
 export default function CatalogPage() {
