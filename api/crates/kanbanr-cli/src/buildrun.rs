@@ -12,6 +12,11 @@
 //! own sccache server, whose base directories are the main checkout and every worktree, so a
 //! compile in one worktree serves the others. Before a cargo command the server is (re)started
 //! when its base directories are out of date, but only when no other build holds a slot.
+//!
+//! The built web bundle is kept on the machine under its sources' key
+//! ([`buildplan::web_key`]): `kanbanr build web` builds it once for a set of sources, and every
+//! build whose worktree's sources have a bundle gets `KANBANR_UI_DIST` pointing at it, so the
+//! server crate embeds it without an `npm run build` in each worktree.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -43,6 +48,8 @@ const POLL: Duration = Duration::from_millis(250);
 const SLOTS: &str = "slots";
 const QUEUE: &str = "queue";
 const TICKET: &str = ".ticket";
+/// The web folder, at the top of a checkout.
+const WEB: &str = "web";
 
 /// Everything a run needs, resolved once before it waits.
 #[derive(Debug, Clone)]
@@ -66,6 +73,11 @@ struct Plan {
     sccache: Option<PathBuf>,
     /// Whether `mold` is on `PATH`.
     mold_found: bool,
+    /// The worktree's web folder, when it has one and the web cache is on: a bundle kept for its
+    /// sources goes to the build as `KANBANR_UI_DIST`.
+    web_dir: Option<PathBuf>,
+    /// `node --version` (`none` without Node), part of the web bundle's key.
+    node_version: String,
 }
 
 /// The environment a command runs with: name, value.
@@ -113,6 +125,15 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
     };
     let repo_dir = git_common_dir(repo).map(|c| buildplan::repo_dir(&c));
     let path = std::env::var_os("PATH").unwrap_or_default();
+    let web_dir = facts
+        .as_ref()
+        .map(|f| f.root.join(WEB))
+        .filter(|w| effective.web_cache && w.join("package.json").is_file());
+    let node_version = if web_dir.is_some() {
+        node_version()
+    } else {
+        String::new()
+    };
     Ok(Plan {
         machine: buildplan::machine_dir(),
         repo_dir,
@@ -133,6 +154,8 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
         main_root,
         sccache: find_tool("sccache", &path),
         mold_found: find_tool("mold", &path).is_some(),
+        web_dir,
+        node_version,
     })
 }
 
@@ -231,13 +254,14 @@ fn run_planned(
     let slot = wait_for_slot(plan, &req.cmd)?;
     let queued_ms = millis(asked.elapsed());
     let mem_available_mib = plan.machine_waits.then(mem_available_mib).flatten();
+    let ui_dist = cached_bundle(plan);
     let env = buildplan::build_env(
         &plan.effective,
         plan.sccache.is_some(),
         plan.mold_found,
         cfg!(target_os = "linux"),
         &cache_dir(plan),
-        None,
+        ui_dist.as_deref(),
     );
     let mut notes = env.notes.clone();
     if is_cargo(&req.cmd)
@@ -493,6 +517,135 @@ pub fn cache_lines(c: &CacheView) -> Vec<String> {
     ));
     lines.extend(c.base_dirs.iter().map(|d| format!("    {d}")));
     lines
+}
+
+// ---------------------------------------------------------------------------------------------
+// The web bundle cache
+// ---------------------------------------------------------------------------------------------
+
+/// `node --version`, trimmed; `none` when Node cannot be run.
+fn node_version() -> String {
+    std::process::Command::new("node")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+/// The bundle kept on this machine for the worktree's current web sources, if there is one.
+fn cached_bundle(plan: &Plan) -> Option<PathBuf> {
+    let web = plan.web_dir.as_deref()?;
+    let key = buildplan::web_key(web, &plan.node_version).ok()?;
+    let dist = buildplan::web_bundle_dir(&plan.machine, &key);
+    dist.is_dir().then_some(dist)
+}
+
+/// Copy the folder `from` to `to`, which must not exist yet, files and folders alike.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let target = to.join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path(), &target)?;
+        } else {
+            std::fs::copy(e.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Does `npm ci` need to run in `web`: no `node_modules/.package-lock.json`, or one older than
+/// `package-lock.json`?
+fn needs_install(web: &Path) -> bool {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    match (
+        modified(&web.join("node_modules").join(".package-lock.json")),
+        modified(&web.join("package-lock.json")),
+    ) {
+        (None, _) => true,
+        (Some(installed), Some(lock)) => installed < lock,
+        (Some(_), None) => false,
+    }
+}
+
+/// The built web bundle for the worktree at `repo`: the one kept on this machine for its sources'
+/// key, else built (`npm ci` when the installed packages are missing or older than the lockfile,
+/// then `npm run build`, each through a build slot) and kept under that key. `force` builds
+/// again even when one is kept. With the web cache off it is built and left in `web/dist`.
+/// Returns the bundle's folder.
+pub fn web(store: &Store, project: &str, repo: &Path, force: bool) -> anyhow::Result<PathBuf> {
+    let facts = coderepo::worktree_facts(repo).ok_or_else(|| {
+        anyhow::anyhow!("not in a git repository: the web bundle is a checkout's")
+    })?;
+    let web = facts.root.join(WEB);
+    if !web.join("package.json").is_file() {
+        anyhow::bail!(
+            "no web/package.json in {}: nothing to build",
+            facts.root.display()
+        );
+    }
+    let mut plan = plan(store, project, repo, &RunRequest::default())?;
+    // The npm runs themselves need no bundle.
+    let cache = plan.web_dir.take().is_some();
+    let node = node_version();
+    let key = buildplan::web_key(&web, &node)?;
+    let kept = buildplan::web_bundle_dir(&plan.machine, &key);
+    if cache && !force && kept.is_dir() {
+        return Ok(kept);
+    }
+    let mut steps: Vec<Vec<String>> = Vec::new();
+    if needs_install(&web) {
+        steps.push(vec!["npm".into(), "ci".into()]);
+    }
+    steps.push(vec!["npm".into(), "run".into(), "build".into()]);
+    for cmd in steps {
+        let req = RunRequest {
+            cmd: cmd.clone(),
+            task: None,
+            kind: "build".into(),
+            tier: None,
+        };
+        let (code, _) = run_planned(&plan, &req, &|c, env| spawn_in(&web, c, env))?;
+        if code != 0 {
+            anyhow::bail!(
+                "`{}` failed in {} (exit {code})",
+                cmd.join(" "),
+                web.display()
+            );
+        }
+    }
+    let dist = web.join("dist");
+    if !dist.is_dir() {
+        anyhow::bail!("`npm run build` left no {}", dist.display());
+    }
+    if !cache {
+        return Ok(dist);
+    }
+    // Copied under a name of this process's own, then renamed into place in one step, so a
+    // build reading the bundle never sees half of it.
+    let parent = plan.machine.join(WEB);
+    std::fs::create_dir_all(&parent)?;
+    let tmp = parent.join(format!("{key}.tmp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    copy_dir(&dist, &tmp.join("dist"))?;
+    let at = parent.join(&key);
+    if force && at.is_dir() {
+        let _ = std::fs::remove_dir_all(&at);
+    }
+    if std::fs::rename(&tmp, &at).is_err() {
+        // Another build kept the same sources' bundle first: its copy stays.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if !kept.is_dir() {
+            anyhow::bail!("the web bundle could not be kept in {}", at.display());
+        }
+    }
+    Ok(kept)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1195,6 +1348,8 @@ mod tests {
             // No compiler cache unless a test brings its own.
             sccache: None,
             mold_found: false,
+            web_dir: None,
+            node_version: String::new(),
         }
     }
 
@@ -1332,25 +1487,48 @@ mod tests {
         let (code, _) = run_planned(&plan, &req(&["git", "no-such-subcommand"]), &spawn).unwrap();
         assert_ne!(code, 0, "the child's failure is the run's status");
 
-        // One build holds the only slot for 300 ms; the second waits for it.
+        // One build holds the only slot until the second is seen waiting for it, and 50 ms
+        // more, so the second has waited however the threads are scheduled.
+        let release = Mutex::new(false);
         let waited = std::thread::scope(|s| {
             let held = s.spawn(|| {
                 run_planned(&plan, &req(&["hold"]), &|_, _| {
-                    std::thread::sleep(Duration::from_millis(300));
+                    while !*release.lock().unwrap() {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                     Ok(0)
                 })
                 .unwrap()
             });
+            // Frees the holder however this closure ends, so a failed assertion fails the test
+            // rather than hanging it.
+            let release_on_exit = Release(&release);
+            // The holder has its slot once its own ticket is gone and the slot is busy.
             let t0 = Instant::now();
-            while free_slots(&plan.machine, 1).map(|f| f.len()).unwrap_or(1) == 1 {
-                assert!(t0.elapsed() < Duration::from_secs(10));
+            while !live_tickets(&plan.machine).is_empty()
+                || free_slots(&plan.machine, 1).map(|f| f.len()).unwrap_or(1) == 1
+            {
+                assert!(
+                    t0.elapsed() < Duration::from_secs(10),
+                    "the holder never ran"
+                );
                 std::thread::sleep(Duration::from_millis(5));
             }
-            let (_, row) = run_planned(&plan, &req(&["after"]), &|_, _| Ok(3)).unwrap();
+            let after = s.spawn(|| run_planned(&plan, &req(&["after"]), &|_, _| Ok(3)).unwrap());
+            let t0 = Instant::now();
+            while live_tickets(&plan.machine).is_empty() {
+                assert!(
+                    t0.elapsed() < Duration::from_secs(10),
+                    "the second never asked"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            drop(release_on_exit);
             held.join().unwrap();
-            row
+            after.join().unwrap().1
         });
-        assert!(waited.queued_ms > 0, "{waited:?}");
+        assert!(waited.queued_ms >= 50, "{waited:?}");
         assert_eq!(waited.exit, 3);
         assert_eq!(waited.slot, 0);
 
@@ -1565,6 +1743,84 @@ mod tests {
             .collect();
         let median = percentile(&mut took, 50);
         assert!(median < 200, "a free slot added {median} ms: {took:?}");
+
+        // With the web cache on, the bundle's key over 200 web sources is on the path too: under
+        // 50 ms itself, and the whole still under 200 ms.
+        let web = dir.join("web");
+        for i in 0..200 {
+            let f = web
+                .join("src")
+                .join(format!("m{}", i % 10))
+                .join(format!("f{i}.tsx"));
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(&f, format!("export const v{i} = {};\n", "x".repeat(2000))).unwrap();
+        }
+        std::fs::write(web.join("package.json"), "{}").unwrap();
+        let mut with_web = plan.clone();
+        with_web.web_dir = Some(web.clone());
+        with_web.node_version = "v22.11.0".into();
+        let mut keyed: Vec<u64> = (0..5)
+            .map(|_| {
+                let t0 = Instant::now();
+                buildplan::web_key(&web, "v22.11.0").unwrap();
+                millis(t0.elapsed())
+            })
+            .collect();
+        let key_median = percentile(&mut keyed, 50);
+        assert!(
+            key_median < 50,
+            "the web key took {key_median} ms: {keyed:?}"
+        );
+        let mut took: Vec<u64> = (0..5)
+            .map(|_| {
+                let t0 = Instant::now();
+                run_planned(&with_web, &req(&["noop"]), &|_, _| Ok(0)).unwrap();
+                millis(t0.elapsed())
+            })
+            .collect();
+        let median = percentile(&mut took, 50);
+        assert!(
+            median < 200,
+            "with the web cache a free slot added {median} ms: {took:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-062 R-6: a build gets `KANBANR_UI_DIST` only when a bundle is kept for its
+    /// worktree's current web sources.
+    #[test]
+    fn a_kept_bundle_for_the_current_sources_goes_to_the_build() {
+        let dir = scratch("ui-dist");
+        let web = dir.join("web");
+        std::fs::create_dir_all(web.join("src")).unwrap();
+        std::fs::write(web.join("package.json"), "{}").unwrap();
+        std::fs::write(web.join("src").join("main.tsx"), "a").unwrap();
+        let mut plan = plan_in(&dir, 1, Priority::None, None);
+        plan.web_dir = Some(web.clone());
+        plan.node_version = "v22.11.0".into();
+        let seen = |plan: &Plan| {
+            let got = Mutex::new(None::<String>);
+            run_planned(plan, &req(&["x"]), &|_, env| {
+                *got.lock().unwrap() = env
+                    .iter()
+                    .find(|(k, _)| k == "KANBANR_UI_DIST")
+                    .map(|(_, v)| v.clone());
+                Ok(0)
+            })
+            .unwrap();
+            got.into_inner().unwrap()
+        };
+        assert_eq!(seen(&plan), None, "no bundle kept yet");
+        let key = buildplan::web_key(&web, "v22.11.0").unwrap();
+        let kept = buildplan::web_bundle_dir(&plan.machine, &key);
+        std::fs::create_dir_all(&kept).unwrap();
+        assert_eq!(seen(&plan), Some(kept.display().to_string()));
+        std::fs::write(web.join("src").join("main.tsx"), "b").unwrap();
+        assert_eq!(
+            seen(&plan),
+            None,
+            "the sources changed: that bundle is not theirs"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
