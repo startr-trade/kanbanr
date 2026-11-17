@@ -1656,14 +1656,10 @@ export interface ItemFilter {
 // ---- The engineering baseline (FTR-033): `GET /projects/{p}/baseline` and `…/profile` ----------
 
 /**
- * One chosen option of a baseline answer. The published schema describes it as this object; the
- * daemon writes the bare option id when it carries no value, so read it through
- * `baseline.ts`'s `chosenId`, which takes either.
+ * One chosen option of a baseline answer: the bare option id when it carries no value, else the
+ * option with its value. Read it through `baseline.ts`'s `chosenId`.
  */
-export interface BaselineChosen {
-  option: string;
-  value: string;
-}
+export type BaselineChosen = string | { option: string; value?: string };
 
 /** One answer of a baseline revision. */
 export interface BaselineAnswer {

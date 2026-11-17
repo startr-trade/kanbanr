@@ -1315,20 +1315,26 @@
         "type": "object"
       },
       "Chosen": {
-        "description": "One chosen option of an answer, with the value it carries when the option asks for one\n(`asks_value`). Written as the bare option id when it carries no value, so `options:\n[postgresql]` reads as before; a value is written `{option: component-library, value: MUI}`.\nIn a `many` area every chosen option carries its own value (coordinator, 17 Nov 2026).",
-        "properties": {
-          "option": {
+        "description": "One chosen option: the bare option id when it carries no value, else the option with its value.",
+        "oneOf": [
+          {
             "type": "string"
           },
-          "value": {
-            "type": "string"
+          {
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "option",
-          "value"
-        ],
-        "type": "object"
+        ]
       },
       "CodeRepository": {
         "additionalProperties": true,
