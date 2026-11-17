@@ -4182,7 +4182,7 @@ fn where_names_the_questions_setup_must_ask() {
     };
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
-    assert_eq!(questions.len(), 6, "{questions:?}");
+    assert_eq!(questions.len(), 7, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
         questions[1].starts_with("Which process")
@@ -4195,6 +4195,16 @@ fn where_names_the_questions_setup_must_ask() {
         .filter(|q| q.contains("identity"))
         .collect();
     assert_eq!(identity.len(), 1, "{questions:?}");
+    // FTR-033 R-1: the engineering baseline is asked after the charter.
+    let charter = questions
+        .iter()
+        .position(|q| q.starts_with("The charter"))
+        .unwrap();
+    assert!(
+        questions[charter + 1].starts_with("The engineering baseline")
+            && questions[charter + 1].contains("kanbanr profile ask --json"),
+        "{questions:?}"
+    );
     assert!(
         identity[0].contains("board and this repository both")
             && identity[0].contains("never --global"),
@@ -4206,7 +4216,7 @@ fn where_names_the_questions_setup_must_ask() {
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], "T");
-    assert_eq!(questions.len(), 5, "{questions:?}");
+    assert_eq!(questions.len(), 6, "{questions:?}");
     assert!(
         !questions.iter().any(|q| q.contains("identity")),
         "{questions:?}"
@@ -4258,7 +4268,7 @@ fn setup_asks_cadence_and_shows_git_model() {
 
     let asked = json(&["where", "--json"]);
     let questions = asked["ask_the_user"].as_array().unwrap();
-    assert_eq!(questions.len(), 6, "{questions:?}");
+    assert_eq!(questions.len(), 7, "{questions:?}");
     let cadence = questions[2].as_str().unwrap();
     assert!(
         cadence.contains("sprints and releases")

@@ -555,7 +555,7 @@ pub fn in_force(b: &Baseline) -> Vec<&Entry> {
 
 /// The (stage, gate, entry) each option of `entries` promises, once per option: the first entry
 /// an option records carries its stage gates for all of them.
-fn promised_gates(entries: &[&Entry]) -> Vec<(String, String, String)> {
+pub(crate) fn promised_gates(entries: &[&Entry]) -> Vec<(String, String, String)> {
     let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut out = Vec::new();
     for e in entries {

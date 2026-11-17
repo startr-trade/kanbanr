@@ -202,17 +202,27 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
         .and_then(|r| serde_json::from_str::<Value>(&r).ok())
         .and_then(|v| v.as_array().map(Vec::len))
         .unwrap_or(0);
-    if !items.is_empty() || !adrs.is_empty() {
-        full.push(section(
-            "Waiting for the user",
-            format!(
-                "{} item(s) and {} proposed decision(s) need a verdict. Offer to review them here,\n\
-                 one question each — see the skill's \"Waiting decisions\" — rather than sending the user\n\
-                 to the browser.",
-                items.len(),
-                adrs.len()
-            ),
-        ));
+    // FTR-033: the baseline revisions Claude proposed that wait for the person.
+    let baseline = kanbanr_core::baseline::load(client.store(), p)
+        .map(|b| {
+            b.revisions
+                .iter()
+                .filter(|r| r.state() == kanbanr_core::baseline::RevisionState::Proposed)
+                .count()
+        })
+        .unwrap_or(0);
+    if !items.is_empty() || !adrs.is_empty() || baseline > 0 {
+        let mut body = format!(
+            "{} item(s) and {} proposed decision(s) need a verdict. Offer to review them here,\n\
+             one question each — see the skill's \"Waiting decisions\" — rather than sending the user\n\
+             to the browser.",
+            items.len(),
+            adrs.len()
+        );
+        if baseline > 0 {
+            body.push_str(&format!("\n{}", recover::baseline_line(baseline)));
+        }
+        full.push(section("Waiting for the user", body));
     }
 
     let scopes = scope_list_text(client, p, false, None)
@@ -249,9 +259,21 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
         full.push(s.clone());
     }
 
+    // FTR-033 R-5: the practice packs whose library copy moved on, reported, never applied.
+    let personal = kanbanr_core::profile::personal_dir(project::home_dir().as_deref());
+    let packs = client
+        .store()
+        .profile_drift(p, personal.as_deref())
+        .ok()
+        .and_then(|d| recover::packs_section(&d));
+    if let Some(s) = &packs {
+        full.push(s.clone());
+    }
+
     let mut optional = vec![section("Hooks", String::new())];
     optional.extend(agents);
     optional.extend(process);
+    optional.extend(packs);
     if let Some(l) = &lessons {
         optional.push(section("Lessons", first_lessons(l, 3)));
     }
@@ -291,6 +313,7 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
             items,
             adrs,
             prepared,
+            baseline,
         },
         sprint: sprint_line(client, p, project),
         release: release_line(client, p, project),
