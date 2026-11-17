@@ -463,7 +463,7 @@ way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `ad
 `test … --manual` or `release promote`. Name the page and the button. If they ask for the terminal
 form, the page names it. Your part is one message saying what is waiting and where:
 `kanbanr open --check` gives the addresses. Give each page's address exactly as it prints it,
-`<monitor>/p/<project>/review` or `…/releases`. Never shorten it to `<monitor>/review`, which does
+`<monitor>/p/<project>/review` or `…/releases`; the project's own page, `<monitor>/p/<project>`, is the Overview of what needs the person, and `…/review?group=<key>` opens one Review group. Never shorten it to `<monitor>/review`, which does
 not open the project's page. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 When the monitor's header warns that the board was last written by a newer kanbanr than it runs
