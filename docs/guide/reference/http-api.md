@@ -74,6 +74,22 @@ types the routes answer with, so it cannot fall behind them.
 
 <!-- generated from openapi.json: end -->
 
+The monitor reads four of these instead of the whole project (DEF-081):
+
+- `GET /api/projects/{project}/index` is the compact index: every item as a card (code, title,
+  status, milestone, kind, sprint, release, priority, owner, labels, dependencies, goals,
+  requirement ids, task counts and when it was created), the milestones, sprints and releases, and
+  the ids of the ADRs, docs and goals. It carries no specifications, history or todo-lists, so it
+  stays small: about 23 KB gzipped on kanbanr's own board of 400 items, where the whole project is
+  4 MB.
+- `GET /api/projects/{project}/config` is the project's configuration, and nothing else. Its whole
+  `ProjectConfig` shape is part of the read API v1 and covered by the
+  [stability promise](../project/stability.md).
+- `GET /api/projects/{project}/features/{code}` is one item with its specification. It reads only
+  that item's own files.
+- `GET /api/projects/{project}/features` is every item without its specification, or only those in
+  `status` or `milestone` when they are given. Any other query parameter is a `400`.
+
 ## Versioning
 
 Version 1 is the paths in use today, under `/api/...`. Additions — a new route, a new field, a new
@@ -106,6 +122,59 @@ published answered `400`, "unsupported operation". Any other method on a read ro
 changed, or `*` for a change to the board as a whole (a project added or removed). The
 project stream sends only that project's events and `*`. The daemon sends a keep-alive comment
 now and then; a client re-reads what it shows when an event arrives.
+
+Beside each burst of `changed` events, both streams also send one `slices` event. It says what
+changed, so a client re-reads only that. Its data is JSON:
+
+```json
+{"project": "kanbanr", "gen": 42, "tags": ["item:FEAT-012", "items", "spec:FEAT-012"]}
+```
+
+`gen` is the project's generation when the event was sent. `tags` names the parts of the board
+that changed, taken from the paths of the changed files:
+
+| Changed file, under `projects/{project}/` | Tags |
+|---|---|
+| `features/<status>/<CODE>.yaml` | `item:<CODE>`, `items` |
+| `features/<status>/features-spec/<CODE>.md` | `spec:<CODE>` |
+| `index.yaml` | `items` |
+| `config.yaml`, `releases.yaml`, `sprints.yaml`, `charter.yaml`, `lessons.yaml`, `decisions.yaml`, `scopes.yaml` | `config`, `releases`, `sprints`, `charter`, `lessons`, `decisions`, `scopes` |
+| `system-baseline.yaml` | `catalog` |
+| `milestones/…` | `milestones` |
+| `prepared/…`, `manual/…`, `gates/…`, `pins/…`, `activity/…`, `events/…`, `timings/…` | the folder's name |
+| `docs/<path>` | `doc:<path>`, `docs`, and `adrs` under `docs/decisions/` |
+| anything else | `*`, meaning everything |
+
+The changes to a project within 150 ms of its first one are sent as one event, with the tags
+combined. A write the monitor makes itself sends `*`. The per-project stream sends only that
+project's `slices`. A client that knows no `slices` event ignores it, as `EventSource` ignores
+event names it has no listener for. A client that gets a `changed` with no `slices` after it
+should re-read everything: a stream that falls behind drops events.
+
+## Caching and compression
+
+Every `GET` under `/api`, except the event streams and `drift/latest`, is answered once per
+revision of the board and kept in the daemon's memory, up to 64 MB. The revision is made of:
+
+- a counter per project, moved by every change to its files;
+- the board's HEAD commit;
+- the date (UTC), because some reads depend on today, such as which sprint is running;
+- for the reads that look at the code repository (readiness, review, drift, the git model, release
+  plans and notes, positions, views and the like), that repository's HEAD commit and the current
+  30-second interval, so an uncommitted edit there shows within 30 seconds.
+
+A body computed while a change landed is kept under the revision it started from, so it is never
+served after that change.
+
+Each `200` carries a weak `ETag` naming that revision and `Cache-Control: no-cache`. A request
+whose `If-None-Match` names the current `ETag` is answered `304 Not Modified`, with no body. A
+browser therefore asks every time and is sent nothing new while the board has not changed. A
+restarted daemon sends new `ETag`s. An error answer carries no `ETag` and is not kept.
+
+A client that sends `Accept-Encoding: gzip` gets JSON, text and the monitor's own files gzipped
+(`Content-Encoding: gzip`). The event streams, images and bodies under 32 bytes are sent as they
+are. The monitor's built files under `/assets/`, whose names change with their content, are sent
+with `Cache-Control: public, max-age=31536000, immutable`.
 
 ## Background drift
 

@@ -369,6 +369,17 @@ and the page shows the branches it found there. A monitor started anywhere else 
 from the cadence alone, without git doctor, and says so. Whether the git hooks are installed is the
 CLI's to read: the page shows it as not known and names `kanbanr git status`, which tells.
 
+### How the monitor stays fast
+
+A page reads only what it shows (DEF-081). The header, the links in specs and docs, and the item
+lists read one compact index of the board: every item as a card, with no specifications or
+histories. An item page reads that item alone, and a status page only the items in that status.
+Every page shares one copy of each read, however many parts of it ask. The daemon answers each
+read once per change to the board and gzips it. The browser then asks again only to be told
+nothing changed. When the CLI changes the board, the daemon says which parts changed, and the
+page re-reads just those parts. The Review, Releases and Schedule pages still read the whole
+board until their own rebuilds land.
+
 ### Which kanbanr the monitor runs
 
 The header shows the kanbanr version and commit the monitor runs, for example `v0.6.0 · 1138833`
