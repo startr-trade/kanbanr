@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import { useAsync } from "../../live";
+import { useQuery } from "../../data/useQuery";
+import { urls } from "../../data/urls";
 import { ErrorBox, Loading } from "../../components/bits";
 import { releaseAction } from "../../releaseAction";
 import type { PreparedView, Release, ReleasePlan, TagResult } from "../../types";
@@ -19,11 +20,13 @@ import { openFor } from "../../prepared";
  * the cut preview, the untested acceptance, Needs, Record result, Check again). Without one it
  * shows both, as before. The acceptance ticked in the body enables the header's cut button, so a
  * page that renders the two apart passes `accepted` and `onAccepted` to both.
+ *
+ * The plan is one read through the shared cache (FTR-041), so the header and the body share it, and
+ * a live change to the releases, the items or the gates re-reads it.
  */
 export function ReleaseButton({
   project,
   release,
-  tick,
   writable,
   busy,
   onPromote,
@@ -38,7 +41,6 @@ export function ReleaseButton({
 }: {
   project: string;
   release: Release;
-  tick: number;
   writable: boolean;
   gates: string[];
   who: string | null;
@@ -56,9 +58,6 @@ export function ReleaseButton({
   // A confirmation after the tag asks what the user checked before it goes (FTR-026).
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
-  // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
-  // fetch is needed (the monitor never fetches).
-  const [again, setAgain] = useState(0);
   // The last promotion's note says what came next ("push main…"); once the plan has been read
   // again it may no longer hold, so it is put away until the next promotion.
   const [hideOutcome, setHideOutcome] = useState(false);
@@ -69,15 +68,18 @@ export function ReleaseButton({
   const [acceptedHere, setAcceptedHere] = useState(false);
   const accepted = acceptedProp ?? acceptedHere;
   const setAccepted = (v: boolean) => (onAccepted ? onAccepted(v) : setAcceptedHere(v));
-  const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
+  // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
+  // fetch is needed (the monitor never fetches).
+  const plan = useQuery<ReleasePlan>(project, urls.releasePlan(project, release.version), ["releases", "items", "gates"]);
   // Which prepared records this button's forms show (DEF-095), told to the page once the plan is
   // read, so the page lists the others under "Prepared, not required". None when the plan fails.
   const shownKey = plan.error ? "" : plan.data ? shownByButton(plan.data, writable, release.version, gates, prepared).join(",") : null;
   useEffect(() => {
     if (shownKey != null) onShown(release.version, shownKey ? shownKey.split(",") : []);
   }, [shownKey, release.version, onShown]);
-  if (plan.error) return <ErrorBox error={plan.error} />;
-  if (!plan.data) return <Loading />;
+  // The header shows a failed or pending plan; the body waits for it quietly (FTR-041).
+  if (plan.error) return head ? <ErrorBox error={plan.error} /> : null;
+  if (!plan.data) return head ? <Loading /> : null;
   const action = releaseAction(plan.data, writable);
   // Ticking the acceptance is the one thing the cut still waits for (DEF-043).
   const enabled = action.enabled || (action.accept != null && action.button && accepted);
@@ -93,7 +95,7 @@ export function ReleaseButton({
   }
   const recheck = () => {
     setHideOutcome(true);
-    setAgain((n) => n + 1);
+    plan.reload();
   };
   // A confirmation after the tag that Claude prepared (FTR-034): what was checked, filled in, beside
   // the one button, pinned to the release tip this plan showed.
@@ -365,19 +367,13 @@ export function ReleaseButton({
               who={who}
               command={action.gate.record}
               prepared={prepared}
-              onRecorded={() => {
-                setHideOutcome(true);
-                setAgain((n) => n + 1);
-              }}
+              onRecorded={recheck}
             />
           ) : null}
           <button
             className="btn"
-            onClick={() => {
-              setHideOutcome(true);
-              setAgain((n) => n + 1);
-            }}
-            disabled={plan.loading}
+            onClick={recheck}
+            disabled={plan.refreshing}
           >
             Check again
           </button>

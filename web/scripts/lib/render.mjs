@@ -79,6 +79,16 @@ export async function render(modulePath, exportName, props, { url = "/" } = {}) 
   return { html, document };
 }
 
+/**
+ * Load `modulePath` through the same Vite server `render` uses, so a check shares the instances the
+ * rendered components see (the shared data cache, which a check seeds or records reads from).
+ */
+export async function load(modulePath) {
+  const vite = await server();
+  const path = isAbsolute(modulePath) && existsSync(modulePath) ? modulePath : `/${modulePath.replace(/^\.?\//, "")}`;
+  return vite.ssrLoadModule(path);
+}
+
 /** Close the shared Vite server, so the check's process can exit. */
 export async function closeRender() {
   if (!serverPromise) return;

@@ -665,6 +665,29 @@ summary:focus-visible,
 }
 .reason:focus:not(:focus-visible) { outline: none; }
 
+/* A release's accordion header (FTR-041, R-8): two lines, the chips and the stage stepper first,
+   then the next-step button with its one line, so neither squeezes the other. */
+.release-head > .ui-row > .ui-row-head {
+  display: grid;
+  grid-template-rows: auto auto;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+  padding-block: var(--sp-2);
+  white-space: normal;
+}
+.release-head > .ui-row > .ui-row-head > .ui-row-meta { flex-wrap: wrap; gap: var(--sp-2); }
+.release-head > .ui-row > .ui-row-head > .ui-row-actions { grid-row: 2; grid-column: 1 / -1; flex-wrap: wrap; }
+.release-chips { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); }
+.release-head .ui-stepper { min-width: calc(var(--sp-4) * 12); }
+.release-action-header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.release-action-header .release-does { margin: 0; color: var(--text-muted); }
+.release-body .ui-table td { white-space: nowrap; }
+.release-body .ui-table { width: 100%; }
+.release-body .ui-table td:nth-child(2) { width: 100%; }
+.releases-filter { margin: var(--sp-2) 0; }
+
 /* A release's notes, read and edited on its branch (FEAT-216): collapsed until opened, the editor
    in the theme's own colours (it reuses `.reason`) and monospace, since the notes are markdown. */
 .release-notes { margin: 10px 0 0; }
