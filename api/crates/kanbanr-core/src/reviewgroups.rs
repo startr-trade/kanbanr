@@ -18,6 +18,10 @@ use std::sync::{Arc, Mutex};
 
 /// Approve a definition never approved, lapsed, or added to.
 const APPROVE: &str = "approve";
+
+/// The pill an Approve row carries when its approval lapsed through an edit to its tests alone
+/// (DEF-111). The web page matches the same text (`TESTS_ONLY_PILL` in web/src/reviewGroups.ts).
+pub const TESTS_ONLY_PILL: &str = "tests only";
 /// Ratify work done under a bypass or an override Claude made.
 const RATIFY: &str = "ratify";
 /// Which release a ready item ships in (FEAT-185).
@@ -491,6 +495,10 @@ impl Board {
             ApprovalKind::Added => vec!["added since approval".into()],
             _ => Vec::new(),
         };
+        // An approval that lapsed or grew through an edit to the tests alone is picked out (DEF-111).
+        if key == APPROVE && e.tests_only {
+            pills.push(TESTS_ONLY_PILL.into());
+        }
         if e.finished {
             pills.push("finished".into());
         }
@@ -1756,6 +1764,60 @@ mod tests {
             .set_feature_definition("demo", &f.code, Some(def))
             .unwrap();
         f.code
+    }
+
+    /// DEF-111 R-1: an Approve row whose approval lapsed through an edit to its tests alone
+    /// carries the "tests only" pill after "approval lapsed"; an edit to a requirement's text and
+    /// a never-approved item carry none, and no row of another group does.
+    #[test]
+    fn a_tests_only_approve_row_carries_the_pill() {
+        use crate::models::TestState;
+        let (store, dir) = board();
+        let def = |test: &str, text: &str| FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![Requirement {
+                id: "R-1".into(),
+                text: text.into(),
+                tests: vec![TestRef {
+                    name: test.into(),
+                    kind: "unit".into(),
+                    state: TestState::Green,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let approved = |title: &str, edit: FeatureDefinition| {
+            let code = define(&store, title, def("a::t", "THE SYSTEM SHALL x"));
+            store.approve_feature("demo", &code, "Ada").unwrap();
+            store
+                .set_feature_definition("demo", &code, Some(edit))
+                .unwrap();
+            code
+        };
+        let tests = approved("Tests", def("a::t_renamed", "THE SYSTEM SHALL x"));
+        let text = approved("Text", def("a::t_renamed", "THE SYSTEM SHALL y"));
+        let never = define(&store, "Never", def("a::t", "THE SYSTEM SHALL x"));
+
+        let approve = slice(&store, "demo", "approve", None).unwrap();
+        let row = |c: &str| approve.rows.iter().find(|r| r.code == c).unwrap();
+        assert_eq!(
+            row(&tests).pills,
+            ["approval lapsed", TESTS_ONLY_PILL],
+            "{approve:#?}"
+        );
+        assert_eq!(row(&text).pills, ["approval lapsed"]);
+        assert!(row(&never).pills.is_empty(), "{:?}", row(&never).pills);
+        for g in summary(&store, "demo", None).unwrap() {
+            if g.key == "approve" {
+                continue;
+            }
+            for r in slice(&store, "demo", &g.key, None).unwrap().rows {
+                assert!(!r.pills.iter().any(|p| p == TESTS_ONLY_PILL), "{r:?}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn statement(s: &str) -> FeatureDefinition {
