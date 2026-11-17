@@ -60,6 +60,8 @@ turns on the git model, so branches are made for you.
 Every item links to a goal in the charter. The recommended release stages are candidate, main and
 production. Production, the cut, is refused until main is pushed.
 
+**Accept the system baseline before the first build.** Once the system docs are written, Claude prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. Claude never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
+
 > Open the monitor, with writes on.
 
 Keep it open. Every decision below happens there.

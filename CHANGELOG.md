@@ -34,6 +34,12 @@ All notable changes to kanbanr are documented here. The format follows
   design that needs each; the answers form the project's engineering baseline, accepted by the
   person on the Baseline page, named by every design that touches an entry, and kept in step with
   its packs (FTR-033).
+- **A system baseline before the first build, and design at three levels (FTR-006).**
+  `kanbanr catalog baseline init` pins the catalog's system rows; the person accepts them on the
+  Review page and the build stage waits until then (new projects by default, existing ones by
+  opting in). A design starts from its kind's skeleton (`kanbanr feature design --template --kind
+  defect`), the `design_sections` check asks for that kind's subsections, and a design names the
+  views it changes, which the design review lists against the baseline.
 - `kanbanr prepare signoff`, `promotion`, `gate` and `ratify` take `--batch`, so the person
   confirms several prepared decisions in one action (FTR-055).
 - The monitor computes docs drift in the background after each board or code change and serves the

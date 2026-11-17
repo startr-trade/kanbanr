@@ -36,6 +36,7 @@ sibling cannot be.
         ├── packs/<name>.yaml           # the applied copy of each practice pack the project follows (FTR-033)
         ├── facts.yaml                  # the project's facts: languages, runtimes, production, parts, data (FTR-005)
         ├── catalog.yaml                # the content catalog: what the project must document, row by row (FTR-005)
+        ├── system-baseline.yaml        # the system rows pinned, and each acceptance of them, append-only (FTR-006)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)
         ├── scopes.yaml                 # agent scopes, oldest first, never trimmed (FEAT-214)
@@ -193,6 +194,33 @@ rows:
     # applies: false            # an override, with why
     # why: "a library has no deployment of its own"
 ```
+
+`system-baseline.yaml` (FTR-006) is absent until `kanbanr catalog baseline init`. It records the
+system rows that applied then and every acceptance of their pins, oldest first, never rewritten:
+
+```yaml
+schema: 1
+initialised_at: 2026-11-20T09:30:00Z
+rows: [context, behaviour, components, data-model, decisions]   # the record, not the rule
+accepted:
+  - at: 2026-11-21T08:02:11Z
+    by: <the person>
+    origin: monitor              # monitor | terminal
+    note: "first baseline, from the setup plan"
+    prepared: 20261121T080000Z-system-baseline   # the record confirmed, when one was
+    rev: 3f9c…                   # a hash of the pins below
+    pins:
+      - {row: context,   source: "architecture/context.md", rev: 91ab…}
+      - {row: decisions, source: "kanbanr:adr-index",       rev: 77e0…}
+      - {row: code-structure, source: "katalogr:structure", rev: ""}   # listed, not pinned
+```
+
+A pin's `rev` is a hash of the source's bytes (a doc's file, a folder's sorted paths and hashes, or
+a generated view's content); a source that needs katalogr, or an enforced one, has an empty `rev`.
+Whether the baseline is awaiting, accepted or changed is derived on every read from the pins and
+the sources now, and never written. A definition may also name `affects_views` (catalog row ids,
+for a generated row with no doc to link); it does not lapse an approval, and an older kanbanr keeps
+it as an unknown key.
 
 What each row's state is (whether it applies, its source present, a stub or missing, its
 protections in force) and the gaps are derived on every read and never written to either file.

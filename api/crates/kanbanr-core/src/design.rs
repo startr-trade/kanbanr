@@ -286,4 +286,51 @@ mod tests {
             ]
         );
     }
+
+    /// FTR-006 R-11: the skill names the setup order (catalog, then the system baseline's init,
+    /// then the acceptance waiting on the Review page), the design template, each kind's required
+    /// sections, and that Claude prepares the acceptance and never accepts it.
+    #[test]
+    fn the_skill_names_the_setup_order_and_each_kinds_skeleton() {
+        let skill = include_str!("../../../../skill/kanbanr/SKILL.md");
+        let at = |needle: &str| {
+            skill
+                .find(needle)
+                .unwrap_or_else(|| panic!("the skill never says `{needle}`"))
+        };
+        // The setup plan's commands, in order.
+        assert!(at("kanbanr catalog init") < at("kanbanr catalog baseline init"));
+        assert!(at("kanbanr catalog baseline init") < at("kanbanr hooks status"));
+        for needle in [
+            "review?group=system-baseline",
+            "kanbanr prepare system-baseline",
+            "kanbanr catalog baseline accept",
+            "kanbanr feature design --template --kind",
+            "affects_views",
+            "`system_baseline_accepted`",
+            "`design_sections`",
+        ] {
+            at(needle);
+        }
+        assert!(
+            skill.contains("never accept") || skill.contains("never accepts"),
+            "the skill must say Claude never accepts the system baseline"
+        );
+        // Each kind's required sections are named in the skill's per-kind list.
+        for k in KINDS {
+            let line = format!("**{}**", k.kind);
+            let start = skill
+                .find(&line)
+                .unwrap_or_else(|| panic!("the skill names no `{line}` design"));
+            let rest = &skill[start..];
+            let para = rest.split('\n').next().unwrap_or("");
+            for section in k.sections.iter().filter(|s| **s != "Design") {
+                assert!(
+                    para.contains(section),
+                    "the skill's {} line misses `{section}`: {para}",
+                    k.kind
+                );
+            }
+        }
+    }
 }

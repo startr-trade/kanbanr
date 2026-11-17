@@ -576,7 +576,8 @@ the project must document, by question and perspective. The **gaps** come first,
 **Components** and **Items**, each on a line with chips: whether it applies (a row switched off
 says `off:` and its reason, greyed), its source's state (present, stub, missing, available, needs
 katalogr), its notations, and each protection, in force or not configured, with the reason as its
-title. A written source links to its doc (a folder to the Docs page at that folder); a generated
+title. A system row also carries its [system baseline](living-docs.md#the-system-baseline) state:
+pinned, changed since the acceptance, not pinned or awaiting. A written source links to its doc (a folder to the Docs page at that folder); a generated
 source links to the page that shows it, such as the Charter, Gantt or Releases. A repository doc
 shows its path. With no facts the page says so and names `kanbanr facts set`; with no catalog it
 names `kanbanr catalog init`. The page is read-only: Claude keeps the catalog. See
@@ -769,11 +770,20 @@ same whichever you use. A read-only monitor shows the command instead.
 ### The Review page
 
 The Review page groups what waits for you by the decision it needs (FTR-038), one tab per group,
-each with its count: **Approve**, **Ratify**, a **Sign off** group per sign-off the process names
+each with its count: **System baseline**, **Approve**, **Ratify**, a **Sign off** group per sign-off the process names
 (**Sign off design-review**, **Sign off docs-folded**, a release's sign-off), **Which release**,
 **Manual checks**, **Delegations**, **Delegated decisions** and **Proposed ADRs**. An empty group
 has no tab. The page opens on the largest group, or on the one its link names.
 
+- **System baseline.** Before the first build, the acceptance of the [system
+  baseline](living-docs.md#the-system-baseline) is its own group, **System baseline**, first among
+  the tabs, with one row: the project's baseline ("N rows, M pinned: awaiting acceptance"), each
+  row linked to its source, and Claude's prepared note when there is one. **Accept** asks first,
+  like every group action, and records you as the person who agreed the system design. A read-only
+  monitor shows `kanbanr catalog baseline accept` for your own terminal. The group shows while the
+  baseline awaits acceptance or a re-acceptance is prepared, never as a panel on the page. In a
+  design-review row, "Changes the system baseline" lists each baseline row the item changes, pinned
+  hash against now.
 - **Rows.** Each row is one item on one line: its code, its title, what is being decided, and pills
   for what needs your eye ("approval lapsed", "spec changed since sign-off", "added since
   approval", "prepared", the batch it is in), with its release and sprint. Under it, one line says

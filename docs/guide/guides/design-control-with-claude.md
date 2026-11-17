@@ -63,6 +63,8 @@ the plan applies it.**
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
+**Accept the system baseline before the first build.** Once the system docs are written, Claude prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. Claude never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
+
 > Open the monitor, with writes on.
 
 Keep it open. Every decision below happens there.
