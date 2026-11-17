@@ -586,6 +586,45 @@
         ],
         "type": "object"
       },
+      "Assessment": {
+        "description": "What `kanbanr planning check` reports: reasons to decline, things for Claude to judge, and the\nnearest valid move when the target cannot take the items.",
+        "properties": {
+          "decision": {
+            "type": "string"
+          },
+          "nearest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Nearest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "problems": {
+            "description": "Each a reason to decline.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Each for Claude to judge.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "decision",
+          "problems",
+          "warnings",
+          "nearest"
+        ],
+        "type": "object"
+      },
       "Attention": {
         "description": "Everything waiting, and how many of it are the person's own decisions.",
         "properties": {
@@ -4787,6 +4826,22 @@
         ],
         "type": "string"
       },
+      "Nearest": {
+        "description": "A move a declined decision could have been instead.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "target"
+        ],
+        "type": "object"
+      },
       "NextGate": {
         "description": "What moving an item on to one next status would ask, and what it still lacks (FEAT-117).",
         "properties": {
@@ -5255,6 +5310,121 @@
           "stage",
           "does",
           "noop"
+        ],
+        "type": "object"
+      },
+      "PlanningDecision": {
+        "additionalProperties": true,
+        "description": "The person's planning decision, as the page recorded it.",
+        "properties": {
+          "action": {
+            "description": "`into-sprint`, `into-release` or `out-of-sprint`.",
+            "type": "string"
+          },
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "id": {
+            "description": "`PD-<n>`.",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "`monitor` or `terminal`, stamped by the front end, never taken from the body.",
+            "type": "string"
+          },
+          "target": {
+            "default": "",
+            "description": "The sprint code or the release version; empty for `out-of-sprint`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "target",
+          "items",
+          "by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "PlanningOutcome": {
+        "additionalProperties": true,
+        "description": "What became of a decision: carried out, or declined with its reason.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "description": "Claude, or the person.",
+            "type": "string"
+          },
+          "decision": {
+            "description": "The decision's id, `PD-<n>`.",
+            "type": "string"
+          },
+          "nearest": {
+            "$ref": "#/components/schemas/Nearest"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "outcome": {
+            "description": "`carried` or `declined`.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was declined; for a carried decision, the command that carried it out.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "outcome",
+          "by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "PlanningView": {
+        "description": "A decision with its derived state and its outcome, when it has one.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/PlanningDecision"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanningOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "description": "`pending`, `carried` or `declined`, derived.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "state",
+          "outcome"
         ],
         "type": "object"
       },
@@ -10430,6 +10600,114 @@
           }
         },
         "summary": "The flow plan (FTR-061): a scope's work in agent-hours over its task graph (total, done and remaining, the critical path and its length, the widest parallelism and its profile), what runs, what is ready and what each blocked task waits on, and a forecast in hours from now per lane count, bounded by build slots; the only dates are those a person set"
+      }
+    },
+    "/api/projects/{project}/planning": {
+      "get": {
+        "operationId": "getProjectsPlanning",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only decisions in this state; every decision when absent.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "enum": [
+                "pending",
+                "carried",
+                "declined"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanningView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The person's planning decisions made on the monitor pages (FTR-049), oldest first: each with its derived state (pending until Claude carries it out or declines it) and its outcome"
+      }
+    },
+    "/api/projects/{project}/planning/{id}/check": {
+      "get": {
+        "operationId": "getProjectsPlanningCheck",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The decision's id, such as PD-3.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assessment"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A planning decision checked, with nothing changed (FTR-049): the reasons to decline it, the warnings for Claude to judge, and the nearest valid move"
       }
     },
     "/api/projects/{project}/position": {

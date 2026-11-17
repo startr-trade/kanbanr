@@ -2266,6 +2266,49 @@ fn dispatch_routes(
             };
             ser(&crate::prepared::list(store, p, &q, repo)?)
         }
+        // FTR-049: `{action, target, items, by, note?}`: the person's planning decision from a
+        // page. It changes no plan; Claude carries it out with `--decision` or declines it. A
+        // verdict route: refused to Claude, and stamped with its origin.
+        ("POST", ["projects", p, "planning"]) => ser(&crate::planning::record(
+            store,
+            p,
+            b,
+            &crate::origin::from_body(b),
+        )?),
+        // `?state=pending|carried|declined`: the planning decisions, oldest first (FTR-049).
+        ("GET", ["projects", p, "planning"]) => {
+            only_params(query, &["state"])?;
+            let state = query_param(query, "state").filter(|v| !v.is_empty());
+            ser(&crate::planning::list(store, p, state.as_deref())?)
+        }
+        // A decision checked against frozen scope, dependencies, capacity and dates (FTR-049).
+        ("GET", ["projects", p, "planning", id, "check"]) => ser(&crate::planning::assess(
+            store,
+            p,
+            id,
+            crate::sprints::today(),
+        )?),
+        // `{by, reason, nearest?: {action, target}}`: Claude (or the person) declines a decision.
+        // Not a verdict (FTR-049).
+        ("POST", ["projects", p, "planning", id, "decline"]) => {
+            let nearest = match b.get("nearest") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    serde_json::from_value::<crate::planning::Nearest>(v.clone()).map_err(|e| {
+                        CoreError::Unsupported(format!("nearest is {{action, target}}: {e}"))
+                    })?,
+                ),
+            };
+            ser(&crate::planning::decline(
+                store,
+                p,
+                id,
+                &str_field(b, "by").unwrap_or_default(),
+                &crate::origin::from_body(b),
+                &str_field(b, "reason").unwrap_or_default(),
+                nearest,
+            )?)
+        }
         // `{by, reason?}`: the person turns a prepared record down; nothing else changes (FTR-034).
         ("POST", ["projects", p, "prepared", id, "reject"]) => {
             ser(&crate::prepared::reject(store, p, id, b)?)
@@ -3457,6 +3500,18 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "record".into())
         ),
         ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
+        ["projects", _p, "planning"] => {
+            let f = |k: &str| body.and_then(|b| str_field(b, k)).unwrap_or_default();
+            let items = body
+                .and_then(|b| vec_field(b, "items"))
+                .unwrap_or_default()
+                .join(", ");
+            match f("action").as_str() {
+                "out-of-sprint" => format!("planning decision: {items} out of their sprint"),
+                _ => format!("planning decision: {items} into {}", f("target")),
+            }
+        }
+        ["projects", _p, "planning", id, "decline"] => format!("decline planning decision {id}"),
         [
             "projects",
             _p,

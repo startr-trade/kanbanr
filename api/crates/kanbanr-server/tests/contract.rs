@@ -198,6 +198,23 @@ fn fixture(data: &std::path::Path) {
                "sources": [{"label": "release tip", "url": "commit:9f078bd"}],
                "by": "Ada L"}),
     );
+    // Two planning decisions from a page, one pending and one declined (FTR-049).
+    for _ in 0..2 {
+        write(
+            &store,
+            "POST",
+            "/projects/shop/planning",
+            json!({"action": "into-release", "target": "1.0", "items": ["FEAT-002"],
+                   "by": "Ada L", "origin": "monitor"}),
+        );
+    }
+    write(
+        &store,
+        "POST",
+        "/projects/shop/planning/PD-2/decline",
+        json!({"by": "Claude", "reason": "superseded by PD-1",
+               "nearest": {"action": "into-release", "target": "1.0"}}),
+    );
     kanbanr_core::activity::append(data, "shop", "Ada L", "approve FEAT-001", Some("FEAT-001"));
     kanbanr_core::activity::append(data, "shop", "Ada L", "add milestone", None);
     write(
@@ -327,6 +344,13 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(base.clone());
             out.push(format!("{base}?state=all&release=1.0"));
         }
+        // The planning decisions, whole and by state, and one checked (FTR-049).
+        "/api/projects/{project}/planning" => {
+            out.push(base.clone());
+            out.push(format!("{base}?state=pending"));
+            out.push(format!("{base}?state=declined"));
+        }
+        "/api/projects/{project}/planning/{id}/check" => out.push(base.replace("{id}", "PD-1")),
         "/api/projects/{project}/drift/latest" => {
             out.push(base.clone());
             out.push(format!("{base}?flags=false"));
