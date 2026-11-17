@@ -236,7 +236,7 @@ fn board_with_a_manual_check(s: &Scratch) -> (std::path::PathBuf, Vec<String>, S
                 requirements: vec![Requirement {
                     text: "THE SYSTEM SHALL show it".into(),
                     tests: vec![TestRef {
-                        name: "the person sees it / on a phone".into(),
+                        name: "manual: the person judges it reads clearly / on a phone".into(),
                         kind: "manual".into(),
                         ..Default::default()
                     }],
@@ -408,7 +408,7 @@ fn a_rows_evidence_is_read_alone() {
     for other in ["manual", "adr", "delegated", "delegation"] {
         assert!(row[other].is_null(), "{other} in {row}");
     }
-    let key = format!("{checked}/R-1/the person sees it / on a phone");
+    let key = format!("{checked}/R-1/manual: the person judges it reads clearly / on a phone");
     let (code, manual) = read(
         &url,
         "demo",
@@ -418,7 +418,7 @@ fn a_rows_evidence_is_read_alone() {
     assert_eq!(manual["manual"]["code"], json!(checked), "{manual}");
     assert_eq!(
         manual["manual"]["test"],
-        json!("the person sees it / on a phone"),
+        json!("manual: the person judges it reads clearly / on a phone"),
         "{manual}"
     );
     let (code, _) = read(
