@@ -1,0 +1,15 @@
+/*
+ * The Overview's Now section: each milestone is one link holding its name, code and done/total
+ * above its bar (FTR-048, UX-1). Tokens only (`npm run check:ui-tokens` reads this file too).
+ */
+
+.overview-now .overview-ms { display: block; color: inherit; text-decoration: none; min-width: 0; }
+.overview-now .overview-ms + .overview-ms { margin-top: var(--sp-3); }
+.overview-now .overview-ms:hover .overview-ms-name { text-decoration: underline; }
+.overview-now .overview-ms-head { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; margin-bottom: var(--sp-1); }
+.overview-now .overview-ms-name {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;
+}
+.overview-now .overview-ms-code { flex: none; color: var(--text-muted); font-size: var(--fs-1); font-weight: 400; }
+.overview-now .overview-ms-count { flex: none; font-variant-numeric: tabular-nums; }
+.overview-now .overview-ms:hover .ui-progress-bar { outline: 1px solid var(--accent); }

@@ -1,0 +1,6 @@
+/*
+ * The Items table: the Code, Sprint and Release cells stay on one line (FTR-048, UX-18).
+ * Tokens only (`npm run check:ui-tokens` reads this file too).
+ */
+
+.items-page .items-nowrap { white-space: nowrap; }

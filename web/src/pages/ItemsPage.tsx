@@ -12,6 +12,7 @@ import { DataTable, Empty, ErrorState, LoadingState, useUrlState, type Column } 
 import { EVIDENCE, ITEM_FILTERS, itemsCsvName, itemsFilter, type ItemFilterState } from "../itemsQuery";
 import { to } from "../overviewLinks";
 import type { CompactIndex, ItemRow } from "../types";
+import "./ItemsPage.css";
 
 /** What the evidence filter's values say. */
 const EVIDENCE_LABEL: Record<(typeof EVIDENCE)[number], string> = {
@@ -76,7 +77,11 @@ function columns(project: string): Column<ItemRow>[] {
       key: "code",
       label: "Code",
       value: (r) => r.code,
-      render: (r) => <Link to={to.item(project, r.code)}>{r.code}</Link>,
+      render: (r) => (
+        <span className="items-nowrap">
+          <Link to={to.item(project, r.code)}>{r.code}</Link>
+        </span>
+      ),
       sortable: true,
       narrow: "keep",
     },
@@ -84,8 +89,22 @@ function columns(project: string): Column<ItemRow>[] {
     { key: "kind", label: "Kind", value: (r) => r.kind ?? null, sortable: true, narrow: "hide" },
     { key: "status", label: "Status", value: (r) => r.status, sortable: true },
     { key: "milestone", label: "Milestone", value: (r) => r.milestone, sortable: true, narrow: "hide" },
-    { key: "sprint", label: "Sprint", value: (r) => r.sprint ?? null, sortable: true, narrow: "hide" },
-    { key: "release", label: "Release", value: (r) => r.release ?? null, sortable: true, narrow: "hide" },
+    {
+      key: "sprint",
+      label: "Sprint",
+      value: (r) => r.sprint ?? null,
+      render: (r) => <span className="items-nowrap">{r.sprint ?? ""}</span>,
+      sortable: true,
+      narrow: "hide",
+    },
+    {
+      key: "release",
+      label: "Release",
+      value: (r) => r.release ?? null,
+      render: (r) => <span className="items-nowrap">{r.release ?? ""}</span>,
+      sortable: true,
+      narrow: "hide",
+    },
     {
       key: "requirements",
       label: "Requirements proven",
