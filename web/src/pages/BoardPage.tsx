@@ -1,30 +1,143 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import type { ReactNode } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { byAgentText } from "../agentScopes";
+import { boardLanes, SEEN_AFTER_MS, seenKey, toggleGroup } from "../boardModel";
+import type { Lane, SortKey } from "../boardModel";
 import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
-import { displayedStates, featuresNewestFirst } from "../types";
-import type { Activity, CompactIndex, IndexItem, Readiness, SprintReport } from "../types";
-import { ALL, UNSCHEDULED, inSprintFilter } from "../sprintFilter";
-import { ErrorBox, FeatureCard, Loading, LiveDot } from "../components/bits";
+import { displayedStates } from "../types";
+import type { Activity, AgentScope, CompactIndex, CriticalPath, IndexConfig, Readiness, SprintReport } from "../types";
+import { ALL, UNSCHEDULED } from "../sprintFilter";
+import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Burndown from "../components/Burndown";
+import { ErrorState, LoadingState } from "../ui/States";
+import { parseOpen, useOpenRows, useUrlState, writeOpen } from "../ui/urlState";
+import { LaneGroups } from "./board/LaneGroups";
+import { LaneHeader } from "./board/LaneHeader";
+import "./board/board.css";
 
-const PAGE_SIZES = [10, 25, 50] as const;
-type PageSize = number | "all";
+const SORTS: { value: SortKey; label: string }[] = [
+  { value: "close", label: "Closest to next stage" },
+  { value: "newest", label: "Newest" },
+  { value: "priority", label: "Priority" },
+];
 
-/** Remembered page-size choice (localStorage), defaulting to 10. */
-function initialPageSize(): PageSize {
-  const v = localStorage.getItem("kanbanr-board-page-size");
-  if (v === "all") return "all";
-  const n = Number(v);
-  return (PAGE_SIZES as readonly number[]).includes(n) ? n : 10;
+/** The one line an older daemon earns: it reports neither the days in a stage nor what each stage lacks. */
+export const OLDER_DAEMON_NOTICE =
+  "This kanbanr does not report how long items have been in their stage or what each stage still lacks: update it to see them.";
+
+/** The notice, or null when the daemon's answers carry the new fields (or there is nothing to judge). */
+export function olderDaemonNotice(index: CompactIndex, readiness: Readiness | null): string | null {
+  const noAges = index.items.length > 0 && !index.items.some((i) => !!i.entered_on);
+  const cards = readiness ? Object.values(readiness) : [];
+  const noChecks = cards.length > 0 && !cards.some((c) => c.next.some((n) => !!n.checks) || !!c.updated_at);
+  return noAges || noChecks ? OLDER_DAEMON_NOTICE : null;
+}
+
+/** The Board, pure over what the page read, so a check renders it without a daemon. */
+export function BoardView(p: {
+  project: string;
+  /** The compact index the lanes were built from: cards name their milestones from it. */
+  index: CompactIndex;
+  lanes: Lane[];
+  config: IndexConfig;
+  sprintPicker: ReactNode;
+  sort: SortKey;
+  onSort(s: SortKey): void;
+  open: Set<string>;
+  shut: Set<string>;
+  onToggle(id: string, open: boolean, byDefault: boolean): void;
+  filters: Set<string>;
+  onFilter(id: string, on: boolean): void;
+  notice: string | null;
+  otherStates: ReactNode;
+  activity: ReactNode;
+  /** The text filter, drawn in the page head. */
+  textFilter?: ReactNode;
+  /** The chosen sprint's header. */
+  sprintHeader?: ReactNode;
+  /** Readiness has not answered yet: the lanes show a loading state instead of groups. */
+  loading?: boolean;
+  /** Readiness failed: items are grouped from the index alone and this says why. */
+  readError?: string | null;
+  /** Clears the bar filters of a lane (several ids at once). */
+  onClearFilters?(ids: string[]): void;
+}): JSX.Element {
+  const clear = p.onClearFilters ?? ((ids: string[]) => ids.forEach((id) => p.onFilter(id, false)));
+  return (
+    <div className="board-page">
+      <div className="page-head">
+        <h1>{p.config.name || p.project}</h1>
+        <LiveDot />
+        <span className="spacer" />
+        {p.sprintPicker}
+        <label className="per-page">
+          Order
+          <select value={p.sort} onChange={(e) => p.onSort(e.target.value as SortKey)}>
+            {SORTS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {p.textFilter}
+      </div>
+      {p.config.description && <p className="muted">{p.config.description}</p>}
+      {p.notice && (
+        <p className="board-notice" role="status">
+          {p.notice}
+        </p>
+      )}
+      {p.readError && <ErrorState error={`Could not read what each item needs next: ${p.readError}`} />}
+      {p.sprintHeader}
+      <div className="board">
+        {p.lanes.map((lane) => (
+          <section className="column" key={lane.status}>
+            <h2 className="col-title">
+              <Link className="column-head" to={`/p/${encodeURIComponent(p.project)}/state/${encodeURIComponent(lane.status)}`}>
+                {lane.status} <span className="count">{lane.total}</span>
+              </Link>
+            </h2>
+            <div className="column-body">
+              {p.loading && lane.kind !== "finished" ? (
+                <LoadingState />
+              ) : (
+                <>
+                  <LaneHeader lane={lane} only={p.filters} onFilter={p.onFilter} />
+                  <LaneGroups
+                    project={p.project}
+                    lane={lane}
+                    index={p.index}
+                    open={p.open}
+                    shut={p.shut}
+                    only={p.filters}
+                    onToggle={p.onToggle}
+                    onClear={clear}
+                  />
+                </>
+              )}
+            </div>
+          </section>
+        ))}
+      </div>
+      {p.otherStates}
+      {p.activity}
+    </div>
+  );
 }
 
 export default function BoardPage() {
   const { project = "" } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   // The compact index has every card, the config and the sprints; never the whole board (DEF-081).
   const { data, error, loading } = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
   const readiness = useQuery<Readiness>(project, urls.readiness(project), TAGS.readiness);
+  // Agent scopes and the critical path only add a fact to a card; if they fail the fact is left out.
+  const scopes = useQuery<AgentScope[]>(project, urls.scopes(project), TAGS.scopes);
+  const critical = useQuery<CriticalPath>(project, urls.criticalPath(project), TAGS.criticalPath);
   // Sprints only where the project uses them (FEAT-119, FEAT-123); everywhere else the board is as
   // it always was.
   const usesSprints = data?.config.cadence.sprints === true;
@@ -40,17 +153,36 @@ export default function BoardPage() {
     TAGS.sprints,
   );
   const [q, setQ] = useState("");
-  const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
-  // Per-status current page (1-based); each column paginates independently.
-  const [pages, setPages] = useState<Record<string, number>>({});
+  // The sort lives in the query string (?bsort=newest), the open groups and bar filters in the hash.
+  const [{ sort }, setUrl] = useUrlState({ sort: "close" }, "b");
+  const [open] = useOpenRows("open");
+  const [shut] = useOpenRows("shut");
+  const [only] = useOpenRows("only");
 
+  // When the person last looked, kept in this browser only: read once on arrival, written after a
+  // while on the page and when it is left, never earlier, so this visit compares with the last one.
+  const [seen] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(seenKey(project));
+    } catch {
+      return null;
+    }
+  });
   useEffect(() => {
-    localStorage.setItem("kanbanr-board-page-size", String(pageSize));
-  }, [pageSize]);
-  // Reset every column to page 1 when the page size or the filter changes.
-  useEffect(() => {
-    setPages({});
-  }, [pageSize, q]);
+    const write = () => {
+      try {
+        localStorage.setItem(seenKey(project), new Date().toISOString());
+      } catch {
+        /* a browser that refuses storage just forgets the visit */
+      }
+    };
+    const timer = window.setTimeout(write, SEEN_AFTER_MS);
+    window.addEventListener("pagehide", write);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pagehide", write);
+    };
+  }, [project]);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -63,54 +195,80 @@ export default function BoardPage() {
   const isNoOp = (s: string) => data.config.no_op_states?.includes(s);
   const countIn = (s: string) => items.filter((f) => f.status === s).length;
 
-  // Filter/search across code, title, kind, priority, labels.
-  const needle = q.trim().toLowerCase();
-  const inSprint = (f: IndexItem) => inSprintFilter(f, usesSprints, sprintCode);
-  const matches = (f: IndexItem) =>
-    inSprint(f) &&
-    (!needle ||
-    [f.code, f.title, f.kind ?? "", f.priority ?? "", ...(f.labels ?? [])]
-      .join(" ")
-      .toLowerCase()
-      .includes(needle));
+  const lanes = boardLanes({
+    project,
+    index: data,
+    readiness: readiness.data,
+    scopes: scopes.data ?? [],
+    critical: critical.data?.critical_path ?? [],
+    seen,
+    now: new Date(),
+    sprint: sprintCode,
+    text: q,
+    sort: sort as SortKey,
+  });
 
-  const setPage = (state: string, p: number) => setPages((prev) => ({ ...prev, [state]: p }));
+  // The hash lists change together (a toggle moves an id between two lists), so one navigation writes them.
+  const writeHash = (lists: Record<string, Set<string>>) => {
+    let hash = location.hash;
+    for (const [param, ids] of Object.entries(lists)) hash = writeOpen(hash, ids, param);
+    navigate({ pathname: location.pathname, search: location.search, hash }, { replace: true, preventScrollReset: true });
+  };
+  const onToggle = (id: string, nowOpen: boolean, byDefault: boolean) => {
+    const next = toggleGroup(parseOpen(location.hash, "open"), parseOpen(location.hash, "shut"), id, nowOpen, byDefault);
+    writeHash({ open: next.open, shut: next.shut });
+  };
+  const onFilter = (id: string, on: boolean) => {
+    const next = new Set(parseOpen(location.hash, "only"));
+    if (on) next.add(id);
+    else next.delete(id);
+    writeHash({ only: next });
+  };
+  const onClearFilters = (ids: string[]) => {
+    const next = new Set(parseOpen(location.hash, "only"));
+    for (const id of ids) next.delete(id);
+    writeHash({ only: next });
+  };
 
-  return (
-    <div className="board-page">
-      <div className="page-head">
-        <h1>{data.config.name || data.project}</h1>
-        <LiveDot />
-        <span className="spacer" />
-        {usesSprints && (
-          <label className="per-page">
-            Sprint
-            <select value={sprintCode} onChange={(e) => setChosen(e.target.value)}>
-              <option value={ALL}>All items</option>
-              <option value={UNSCHEDULED}>Unscheduled</option>
-              {sprints.map((s) => (
-                <option key={s.code} value={s.code}>
-                  {s.code}
-                  {s.state === "active" ? " (active)" : s.state === "closed" ? " (closed)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+  const sprintPicker = (
+    <>
+      {usesSprints && (
         <label className="per-page">
-          Per page
-          <select
-            value={String(pageSize)}
-            onChange={(e) => setPageSize(e.target.value === "all" ? "all" : Number(e.target.value))}
-          >
-            {PAGE_SIZES.map((n) => (
-              <option key={n} value={n}>
-                {n}
+          Sprint
+          <select value={sprintCode} onChange={(e) => setChosen(e.target.value)}>
+            <option value={ALL}>All items</option>
+            <option value={UNSCHEDULED}>Unscheduled</option>
+            {sprints.map((s) => (
+              <option key={s.code} value={s.code}>
+                {s.code}
+                {s.state === "active" ? " (active)" : s.state === "closed" ? " (closed)" : ""}
               </option>
             ))}
-            <option value="all">All</option>
           </select>
         </label>
+      )}
+    </>
+  );
+
+  return (
+    <BoardView
+      project={project}
+      index={data}
+      lanes={lanes}
+      config={data.config}
+      sprintPicker={sprintPicker}
+      sort={sort as SortKey}
+      onSort={(s) => setUrl({ sort: s })}
+      open={open}
+      shut={shut}
+      onToggle={onToggle}
+      filters={only}
+      onFilter={onFilter}
+      onClearFilters={onClearFilters}
+      notice={olderDaemonNotice(data, readiness.data)}
+      loading={readiness.loading && !readiness.data && !readiness.error}
+      readError={readiness.error}
+      textFilter={
         <input
           className="board-search"
           aria-label="Filter items"
@@ -118,84 +276,27 @@ export default function BoardPage() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-      </div>
-      {data.config.description && <p className="muted">{data.config.description}</p>}
-      {sprint.data ? <SprintHeader report={sprint.data} /> : null}
-      <div className="board">
-        {states.map((state) => {
-          // Reverse-chronological within the column, then paginate with the shared page size.
-          const all = featuresNewestFirst(items.filter((f) => f.status === state && matches(f)));
-          const total = all.length;
-          const size = pageSize === "all" ? Math.max(total, 1) : pageSize;
-          const pageCount = Math.max(1, Math.ceil(total / size));
-          const page = Math.min(Math.max(1, pages[state] ?? 1), pageCount);
-          const shown = pageSize === "all" ? all : all.slice((page - 1) * size, page * size);
-          return (
-            <section className="column" key={state}>
-              <h2 className="col-title">
-                <Link className="column-head" to={`/p/${encodeURIComponent(project)}/state/${encodeURIComponent(state)}`}>
-                  {state} <span className="count">{total}</span>
-                </Link>
-              </h2>
-              <div className="column-body">
-                {shown.map((f) => (
-                  <FeatureCard
-                    key={f.code}
-                    project={project}
-                    feature={f}
-                    siblings={items}
-                    gaps={readiness.data?.[f.code]?.gaps}
-                    next={readiness.data?.[f.code]?.next}
-                  />
-                ))}
-                {total === 0 && <div className="muted small pad">—</div>}
-              </div>
-              {pageCount > 1 && (
-                <div className="pager">
-                  <button
-                    type="button"
-                    disabled={page <= 1}
-                    onClick={() => setPage(state, page - 1)}
-                    aria-label={`Previous page of ${state}`}
-                  >
-                    ‹
-                  </button>
-                  <span className="muted small">
-                    {page} / {pageCount}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={page >= pageCount}
-                    onClick={() => setPage(state, page + 1)}
-                    aria-label={`Next page of ${state}`}
-                  >
-                    ›
-                  </button>
-                </div>
-              )}
-            </section>
-          );
-        })}
-      </div>
-
-      {otherStates.length > 0 && (
-        <div className="other-states">
-          <span className="muted small">Other states:</span>
-          {otherStates.map((s) => (
-            <Link
-              key={s}
-              to={`/p/${encodeURIComponent(project)}/state/${encodeURIComponent(s)}`}
-              className={`statelink${isNoOp(s) ? " noop" : ""}`}
-              title={isNoOp(s) ? "no-op state" : "non-displayed state"}
-            >
-              {s} <b>{countIn(s)}</b>
-            </Link>
-          ))}
-        </div>
-      )}
-
-      <ActivityPanel project={project} />
-    </div>
+      }
+      sprintHeader={sprint.data ? <SprintHeader report={sprint.data} /> : null}
+      otherStates={
+        otherStates.length > 0 ? (
+          <div className="other-states">
+            <span className="muted small">Other states:</span>
+            {otherStates.map((s) => (
+              <Link
+                key={s}
+                to={`/p/${encodeURIComponent(project)}/state/${encodeURIComponent(s)}`}
+                className={`statelink${isNoOp(s) ? " noop" : ""}`}
+                title={isNoOp(s) ? "no-op state" : "non-displayed state"}
+              >
+                {s} <b>{countIn(s)}</b>
+              </Link>
+            ))}
+          </div>
+        ) : null
+      }
+      activity={<ActivityPanel project={project} />}
+    />
   );
 }
 
