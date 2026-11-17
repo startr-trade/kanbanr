@@ -121,14 +121,34 @@ export function selectTestsOnly(
 }
 
 /**
- * The selection a group opens with: the rows Claude prepared a record for that can be decided.
- * The person can untick any of it, so the selection is always the person's.
+ * The selection of exactly one batch's rows that can be selected now, in the selection's group
+ * (FTR-038 R-5: nothing is preselected, so a whole batch is one explicit press of its own
+ * button). Any earlier selection is replaced, as Select all replaces it.
  */
-export function preselected(slice: GroupSlice, pending: ReadonlySet<string> = new Set()): Selection {
-  return {
-    group: slice.key,
-    keys: new Set(slice.rows.filter((r) => r.prepared !== "" && selectable(r, pending)).map((r) => r.key)),
-  };
+export function selectBatch(
+  sel: Selection,
+  rows: ReviewRow[],
+  name: string,
+  pending: ReadonlySet<string> = new Set(),
+): Selection {
+  return { group: sel.group, keys: new Set(rows.filter((r) => r.batch === name && selectable(r, pending)).map((r) => r.key)) };
+}
+
+/**
+ * What the Select-all box shows (FTR-038 R-2): `checked` when every selectable shown row is
+ * selected, `indeterminate` when only some are, and the label that says how many. `shown` is the
+ * rows on screen, `selectableRows` the part of them that can be selected now.
+ */
+export function selectAllState(
+  sel: Selection,
+  shown: ReviewRow[],
+  selectableRows: ReviewRow[],
+): { checked: boolean; indeterminate: boolean; label: string } {
+  const picked = shown.filter((r) => sel.keys.has(r.key)).length;
+  const chosen = selectableRows.filter((r) => sel.keys.has(r.key)).length;
+  const checked = selectableRows.length > 0 && chosen === selectableRows.length;
+  const indeterminate = chosen > 0 && !checked;
+  return { checked, indeterminate, label: picked === 0 ? `Select all ${selectableRows.length}` : `${picked} of ${shown.length} selected` };
 }
 
 /** The selected rows of `slice`'s group, in `rows`' order. */

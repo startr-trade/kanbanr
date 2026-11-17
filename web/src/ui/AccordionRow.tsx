@@ -51,7 +51,7 @@ export function AccordionRow(p: {
               onChange={(e) => p.select?.onChange(e.currentTarget.checked)}
             />
             {p.select.disabled && (
-              <span className="ui-row-reason" id={reasonId}>
+              <span className="ui-row-reason" id={reasonId} title={p.select.disabled}>
                 {p.select.disabled}
               </span>
             )}

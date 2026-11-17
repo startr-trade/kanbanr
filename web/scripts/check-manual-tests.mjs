@@ -161,9 +161,10 @@ try {
   if (!early?.querySelector('input[type="checkbox"]')?.hasAttribute("disabled")) notDue.push("a check that is not due can be selected in the manual group");
   if (early?.querySelector(".ui-row-reason")?.textContent !== sentence) notDue.push("a check that is not due does not say why beside its row");
   if (early?.querySelector('input[type="checkbox"]')?.hasAttribute("checked")) notDue.push("a check that is not due arrives selected");
-  if (!document.getElementById(rows[1].key)?.querySelector('input[type="checkbox"]')?.hasAttribute("checked")) {
-    notDue.push("a due check with a prepared result does not arrive selected");
-  }
+  // Nothing arrives selected (FTR-038 R-5, decided 18 Nov 2026): a due check is selectable, unticked.
+  const due = document.getElementById(rows[1].key)?.querySelector('input[type="checkbox"]');
+  if (!due || due.hasAttribute("disabled")) notDue.push("a due check with a prepared result cannot be selected");
+  if (due?.hasAttribute("checked")) notDue.push("a due check with a prepared result arrives selected");
 } catch (e) {
   notDue.push(`rendering the manual group failed: ${e?.stack ?? e}`);
 } finally {

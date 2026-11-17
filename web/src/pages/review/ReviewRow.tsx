@@ -60,7 +60,7 @@ export function ReviewRow(p: {
         </>
       }
       meta={
-        <>
+        <span className="review-row-meta" title={[what, ...pills].filter(Boolean).join(" · ")}>
           {what !== "" && <span className="review-row-what">{what}</span>}
           {p.badge}
           {pills.map((text, i) => (
@@ -68,7 +68,7 @@ export function ReviewRow(p: {
               {text}
             </span>
           ))}
-        </>
+        </span>
       }
       actions={
         isItem ? (

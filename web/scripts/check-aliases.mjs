@@ -92,7 +92,8 @@ try {
   const head = panel.document.querySelector(".review-group-head");
   if (!/renames every item in the plan/.test(head?.textContent ?? "")) problems2.push("the recode group has no sentence of its own");
   const buttons = [...(head?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim());
-  if (!buttons.some((b) => /^Confirm( all)? 1$/.test(b))) problems2.push(`the group's action is not Confirm: ${JSON.stringify(buttons)}`);
+  // Nothing arrives selected (FTR-038 R-5), so the button reads Confirm 0 until the plan is ticked.
+  if (!buttons.some((b) => /^Confirm( all)? \d+$/.test(b))) problems2.push(`the group's action is not Confirm: ${JSON.stringify(buttons)}`);
   const ask = askText(slice, { group: "recode", keys: new Set(["P-1"]) }, slice.rows);
   if (ask !== "Confirm recode 3 items to their kinds' prefixes?") problems2.push(`the question reads ${JSON.stringify(ask)}`);
 

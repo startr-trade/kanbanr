@@ -3,7 +3,7 @@
 // A batch Claude prepared, decided on the Review page's groups (FTR-038 T7). Two names:
 //
 // web::check_review_batch_selection_confirms_the_batch_after_asking (FTR-038 R-5): a batch's
-// records arrive selected in their group; the selection that is exactly that batch reads
+// records are selected by the person (selectBatch, or its own button) in their group; the selection that is exactly that batch reads
 // "Confirm all N" (and the prepared ones "Reject all N"); the first press only asks, naming the
 // batch's items, and posts nothing; the second posts the batch route once, as the monitor's
 // identity, with nothing typed.
@@ -18,8 +18,9 @@
 // Usage: npm run check:review-batch
 import { readFileSync } from "node:fs";
 import { batches } from "../src/prepared.ts";
-import { actionLabel, askText, batchOf, preselected } from "../src/reviewGroups.ts";
-import { closeRender, render } from "./lib/render.mjs";
+import { actionLabel, askText, batchOf, emptySelection, selectBatch } from "../src/reviewGroups.ts";
+import { JSDOM } from "jsdom";
+import { closeRender, load, render } from "./lib/render.mjs";
 
 const R5 = "web::check_review_batch_selection_confirms_the_batch_after_asking";
 const FTR037 = "web::check_review_page_offers_one_click_for_a_batch";
@@ -66,25 +67,46 @@ const count = (re, s = src) => (s.match(re) ?? []).length;
 // R-5: the selection that is one batch confirms it, after asking.
 {
   const problems = [];
-  const pre = preselected(manual);
-  expect(problems, "the batch's records arrive selected", [...pre.keys].sort(), ["DEF-040/R-1/manual: x", "FTR-034/R-1/manual: x"]);
+  const pre = selectBatch(emptySelection("manual"), rows, "agile-1");
+  expect(problems, "selectBatch selects the batch's records", [...pre.keys].sort(), ["DEF-040/R-1/manual: x", "FTR-034/R-1/manual: x"]);
   expect(problems, "the selection is the batch", batchOf(manual, pre), "agile-1");
   expect(problems, "it reads Confirm all N", actionLabel(manual, pre), "Confirm all 2");
   expect(problems, "the question names the batch's items", askText(manual, pre, rows), "Confirm DEF-040 R-1 and FTR-034 R-1?");
   try {
-    const { document, html } = await render("src/pages/review/GroupView.tsx", "GroupPanel", {
-      project: "x",
-      slice: manual,
-      writable: true,
-      who: "Alice <a@example.invalid>",
-      tick: 0,
-      body: () => "",
-    });
-    const head = document.querySelector(".review-group-head");
-    const buttons = [...(head?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim());
-    if (!buttons.includes("Confirm all 2")) problems.push(`the group button does not read "Confirm all 2": ${JSON.stringify(buttons)} ${html.slice(0, 200)}`);
-    if (!buttons.includes("Reject all 2")) problems.push(`the prepared button does not read "Reject all 2": ${JSON.stringify(buttons)}`);
-    if (document.querySelector(".ask-first")) problems.push("the question shows before the first press");
+    // Nothing arrives selected: the head reads Confirm 0 until the person presses "Select these 2".
+    // The Manual group draws its rows through a live read (EventSource); a group of another key does not.
+    const props = { project: "x", slice: { ...manual, key: "manual-rows" }, writable: true, who: "Alice <a@example.invalid>", tick: 0, body: () => "" };
+    const first = await render("src/pages/review/GroupView.tsx", "GroupPanel", props);
+    const names = (doc) => [...(doc.querySelector(".review-group-head")?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim());
+    if (!names(first.document).includes("Confirm 0")) problems.push(`a fresh group does not read "Confirm 0": ${JSON.stringify(names(first.document))}`);
+    if (!names(first.document).includes("Select these 2")) problems.push(`the batch line has no "Select these 2": ${JSON.stringify(names(first.document))}`);
+    // Pressed in a live DOM, the way check-review-groups.mjs does.
+    const dom = new JSDOM("<!DOCTYPE html><body><div id=root></div></body>", { url: "http://localhost/p/x/review" });
+    const saved = {};
+    for (const k of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) saved[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+    Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true });
+    Object.defineProperty(globalThis, "document", { value: dom.window.document, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      const mod = await load("src/pages/review/GroupView.tsx");
+      const React = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const { MemoryRouter } = await import("react-router-dom");
+      const container = dom.window.document.getElementById("root");
+      const root = createRoot(container);
+      await React.act(async () => root.render(React.createElement(MemoryRouter, { initialEntries: ["/p/x/review"] }, React.createElement(mod.GroupPanel, props))));
+      const button = [...container.querySelectorAll(".review-group-batch button")].find((b) => /Select these/.test(b.textContent));
+      if (!button) problems.push("live: no Select these button");
+      else await React.act(async () => button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+      const buttons = names(container);
+      if (!buttons.includes("Confirm all 2")) problems.push(`the group button does not read "Confirm all 2": ${JSON.stringify(buttons)}`);
+      if (!buttons.includes("Reject all 2")) problems.push(`the prepared button does not read "Reject all 2": ${JSON.stringify(buttons)}`);
+      if (container.querySelector(".ask-first")) problems.push("the question shows before the first press");
+      await React.act(async () => root.unmount());
+    } finally {
+      for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+    }
   } catch (e) {
     problems.push(`rendering the group failed: ${e?.stack ?? e}`);
   } finally {
