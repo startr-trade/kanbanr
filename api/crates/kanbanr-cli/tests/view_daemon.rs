@@ -3170,3 +3170,250 @@ fn the_releases_summary_and_a_tab_slice_meet_their_budgets() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-004 R-2: the five repository doc routes answer at a pick with nothing checked out: `at`
+/// absent means main, a commit reads that commit's text from git, `worktree` reads the disk and
+/// says so, a file's bytes come back as they are, a doc missing at the pick says whether main has
+/// it, and a path outside the repository is refused. Refs and status are what they were. Started
+/// with no repository, every route answers 409 with FTR-003's sentence.
+#[test]
+fn repo_doc_routes_answer_at_a_position_and_say_what_they_read() {
+    let base = std::env::temp_dir().join(format!("kanbanr-view-repodocs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(work.join("docs/guide")).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kanbanr = |args: &[&str]| release_cli(&home, &work, args);
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["config", "core.autocrlf", "false"]);
+    kanbanr(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = kanbanr(&["where"]);
+    assert!(
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {board}"
+    );
+    let image: &[u8] = &[0x89, b'P', b'N', b'G', 0xff, 0x00, 0xfe, 0x0a];
+    std::fs::write(work.join("docs/guide/x.md"), "# X first\n").unwrap();
+    std::fs::write(work.join("docs/guide/dot.png"), image).unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "--no-verify", "-m", "[no-ref] first"]);
+    let first = git(&["rev-parse", "HEAD"]);
+    std::fs::write(work.join("docs/guide/x.md"), "# X second\n").unwrap();
+    std::fs::write(work.join("docs/guide/only-main.md"), "# Main only\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "--no-verify", "-m", "[no-ref] second"]);
+    let second = git(&["rev-parse", "HEAD"]);
+    // An uncommitted edit: only `worktree` shows it.
+    std::fs::write(work.join("docs/guide/x.md"), "# X on disk\n").unwrap();
+    let refs_before = git(&["for-each-ref"]);
+    let status_before = git(&["status", "--porcelain"]);
+
+    let port = free_port();
+    let child = cli_cmd()
+        .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while ureq::get(&format!("{url}/api/projects")).call().is_err() {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let get_bytes = |path: &str| -> (u16, String, Vec<u8>) {
+        let r = match ureq::get(&format!("{url}/api{path}")).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => panic!("no answer: {e}"),
+        };
+        let (status, mime) = (r.status(), r.content_type().to_string());
+        let mut body = Vec::new();
+        std::io::Read::read_to_end(&mut r.into_reader(), &mut body).unwrap();
+        (status, mime, body)
+    };
+    let get = |path: &str| -> (u16, serde_json::Value) {
+        let (status, _, body) = get_bytes(path);
+        let text = String::from_utf8_lossy(&body).into_owned();
+        let v = serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
+        (status, v)
+    };
+
+    // The picker's list: main and the working tree at least, both available here.
+    let (status, list) = get("/projects/shop/positions");
+    assert_eq!(status, 200, "{list}");
+    let kinds: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(&kinds[..2], ["main", "worktree"], "{list}");
+    assert!(list[0]["available"].as_bool().unwrap(), "{list}");
+
+    // A pick resolved: absent means main.
+    let (status, at) = get("/projects/shop/positions/resolve");
+    assert_eq!(status, 200, "{at}");
+    assert_eq!(at["kind"], "main");
+    assert_eq!(at["source"], "git");
+    assert_eq!(at["position"]["commit"], second.as_str());
+    assert_eq!(at["label"], format!("main @ {}", &second[..7]));
+    let (status, at) = get(&format!("/projects/shop/positions/resolve?at={first}"));
+    assert_eq!(status, 200, "{at}");
+    assert_eq!(at["kind"], "commit");
+    assert_eq!(at["position"]["commit"], first.as_str());
+
+    // The tree under docs/ at a pick.
+    let (status, tree) = get("/projects/shop/repo-docs");
+    assert_eq!(status, 200, "{tree}");
+    assert_eq!(tree["root"], "docs/");
+    assert_eq!(
+        tree["files"],
+        serde_json::json!(["docs/guide/only-main.md", "docs/guide/x.md"])
+    );
+    let (_, tree) = get(&format!("/projects/shop/repo-docs?at={first}"));
+    assert_eq!(tree["files"], serde_json::json!(["docs/guide/x.md"]));
+
+    // A doc's text at main, at a commit, and at the working tree, each saying what it read.
+    let (status, doc) = get("/projects/shop/repo-docs/content?path=docs/guide/x.md");
+    assert_eq!(status, 200, "{doc}");
+    assert_eq!(doc["text"], "# X second\n");
+    assert_eq!(doc["kind"], "main");
+    assert_eq!(doc["source"], "git");
+    assert_eq!(doc["missing"], false);
+    assert!(doc["blob"].as_str().is_some_and(|b| b.len() == 40), "{doc}");
+    let (_, doc) = get(&format!(
+        "/projects/shop/repo-docs/content?path=docs/guide/x.md&at={first}"
+    ));
+    assert_eq!(doc["text"], "# X first\n");
+    assert_eq!(doc["position"]["commit"], first.as_str());
+    let (_, doc) = get("/projects/shop/repo-docs/content?path=docs/guide/x.md&at=worktree");
+    assert_eq!(doc["text"], "# X on disk\n");
+    assert_eq!(doc["source"], "disk");
+    assert!(
+        doc["label"]
+            .as_str()
+            .unwrap()
+            .starts_with("working tree @ "),
+        "{doc}"
+    );
+
+    // Missing at the pick: says so, naming the position, and whether main has it.
+    let (status, doc) = get(&format!(
+        "/projects/shop/repo-docs/content?path=docs/guide/only-main.md&at={first}"
+    ));
+    assert_eq!(status, 200, "{doc}");
+    assert_eq!(doc["missing"], true);
+    assert_eq!(doc["text"], serde_json::Value::Null);
+    assert_eq!(doc["at_main"], true);
+    assert!(
+        doc["why"]
+            .as_str()
+            .unwrap()
+            .contains("docs/guide/only-main.md is not in the repository at commit @"),
+        "{doc}"
+    );
+
+    // A file's bytes, as they are, labelled by its extension.
+    let (status, mime, bytes) = get_bytes("/projects/shop/repo-docs/raw?path=docs/guide/dot.png");
+    assert_eq!(status, 200);
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, image);
+    let (status, _, bytes) = get_bytes(&format!(
+        "/projects/shop/repo-docs/raw?path=docs/guide/x.md&at={first}"
+    ));
+    assert_eq!(status, 200);
+    assert_eq!(bytes, b"# X first\n");
+    assert_eq!(
+        get_bytes(&format!(
+            "/projects/shop/repo-docs/raw?path=docs/guide/only-main.md&at={first}"
+        ))
+        .0,
+        404
+    );
+
+    // Refused: a path outside the repository, an unknown parameter, a pick that is no position,
+    // a commit the repository lacks.
+    for bad in [
+        "/projects/shop/repo-docs/content?path=../../etc/passwd",
+        "/projects/shop/repo-docs/raw?path=../../etc/passwd",
+        "/projects/shop/repo-docs/content?path=/etc/passwd",
+        "/projects/shop/repo-docs/content",
+        "/projects/shop/repo-docs?att=main",
+        "/projects/shop/positions?x=1",
+        "/projects/shop/positions/resolve?at=no-such-thing",
+    ] {
+        assert_eq!(get(bad).0, 400, "{bad}");
+    }
+    let (status, why) = get(&format!(
+        "/projects/shop/positions/resolve?at={}",
+        "1".repeat(40)
+    ));
+    assert_eq!(status, 409, "{why}");
+
+    // Nothing read changed the repository.
+    assert_eq!(git(&["for-each-ref"]), refs_before);
+    assert_eq!(git(&["status", "--porcelain"]), status_before);
+
+    // Started outside any repository: 409, and the message says what to do.
+    let port2 = free_port();
+    let child2 = cli_cmd()
+        .args(["serve", "--bind", &format!("127.0.0.1:{port2}")])
+        .current_dir(&base)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon2 = Daemon(child2);
+    let url2 = format!("http://127.0.0.1:{port2}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while ureq::get(&format!("{url2}/api/projects")).call().is_err() {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for route in [
+        "positions",
+        "positions/resolve",
+        "repo-docs",
+        "repo-docs/content?path=docs/guide/x.md",
+        "repo-docs/raw?path=docs/guide/x.md",
+    ] {
+        match ureq::get(&format!("{url2}/api/projects/shop/{route}")).call() {
+            Err(ureq::Error::Status(code, r)) => {
+                assert_eq!(code, 409, "{route}");
+                assert_eq!(
+                    r.into_string().unwrap(),
+                    "no checkout on this machine: a view needs the code repository (start `kanbanr serve` from the project folder) or a saved snapshot (FTR-016)",
+                    "{route}"
+                );
+            }
+            other => panic!("{route}: expected a 409, got {other:?}"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

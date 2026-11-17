@@ -261,6 +261,25 @@ pub async fn get_doc_raw(
     }
 }
 
+/// `GET /api/projects/:project/repo-docs/raw?path=&at=`: a code repository file's bytes at the
+/// pick (FTR-004), as they are, labelled by the file's extension. Served apart from the passthrough
+/// because a dispatch answer is text, and an image is not.
+pub async fn get_repo_doc_raw(
+    State(st): State<AppState>,
+    Path(p): Path<String>,
+    OriginalUri(uri): OriginalUri,
+) -> axum::response::Response {
+    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let dpath = pq.strip_prefix("/api").unwrap_or(pq);
+    let query = uri.query();
+    let repo = repo_for(&st, dpath);
+    let store = crate::memo::store_for(&st, &p);
+    match dispatch::repo_doc_raw(store, &p, query, repo) {
+        Ok((bytes, mime)) => ([("content-type", mime)], bytes).into_response(),
+        Err(e) => core_err(e).into_response(),
+    }
+}
+
 /// `?flags=` on `/drift/latest` (FTR-045): include the flags; true when absent.
 #[derive(serde::Deserialize)]
 pub struct LatestQuery {
@@ -406,7 +425,8 @@ pub(crate) fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a 
 /// read it (FTR-048), the Overview, which embeds attention and judges staleness against HEAD
 /// (FTR-048), and the Review page's group decision, which judges a row's
 /// blocks as the page does, and the page's group reads that judge them (FTR-038), query string
-/// aside. (A write gets the repository from
+/// aside, the position picker and the repository doc reads (FTR-004), and the project's doctor,
+/// which checks repository doc links at each item's position (FTR-004). (A write gets the repository from
 /// `run_write` either way; the decide route is listed so the set says which routes read it.)
 pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
@@ -428,6 +448,12 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "scopes", "drift"]
             | ["projects", _, "prepared"]
             | ["projects", _, "position"]
+            | ["projects", _, "positions"]
+            | ["projects", _, "positions", "resolve"]
+            | ["projects", _, "repo-docs"]
+            | ["projects", _, "repo-docs", "content"]
+            | ["projects", _, "repo-docs", "raw"]
+            | ["projects", _, "doctor"]
             | ["projects", _, "views", _]
             | ["projects", _, "items"]
             | ["projects", _, "attention"]

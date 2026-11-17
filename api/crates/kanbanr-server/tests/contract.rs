@@ -318,6 +318,15 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(format!("{base}?path=img/dot.png"));
             out.push(format!("{base}?path=guide/intro.md"));
         }
+        // Repository docs at a pick (FTR-004): main by default, and the working tree.
+        "/api/projects/{project}/repo-docs/content" | "/api/projects/{project}/repo-docs/raw" => {
+            out.push(format!("{base}?path=docs/guide.md"));
+            out.push(format!("{base}?path=docs/guide.md&at=worktree"));
+        }
+        "/api/projects/{project}/positions/resolve" | "/api/projects/{project}/repo-docs" => {
+            out.push(base.clone());
+            out.push(format!("{base}?at=worktree"));
+        }
         "/api/projects/{project}/features/{code}/export" => {
             out.push(base.clone());
             out.push(format!("{base}?format=json"));

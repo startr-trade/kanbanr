@@ -646,6 +646,52 @@ fn position_repo(repo: Option<&std::path::Path>) -> Result<&std::path::Path> {
     })
 }
 
+/// The pick `at` names for project `p` (FTR-004), resolved against `repo`: `main` when absent.
+fn picked_at(
+    store: &Store,
+    p: &str,
+    repo: &std::path::Path,
+    query: Option<&str>,
+) -> Result<crate::picks::Picked> {
+    let project = store.load_meta(p)?;
+    let pick = match query_param(query, "at").filter(|s| !s.trim().is_empty()) {
+        None => crate::picks::Pick::Main,
+        Some(text) => crate::picks::parse_pick(
+            &text,
+            &project,
+            &crate::sprints::load(store, p).unwrap_or_default(),
+            &crate::releases::load(store, p).unwrap_or_default(),
+        )?,
+    };
+    crate::picks::resolve(store, p, repo, &pick)
+}
+
+/// The required `path` of a repository doc read (FTR-004).
+fn repo_doc_path(query: Option<&str>) -> Result<String> {
+    query_param(query, "path")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| CoreError::Unsupported("path is required: a repository path".into()))
+}
+
+/// `GET /projects/{p}/repo-docs/raw?path=&at=` (FTR-004): the bytes of a repository file at the
+/// pick, and their media type. The daemon serves these bytes as they are; a path missing at the
+/// pick is a 404.
+pub fn repo_doc_raw(
+    store: &Store,
+    p: &str,
+    query: Option<&str>,
+    repo: Option<&std::path::Path>,
+) -> Result<(Vec<u8>, &'static str)> {
+    only_params(query, &["path", "at"])?;
+    let repo = position_repo(repo)?;
+    let path = repo_doc_path(query)?;
+    let at = picked_at(store, p, repo, query)?;
+    match crate::repodocs::read_bytes(repo, &at, &path)? {
+        Some(bytes) => Ok((bytes, crate::docs::content_type(&path))),
+        None => Err(CoreError::DocNotFound(path)),
+    }
+}
+
 /// A boolean query-string flag: present with no/empty/"true"/"1" value -> true.
 fn query_flag(query: Option<&str>, key: &str) -> bool {
     match query_param(query, key) {
@@ -1043,6 +1089,10 @@ pub fn read_media_type(path: &str) -> &'static str {
             MARKDOWN
         }
         ["projects", _, "docs", "content"] => MARKDOWN,
+        // A repository file's bytes, labelled by its extension (FTR-004).
+        ["projects", _, "repo-docs", "raw"] => {
+            crate::docs::content_type(&query_param(query, "path").unwrap_or_default())
+        }
         ["projects", _, "scopes", _, "brief"] => MARKDOWN,
         _ => JSON,
     }
@@ -1138,6 +1188,40 @@ fn dispatch_routes(
                 max_nodes,
             )?;
             Ok(String::from_utf8_lossy(&crate::views::answer_bytes(&answer)).into_owned())
+        }
+        // The positions a reader can pick, and one picked (FTR-004).
+        ("GET", ["projects", p, "positions"]) => {
+            only_params(query, &[])?;
+            let repo = position_repo(repo)?;
+            store.load_meta(p)?;
+            ser(&crate::picks::picks(store, p, repo))
+        }
+        ("GET", ["projects", p, "positions", "resolve"]) => {
+            only_params(query, &["at"])?;
+            ser(&picked_at(store, p, position_repo(repo)?, query)?)
+        }
+        // Repository docs at a pick (FTR-004): the tree under docs/, a doc, its bytes.
+        ("GET", ["projects", p, "repo-docs"]) => {
+            only_params(query, &["at"])?;
+            let repo = position_repo(repo)?;
+            let at = picked_at(store, p, repo, query)?;
+            ser(&crate::repodocs::tree(repo, &at, "docs/")?)
+        }
+        ("GET", ["projects", p, "repo-docs", "content"]) => {
+            only_params(query, &["path", "at"])?;
+            let repo = position_repo(repo)?;
+            let path = repo_doc_path(query)?;
+            let at = picked_at(store, p, repo, query)?;
+            let main = if at.kind == "main" {
+                at.state.clone()
+            } else {
+                crate::picks::resolve(store, p, repo, &crate::picks::Pick::Main)?.state
+            };
+            ser(&crate::repodocs::read(repo, &at, &path, &main)?)
+        }
+        ("GET", ["projects", p, "repo-docs", "raw"]) => {
+            let (bytes, _) = repo_doc_raw(store, p, query, repo)?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
         }
         // The docs and items that name what work changed and have not changed since (FTR-013).
         ("GET", ["projects", p, "drift"]) => {

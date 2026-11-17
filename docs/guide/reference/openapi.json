@@ -5247,6 +5247,71 @@
         ],
         "type": "object"
       },
+      "PickView": {
+        "description": "One entry of the position picker (FTR-004): whether it resolves here, and why not.",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "pick": {
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it is not available; empty when it is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pick",
+          "kind",
+          "label",
+          "available",
+          "why"
+        ],
+        "type": "object"
+      },
+      "Picked": {
+        "description": "A pick resolved to a position (FTR-004). `state.position.commit` is `Some` for every\n[`Source::Git`] value, and then `state.changed` is empty. Serialises the position as\n`position`; the changed paths are not sent.",
+        "properties": {
+          "kind": {
+            "description": "`main`, `worktree`, `item`, `sprint`, `release` or `commit`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What the banner shows: `FTR-004 · feat/FTR-004-read-docs @ 1a2b3c4`, `main @ 6a973c6`.",
+            "type": "string"
+          },
+          "pick": {
+            "description": "The pick's text, as [`Pick`]'s Display gives it.",
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/PositionRef"
+          },
+          "resolved_from": {
+            "description": "The rule used: `branch tip`, `merge commit recorded on the item`, `tag` …",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source3"
+          }
+        },
+        "required": [
+          "pick",
+          "kind",
+          "position",
+          "source",
+          "label",
+          "resolved_from"
+        ],
+        "type": "object"
+      },
       "Place": {
         "description": "A decision waiting for someone, and where.",
         "enum": [
@@ -7202,6 +7267,126 @@
         ],
         "type": "object"
       },
+      "RepoDoc": {
+        "description": "A repository doc at a position: its text, or why it is not there.",
+        "properties": {
+          "at_main": {
+            "description": "For a missing doc, whether main has it; None otherwise.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "blob": {
+            "description": "The blob id of the bytes read: the id the position recorded, from git or disk.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`main`, `worktree`, `item`, `sprint`, `release` or `commit`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What the banner shows: `FTR-004 · feat/FTR-004-read-docs @ 1a2b3c4`, `main @ 6a973c6`.",
+            "type": "string"
+          },
+          "missing": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "pick": {
+            "description": "The pick's text, as [`Pick`]'s Display gives it.",
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/PositionRef"
+          },
+          "resolved_from": {
+            "description": "The rule used: `branch tip`, `merge commit recorded on the item`, `tag` …",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source3"
+          },
+          "text": {
+            "description": "The doc's text (lossy UTF-8); None when it is missing at the position.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "description": "Why there is no text; empty when there is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pick",
+          "kind",
+          "position",
+          "source",
+          "label",
+          "resolved_from",
+          "path",
+          "text",
+          "blob",
+          "missing",
+          "why",
+          "at_main"
+        ],
+        "type": "object"
+      },
+      "RepoTree": {
+        "description": "The `.md` files under a root at a position.",
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "`main`, `worktree`, `item`, `sprint`, `release` or `commit`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What the banner shows: `FTR-004 · feat/FTR-004-read-docs @ 1a2b3c4`, `main @ 6a973c6`.",
+            "type": "string"
+          },
+          "pick": {
+            "description": "The pick's text, as [`Pick`]'s Display gives it.",
+            "type": "string"
+          },
+          "position": {
+            "$ref": "#/components/schemas/PositionRef"
+          },
+          "resolved_from": {
+            "description": "The rule used: `branch tip`, `merge commit recorded on the item`, `tag` …",
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source3"
+          }
+        },
+        "required": [
+          "pick",
+          "kind",
+          "position",
+          "source",
+          "label",
+          "resolved_from",
+          "root",
+          "files"
+        ],
+        "type": "object"
+      },
       "Report": {
         "description": "Every flag for the board (or one item), with when it was generated, so two runs can be compared\nlater (FTR-013 R-8).",
         "properties": {
@@ -8252,6 +8437,14 @@
           "kind"
         ],
         "type": "object"
+      },
+      "Source3": {
+        "description": "Where a read at a pick takes its bytes from: git objects at a commit, or the working tree.",
+        "enum": [
+          "git",
+          "disk"
+        ],
+        "type": "string"
       },
       "SourceKind": {
         "description": "The three kinds a realized design becomes (ADR-0014 point 2).",
@@ -11445,6 +11638,100 @@
         "summary": "The live position of the code repository the daemon was started in: its commit plus a hash of the uncommitted changes, and the changed paths"
       }
     },
+    "/api/projects/{project}/positions": {
+      "get": {
+        "operationId": "getProjectsPositions",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PickView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The positions the picker offers: main, the working tree, each sprint and each release, with whether each resolves in the code repository and why not"
+      }
+    },
+    "/api/projects/{project}/positions/resolve": {
+      "get": {
+        "operationId": "getProjectsPositionsResolve",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The position to read at: main (the default), worktree, an item code, a sprint code, a release version, a commit or a position text. One the repository cannot resolve is a 400 saying why; a commit it lacks, or no repository, a 409.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Picked"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A pick resolved to a position: its commit, where a read takes its bytes from, the banner label and the rule used"
+      }
+    },
     "/api/projects/{project}/prepared": {
       "get": {
         "operationId": "getProjectsPrepared",
@@ -11920,6 +12207,175 @@
           }
         },
         "summary": "What promoting a release would do, with nothing changed: the button, each step and condition, what is missing and, for the cut, what ships. The monitor reads the code repository only when started in the project folder"
+      }
+    },
+    "/api/projects/{project}/repo-docs": {
+      "get": {
+        "operationId": "getProjectsRepoDocs",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The position to read at: main (the default), worktree, an item code, a sprint code, a release version, a commit or a position text. One the repository cannot resolve is a 400 saying why; a commit it lacks, or no repository, a 409.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoTree"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The markdown files under the code repository's docs/ at a pick, read with nothing checked out"
+      }
+    },
+    "/api/projects/{project}/repo-docs/content": {
+      "get": {
+        "operationId": "getProjectsRepoDocsContent",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The file's path in the code repository, forward-slashed, such as docs/guide/intro.md.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The position to read at: main (the default), worktree, an item code, a sprint code, a release version, a commit or a position text. One the repository cannot resolve is a 400 saying why; a commit it lacks, or no repository, a 409.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoDoc"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A repository doc at a pick: its text and blob, the position it was read at and from where, or why it is missing there and whether main has it"
+      }
+    },
+    "/api/projects/{project}/repo-docs/raw": {
+      "get": {
+        "operationId": "getProjectsRepoDocsRaw",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The file's path in the code repository, forward-slashed, such as docs/guide/intro.md.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The position to read at: main (the default), worktree, an item code, a sprint code, a release version, a commit or a position text. One the repository cannot resolve is a 400 saying why; a commit it lacks, or no repository, a 409.",
+            "in": "query",
+            "name": "at",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "contentMediaType": "application/octet-stream",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The file's bytes; the media type follows its extension (png, jpg, gif, svg, webp, pdf; md and txt as text/plain), application/octet-stream otherwise."
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A repository file's bytes at a pick, such as an image"
       }
     },
     "/api/projects/{project}/review": {
