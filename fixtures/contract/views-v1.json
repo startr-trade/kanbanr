@@ -1,0 +1,441 @@
+{
+  "format": 1,
+  "exact": {
+    "schema": 1,
+    "view_format": 1,
+    "view_id": "v1-0123456789abcdef0123456789abcdef",
+    "exact": true,
+    "positions": [
+      {
+        "repo": "app",
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "dirty": null
+      }
+    ],
+    "query": {
+      "op": "structure",
+      "args": {
+        "inferred": "false",
+        "level": "file",
+        "max-nodes": "60"
+      }
+    },
+    "mermaid": "flowchart LR\n%% katalogr view: structure --inferred false --level file --max-nodes 60\n  n16585fb7a8ce[\"app:ring2.tx\"]\n  n28b4f1c110ac[\"app:api.tx\"]\n  n2bf4d3b28d64[\"app:ring1.tx\"]\n  n85c3acb9e30f[\"app:lib.tx\"]\n  nbb2347447698[\"app:client.tx\"]\n  nf6ff7666ffed[\"app:user.tx\"]\n  n16585fb7a8ce -->|\"calls\"| n2bf4d3b28d64\n  n2bf4d3b28d64 -->|\"calls\"| n16585fb7a8ce\n  nbb2347447698 -->|\"via-contract\"| n28b4f1c110ac\n  nf6ff7666ffed -->|\"calls\"| n85c3acb9e30f\n",
+    "graph": {
+      "edges": [
+        {
+          "from": "n16585fb7a8ce",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n2bf4d3b28d64"
+        },
+        {
+          "from": "n2bf4d3b28d64",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n16585fb7a8ce"
+        },
+        {
+          "from": "nbb2347447698",
+          "inferred": false,
+          "kind": "via-contract",
+          "to": "n28b4f1c110ac"
+        },
+        {
+          "from": "nf6ff7666ffed",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n85c3acb9e30f"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "app",
+          "id": "n16585fb7a8ce",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:ring2.tx",
+          "path": "ring2.tx"
+        },
+        {
+          "group": "app",
+          "id": "n28b4f1c110ac",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:api.tx",
+          "path": "api.tx"
+        },
+        {
+          "group": "app",
+          "id": "n2bf4d3b28d64",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:ring1.tx",
+          "path": "ring1.tx"
+        },
+        {
+          "group": "app",
+          "id": "n85c3acb9e30f",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:lib.tx",
+          "path": "lib.tx"
+        },
+        {
+          "group": "app",
+          "id": "nbb2347447698",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:client.tx",
+          "path": "client.tx"
+        },
+        {
+          "group": "app",
+          "id": "nf6ff7666ffed",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:user.tx",
+          "path": "user.tx"
+        }
+      ],
+      "shown": 6,
+      "title": "structure --inferred false --level file --max-nodes 60",
+      "total": 6
+    },
+    "pele": "1.7.0"
+  },
+  "not_exact": {
+    "schema": 1,
+    "view_format": 1,
+    "exact": false,
+    "positions": [
+      {
+        "repo": "app",
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "dirty": null
+      }
+    ],
+    "query": {
+      "op": "structure",
+      "args": {
+        "inferred": "false",
+        "level": "file",
+        "max-nodes": "60"
+      }
+    },
+    "mermaid": "flowchart LR\n%% katalogr view: structure --inferred false --level file --max-nodes 60\n  n16585fb7a8ce[\"app:ring2.tx\"]\n  n28b4f1c110ac[\"app:api.tx\"]\n  n2bf4d3b28d64[\"app:ring1.tx\"]\n  n85c3acb9e30f[\"app:lib.tx\"]\n  nbb2347447698[\"app:client.tx\"]\n  nf6ff7666ffed[\"app:user.tx\"]\n  n16585fb7a8ce -->|\"calls\"| n2bf4d3b28d64\n  n2bf4d3b28d64 -->|\"calls\"| n16585fb7a8ce\n  nbb2347447698 -->|\"via-contract\"| n28b4f1c110ac\n  nf6ff7666ffed -->|\"calls\"| n85c3acb9e30f\n",
+    "graph": {
+      "edges": [
+        {
+          "from": "n16585fb7a8ce",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n2bf4d3b28d64"
+        },
+        {
+          "from": "n2bf4d3b28d64",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n16585fb7a8ce"
+        },
+        {
+          "from": "nbb2347447698",
+          "inferred": false,
+          "kind": "via-contract",
+          "to": "n28b4f1c110ac"
+        },
+        {
+          "from": "nf6ff7666ffed",
+          "inferred": false,
+          "kind": "calls",
+          "to": "n85c3acb9e30f"
+        }
+      ],
+      "nodes": [
+        {
+          "group": "app",
+          "id": "n16585fb7a8ce",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:ring2.tx",
+          "path": "ring2.tx"
+        },
+        {
+          "group": "app",
+          "id": "n28b4f1c110ac",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:api.tx",
+          "path": "api.tx"
+        },
+        {
+          "group": "app",
+          "id": "n2bf4d3b28d64",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:ring1.tx",
+          "path": "ring1.tx"
+        },
+        {
+          "group": "app",
+          "id": "n85c3acb9e30f",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:lib.tx",
+          "path": "lib.tx"
+        },
+        {
+          "group": "app",
+          "id": "nbb2347447698",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:client.tx",
+          "path": "client.tx"
+        },
+        {
+          "group": "app",
+          "id": "nf6ff7666ffed",
+          "kind": "artifact",
+          "label": "",
+          "name": "app:user.tx",
+          "path": "user.tx"
+        }
+      ],
+      "shown": 6,
+      "title": "structure --inferred false --level file --max-nodes 60",
+      "total": 6
+    },
+    "pele": "1.7.0",
+    "watermark": 4,
+    "pending": 1,
+    "stale": true
+  },
+  "required": {
+    "always": [
+      "schema",
+      "view_format",
+      "exact",
+      "positions",
+      "query",
+      "mermaid",
+      "graph",
+      "pele"
+    ],
+    "when_exact": [
+      "view_id"
+    ],
+    "when_not_exact": [
+      "watermark",
+      "pending",
+      "stale"
+    ]
+  },
+  "catalogue": {
+    "pele": "1.7.0",
+    "schema": 1,
+    "views": [
+      {
+        "op": "callers",
+        "params": [
+          {
+            "name": "symbol",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "2",
+            "name": "depth",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "60",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "contracts",
+        "params": [
+          {
+            "default": "",
+            "name": "kind",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "default": "60",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "cycles",
+        "params": [
+          {
+            "default": "package",
+            "name": "level",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "file",
+              "package"
+            ]
+          },
+          {
+            "default": "5",
+            "name": "limit",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "flow",
+        "params": [
+          {
+            "name": "symbol",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "6",
+            "name": "depth",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "40",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "false",
+            "name": "reverse",
+            "required": false,
+            "type": "boolean"
+          }
+        ]
+      },
+      {
+        "op": "impact",
+        "params": [
+          {
+            "name": "symbol",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "3",
+            "name": "depth",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "60",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "lineage",
+        "params": [
+          {
+            "name": "symbol",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "3",
+            "name": "depth",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "60",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "path",
+        "params": [
+          {
+            "name": "from",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "to",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "6",
+            "name": "max-len",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "op": "process",
+        "params": [
+          {
+            "name": "symbol",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "default": "150",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "default": "true",
+            "name": "messages",
+            "required": false,
+            "type": "boolean"
+          }
+        ]
+      },
+      {
+        "op": "structure",
+        "params": [
+          {
+            "default": "false",
+            "name": "inferred",
+            "required": false,
+            "type": "boolean"
+          },
+          {
+            "default": "package",
+            "name": "level",
+            "required": false,
+            "type": "enum",
+            "values": [
+              "file",
+              "package"
+            ]
+          },
+          {
+            "default": "60",
+            "name": "max-nodes",
+            "required": false,
+            "type": "integer"
+          }
+        ]
+      }
+    ]
+  }
+}

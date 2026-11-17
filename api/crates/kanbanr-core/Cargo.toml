@@ -19,6 +19,9 @@ thiserror.workspace = true
 # The board's cross-process write lock (FEAT-029), in the one write recipe (FEAT-176).
 fs2 = "0.4"
 time.workspace = true
+# The optional link to katalogr (FTR-016): loopback HTTP to `katalogr api`. No TLS and no default
+# features; kanbanr-cli already links ureq with its own, and cargo unifies them.
+ureq = { version = "2", default-features = false, features = ["json"] }
 # SHA-256 for a position's dirty part and a view ID (SPK-001); already in the lockfile through other crates.
 sha2 = "0.10"
 # Git-backed data folder (shared by the server and the CLI's local mode). vendored-libgit2 +
