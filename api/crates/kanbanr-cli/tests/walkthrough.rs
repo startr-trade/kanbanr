@@ -75,6 +75,9 @@ for line in sys.stdin:
         hook = subprocess.run(["kanbanr", "walkthrough", "answer"], input=json.dumps(payload), capture_output=True, text=True)
         say("hook said: " + hook.stdout.strip())
         result("You picked " + (json.loads(hook.stdout)["hookSpecificOutput"]["updatedInput"]["answers"]["Which colour should the basket page use?"] if hook.stdout.strip() else "nothing"), cost)
+    elif "scope the screen" in low:
+        say("Scoping the basket page.")
+        result("I have the item scoped. How should the page look?", cost)
     elif "spend everything" in low:
         say("Spending.")
         result("Reached max budget", 99.0, "error_max_budget_usd")
@@ -412,6 +415,46 @@ fn every_question_asked_in_a_run_has_one_row_in_questions_tsv() {
     assert!(checks.contains("MT-1\t2.1\ttrue"), "{checks}\n{shown}");
     let findings = std::fs::read_to_string(run.join("raw/findings.md")).unwrap();
     assert!(!findings.contains("question-unanswered"), "{findings}");
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
+/// DEF-087 R-1 — a talk claim with `since` counts a question Claude asked in an earlier step of
+/// its span: the fake Claude asks how the page should look in step 2.1, step 2.2's claim
+/// (`asked: look, since: "2.1"`) passes its check, and step 2.3's `not_asked` over the same span
+/// is a finding naming the step it was asked at.
+#[cfg(unix)]
+#[test]
+fn a_talk_expectation_over_a_span_passes_on_an_earlier_question() {
+    let w = world("span");
+    let rb = w.root.join("span.md");
+    let head = RUNBOOK.split("  - id: \"1.2\"").next().unwrap();
+    std::fs::write(
+        &rb,
+        format!(
+            "{head}  - id: \"2.1\"\n    say: \"Please scope the screen for the basket.\"\n  - id: \"2.2\"\n    expect: {{talk: {{asked: \"look\", since: \"2.1\"}}}}\n    check: MT-1\n  - id: \"2.3\"\n    expect: {{talk: {{not_asked: \"look\", since: \"2.1\"}}}}\n```\n"
+        ),
+    )
+    .unwrap();
+    let out = run_walkthrough(&w, &rb, "s1");
+    let shown = text(&out);
+    let run = w.runs.join("s1");
+    let checks = std::fs::read_to_string(run.join("raw/checks.tsv"))
+        .unwrap_or_else(|_| panic!("no checks.tsv\n{shown}"));
+    assert!(checks.contains("MT-1\t2.2\ttrue"), "{checks}\n{shown}");
+    let findings = std::fs::read_to_string(run.join("raw/findings.md")).unwrap();
+    assert!(
+        !findings.contains("step 2.2 talk-expect-failed"),
+        "{findings}"
+    );
+    let unwanted = findings
+        .lines()
+        .find(|l| l.contains("step 2.3 talk-expect-failed"))
+        .unwrap_or_else(|| panic!("no finding for step 2.3:\n{findings}\n{shown}"));
+    assert!(
+        unwanted.contains("asked at 2.1: I have the item scoped. How should the page look?")
+            || unwanted.contains("asked at 2.1: How should the page look?"),
+        "{unwanted}"
+    );
     let _ = std::fs::remove_dir_all(&w.root);
 }
 

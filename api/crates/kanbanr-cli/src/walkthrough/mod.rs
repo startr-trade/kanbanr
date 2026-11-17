@@ -151,7 +151,8 @@ pub struct Finding {
     pub step: String,
     /// `offer-missing`, `truth-mismatch`, `question-unanswered`, `budget-stop`,
     /// `board-expect-failed`, `page-expect-failed`, `talk-expect-failed`, `no-browser`,
-    /// `decision-failed`, `press-failed`, `push-failed`, `setup`.
+    /// `decision-failed`, `press-failed`, `push-failed`, `setup`, `offer-present` (a button the
+    /// runbook says is absent for an item was offered), `offer-unchecked` (it could not be read).
     pub kind: &'static str,
     /// What the board (or the runbook) said.
     pub board: String,
@@ -687,6 +688,26 @@ struct Running {
     kanbanr: PathBuf,
     ci: Option<truth::CiRuns>,
     gh: Option<PathBuf>,
+    /// The text questions of every step already run, in runbook order: one entry per step
+    /// reached, a skipped one with an empty list (DEF-087). A talk claim's `since` reads it.
+    asked_log: Vec<(String, Vec<String>)>,
+}
+
+/// The questions a talk claim reads (DEF-087), each with its step: `here` alone (step id `""`)
+/// when `since` is None, else every question `log` holds from the step `since` names to the end,
+/// then `here`. A `since` that `log` does not hold (lint stops one before a run) reads `here` alone.
+pub fn asked_in_span<'a>(
+    log: &'a [(String, Vec<String>)],
+    since: Option<&str>,
+    here: &'a [String],
+) -> Vec<(&'a str, &'a str)> {
+    let start = since.and_then(|s| log.iter().position(|(id, _)| id == s));
+    let earlier = start.map(|j| &log[j..]).unwrap_or(&[]);
+    earlier
+        .iter()
+        .flat_map(|(id, qs)| qs.iter().map(move |q| (id.as_str(), q.as_str())))
+        .chain(here.iter().map(|q| ("", q.as_str())))
+        .collect()
 }
 
 impl Running {
@@ -924,8 +945,16 @@ impl Running {
         self.started.elapsed() > Duration::from_secs(self.max_minutes * 60)
     }
 
-    /// One step. `Ok(false)` when the run must stop (budget, wall time, the session gone).
+    /// One step. `Ok(false)` when the run must stop (budget, wall time, the session gone). Every
+    /// step reached leaves its questions in `asked_log`, whichever way it returns.
     fn step(&mut self, step: &Step) -> Result<bool> {
+        let mut asked_here: Vec<String> = Vec::new();
+        let out = self.step_inner(step, &mut asked_here);
+        self.asked_log.push((step.id.clone(), asked_here));
+        out
+    }
+
+    fn step_inner(&mut self, step: &Step, asked_here: &mut Vec<String>) -> Result<bool> {
         let id = step.id.clone();
         answer::set_current_step(&self.dirs, &id)?;
         if self.over_time() {
@@ -969,7 +998,6 @@ impl Running {
         }
         let mut step_ok = true;
         let mut why = Vec::new();
-        let mut asked_here: Vec<String> = Vec::new();
         let mut final_text = String::new();
         // RC3: a step starts on an idle session — no sub-agent build still running, nothing still
         // arriving — so its say is not answered by a turn about earlier work.
@@ -1385,14 +1413,7 @@ impl Running {
             }
         }
         if let Some(expect) = &step.expect {
-            self.expect(
-                &id,
-                expect,
-                &asked_here,
-                &final_text,
-                &mut step_ok,
-                &mut why,
-            );
+            self.expect(&id, expect, asked_here, &final_text, &mut step_ok, &mut why);
         }
         // A board that setup never made fails every later step for the same reason: stop here,
         // say what Claude last asked, and prepare nothing on the target board. While Claude's last
@@ -1580,6 +1601,40 @@ impl Running {
                 }
             }
         }
+        // DEF-076 Q1: an item-scoped button the page must not offer.
+        if let Some(offer) = &expect.offer
+            && expect.absent
+        {
+            let found = match self.monitor.as_ref() {
+                Some(m) => m
+                    .offers(&project, offer, None)
+                    .map(|f| matches!(f, Found::Offered)),
+                None => Err(anyhow!("no monitor")),
+            };
+            let board = format!(
+                "the guide says \"{}\" is not offered on the {} page",
+                offer.button, offer.page
+            );
+            match found {
+                Ok(offered) => {
+                    if let Some(truth) = offer.judge_absent(offered) {
+                        self.finding(id, "offer-present", board, truth);
+                        *ok = false;
+                        why.push("a button the guide says is absent was offered".into());
+                    }
+                }
+                Err(e) => {
+                    let kind = if e.to_string().starts_with("ambiguous") {
+                        "ambiguous-selector"
+                    } else {
+                        "offer-unchecked"
+                    };
+                    self.finding(id, kind, board, e.to_string());
+                    *ok = false;
+                    why.push(e.to_string());
+                }
+            }
+        }
         if let Some(talk) = &expect.talk {
             let re = |p: &str| {
                 regex::RegexBuilder::new(p)
@@ -1587,35 +1642,66 @@ impl Running {
                     .build()
                     .ok()
             };
+            // DEF-087: with `since`, the questions of every step from that one to this.
+            let since = talk.since.as_deref();
+            let log = std::mem::take(&mut self.asked_log);
+            let span: Vec<(String, String)> = asked_in_span(&log, since, asked)
+                .into_iter()
+                .map(|(step, q)| {
+                    (
+                        if step.is_empty() { id } else { step }.to_string(),
+                        q.to_string(),
+                    )
+                })
+                .collect();
+            self.asked_log = log;
             if let Some(p) = &talk.asked
                 && let Some(r) = re(p)
-                && !asked.iter().any(|q| r.is_match(q))
+                && !span.iter().any(|(_, q)| r.is_match(q))
             {
-                self.finding(
-                    id,
-                    "talk-expect-failed",
-                    format!("a question matching /{p}/ was expected"),
-                    format!(
-                        "asked: {}",
-                        if asked.is_empty() {
-                            "nothing".to_string()
-                        } else {
-                            asked.join(" | ")
-                        }
+                let (board, truth) = match since {
+                    None => (
+                        format!("a question matching /{p}/ was expected"),
+                        format!(
+                            "asked: {}",
+                            if asked.is_empty() {
+                                "nothing".to_string()
+                            } else {
+                                asked.join(" | ")
+                            }
+                        ),
                     ),
-                );
+                    Some(s) => (
+                        format!("a question matching /{p}/ was expected in steps {s}–{id}"),
+                        format!(
+                            "asked: {}",
+                            if span.is_empty() {
+                                "nothing".to_string()
+                            } else {
+                                span.iter()
+                                    .map(|(step, q)| format!("{step}: {q}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" | ")
+                            }
+                        ),
+                    ),
+                };
+                self.finding(id, "talk-expect-failed", board, truth);
                 *ok = false;
                 why.push("the expected question was not asked".into());
             }
             if let Some(p) = &talk.not_asked
                 && let Some(r) = re(p)
-                && let Some(q) = asked.iter().find(|q| r.is_match(q))
+                && let Some((step, q)) = span.iter().find(|(_, q)| r.is_match(q))
             {
                 self.finding(
                     id,
                     "talk-expect-failed",
                     format!("no question matching /{p}/ was expected"),
-                    format!("asked: {q}"),
+                    match since {
+                        None => format!("asked: {q}"),
+                        Some(_) => format!("asked at {step}: {q}"),
+                    },
                 );
                 *ok = false;
                 why.push("an unwanted question was asked".into());
@@ -1830,6 +1916,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         kanbanr: kanbanr.clone(),
         ci: None,
         gh: gh.clone(),
+        asked_log: Vec::new(),
     };
     println!(
         "run {name}: {} steps, model {model}, budget {} USD, fence {}",
@@ -2338,5 +2425,62 @@ mod tests {
         // Markers keep the order they were first named in, across the runs.
         let order: Vec<&str> = merged.iter().map(|c| c.marker.as_str()).collect();
         assert_eq!(order, ["MT-1", "MT-10", "MT-3", "MT-6"]);
+    }
+
+    /// DEF-087 R-1: a talk claim with `since` reads the questions of every step from that one to
+    /// its own, each with its step; without `since`, or with one the log does not hold, its own
+    /// step alone.
+    #[test]
+    fn a_talk_expectation_reads_every_step_of_its_span() {
+        let log: Vec<(String, Vec<String>)> = vec![
+            ("2.1".into(), vec!["Which process?".into()]),
+            ("2.2".into(), vec!["How should the page look?".into()]),
+            ("3.1".into(), vec![]),
+            ("3.2".into(), vec![]),
+        ];
+        let here = vec!["Ready?".to_string()];
+        assert_eq!(
+            asked_in_span(&log, Some("2.1"), &here),
+            [
+                ("2.1", "Which process?"),
+                ("2.2", "How should the page look?"),
+                ("", "Ready?")
+            ]
+        );
+        assert_eq!(asked_in_span(&log, Some("3.1"), &here), [("", "Ready?")]);
+        assert_eq!(asked_in_span(&log, None, &here), [("", "Ready?")]);
+        assert_eq!(asked_in_span(&log, Some("9.9"), &here), [("", "Ready?")]);
+    }
+
+    /// DEF-087 R-5: three doc comments in the walkthrough say what the code does: a title
+    /// selector's several fits are ambiguous, a pick's policy can be `runbook-context`, and a text
+    /// question without a question mark can be a request sentence.
+    #[test]
+    fn the_walkthrough_doc_comments_match_the_code() {
+        let runbook = include_str!("runbook.rs");
+        let answer = include_str!("answer.rs");
+        let driver = include_str!("driver.rs");
+        let gone = ["the newest when", "several do."].concat();
+        assert!(
+            !runbook.contains(&gone),
+            "runbook.rs still says the newest wins"
+        );
+        assert_eq!(
+            runbook
+                .matches("several equal fits are\n    /// ambiguous (`ambiguous-selector`), never a guess.")
+                .count(),
+            2
+        );
+        let old_policy = ["`runbook`, `recommended`, ", "`first` or `free-text`."].concat();
+        assert!(
+            !answer.contains(&old_policy),
+            "answer.rs leaves out runbook-context"
+        );
+        assert!(
+            answer.contains("`runbook`, `recommended`, `runbook-context`, `first` or `free-text`.")
+        );
+        assert!(driver.contains(
+            "With no question mark, a request\n/// sentence (in bold, or the message's last sentence) is the question."
+        ));
     }
 }

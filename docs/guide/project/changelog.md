@@ -33,6 +33,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- A walkthrough's talk expectation can cover a span of steps (`since:`), so a question Claude asks
+  while scoping counts for the check that expects it (DEF-087); both guide runbooks now check that
+  they reach their cut (MT-10, for FTR-054).
 - A walkthrough's results name the commit of the build it ran, and a dirty or unknown build is
   refused unless `--rev` names one; the Review page shows each result's check id (DEF-089).
 - A delegation whose grant cannot be checked, because the board's git history cannot be read (for

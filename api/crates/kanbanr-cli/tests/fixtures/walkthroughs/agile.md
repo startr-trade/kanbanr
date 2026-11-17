@@ -26,6 +26,7 @@ checks:
   MT-6: {item: DOC-008, requirement: R-1, test: "manual: the agile walkthrough's first screen request gets a style question"}
   MT-7: {item: DOC-008, requirement: R-2, test: "manual: the agile walkthrough reaches its cut with no question about push order or the Record result form"}
   MT-8: {item: DOC-008, requirement: R-3, test: "manual: the agile walkthrough's proposed pipeline has separate rerunnable stages and stack caching"}
+  MT-10: {item: FTR-054, requirement: R-1, test: "walkthrough: the togaf and agile runbooks complete headlessly with zero stops and prepare the eight v0.6.0 checks"}
 answers:
   - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
   - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "Nothing yet: finish the setup, and I'll tell you what to build in a later step."}
@@ -64,12 +65,14 @@ steps:
   - id: "2.1"
     say: "Start a two-week sprint for the saved basket. Put it in, for release 0.1.0."
     expect: {board: {sprint: active}}
-    names: {basket: {new_item: {title_matches: "\\bbasket\\b"}}}
     answers:
     - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there."}
   - id: "2.2"
     say: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design."
-    expect: {board: {item: {named: basket}}}
+    expect: {board: {item: {title_matches: "\\bshoppers?\\b|\\bsaved basket\\b"}}}
+    # Bound here, once the item exists wherever Claude filed it: setup may already have made it,
+    # and the agile run of 16 Nov bound a chore titled "…for the basket program" by new_item.
+    names: {basket: {title_matches: "\\bshoppers?\\b|\\bsaved basket\\b"}}
   - id: "2.3"
     say: "Add a manual test to the saved basket: open the basket page, add an item, close the browser, reopen the page, and the item is still there."
   # 3 One item, stage by stage
@@ -78,10 +81,11 @@ steps:
     offer: {page: review, button: Approve, subject: {item: {named: basket}}}
   - id: "3.2"
     say: "Build the basket page."
-    expect: {talk: {asked: "style|styling|look|feel|screen"}}
-    check: MT-6
   - id: "3.3"
     say: "Move the saved basket on to Develop: write the design and its task list, and name a test for each requirement."
+    # MT-6: Claude asks how the page should look when it first scopes the screen, in any step from 2.1 to here (DEF-087).
+    expect: {talk: {asked: "style|styling|look|feel|screen", since: "2.1"}}
+    check: MT-6
   - id: "3.4"
     decide: {signoff: {item: {named: basket}, name: design-review}}
     offer: {page: review, button: "Sign off design-review", subject: {item: {named: basket}}}
@@ -110,6 +114,13 @@ steps:
     offer: {page: review, button: Approve, subject: {item: {named: readme}}}
   - id: "4.3"
     say: "Move the README chore on as far as it goes. Tell me what waits for me on the Review page."
+  # The chore holds at Test until its docs-folded sign-off, and the rename in 5 needs it merged
+  # (the agile run of 16 Nov stalled at 5.6 without these two steps; the TOGAF guide has them).
+  - id: "4.4"
+    decide: {signoff: {item: {named: readme}, name: docs-folded}}
+    offer: {page: review, button: "Sign off docs-folded", subject: {item: {named: readme}}}
+  - id: "4.5"
+    say: "Move the README chore on as far as it goes, if it has not moved already."
   # 5 A second item, with drifted docs
   - id: "5.1"
     say: "Add an item to rename the basket page address from /basket to /cart. Take it to Design and tell me what waits for me on the Review page."
@@ -178,7 +189,7 @@ steps:
     say: "Move every item in v0.1.0 on to Review, if it has not moved already."
   - id: "6.5"
     decide: {promote: {release: v0.1.0, to: candidate}}
-    offer: {page: releases, button: "Promote v0.1.0 to candidate"}
+    offer: {page: releases, button: "Promote to candidate"}
     expect: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.6"
     say: "Write the release notes and the changelog for readers."
@@ -208,7 +219,7 @@ steps:
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.13"
     decide: {promote: {release: v0.1.0, to: main}}
-    offer: {page: releases, button: "Promote v0.1.0 to main"}
+    offer: {page: releases, button: "Promote to main"}
     expect: {board: {release: {version: v0.1.0, stage: main}}}
   - id: "6.14"
     push: {repo: code, refspec: main}
@@ -216,12 +227,18 @@ steps:
     say: "I pushed main for v0.1.0. CI on main passed for that commit. Prepare the result for me to confirm on the Releases page."
     decide: {confirm_prepared: {kind: gate-result, release: v0.1.0}}
     offer: {page: releases, button: "Record ci passed"}
-    expect: {talk: {not_asked: "push order|order .*push|record result form|fill in"}}
+    # MT-7: no question about push order or the Record result form anywhere from 6.1 to the cut (DEF-087).
+    expect: {talk: {not_asked: "push order|order .*push|record result form|fill in", since: "6.1"}}
+    check: MT-7
   - id: "6.16"
     decide: {promote: {release: v0.1.0, to: production}}
     offer: {page: releases, button: "Cut v0.1.0"}
     expect: {board: {release: {version: v0.1.0, stage: production}}}
     check: MT-7
+  # MT-10 (FTR-054 R-1): the run reached its cut; a run that stopped never gets here.
+  - id: "6.16a"
+    expect: {board: {release: {version: v0.1.0, stage: production}}}
+    check: MT-10
   - id: "6.17"
     push: {repo: code, refspec: v0.1.0}
     expect: {truth: {tag: {release: v0.1.0}}}

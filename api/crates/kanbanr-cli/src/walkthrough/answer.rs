@@ -106,7 +106,7 @@ impl Question {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Picked {
     pub pick: String,
-    /// `runbook`, `recommended`, `first` or `free-text`.
+    /// `runbook`, `recommended`, `runbook-context`, `first` or `free-text`.
     pub policy: &'static str,
     /// The rule's pattern, when the runbook chose.
     pub rule: Option<String>,
