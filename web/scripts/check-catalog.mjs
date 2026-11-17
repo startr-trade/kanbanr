@@ -168,12 +168,13 @@ const status = {
   })).document;
   if (!(broken.body.textContent ?? "").includes("is not a question")) problems.push("an invalid catalog's problems are not shown");
 
-  // The source: only the two reads, tagged so a change to the catalog, facts or docs refreshes it.
+  // The source: only the two reads, tagged so a change to the catalog, facts, docs or config
+  // (protections and releases decide which rows apply) refreshes it.
   const page = read("pages/CatalogPage.tsx");
   const reads = [...page.matchAll(/apiUrl\(`([^`]*)`\)/g)].map((m) => m[1]);
   expect("the page reads only …/catalog and …/facts", reads, ["/projects/${enc}/catalog", "/projects/${enc}/facts"]);
   if (/\bapi\./.test(page)) problems.push("CatalogPage.tsx calls api.*; it reads through useQuery only and writes nothing");
-  if (!/\["catalog", "facts", "docs"\]/.test(page)) problems.push("the catalog read is not tagged catalog, facts and docs");
+  if (!/\["catalog", "facts", "docs", "config"\]/.test(page)) problems.push("the catalog read is not tagged catalog, facts, docs and config");
   const api = read("api.ts");
   if (!/getCatalog: \([^)]*\) =>\s*getJson<CatalogStatus>\(/.test(api)) problems.push("api.ts: getCatalog does not read a CatalogStatus");
   if (!/getFacts: \([^)]*\) =>\s*getJson<FactsOrEmpty>\(/.test(api)) problems.push("api.ts: getFacts does not read the facts record or {}");
