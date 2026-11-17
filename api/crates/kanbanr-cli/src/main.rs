@@ -7294,6 +7294,9 @@ fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
             for w in &s.waits {
                 println!("{w}");
             }
+            for l in buildrun::cache_lines(&s.cache) {
+                println!("{l}");
+            }
             Ok(())
         }
         BuildCmd::Log { task, since } => {
