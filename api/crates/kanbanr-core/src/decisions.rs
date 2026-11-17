@@ -395,12 +395,22 @@ pub fn verdict_of(method: &str, path: &str) -> Option<Verdict> {
     }
 }
 
-/// Is this a route only the person may use: the mode, a grant, a review, and the answer to a
-/// prepared record (FTR-034)?
+/// Why Claude may not accept a baseline revision (FTR-033): the person-only wording, shared by
+/// the guard and the write path.
+pub const ACCEPT_BASELINE_REFUSAL: &str = "accepting a baseline revision is the person's own, on the Baseline page or in their \
+     terminal: no mode or delegation lets Claude take it. Propose it (`kanbanr baseline \
+     propose`) and tell the person where it waits.";
+
+/// Is this a route only the person may use: the mode, a grant, a review, the answer to a
+/// prepared record (FTR-034), and accepting a baseline revision (FTR-033)?
 pub fn is_person_only(method: &str, path: &str) -> bool {
     matches!(
         (method, segments(path).as_slice()),
         ("PUT", ["projects", _, "decisions", "mode"])
+            | (
+                "POST",
+                ["projects", _, "baseline", "revisions", _, "accept"]
+            )
             | ("POST", ["projects", _, "prepared", _, "confirm" | "reject"])
             | (
                 "POST",
@@ -446,6 +456,8 @@ pub(crate) fn authorize(
             Ok(Authorized::AsIs)
         } else if by_the_person {
             Err("`--under` is Claude's; a person needs none".to_string())
+        } else if matches!(segments(path).as_slice(), ["projects", _, "baseline", ..]) {
+            Err(ACCEPT_BASELINE_REFUSAL.to_string())
         } else if matches!(segments(path).as_slice(), ["projects", _, "prepared", ..]) {
             Err(
                 "answering a prepared record is the person's own, recorded on the monitor, never \
@@ -1124,6 +1136,28 @@ pub fn waiting(
             );
         }
     }
+    // Each proposed baseline revision waits on the Baseline page, the person's in every mode
+    // (FTR-033).
+    let baseline_url = review_url.map(|u| match u.strip_suffix("/review") {
+        Some(base) => format!("{base}/baseline"),
+        None => u.to_string(),
+    });
+    for r in crate::baseline::load(store, p)?.revisions {
+        if r.state() != crate::baseline::RevisionState::Proposed {
+            continue;
+        }
+        let areas: Vec<&str> = r.answers.iter().map(|a| a.area.as_str()).collect();
+        out.push(Waiting {
+            code: r.id.clone(),
+            what: format!(
+                "accept or withdraw the baseline revision ({})",
+                areas.join(", ")
+            ),
+            place: Place::Monitor,
+            delegation: None,
+            url: baseline_url.as_ref().map(|u| format!("{u}#{}", r.id)),
+        });
+    }
     for x in to_review(&project, d) {
         let what = match x.signoff.as_str() {
             "" => format!(
@@ -1566,6 +1600,116 @@ mod tests {
         let g = one(None);
         assert_eq!(g.permission_rules, vec![rule]);
         assert!(!g.permission_rules_checked && g.permission_rules_missing.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-033 R-3: accepting a baseline revision is the person's in every mode. The monitor and
+    /// the terminal take it in monitor and delegated mode alike (conversation mode cannot be set
+    /// yet); Claude is refused
+    /// it in each, with or without a delegation named; the guard words it as the person's own; the
+    /// route is a stamped verdict route; and a proposed revision waits on the Baseline page.
+    #[test]
+    fn accepting_a_baseline_revision_is_the_persons_in_every_mode() {
+        use crate::origin::{DecisionContext, Taker, Verdict, verdict_of_route, verdict_refusal};
+        let (store, dir, _, _) = board();
+        let accept = "/projects/demo/baseline/revisions/REV-001/accept";
+        assert!(is_person_only("POST", accept));
+        assert!(!is_person_only("GET", accept));
+        assert!(crate::origin::is_verdict_route("POST", accept));
+        assert!(crate::origin::stamps_origin("POST", accept));
+        assert_eq!(
+            verdict_of_route("POST", accept),
+            Some(Verdict::AcceptBaseline)
+        );
+        // The withdrawal and the proposal are no verdicts, but say where they came from.
+        for (m, path) in [
+            ("POST", "/projects/demo/baseline/revisions"),
+            ("POST", "/projects/demo/baseline/revisions/REV-001/withdraw"),
+            ("POST", "/projects/demo/baseline/packs"),
+            ("DELETE", "/projects/demo/baseline/packs/data"),
+        ] {
+            assert!(!is_person_only(m, path), "{m} {path}");
+            assert!(crate::origin::stamps_origin(m, path), "{m} {path}");
+        }
+
+        propose(&store, "demo", defects(), who("conversation")).unwrap();
+        grant_it(&store, "DLG-001");
+        let under = json!({"delegation": "DLG-001"});
+        // Conversation mode cannot be set until FTR-035 builds it; the person-only rule is
+        // judged before the mode is read, so it holds there too.
+        for mode in [Mode::Monitor, Mode::Delegated] {
+            set_mode(&store, "demo", mode, "", who("monitor"), None).unwrap();
+            for origin in [Origin::Monitor, Origin::Terminal] {
+                assert_eq!(
+                    judge(&store, "POST", accept, None, origin),
+                    Ok(Authorized::AsIs),
+                    "{mode:?} {origin:?}"
+                );
+            }
+            for body in [None, Some(&under)] {
+                for origin in [Origin::Conversation, Origin::Delegated] {
+                    let why = judge(&store, "POST", accept, body, origin).unwrap_err();
+                    assert!(
+                        why.contains("accepting a baseline revision is the person's own")
+                            && why.contains("Baseline page"),
+                        "{mode:?} {origin:?}: {why}"
+                    );
+                }
+            }
+            // The one guard, with the project's decisions, says the same.
+            let d = load(&store, "demo").unwrap();
+            let project = store.load("demo").unwrap();
+            let ctx = DecisionContext {
+                decisions: Some(&d),
+                project: Some(&project),
+                method: "POST",
+                path: accept,
+                body: None,
+                origin: None,
+                now: NOW.into(),
+            };
+            assert_eq!(
+                verdict_refusal(Verdict::AcceptBaseline, Taker::Person, &ctx),
+                None
+            );
+            let why = verdict_refusal(Verdict::AcceptBaseline, Taker::Claude, &ctx).unwrap();
+            assert!(why.contains("the person's own"), "{why}");
+        }
+
+        // A proposed revision waits on the Baseline page; an accepted one does not.
+        let file = store
+            .project_dir("demo")
+            .join(crate::baseline::BASELINE_FILE);
+        std::fs::write(
+            &file,
+            "revisions:\n  - id: REV-001\n    answers: [{area: database, later: true}, \
+             {area: kubernetes, later: true}]\n    proposed: {by: Claude, at: '2026-11-12', \
+             origin: conversation}\n  - id: REV-002\n    answers: [{area: ui-style, later: \
+             true}]\n    proposed: {by: Claude, at: '2026-11-12', origin: conversation}\n    \
+             accepted: {by: Ada, at: '2026-11-12', origin: monitor}\n",
+        )
+        .unwrap();
+        let d = load(&store, "demo").unwrap();
+        let w = waiting(
+            &store,
+            "demo",
+            None,
+            &d,
+            Some("http://localhost:8080/p/demo/review"),
+            NOW,
+        )
+        .unwrap();
+        let rev: Vec<&Waiting> = w.iter().filter(|x| x.code.starts_with("REV-")).collect();
+        assert_eq!(rev.len(), 1, "{w:?}");
+        assert_eq!(
+            rev[0].what,
+            "accept or withdraw the baseline revision (database, kubernetes)"
+        );
+        assert_eq!(rev[0].place, Place::Monitor);
+        assert_eq!(
+            rev[0].url.as_deref(),
+            Some("http://localhost:8080/p/demo/baseline#REV-001")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

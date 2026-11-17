@@ -596,3 +596,106 @@ fn reads_on_a_board_this_size_stay_within_the_byte_budget() {
     }
     eprintln!("index {raw} B raw, {gz} B gzip; {}", report.join("; "));
 }
+
+/// A code repository with one commit, made with `git` inside the scratch folder (under the system
+/// temporary directory, L-41).
+fn code_repo(scratch: &Scratch) -> PathBuf {
+    let dir = scratch.0.join("code");
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    std::fs::write(dir.join("README.md"), "# code\n").unwrap();
+    for args in [
+        &["init", "-q", "--initial-branch=main"][..],
+        &["add", "-A"][..],
+        &["commit", "-q", "-m", "code"][..],
+    ] {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(&dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    dir
+}
+
+/// `serve`, with the daemon started in a code repository for `project` (FEAT-183).
+fn serve_with_code(data: &Path, project: &str, repo: &Path) -> String {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let bind = format!("127.0.0.1:{port}");
+    let (dir, addr) = (data.to_path_buf(), bind.clone());
+    let code = Some((project.to_string(), repo.to_path_buf()));
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(kanbanr_server::run(dir, addr, None, false, code))
+            .unwrap();
+    });
+    let url = format!("http://{bind}");
+    for _ in 0..400 {
+        if ureq::get(&format!("{url}/healthz")).call().is_ok() {
+            return url;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("the daemon did not come up on {bind}");
+}
+
+#[test]
+fn drift_latest_answers_from_the_last_run_without_computing() {
+    let scratch = Scratch::new("drift-latest");
+    let (data, _) = small_board(&scratch, &["shop"]);
+    let code = code_repo(&scratch);
+    let url = serve_with_code(&data, "shop", &code);
+    let latest = format!("{url}/api/projects/shop/drift/latest");
+
+    // The first background run finishes: the state turns fresh.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let first = loop {
+        let v = get_gz(&latest).json();
+        if v["state"] == "fresh" {
+            break v;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "drift was not fresh within 120 s: {v}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let finished_at = first["as_of"]["finished_at"].clone();
+    assert!(
+        finished_at.as_str().is_some_and(|s| !s.is_empty()),
+        "{first}"
+    );
+
+    // Ten reads answer from memory: each fast, and each the same run.
+    let mut took = Vec::new();
+    for _ in 0..10 {
+        let start = Instant::now();
+        let v = get_gz(&latest).json();
+        let ms = start.elapsed().as_millis();
+        took.push(ms);
+        assert!(ms < 50, "a read took {ms} ms, over 50 ms: {took:?}");
+        assert_eq!(v["state"], "fresh", "{v}");
+        assert_eq!(
+            v["as_of"]["finished_at"], finished_at,
+            "a read computed a new result: {v}"
+        );
+    }
+    eprintln!("drift/latest reads (ms): {took:?}");
+}

@@ -74,8 +74,9 @@ export const NOT_READY = "not ready: see what is missing below";
 export const TICK_UNTESTED = "Tick 'Ship these unverified' below to cut";
 
 /**
- * Why a release button is disabled (DEF-071), in this order: the first missing thing (with its fix
- * after " — "), the tag's sentence, the untested acceptance, else a pointer to the list below.
+ * Why a release button is disabled (DEF-071), in this order: the untested acceptance when the cut
+ * waits only for it, the first missing thing (with its fix after " — "), the tag's sentence, else a
+ * pointer to the list below.
  * "" when the button is enabled or there is none.
  */
 function whyDisabled(
@@ -86,10 +87,12 @@ function whyDisabled(
   untestedOnly = false,
 ): string {
   if (!button || enabled) return "";
+  // A cut waiting only for the person's acceptance says how to give it, not the fix text
+  // (DEF-071 T4, 17 Nov).
+  if (untestedOnly) return TICK_UNTESTED;
   const first = missing[0];
   if (first) return first.fix ? `${first.text} — ${first.fix}` : first.text;
   if (tagSentence) return tagSentence;
-  if (untestedOnly) return TICK_UNTESTED;
   return NOT_READY;
 }
 
