@@ -1091,6 +1091,21 @@ fn dispatch_routes(
             ser(&store.save_process(name, file, str_field(b, "description"))?)
         }
 
+        // ---- practice packs (FTR-033): the board's and the built-in libraries ----
+        ("GET", ["profiles"]) => ser(&crate::profile::listing(store)?),
+        ("GET", ["profiles", name]) => {
+            let name = percent_decode(name);
+            let (file, library) = store.resolve_profile(&name, None)?;
+            ser(&json!({ "name": name, "library": library, "file": file }))
+        }
+        // `{file, description?}`: save a pack to the board's library, versioned.
+        ("PUT", ["profiles", name]) => {
+            let file: crate::profile::ProfileFile =
+                serde_json::from_value(b.get("file").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| CoreError::Unsupported(format!("invalid pack file: {e}")))?;
+            ser(&store.save_profile(&percent_decode(name), file, str_field(b, "description"))?)
+        }
+
         // How a project stands against its saved process (FEAT-170): read-only, for the CLI and
         // the monitor. A personal process is the user's kanbanr's to compare; here it is named only.
         ("GET", ["projects", p, "process"]) => {
@@ -1101,6 +1116,12 @@ fn dispatch_routes(
                 messages: drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
                 drift,
             })
+        }
+
+        // The packs a project follows against their libraries (FTR-033). A personal pack is the
+        // user's kanbanr's to compare; here it is named only.
+        ("GET", ["projects", p, "profile"]) => {
+            ser(&crate::baseline::profile_status(store, p, None)?)
         }
 
         // ---- portfolio / program hierarchy (FEAT-030) ----
@@ -1946,6 +1967,96 @@ fn dispatch_routes(
                 p,
                 &str_field(b, "decision").unwrap_or_default(),
                 keep,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // ---- the engineering baseline (FTR-033) ----
+        ("GET", ["projects", p, "baseline"]) => ser(&crate::baseline::view(store, p, None)?),
+        // `{name, file?, dry_run?}`: follow a pack, or update it to its library's current copy;
+        // `file` carries a personal pack whole, as a personal process is sent. With `dry_run`,
+        // only what it would change.
+        ("POST", ["projects", p, "baseline", "packs"]) => {
+            let name = str_field(b, "name").unwrap_or_default().trim().to_string();
+            if name.is_empty() {
+                return Err(CoreError::Unsupported("a pack needs a name".into()));
+            }
+            let (file, library) = match b.get("file").filter(|f| !f.is_null()) {
+                Some(f) => (
+                    serde_json::from_value::<crate::profile::ProfileFile>(f.clone())
+                        .map_err(|e| CoreError::Unsupported(format!("invalid pack file: {e}")))?,
+                    crate::config::Library::Personal,
+                ),
+                None => store.resolve_profile(&name, None)?,
+            };
+            let before = crate::baseline::load(store, p)?;
+            let applied = crate::baseline::applied_pack(store, p, &name)?;
+            let following = before
+                .packs
+                .iter()
+                .any(|r| r.source.name == name && r.removed.is_none());
+            let diff = match &applied {
+                Some(old) => crate::profile::diff(old, &file),
+                None => Vec::new(),
+            };
+            let answers_kept = before.areas.len();
+            if is_dry_run(Some(b)) {
+                return ser(&json!({
+                    "pack": file.source(&name, library),
+                    "updated": following,
+                    "diff": diff,
+                    "answers_kept": answers_kept,
+                    "dry_run": true,
+                }));
+            }
+            let after =
+                crate::baseline::add_pack(store, p, &name, &file, library, decision_stamp(b)?)?;
+            let record = after.packs.iter().find(|r| r.source.name == name);
+            ser(&json!({
+                "pack": record,
+                "updated": following,
+                "diff": diff,
+                "answers_kept": answers_kept,
+            }))
+        }
+        ("DELETE", ["projects", p, "baseline", "packs", name]) => {
+            let name = percent_decode(name);
+            let after = crate::baseline::remove_pack(store, p, &name, decision_stamp(b)?)?;
+            ser(&json!({
+                "pack": after.packs.iter().find(|r| r.source.name == name),
+                "answers_kept": after.areas.len(),
+            }))
+        }
+        // `{item?, note?, answers}`: a proposed revision, inert until the person accepts it.
+        ("POST", ["projects", p, "baseline", "revisions"]) => {
+            let proposal: crate::baseline::Proposal = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("a baseline proposal: {e}")))?;
+            let current = crate::baseline::load(store, p)?;
+            let packs = crate::baseline::followed_packs(store, p, &current)?;
+            ser(&crate::baseline::propose(
+                store,
+                p,
+                proposal,
+                &packs,
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{rev, by}`: the person accepts the revision as they saw it; theirs in every mode.
+        ("POST", ["projects", p, "baseline", "revisions", id, "accept"]) => {
+            ser(&crate::baseline::accept(
+                store,
+                p,
+                id,
+                &str_field(b, "rev").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{reason, by}`: anyone may withdraw a proposed revision.
+        ("POST", ["projects", p, "baseline", "revisions", id, "withdraw"]) => {
+            ser(&crate::baseline::withdraw(
+                store,
+                p,
+                id,
                 &str_field(b, "reason").unwrap_or_default(),
                 decision_stamp(b)?,
             )?)
@@ -2896,6 +3007,29 @@ pub fn commit_message_after(
     {
         return format!("propose delegation {id}");
     }
+    // FTR-033: the revision's id, and whether a pack was added or updated at which version.
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "baseline", "revisions"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(id) = v["id"].as_str()
+    {
+        return format!("propose baseline revision {id}");
+    }
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "baseline", "packs"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(name) = v["pack"]["name"].as_str()
+    {
+        let verb = if v["updated"].as_bool() == Some(true) {
+            "update"
+        } else {
+            "add"
+        };
+        return match v["pack"]["version"].as_u64() {
+            Some(n) if n > 0 => format!("{verb} pack {name} v{n}"),
+            _ => format!("{verb} pack {name}"),
+        };
+    }
     if method.eq_ignore_ascii_case("POST")
         && matches!(segs.as_slice(), ["projects", _, "scopes"])
         && let Ok(v) = serde_json::from_str::<Value>(response)
@@ -2921,6 +3055,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             .map(|id| format!("add program {id}"))
             .unwrap_or_else(|| "update portfolio".into()),
         ["processes", name] => format!("save process {}", percent_decode(name)),
+        ["profiles", name] => format!("save profile {}", percent_decode(name)),
         ["projects"] => "create project".into(),
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),
@@ -3042,6 +3177,27 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             },
             body.and_then(|b| str_field(b, "decision"))
                 .unwrap_or_default()
+        ),
+        // FTR-033. Whether a pack was added or updated, and its version, are the response's: see
+        // `commit_message_after`.
+        ["projects", _p, "baseline", "packs"] => format!(
+            "add pack {}",
+            body.and_then(|b| str_field(b, "name"))
+                .unwrap_or_default()
+                .trim()
+        ),
+        ["projects", _p, "baseline", "packs", name] => {
+            format!("remove pack {}", percent_decode(name))
+        }
+        ["projects", _p, "baseline", "revisions"] => "propose a baseline revision".into(),
+        ["projects", _p, "baseline", "revisions", id, "accept"] => {
+            format!("accept baseline revision {id}")
+        }
+        ["projects", _p, "baseline", "revisions", id, "withdraw"] => format!(
+            "withdraw baseline revision {id}: {}",
+            body.and_then(|b| str_field(b, "reason"))
+                .unwrap_or_default()
+                .trim()
         ),
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
@@ -3389,6 +3545,173 @@ mod tests {
     }
 
     /// FEAT-212 R-15: a cadence write that does not name the gates or the preparation keeps them.
+    /// FTR-033: the ten pack and baseline routes, each with its commit message: list, read and
+    /// save a pack; follow one (a dry run first); the project's pack status; propose, accept (the
+    /// person's) and withdraw a revision; the view; and removing the pack.
+    #[test]
+    fn baseline_routes_round_trip() {
+        use serde_json::json;
+        let (store, dir) = release_board("baseline-routes");
+        crate::git::ensure_repo(&dir);
+        let call = |m: &str, path: &str, body: Option<Value>| -> Value {
+            let out = dispatch(&store, m, path, body.as_ref())
+                .unwrap_or_else(|e| panic!("{m} {path}: {e}"));
+            serde_json::from_str(&out).unwrap()
+        };
+        let msg = |m: &str, path: &str, body: &Value, response: &Value| {
+            commit_message_after(m, path, Some(body), &response.to_string())
+        };
+
+        // The libraries: the built-in packs, then one saved to the board.
+        let listed = call("GET", "/profiles", None);
+        assert!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["name"] == "core" && r["library"] == "builtin"),
+            "{listed}"
+        );
+        assert_eq!(call("GET", "/profiles/core", None)["library"], "builtin");
+        let file =
+            crate::profile::ProfileFile::from_yaml(crate::baseline::tests::STORE_PACK).unwrap();
+        let save = json!({"file": file, "description": "The database"});
+        call("PUT", "/profiles/store", Some(save.clone()));
+        assert_eq!(
+            commit_message("PUT", "/profiles/store", Some(&save)),
+            "save profile store"
+        );
+        assert_eq!(call("GET", "/profiles/store", None)["library"], "board");
+
+        // Following it: a dry run writes nothing, then the pack is added.
+        let add = json!({"name": "store", "by": "Ada", "origin": "monitor"});
+        let mut dry = add.clone();
+        dry["dry_run"] = json!(true);
+        assert_eq!(
+            call("POST", "/projects/shop/baseline/packs", Some(dry))["dry_run"],
+            true
+        );
+        assert!(
+            crate::baseline::load(&store, "shop")
+                .unwrap()
+                .packs
+                .is_empty()
+        );
+        let added = call("POST", "/projects/shop/baseline/packs", Some(add.clone()));
+        assert_eq!(added["pack"]["name"], "store");
+        assert_eq!(
+            msg("POST", "/projects/shop/baseline/packs", &add, &added),
+            "add pack store v1"
+        );
+        let again = call("POST", "/projects/shop/baseline/packs", Some(add.clone()));
+        assert_eq!(
+            msg("POST", "/projects/shop/baseline/packs", &add, &again),
+            "update pack store v1"
+        );
+        let status = call("GET", "/projects/shop/profile", None);
+        assert_eq!(status["packs"][0]["name"], "store");
+        assert_eq!(status["packs"][0]["removed"], false);
+
+        // A proposal, from the conversation; its id names the commit.
+        let propose = json!({
+            "answers": [{"area": "database", "options": ["postgresql"]}],
+            "by": "Claude",
+            "origin": "conversation",
+        });
+        let proposed = call(
+            "POST",
+            "/projects/shop/baseline/revisions",
+            Some(propose.clone()),
+        );
+        assert_eq!(proposed["id"], "REV-001");
+        assert_eq!(proposed["state"], "proposed");
+        assert_eq!(
+            msg(
+                "POST",
+                "/projects/shop/baseline/revisions",
+                &propose,
+                &proposed
+            ),
+            "propose baseline revision REV-001"
+        );
+        let rev = proposed["rev"].as_str().unwrap().to_string();
+
+        // Accepting is the person's: refused from the conversation, taken from the monitor.
+        let accept_path = "/projects/shop/baseline/revisions/REV-001/accept";
+        let err = dispatch(
+            &store,
+            "POST",
+            accept_path,
+            Some(&json!({"rev": rev, "by": "Claude", "origin": "conversation"})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("accepting a baseline revision"), "{err}");
+        let accept = json!({"rev": rev, "by": "Ada", "origin": "monitor"});
+        let accepted = call("POST", accept_path, Some(accept.clone()));
+        assert_eq!(accepted["state"], "accepted");
+        assert_eq!(
+            commit_message("POST", accept_path, Some(&accept)),
+            "accept baseline revision REV-001"
+        );
+
+        // The view shows the answered area.
+        let view = call("GET", "/projects/shop/baseline", None);
+        let area = view["areas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "database")
+            .cloned()
+            .unwrap();
+        assert_eq!(area["status"], "answered", "{area}");
+
+        // A second proposal, withdrawn with its reason.
+        let second = call(
+            "POST",
+            "/projects/shop/baseline/revisions",
+            Some(json!({
+                "answers": [{"area": "database", "options": ["sqlite"]}],
+                "by": "Claude",
+                "origin": "conversation",
+            })),
+        );
+        assert_eq!(second["id"], "REV-002");
+        let withdraw_path = "/projects/shop/baseline/revisions/REV-002/withdraw";
+        let withdraw = json!({"reason": "not now", "by": "Ada", "origin": "monitor"});
+        assert_eq!(
+            call("POST", withdraw_path, Some(withdraw.clone()))["state"],
+            "withdrawn"
+        );
+        assert_eq!(
+            commit_message("POST", withdraw_path, Some(&withdraw)),
+            "withdraw baseline revision REV-002: not now"
+        );
+
+        // Removing the pack keeps its answers.
+        let remove = json!({"by": "Ada", "origin": "monitor"});
+        let removed = call(
+            "DELETE",
+            "/projects/shop/baseline/packs/store",
+            Some(remove.clone()),
+        );
+        assert!(removed["pack"]["removed"].is_object(), "{removed}");
+        assert_eq!(removed["answers_kept"], 1);
+        assert_eq!(
+            commit_message(
+                "DELETE",
+                "/projects/shop/baseline/packs/store",
+                Some(&remove)
+            ),
+            "remove pack store"
+        );
+        assert_eq!(
+            call("GET", "/projects/shop/profile", None)["packs"][0]["removed"],
+            true
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn release_gates_survive_cadence_put() {
         let (store, dir) = release_board("gates-survive");

@@ -358,6 +358,14 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::decisions::DecisionsView>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/baseline",
+            summary: "The project's engineering baseline (FTR-033): the packs it follows with \
+                      their drift, every area with its standing answer and entries, every \
+                      revision with what accepting it does, and the charter's constraints",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::baseline::BaselineView>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/prepared",
             summary: "The records Claude prepared for the person to confirm (FTR-034), newest \
                       first: each with its sources, where it stands, the person's answer and the \

@@ -457,7 +457,11 @@ pub fn add_pack(
             .into_iter()
             .filter(|e| e.pack == name)
             .collect();
-        for (stage, gate, from) in promised_gates(&mine) {
+        // With releases off no stage holds a gate (as on acceptance).
+        for (stage, gate, from) in promised_gates(&mine)
+            .into_iter()
+            .filter(|_| project.config.cadence.releases)
+        {
             cadence
                 .add_stage_gate(&stage, &gate, &from)
                 .map_err(CoreError::Unsupported)?;
@@ -607,7 +611,9 @@ fn highest(ids: impl Iterator<Item = String>, prefix: &str) -> u32 {
 /// answer giving options and also `later` or `not_applicable`, an area a proposed revision already
 /// answers, a value missing or out of place (`profile::value_problems`), and an item not on the
 /// board. A `when` that does not hold is a warning on the view. Each chosen option makes one entry
-/// per `records` row; `replaces` names the in-force entries of every area answered.
+/// per `records` row, except a non-goal row that another option chosen in the same area is the
+/// thing it excludes (left out, with a warning naming that choice); `replaces` names the in-force
+/// entries of every area answered.
 pub fn propose(
     store: &Store,
     p: &str,
@@ -741,6 +747,34 @@ pub fn propose(
                 .map(|o| (o.id.clone(), o.mentions.clone()))
                 .collect();
             for r in &opt.records {
+                // A non-goal gives way to another option chosen in the same area that is the
+                // thing it excludes (containers' "No Kubernetes" with kubernetes also chosen):
+                // the row is left out and the view says which choice it gave way to (FTR-033 P3
+                // Q1). The other option is known by its words: its mentions and its label.
+                if r.kind == Kind::NonGoal
+                    && let Some((other, word)) = a.options.iter().find_map(|o| {
+                        if o.option == opt.id {
+                            return None;
+                        }
+                        let other = area.option(&o.option)?;
+                        let mut words = other.mentions.clone();
+                        words.push(other.label.clone());
+                        profile::tokens_in(&words, &r.text)
+                            .into_iter()
+                            .next()
+                            .map(|w| (other, w))
+                    })
+                {
+                    warnings.push(format!(
+                        "area '{}': the non-goal '{}' of '{}' is left out: it gave way to '{}', \
+                         also chosen (it says '{word}')",
+                        area.id,
+                        template(&r.text, &opt.label, &c.value, &project_name),
+                        opt.label,
+                        other.label
+                    ));
+                    continue;
+                }
                 next += 1;
                 entries.push(Entry {
                     id: format!("B-{next:03}"),
@@ -843,7 +877,18 @@ pub fn accept(
         .iter()
         .filter(|e| revision.adds.contains(&e.id))
         .collect();
+    // With releases off there are no stages to hold a gate: the entry is recorded, no stage gate
+    // is added, and the view says when it applies (FTR-033 P3 Q2). With releases on, a stage the
+    // project does not have refuses the acceptance, naming the stages it has.
+    let mut warnings: Vec<String> = Vec::new();
     for (stage, gate, from) in promised_gates(&added) {
+        if !cadence.releases {
+            warnings.push(format!(
+                "{from} requires the `{gate}` gate at release stage {stage}; this project has \
+                 releases off, so it applies once releases are on: stage {stage}"
+            ));
+            continue;
+        }
         cadence
             .add_stage_gate(&stage, &gate, &from)
             .map_err(CoreError::Unsupported)?;
@@ -987,12 +1032,9 @@ pub fn accept(
         store.save_config(p, &project.config)?;
     }
     save(store, p, &b)?;
-    Ok(revision_view(
-        &b,
-        id.trim(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    ))
+    let mut view = revision_view(&b, id.trim(), &BTreeMap::new(), &BTreeMap::new());
+    view.warnings = warnings;
+    Ok(view)
 }
 
 /// Withdraw a proposed revision, with a reason; anyone may. The record stays.
@@ -1387,6 +1429,61 @@ pub fn open_areas(
     out
 }
 
+// ---- the packs' status (`GET /projects/{p}/profile`) ------------------------------------------
+
+/// One pack the project follows or followed, against its library's current copy.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PackStatus {
+    pub name: String,
+    pub library: Library,
+    pub version: u32,
+    /// The project stopped following it; its entries stay.
+    pub removed: bool,
+    /// How it stands against its library: `None` for a removed pack, and for a personal pack
+    /// when the caller cannot see the personal library.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift: Option<profile::Drift>,
+    /// The drift as sentences, each saying what to run.
+    pub messages: Vec<String>,
+}
+
+/// The packs of a project with their drift (FTR-033 R-5).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProfileStatus {
+    pub packs: Vec<PackStatus>,
+}
+
+/// Every pack of `p`'s baseline, in its order, with its drift from [`Store::profile_drift`].
+pub fn profile_status(
+    store: &Store,
+    p: &str,
+    personal_dir: Option<&std::path::Path>,
+) -> Result<ProfileStatus> {
+    let b = load(store, p)?;
+    let drift = store.profile_drift(p, personal_dir)?;
+    let packs = b
+        .packs
+        .iter()
+        .map(|r| {
+            let d = (r.removed.is_none())
+                .then(|| drift.iter().find(|d| d.source.name == r.source.name))
+                .flatten()
+                .cloned();
+            PackStatus {
+                name: r.source.name.clone(),
+                library: r.source.library,
+                version: r.source.version,
+                removed: r.removed.is_some(),
+                messages: d.as_ref().map(|d| d.messages()).unwrap_or_default(),
+                drift: d,
+            }
+        })
+        .collect();
+    Ok(ProfileStatus { packs })
+}
+
 // ---- the view ---------------------------------------------------------------------------------
 
 /// A pack the project follows or followed, with what its library's copy says now.
@@ -1450,7 +1547,8 @@ pub struct RevisionView {
     pub depends_on: Vec<String>,
     /// `kanbanr baseline accept REV-n`.
     pub command: String,
-    /// What the proposal noticed and did not refuse: an area whose `when` does not hold.
+    /// What the proposal or the acceptance noticed and did not refuse: an area whose `when` does
+    /// not hold, a non-goal that gave way to another choice, a stage gate waiting for releases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -2187,8 +2285,14 @@ areas:
         );
         let _ = std::fs::remove_dir_all(dir);
 
-        // The default stages have no `main`: refused, naming them, and nothing written.
+        // With releases on, stages without `main`: refused, naming them, and nothing written.
         let (store, dir, _) = board(false);
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        c.release_stages = ["candidate", "test", "staging", "production"]
+            .map(String::from)
+            .to_vec();
+        store.set_cadence("demo", None, c).unwrap();
         follow(&store, STORE_PACK);
         let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
         let err = accept(&store, "demo", "REV-001", &v.rev, person())
@@ -2202,6 +2306,122 @@ areas:
         assert!(crate::adr::list(&store, "demo").unwrap().is_empty());
         let b = load(&store, "demo").unwrap();
         assert_eq!(b.revisions[0].state(), RevisionState::Proposed);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 P3 Q2 (R-3): with releases off, accepting an entry whose option promises a stage
+    /// gate records the entry, adds no stage gate, and says when it applies.
+    #[test]
+    fn with_releases_off_an_accepted_release_gate_is_recorded_and_waits_for_releases() {
+        let (store, dir, _) = board(false);
+        assert!(!store.load_meta("demo").unwrap().config.cadence.releases);
+        follow(&store, STORE_PACK);
+        let before = store.load_meta("demo").unwrap().config.cadence;
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        let accepted = accept_it(&store, &v);
+        assert_eq!(accepted.state, RevisionState::Accepted);
+        assert_eq!(
+            accepted.warnings,
+            vec![
+                "B-001 requires the `migrations-check` gate at release stage main; this project \
+                 has releases off, so it applies once releases are on: stage main"
+                    .to_string()
+            ]
+        );
+        let b = load(&store, "demo").unwrap();
+        assert_eq!(in_force(&b).len(), 2, "both entries are recorded");
+        assert_eq!(store.load_meta("demo").unwrap().config.cadence, before);
+        assert!(main_gates(&store).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 P3 Q1 (R-3): a chosen option's non-goal is recorded unless another option chosen
+    /// in the same area is the thing it excludes; then it is left out, and the view says which
+    /// choice it gave way to.
+    #[test]
+    fn a_non_goal_gives_way_to_the_option_it_excludes_chosen_in_the_same_area() {
+        const RUNS: &str = r#"
+profile:
+  name: runs
+  description: Where it runs, for the tests
+  version: 1
+areas:
+  - id: runs-where
+    title: Where it runs
+    asks: setup
+    select: many
+    touches: [deploy]
+    question: Where does the product run?
+    options:
+      - id: containers
+        label: Containers on a host
+        recommended: true
+        why: One host
+        fits_when: Small
+        costs: One host
+        mentions: [Docker, Compose]
+        records:
+          - {kind: constraint, text: Containers on a host run the product}
+          - {kind: non_goal, text: "No Kubernetes: containers run on a host with Compose"}
+      - id: kubernetes
+        label: Kubernetes
+        why: A cluster
+        fits_when: Many services
+        costs: A cluster to run
+        mentions: [Kubernetes, k8s]
+        records:
+          - {kind: constraint, text: Kubernetes runs the product}
+      - id: host
+        label: A host or VM
+        why: No containers
+        fits_when: One binary
+        costs: Hand-run
+        mentions: [systemd]
+        records:
+          - {kind: constraint, text: The product runs directly on a host or VM}
+"#;
+        let (store, dir, _) = board(false);
+        follow(&store, RUNS);
+        // Containers alone, or beside a host: the non-goal is recorded.
+        let v = propose_answers(
+            &store,
+            "",
+            vec![answer("runs-where", &["containers", "host"])],
+        );
+        assert!(
+            v.entries.iter().any(|e| e.kind == Kind::NonGoal),
+            "{:?}",
+            v.entries
+        );
+        assert!(v.warnings.is_empty(), "{:?}", v.warnings);
+        withdraw(&store, "demo", &v.revision.id, "try again", person()).unwrap();
+
+        // Containers and Kubernetes: "No Kubernetes" gives way, and the view says why.
+        let v = propose_answers(
+            &store,
+            "",
+            vec![answer("runs-where", &["containers", "kubernetes"])],
+        );
+        let kinds: Vec<(Kind, &str)> = v
+            .entries
+            .iter()
+            .map(|e| (e.kind, e.option.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                (Kind::Constraint, "containers"),
+                (Kind::Constraint, "kubernetes")
+            ]
+        );
+        assert_eq!(v.warnings.len(), 1, "{:?}", v.warnings);
+        let w = &v.warnings[0];
+        assert!(
+            w.contains("No Kubernetes")
+                && w.contains("gave way to 'Kubernetes'")
+                && w.contains("runs-where"),
+            "{w}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
