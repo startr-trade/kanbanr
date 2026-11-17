@@ -1187,6 +1187,10 @@ pub struct CommitMeta {
     /// The committer date, RFC 3339 (`%cI`).
     pub at: String,
     pub subject: String,
+    /// The committer time in seconds (`%ct`), the time [`DocHistory`] compares (MNT-014).
+    pub unix: i64,
+    /// More than one parent (`%P`). A merge lists no touches.
+    pub merge: bool,
 }
 
 /// One change to one path.
@@ -1217,9 +1221,60 @@ pub struct PathHistory {
     head: String,
     commits: Vec<CommitMeta>,
     touches: std::collections::HashMap<String, Vec<Touch>>,
+    /// Commits with more than one parent.
+    merges: usize,
+}
+
+/// One change to a path, as [`PathHistory::touches`] lists it (MNT-014).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathTouch<'a> {
+    pub commit: &'a CommitMeta,
+    /// The commit's index in walk order, newest first.
+    pub index: usize,
+    /// The path's blob after the commit; `None` when the commit deleted it.
+    pub blob: Option<&'a str>,
 }
 
 impl PathHistory {
+    /// No commit has more than one parent. Only then do `baseline` and `blob_at` match a walk of
+    /// the trees (MNT-014).
+    pub fn is_linear(&self) -> bool {
+        self.merges == 0
+    }
+
+    /// The changes to exactly `rel`, newest first, without following renames. A rename into `rel`
+    /// is a touch with its blob; a rename away from it is a delete (MNT-014).
+    pub fn touches(&self, rel: &str) -> Vec<PathTouch<'_>> {
+        self.touches
+            .get(rel)
+            .map(|list| {
+                list.iter()
+                    .map(|t| PathTouch {
+                        commit: &self.commits[t.commit],
+                        index: t.commit,
+                        blob: (!t.blob.is_empty()).then_some(t.blob.as_str()),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The index of the first commit, in walk order, committed at or before `unix`; `None` when
+    /// every commit is newer. The rule [`DocHistory`] judges by (MNT-014).
+    pub fn baseline(&self, unix: i64) -> Option<usize> {
+        self.commits.iter().position(|c| c.unix <= unix)
+    }
+
+    /// `rel`'s blob in commit `index`'s tree: the blob of its newest touch at or before `index`.
+    /// `None` when that touch is a delete or there is none. Valid on a linear history only
+    /// (MNT-014).
+    pub fn blob_at(&self, rel: &str, index: usize) -> Option<&str> {
+        let list = self.touches.get(rel)?;
+        let i = list.partition_point(|t| t.commit < index);
+        let t = list.get(i)?;
+        (!t.blob.is_empty()).then_some(t.blob.as_str())
+    }
+
     /// The commit the history was walked at (empty for a repository with no commits).
     pub fn head(&self) -> &str {
         &self.head
@@ -1292,6 +1347,9 @@ type HistorySlot = std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<PathHis
 static PATH_HISTORY_CACHE: std::sync::Mutex<Vec<((std::path::PathBuf, String), HistorySlot)>> =
     std::sync::Mutex::new(Vec::new());
 static PATH_HISTORY_WALKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Walks run, by repository (its canonical git folder).
+static PATH_HISTORY_WALKS_BY_REPO: std::sync::Mutex<Vec<(std::path::PathBuf, u64)>> =
+    std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 thread_local! {
@@ -1301,6 +1359,30 @@ thread_local! {
 /// The walks run in this process so far, for tests and the bench.
 pub fn path_history_walks() -> u64 {
     PATH_HISTORY_WALKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The walks run for the repository holding `dir`, so tests running side by side do not see each
+/// other's walks (MNT-014). `path_history_walks` is the sum over every repository.
+pub fn path_history_walks_of(dir: &Path) -> u64 {
+    let Some(git_dir) = git_dir_of(dir) else {
+        return 0;
+    };
+    PATH_HISTORY_WALKS_BY_REPO
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(d, _)| *d == git_dir)
+        .map_or(0, |(_, n)| *n)
+}
+
+/// The canonical git folder of the repository holding `dir`.
+fn git_dir_of(dir: &Path) -> Option<std::path::PathBuf> {
+    let repo = Repository::discover(dir).ok()?;
+    Some(
+        repo.path()
+            .canonicalize()
+            .unwrap_or_else(|_| repo.path().to_path_buf()),
+    )
 }
 
 /// The walks run by this thread, so a test is not counted against by the others running beside it.
@@ -1325,6 +1407,7 @@ pub fn path_history(dir: &Path) -> Result<std::sync::Arc<PathHistory>, HistoryEr
         .map(|c| c.id().to_string())
         .unwrap_or_default();
     let root = repo.workdir().unwrap_or(repo.path()).to_path_buf();
+    let counted = git_dir.clone();
     let key = (git_dir, head.clone());
 
     let slot: HistorySlot = {
@@ -1341,6 +1424,15 @@ pub fn path_history(dir: &Path) -> Result<std::sync::Arc<PathHistory>, HistoryEr
     let mut held = slot.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(h) = held.as_ref() {
         return Ok(h.clone());
+    }
+    {
+        let mut by = PATH_HISTORY_WALKS_BY_REPO
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        match by.iter_mut().find(|(d, _)| *d == counted) {
+            Some((_, n)) => *n += 1,
+            None => by.push((counted.clone(), 1)),
+        }
     }
     let built = std::sync::Arc::new(walk_path_history(&root, &head).map_err(|m| HistoryError {
         repo: root.clone(),
@@ -1368,12 +1460,11 @@ fn walk_path_history(root: &Path, head: &str) -> Result<PathHistory, String> {
             "-c",
             "core.quotePath=false",
             "log",
-            "--no-merges",
             "--root",
             "--raw",
             "-M",
             "--no-abbrev",
-            "--format=%x1e%H%x1f%cI%x1f%s",
+            "--format=%x1e%H%x1f%cI%x1f%ct%x1f%P%x1f%s",
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -1381,22 +1472,32 @@ fn walk_path_history(root: &Path, head: &str) -> Result<PathHistory, String> {
     Ok(h)
 }
 
-/// Parse the log's records (split on `\x1e`): the first line is `sha\x1fdate\x1fsubject`, each
+/// Parse the log's records (split on `\x1e`): the first line is
+/// `sha\x1fdate\x1funix\x1fparents\x1fsubject`, each
 /// later line starting with `:` is a raw entry `:<mode> <mode> <old> <new> <status>\t<path>[\t<path2>]`.
 fn parse_path_history(text: &str, h: &mut PathHistory) {
     for rec in text.split('\u{1e}').filter(|r| !r.trim().is_empty()) {
         let mut lines = rec.lines();
         let Some(first) = lines.next() else { continue };
-        let mut f = first.splitn(3, '\u{1f}');
-        let (Some(sha), Some(at), subject) = (f.next(), f.next(), f.next().unwrap_or_default())
-        else {
+        let mut f = first.splitn(5, '\u{1f}');
+        let (Some(sha), Some(at), Some(unix), Some(parents), subject) = (
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next(),
+            f.next().unwrap_or_default(),
+        ) else {
             continue;
         };
         let idx = h.commits.len();
+        let merge = parents.split_whitespace().count() > 1;
+        h.merges += usize::from(merge);
         h.commits.push(CommitMeta {
             sha: sha.to_string(),
             at: at.to_string(),
             subject: subject.to_string(),
+            unix: unix.parse().unwrap_or_default(),
+            merge,
         });
         for line in lines.filter(|l| l.starts_with(':')) {
             let mut cols = line.split('\t');
@@ -2267,6 +2368,118 @@ mod tests {
         // And an unchanged HEAD does not.
         let _ = path_history(&dir).unwrap();
         assert_eq!(path_history_walks_here() - before, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: a path's exact touches, newest first, without following renames; a rename away
+    /// is a delete, a rename in carries the blob.
+    #[test]
+    fn touches_list_exact_path_changes_newest_first() {
+        let dir = fixture("ph-touches");
+        let h = path_history(&dir).unwrap();
+        let a = h.touches("docs/a.md");
+        let subjects: Vec<&str> = a.iter().map(|t| t.commit.subject.as_str()).collect();
+        assert_eq!(subjects, ["rename a to b", "edit a", "add a and c"]);
+        assert!(a[0].blob.is_none(), "a rename away is a delete");
+        assert!(a[1].blob.is_some() && a[2].blob.is_some());
+        assert!(a[0].index < a[1].index && a[1].index < a[2].index);
+        assert_eq!(h.commits[a[1].index].sha, a[1].commit.sha);
+        let b = h.touches("docs/b.md");
+        let subjects: Vec<&str> = b.iter().map(|t| t.commit.subject.as_str()).collect();
+        assert_eq!(subjects, ["edit b", "rename a to b"]);
+        assert_eq!(
+            b[1].blob.unwrap(),
+            g(
+                &dir,
+                None,
+                &["rev-parse", &format!("{}:docs/b.md", b[1].commit.sha)]
+            )
+        );
+        let d = h.touches("d.txt");
+        assert_eq!(d.len(), 2);
+        assert!(d[0].blob.is_none() && d[1].blob.is_some());
+        assert!(h.touches("never.md").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: `blob_at` is the blob in a commit's tree, and `baseline` finds the commit
+    /// `DocHistory` judges against.
+    #[test]
+    fn blob_at_gives_the_tree_state_at_a_commit() {
+        let dir = temp("ph-blobat");
+        g(&dir, None, &["init", "-q"]);
+        put(&dir, 1, "add", &[("a.md", "1\n"), ("b.md", "b\n")]);
+        put(&dir, 2, "edit a", &[("a.md", "2\n")]);
+        put(&dir, 3, "other", &[("c.md", "c\n")]);
+        g(&dir, None, &["rm", "-q", "a.md"]);
+        g(
+            &dir,
+            Some("2026-01-04T10:00:00+00:00"),
+            &["commit", "-q", "-m", "drop a"],
+        );
+        put(&dir, 5, "re-add a", &[("a.md", "2\n")]);
+        let h = path_history(&dir).unwrap();
+        assert!(h.is_linear());
+        assert_eq!(h.commits.len(), 5);
+        for (i, c) in h.commits.iter().enumerate() {
+            for rel in ["a.md", "b.md", "c.md", "never.md"] {
+                let want = std::process::Command::new("git")
+                    .args(["rev-parse", "-q", "--verify", &format!("{}:{rel}", c.sha)])
+                    .current_dir(&dir)
+                    .output()
+                    .unwrap();
+                let want = want
+                    .status
+                    .success()
+                    .then(|| String::from_utf8_lossy(&want.stdout).trim().to_string());
+                assert_eq!(h.blob_at(rel, i).map(str::to_string), want, "{rel} at {i}");
+            }
+        }
+        // baseline: the first commit, in walk order, at or before the time.
+        let last = h.commits[0].unix;
+        assert_eq!(h.baseline(last), Some(0));
+        assert_eq!(h.baseline(last + 1_000_000), Some(0));
+        assert_eq!(h.baseline(h.commits[4].unix), Some(4));
+        assert_eq!(h.baseline(h.commits[4].unix - 1), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: recording merges leaves `last_change` and `versions` as they were, and says
+    /// the history is not linear.
+    #[test]
+    fn path_history_versions_ignore_merge_records() {
+        let dir = fixture("ph-merges");
+        let h = path_history(&dir).unwrap();
+        assert!(!h.is_linear());
+        let merge = h.commits.iter().find(|c| c.merge).unwrap();
+        assert_eq!(merge.subject, "merge side");
+        assert!(h.commits.iter().filter(|c| c.merge).count() == 1);
+        assert!(
+            h.touches
+                .values()
+                .flatten()
+                .all(|t| !h.commits[t.commit].merge)
+        );
+        for rel in ["c.txt", "s.txt", "docs/b.md", "d.txt"] {
+            let want: Vec<String> = g(
+                &dir,
+                None,
+                &["log", "--no-merges", "--follow", "--format=%H", "--", rel],
+            )
+            .lines()
+            .map(str::to_string)
+            .collect();
+            let got: Vec<String> = h.versions(rel).into_iter().map(|v| v.sha).collect();
+            assert_eq!(got, want, "{rel}");
+        }
+        assert_eq!(
+            h.last_change(&["c.txt"]).unwrap().at,
+            g(
+                &dir,
+                None,
+                &["log", "-1", "--no-merges", "--format=%cI", "--", "c.txt"]
+            )
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
