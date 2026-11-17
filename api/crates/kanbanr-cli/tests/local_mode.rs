@@ -19716,3 +19716,259 @@ fn a_cut_without_katalogr_ships_with_a_warning() {
     assert_eq!(r["snapshot"]["state"], "skipped", "{r}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A scratch board with one item that is defined and not yet approved, set to conversation mode
+/// from the terminal (FTR-035).
+fn conversation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = delegation_board(tag);
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cap", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def2.yaml");
+    std::fs::write(&def, "statement: Cap the cart\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "mode", "conversation"]));
+    (base, work)
+}
+
+/// Run `kanbanr decisions heard` as Claude Code's hook would: the payload on stdin, the project
+/// folder in `CLAUDE_PROJECT_DIR`.
+fn run_heard_hook(base: &std::path::Path, work: &std::path::Path, payload: &str) -> Output {
+    use std::io::Write;
+    let mut child = Command::new(cli())
+        .args(["decisions", "heard"])
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env("CLAUDE_PROJECT_DIR", work)
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn kanbanr");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    child.wait_with_output().expect("run kanbanr hook")
+}
+
+/// The recorded fixture, with the board's project, the item's code and its revision written in.
+fn ask_user_question_payload(project: &str, code: &str, rev: &str, answer: &str) -> String {
+    let fixture = include_str!("fixtures/ask_user_question.json")
+        .replace("example-project", project)
+        .replace("FTR-1", code)
+        .replace("0000000000000000", rev)
+        .replace("rev 00000000", &format!("rev {}", &rev[..8]));
+    // The answer is the last "Approve" value of the file: the one under `answers`.
+    let at = fixture.rfind("\": \"Approve\"").expect("the answer");
+    format!(
+        "{}\": \"{answer}\"{}",
+        &fixture[..at],
+        &fixture[at + "\": \"Approve\"".len()..]
+    )
+}
+
+/// FTR-035 R-1, R-2: the hook makes a pass from the person's approving answer; the verdict with
+/// `--pass` records `origin: conversation` and what was heard, uses the pass once, and a
+/// declined answer makes none.
+#[test]
+fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
+    let (base, work) = conversation_board("ftr035-heard");
+    let q = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    );
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+    let q: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    let rev = q["rev"].as_str().unwrap().to_string();
+
+    // Not yet: nothing is written, and Claude is told so.
+    let declined = run_heard_hook(
+        &base,
+        &work,
+        &ask_user_question_payload("shop", "FEAT-002", &rev, "Not yet"),
+    );
+    assert!(declined.status.success());
+    let said = String::from_utf8_lossy(&declined.stdout).to_string();
+    assert!(said.contains("nothing is recorded"), "{said}");
+    let data = run_in(&base, &work, &["where"]);
+    let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
+    let passes = data.join(".git/kanbanr/passes");
+    assert!(
+        std::fs::read_dir(&passes).is_none_or_empty(),
+        "a declined answer wrote a pass"
+    );
+
+    let heard = run_heard_hook(
+        &base,
+        &work,
+        &ask_user_question_payload("shop", "FEAT-002", &rev, "Approve"),
+    );
+    assert!(heard.status.success());
+    let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pass = context
+        .split("--pass ")
+        .nth(1)
+        .and_then(|s| {
+            s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .next()
+        })
+        .unwrap_or_default()
+        .to_string();
+    assert!(pass.starts_with("P-"), "{context}");
+
+    let record = |p: &str| {
+        in_session(
+            &base,
+            &work,
+            &["approve", "FEAT-002", "--rev", &rev, "--pass", p],
+        )
+    };
+    let done = record(&pass);
+    assert!(
+        done.status.success(),
+        "{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    let said = String::from_utf8_lossy(&done.stdout).to_string();
+    assert!(said.contains(&pass), "{said}");
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-002", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let approval = &v["definition"]["approval"];
+    assert_eq!(approval["origin"], "conversation", "{v}");
+    assert_eq!(approval["heard"]["answer"], "Approve");
+    assert_eq!(approval["heard"]["pass"], pass.as_str());
+    let text = run_in(&base, &work, &["feature", "show", "FEAT-002"]);
+    let text = String::from_utf8_lossy(&text.stdout).to_string();
+    assert!(text.contains("via the conversation, answering"), "{text}");
+    let log = git_in(&base, &data, &["log", "-1", "--format=%B"]);
+    let log = String::from_utf8_lossy(&log.stdout).to_string();
+    assert!(log.contains("Kanbanr-Pass: "), "{log}");
+
+    let again = record(&pass);
+    assert!(!again.status.success(), "a pass is used once");
+    let why = String::from_utf8_lossy(&again.stderr).to_string();
+    assert!(why.contains("unknown, already used or expired"), "{why}");
+}
+
+trait EmptyDir {
+    fn is_none_or_empty(self) -> bool;
+}
+
+impl EmptyDir for std::io::Result<std::fs::ReadDir> {
+    fn is_none_or_empty(self) -> bool {
+        self.map(|mut d| d.next().is_none()).unwrap_or(true)
+    }
+}
+
+/// FTR-035 R-2: `decisions question` is the board's one question, and only in conversation mode.
+#[test]
+fn decisions_question_prints_the_tagged_question_only_in_conversation_mode() {
+    let (base, work) = conversation_board("ftr035-question");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let q = ok(run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    ));
+    let v: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    assert_eq!(v["header"], "Approve");
+    assert_eq!(v["options"][0]["label"], "Approve");
+    assert_eq!(v["multiSelect"], false);
+    let tag = kanbanr_core::passes::parse_tag(v["question"].as_str().unwrap())
+        .expect("the question ends in a tag");
+    assert_eq!(tag.code, "FEAT-002");
+    assert_eq!(tag.project, "shop");
+    assert_eq!(tag.rev, v["rev"].as_str().unwrap());
+    let text = ok(run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002"],
+    ));
+    assert!(String::from_utf8_lossy(&text.stdout).contains("[kanbanr approve FEAT-002 --rev "));
+
+    let sign = ok(run_in(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "question",
+            "signoff",
+            "FEAT-002",
+            "design-review",
+            "--json",
+        ],
+    ));
+    let v: serde_json::Value = serde_json::from_slice(&sign.stdout).unwrap();
+    assert_eq!(v["header"], "Sign off");
+
+    let nameless = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "signoff", "FEAT-002"],
+    );
+    assert!(!nameless.status.success());
+    let nobody = run_in(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "question",
+            "signoff",
+            "FEAT-002",
+            "nobody-asks",
+        ],
+    );
+    assert!(!nobody.status.success());
+    let verdict = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "release", "FEAT-002"],
+    );
+    assert!(!verdict.status.success());
+
+    ok(run_in(&base, &work, &["decisions", "mode", "monitor"]));
+    let refused = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002"],
+    );
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(why.contains("monitor"), "{why}");
+}

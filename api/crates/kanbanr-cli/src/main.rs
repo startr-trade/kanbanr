@@ -452,6 +452,10 @@ enum Command {
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG")]
         under: Option<String>,
+        /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
+        /// made from it (FTR-035). Claude's; a person needs none.
+        #[arg(long, value_name = "P", conflicts_with = "under")]
+        pass: Option<String>,
     },
     /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
     /// and the item returns to what is awaiting review.
@@ -479,6 +483,10 @@ enum Command {
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG")]
         under: Option<String>,
+        /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
+        /// made from it (FTR-035). Claude's; a person needs none.
+        #[arg(long, value_name = "P", conflicts_with = "under")]
+        pass: Option<String>,
     },
     /// Record a named sign-off a stage can require — "design-review", "release" (FEAT-114). It covers
     /// the definition as it stands: change the definition and the sign-off lapses.
@@ -514,6 +522,10 @@ enum Command {
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG", conflicts_with = "withdraw")]
         under: Option<String>,
+        /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
+        /// made from it (FTR-035). Claude's; a person needs none.
+        #[arg(long, value_name = "P", conflicts_with_all = ["withdraw", "under"])]
+        pass: Option<String>,
     },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
@@ -1796,9 +1808,9 @@ enum GateCmd {
 enum DecisionsCmd {
     /// The mode, every delegation, the delegated decisions to review, and what waits where.
     Show,
-    /// Set where decisions are taken: monitor or delegated. The person's own.
+    /// Set where decisions are taken: monitor, delegated or conversation. The person's own.
     Mode {
-        /// monitor | delegated
+        /// monitor | delegated | conversation
         mode: String,
         #[arg(long, default_value = "")]
         reason: String,
@@ -1857,6 +1869,16 @@ enum DecisionsCmd {
         undo: bool,
         #[arg(long, default_value = "")]
         reason: String,
+    },
+    /// The question to ask the person for a verdict, in a project that takes its decisions in
+    /// the conversation: ask it verbatim with AskUserQuestion (FTR-035).
+    Question {
+        /// approve | ratify | signoff
+        verdict: String,
+        /// The item.
+        code: String,
+        /// The sign-off's name (for `signoff`), as a gate asks for it.
+        name: Option<String>,
     },
     /// Claude Code's PostToolUse hook on AskUserQuestion. Reads the payload on stdin; when the
     /// person chose the approving option of a tagged question, writes a one-time pass and tells
@@ -2939,6 +2961,8 @@ fn command_access(cmd: &Command) -> Access {
         // Makes a pass from the person's answer (FTR-035); every other decisions command writes
         // through core.
         Command::Decisions(DecisionsCmd::Heard) => Hook,
+        // Prints a question from what the board holds (FTR-035).
+        Command::Decisions(DecisionsCmd::Question { .. }) => Read,
         Command::Decisions(_) => Core,
         Command::Claude(cmd) => match cmd {
             ClaudeCmd::Guard => Hook,
@@ -10445,19 +10469,23 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             by,
             rev,
             under,
+            pass,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/ratify"),
-                Some(json!({ "by": who, "reason": reason, "rev": rev, "delegation": under })),
+                Some(json!({
+                    "by": who, "reason": reason, "rev": rev, "delegation": under, "pass": pass
+                })),
             )?;
             print_write(
                 cli,
                 &resp,
                 format!(
-                    "{code} ratified by {who} — built under a recorded bypass, agreed to after the fact"
+                    "{code} ratified by {who} — built under a recorded bypass, agreed to after the fact{}",
+                    heard_note(&resp)
                 ),
             );
             Ok(())
@@ -10467,16 +10495,21 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             by,
             rev,
             under,
+            pass,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/approve"),
-                Some(json!({ "by": who, "rev": rev, "delegation": under })),
+                Some(json!({ "by": who, "rev": rev, "delegation": under, "pass": pass })),
             )?;
             let who = recorded_by(&resp, &who);
-            print_write(cli, &resp, format!("{code} approved by {who}"));
+            print_write(
+                cli,
+                &resp,
+                format!("{code} approved by {who}{}", heard_note(&resp)),
+            );
             Ok(())
         }
         Command::Signoff {
@@ -10490,6 +10523,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             withdraw,
             reason,
             under,
+            pass,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
@@ -10518,7 +10552,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 ),
                 Some(json!({
                     "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev,
-                    "delegation": under
+                    "delegation": under, "pass": pass
                 })),
                 scm::repo_root().as_deref(),
             )?;
@@ -10526,7 +10560,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_write(
                 cli,
                 &resp,
-                format!("{code}: sign-off '{name}' recorded by {who}"),
+                format!(
+                    "{code}: sign-off '{name}' recorded by {who}{}",
+                    heard_note(&resp)
+                ),
             );
             if !cli.json
                 && let Some(held) = serde_json::from_str::<Value>(&resp)
@@ -14554,6 +14591,41 @@ fn recorded_by(resp: &str, asked: &str) -> String {
         .unwrap_or_else(|| asked.to_string())
 }
 
+/// The pass a verdict's answer says it was recorded from (FTR-035): the record itself, or the item
+/// with the record last in its list.
+fn heard_pass(resp: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(resp).ok()?;
+    let pass = |r: &Value| -> Option<String> {
+        r["heard"]["pass"]
+            .as_str()
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+    };
+    let def = &v["definition"];
+    pass(&v)
+        .or_else(|| {
+            def["signoffs"]
+                .as_array()
+                .and_then(|a| a.last())
+                .and_then(pass)
+        })
+        .or_else(|| {
+            def["approvals"]
+                .as_array()
+                .and_then(|a| a.last())
+                .and_then(pass)
+        })
+        .or_else(|| pass(&def["approval"]))
+}
+
+/// What a verdict recorded from the person's answer in the conversation adds to its sentence
+/// (FTR-035); nothing for any other verdict.
+fn heard_note(resp: &str) -> String {
+    heard_pass(resp)
+        .map(|p| format!(", recorded from the person's answer in the conversation (pass {p})"))
+        .unwrap_or_default()
+}
+
 /// What `board` and `review --pending` say about decisions (FTR-028): the mode with the
 /// delegations in force (`None` in plain monitor mode), and one line per delegated decision
 /// waiting to be kept or undone. Nothing when the decisions cannot be read.
@@ -14727,9 +14799,199 @@ fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
     print_defaults(cli, &json!({"mode": mode, "delegations": delegations}))
 }
 
-/// `kanbanr decisions heard`, Claude Code's PostToolUse hook on AskUserQuestion (FTR-035). A stub
-/// that answers nothing and exits 0 until the pass is made from the payload (FTR-035 T5).
-fn run_decisions_heard(_cli: &Cli, _client: Option<&Backend>) -> anyhow::Result<()> {
+/// `kanbanr decisions heard`, Claude Code's PostToolUse hook on AskUserQuestion (FTR-035). Reads
+/// the payload on stdin; for each tagged question the person answered with its approving option it
+/// writes a one-time pass and tells Claude the command that records it. It never blocks and never
+/// exits non-zero: every outcome is silence or one `additionalContext` answer.
+fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
+    use kanbanr_core::passes::{self, Listened};
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    let lines: Vec<String> = match passes::listen(&payload) {
+        Listened::Quiet(_) => return Ok(()),
+        Listened::Declined(declined) => declined
+            .iter()
+            .map(|(tag, answer)| {
+                let heard = if answer.is_empty() {
+                    "they gave no answer".to_string()
+                } else {
+                    format!("they answered: \"{answer}\"")
+                };
+                format!(
+                    "kanbanr: the person did not choose {} for {} ({heard}); nothing is \
+                     recorded, nothing is pending",
+                    passes::approving_label(&tag.verdict),
+                    tag.code
+                )
+            })
+            .collect(),
+        Listened::Answered(answers) => {
+            let Some(client) = client else {
+                return Ok(());
+            };
+            let store = client.store();
+            // No board here: nothing to say.
+            if !store.data_dir().is_dir() {
+                return Ok(());
+            }
+            let here = project::resolve_project(cli.project.as_deref());
+            let now = kanbanr_core::now_rfc3339();
+            answers
+                .iter()
+                .map(|a| match passes::issue(store, a, &now) {
+                    Ok(Ok(pass)) => {
+                        let mut command = match &a.tag.signoff {
+                            name if !name.is_empty() => {
+                                format!("kanbanr signoff {} {name}", pass.code)
+                            }
+                            _ => format!("kanbanr {} {}", pass.verdict, pass.code),
+                        };
+                        command.push_str(&format!(" --rev {} --pass {}", pass.rev, pass.id));
+                        if here.as_deref() != Some(pass.project.as_str()) {
+                            command.push_str(&format!(" --project {}", pass.project));
+                        }
+                        passes::context_line(&pass, &command)
+                    }
+                    Ok(Err(why)) => format!("kanbanr: no pass was made: {why}"),
+                    Err(e) => format!("kanbanr: no pass was made: {e}"),
+                })
+                .collect()
+        }
+    };
+    if !lines.is_empty() {
+        println!(
+            "{}",
+            json!({"hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": lines.join("\n"),
+            }})
+        );
+    }
+    Ok(())
+}
+
+/// The question to ask the person for a verdict, from the board (FTR-035): the text, header and
+/// options for AskUserQuestion, the tag the hook reads back, and the command the pass stands in
+/// for. Light checks only: the mode, the verdict, the item and its definition, a sign-off some
+/// gate asks for, something to ratify.
+fn conversation_question(
+    store: &kanbanr_core::Store,
+    project: &str,
+    verdict: &str,
+    code: &str,
+    name: Option<&str>,
+) -> anyhow::Result<Value> {
+    use kanbanr_core::passes::{self, Tag};
+    let mode = kanbanr_core::decisions::load(store, project)?.mode();
+    if mode != kanbanr_core::decisions::Mode::Conversation {
+        anyhow::bail!(
+            "this project takes decisions on the monitor (mode: {}): say what waits there, \
+             never ask for a verdict",
+            mode.as_str()
+        );
+    }
+    if !matches!(verdict, "approve" | "ratify" | "signoff") {
+        anyhow::bail!("a question is asked for approve, ratify or signoff, not `{verdict}`");
+    }
+    let board = store.load(project)?;
+    let feature = board.feature(code)?;
+    let Some(definition) = feature.definition.as_ref() else {
+        anyhow::bail!("{code} has no definition to ask about");
+    };
+    let signoff = match (verdict, name) {
+        ("signoff", None) => anyhow::bail!("a sign-off question needs the sign-off's name"),
+        ("signoff", Some(n)) => {
+            if !board
+                .config
+                .effective_gates()
+                .values()
+                .any(|g| g.signoffs.iter().any(|x| x == n))
+            {
+                anyhow::bail!("no gate of project {project} asks for sign-off `{n}`");
+            }
+            n.to_string()
+        }
+        _ => String::new(),
+    };
+    if verdict == "ratify" && !kanbanr_core::doctor::awaiting_ratification(feature) {
+        anyhow::bail!("{code} has nothing to ratify");
+    }
+    let rev = definition.content_rev();
+    let tag = Tag {
+        verdict: if verdict == "signoff" {
+            format!("signoff:{signoff}")
+        } else {
+            verdict.to_string()
+        },
+        code: code.to_string(),
+        signoff: signoff.clone(),
+        rev: rev.clone(),
+        project: project.to_string(),
+    };
+    let title = &feature.title;
+    let rev8 = rev.get(..8).unwrap_or(&rev);
+    let asked = match verdict {
+        "approve" => format!("Approve {code} \"{title}\" 's definition"),
+        "ratify" => format!("Ratify {code} \"{title}\", built under a recorded bypass,"),
+        _ => format!("Sign off {signoff} on {code} \"{title}\""),
+    };
+    let label = passes::approving_label(&tag.verdict);
+    let command = match verdict {
+        "signoff" => format!("kanbanr signoff {code} {signoff} --rev {rev} --pass <ID>"),
+        v => format!("kanbanr {v} {code} --rev {rev} --pass <ID>"),
+    };
+    Ok(json!({
+        "question": format!(
+            "{asked} as it stands (rev {rev8})? {}",
+            passes::tag_text(&tag)
+        ),
+        "header": label,
+        "options": [
+            {
+                "label": label,
+                "description": "Record it now as your decision; kanbanr keeps this question and \
+                                your answer on the record",
+            },
+            {
+                "label": "Not yet",
+                "description": "Record nothing; tell Claude what to change or what you need to \
+                                see first",
+            },
+        ],
+        "multiSelect": false,
+        "tag": passes::tag_text(&tag),
+        "rev": rev,
+        "command": command,
+    }))
+}
+
+/// `kanbanr decisions question`: print the board's question for a verdict, as text or `--json`.
+fn run_decisions_question(
+    cli: &Cli,
+    client: &Backend,
+    verdict: &str,
+    code: &str,
+    name: Option<&str>,
+) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let q = conversation_question(client.store(), &p, verdict, code, name)?;
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&q)?);
+        return Ok(());
+    }
+    println!("Ask the person with AskUserQuestion, verbatim, one question:");
+    println!("  question: {}", q["question"].as_str().unwrap_or(""));
+    println!("  header:   {}", q["header"].as_str().unwrap_or(""));
+    for o in q["options"].as_array().into_iter().flatten() {
+        println!(
+            "  option:   {} — {}",
+            o["label"].as_str().unwrap_or(""),
+            o["description"].as_str().unwrap_or("")
+        );
+    }
+    println!(
+        "A hook answers with the command to run; it stands for: {}",
+        q["command"].as_str().unwrap_or("")
+    );
     Ok(())
 }
 
@@ -14746,10 +15008,21 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
     };
     match cmd {
         DecisionsCmd::Heard => run_decisions_heard(cli, Some(client)),
+        DecisionsCmd::Question {
+            verdict,
+            code,
+            name,
+        } => run_decisions_question(cli, client, verdict, code, name.as_deref()),
         DecisionsCmd::Show => {
             let resp = get_decisions(client, &base)?;
             show(&resp, &|v| {
                 println!("Decisions: {}", v["mode"].as_str().unwrap_or("monitor"));
+                if v["mode"].as_str() == Some("conversation") {
+                    println!(
+                        "  item verdicts are asked in the conversation (`kanbanr decisions \
+                         question <approve|ratify|signoff> <CODE> [<NAME>]`), not on the monitor"
+                    );
+                }
                 let gs = v["delegations"].as_array().cloned().unwrap_or_default();
                 if gs.is_empty() {
                     println!("no delegations");

@@ -271,6 +271,24 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
     out
 }
 
+/// How a verdict ends its line: `origin::via`, or for a verdict recorded from the person's answer
+/// in the conversation, the question without its tag and the answer (FTR-035).
+fn via_heard(origin: &str, heard: Option<&crate::models::Heard>) -> String {
+    let Some(h) = heard else {
+        return crate::origin::via(origin);
+    };
+    // The tag is the last bracket group of the question.
+    let asked = h
+        .question
+        .rfind(" [kanbanr ")
+        .map_or(h.question.as_str(), |i| &h.question[..i]);
+    format!(
+        " via the conversation, answering \"{}\" with \"{}\"",
+        asked.trim(),
+        h.answer
+    )
+}
+
 /// The definition as markdown: why the item exists, the six dimensions with their gaps named, and
 /// each requirement with its evidence. This is what `kanbanr feature show` prints, which is the
 /// whole of what Claude sees about an item — a field rendered nowhere may as well not exist.
@@ -358,7 +376,7 @@ pub(crate) fn definition_sections_with(
                      bypass and agreed to afterwards\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
-                    crate::origin::via(&a.origin)
+                    via_heard(&a.origin, a.heard.as_ref())
                 ));
             }
         }
@@ -368,7 +386,7 @@ pub(crate) fn definition_sections_with(
                     "- **Approved** by {} on {}{}{}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
-                    crate::origin::via(&a.origin),
+                    via_heard(&a.origin, a.heard.as_ref()),
                     tests_only(def)
                 ));
             }
@@ -379,7 +397,7 @@ pub(crate) fn definition_sections_with(
                     "- **Approved** by {} on {}{}{}, with {}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
-                    crate::origin::via(&a.origin),
+                    via_heard(&a.origin, a.heard.as_ref()),
                     tests_only(def),
                     added_since(def)
                 ));
@@ -429,7 +447,7 @@ pub(crate) fn definition_sections_with(
             s.id,
             s.by,
             s.at.get(..10).unwrap_or(&s.at),
-            crate::origin::via(&s.origin),
+            via_heard(&s.origin, s.heard.as_ref()),
             if s.status.is_empty() {
                 String::new()
             } else {

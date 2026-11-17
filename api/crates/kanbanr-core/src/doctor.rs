@@ -702,7 +702,7 @@ pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> boo
 /// Does `f` wait for a ratification? The old rule (`unreconciled_bypass` of its definition),
 /// or an open override (DEF-043). The one predicate the doctor, the review queue, the cut and
 /// FTR-034's `ratification` prepared record use.
-pub(crate) fn awaiting_ratification(f: &crate::FeatureItem) -> bool {
+pub fn awaiting_ratification(f: &crate::FeatureItem) -> bool {
     f.definition.as_ref().is_some_and(unreconciled_bypass)
         || !crate::readiness::open_overrides(f).is_empty()
 }
