@@ -387,6 +387,17 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
                     .replace("{row}", "FEAT-002"),
             );
         }
+        // The Plan view (FTR-043): each tab, and the fixture's sprint, release and milestone rows.
+        "/api/projects/{project}/plan" => {
+            for scope in ["current", "planned", "past"] {
+                out.push(format!("{base}?scope={scope}"));
+            }
+        }
+        "/api/projects/{project}/plan/rows/{key}" => {
+            out.push(base.replace("{key}", &format!("sprint:{sprint}")));
+            out.push(base.replace("{key}", "release:1.0"));
+            out.push(base.replace("{key}", "milestone:M1"));
+        }
         _ => out.push(base),
     }
     out

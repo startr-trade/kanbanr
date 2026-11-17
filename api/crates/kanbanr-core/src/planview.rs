@@ -89,10 +89,15 @@ pub struct PlanLane {
     pub to: String,
     pub bands: Vec<PlanBand>,
     pub marks: Vec<PlanMark>,
-    /// Delivered and planned: a sprint's done and committed estimate (rounded), a release's
-    /// finished (shipped, once shipped) and items, a milestone's done and items.
+    /// Delivered and planned: a sprint's done and committed estimate (rounded) — on the Past tab,
+    /// its delivered items of its committed items ("9 of 11 delivered") — a release's finished
+    /// (shipped, once shipped) and items, a milestone's done and items.
     pub done: usize,
     pub total: usize,
+    /// A sprint's done and committed estimate in the project's unit, beside the counts; `None` on
+    /// every other lane and where the sprint has no report.
+    pub points_done: Option<f64>,
+    pub points_total: Option<f64>,
     /// How many items it carried out.
     pub carried: usize,
     /// The running sprint's burndown; `None` on every other lane.
@@ -242,16 +247,83 @@ fn sprint_state_word(state: SprintState) -> &'static str {
     }
 }
 
+fn cadence_on(b: &Board) -> bool {
+    b.project.config.cadence.sprints
+}
+
+/// What a sprint holds, counted the way `sprints::report` counts it: the items planned into it and
+/// those it carried out; done is what reached a finished status, less what it carried out.
+#[derive(Clone, Copy)]
+struct Tally {
+    committed: f64,
+    done: f64,
+    items: usize,
+    delivered: usize,
+}
+
+fn tally(b: &Board, s: &Sprint) -> Tally {
+    let carried: BTreeSet<&str> = s.carried.iter().map(|c| c.code.as_str()).collect();
+    let size = |f: &FeatureItem| match b.project.config.estimate_unit {
+        crate::config::EstimateUnit::Points => f.points.unwrap_or(0.0),
+        crate::config::EstimateUnit::Days => f.estimate_days.unwrap_or(0.0),
+    };
+    let mut t = Tally {
+        committed: 0.0,
+        done: 0.0,
+        items: 0,
+        delivered: 0,
+    };
+    for f in &b.project.features {
+        let out = carried.contains(f.code.as_str());
+        if f.sprint.as_deref() != Some(s.code.as_str()) && !out {
+            continue;
+        }
+        t.items += 1;
+        t.committed += size(f);
+        if !out && finished(&b.project.config, f) {
+            t.delivered += 1;
+            t.done += size(f);
+        }
+    }
+    t
+}
+
+/// How a sprint's lane counts `done` and `total`: by its estimate, or by its items (the Past tab).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Count {
+    Estimate,
+    Items,
+}
+
 /// A sprint's lane: one band over its dates, filled by done of committed. With `burndown`, the
 /// lane carries the sprint's report. A sprint whose dates do not parse gets an undated lane.
-fn sprint_lane(store: &Store, p: &str, s: &Sprint, today: Date, burndown: bool) -> PlanLane {
-    // The report needs the sprints cadence on; a board holding sprints with it off shows the
-    // sprints with nothing counted, never an error.
-    let report = sprints::report(store, p, &s.code, today).ok();
-    let (done, committed) = report
-        .as_ref()
-        .map(|r| (r.done, r.committed))
-        .unwrap_or((0.0, 0.0));
+fn sprint_lane(
+    b: &Board,
+    store: &Store,
+    p: &str,
+    s: &Sprint,
+    today: Date,
+    burndown: bool,
+    count: Count,
+) -> PlanLane {
+    // The burndown needs the sprint's report, which reads the board again; the other lanes count
+    // from the metadata already loaded, so a tab of many sprints loads it once (R-9's budget). With
+    // the sprints cadence off a board's sprints show with nothing counted, never an error.
+    let report = if burndown {
+        sprints::report(store, p, &s.code, today).ok()
+    } else {
+        None
+    };
+    let tally = cadence_on(b).then(|| tally(b, s));
+    let (done, committed) = tally.map(|t| (t.done, t.committed)).unwrap_or((0.0, 0.0));
+    let (done_n, total_n) = match (count, tally) {
+        (Count::Items, Some(t)) => (t.delivered, t.items),
+        (Count::Items, None) => (0, 0),
+        (Count::Estimate, _) => (
+            done.round().max(0.0) as usize,
+            committed.round().max(0.0) as usize,
+        ),
+    };
     let state = s.state_on(today);
     let label = titled(&s.code, &s.name);
     let dated = parse_ymd(&s.start).is_some() && parse_ymd(&s.end).is_some();
@@ -282,8 +354,10 @@ fn sprint_lane(store: &Store, p: &str, s: &Sprint, today: Date, burndown: bool) 
             Vec::new()
         },
         marks: Vec::new(),
-        done: done.round().max(0.0) as usize,
-        total: committed.round().max(0.0) as usize,
+        done: done_n,
+        total: total_n,
+        points_done: tally.map(|t| t.done),
+        points_total: tally.map(|t| t.committed),
         carried: s.carried.len(),
         burndown: if burndown { report } else { None },
         label,
@@ -319,6 +393,8 @@ fn release_lane(rep: &ReleaseReport, marks: Vec<PlanMark>, done: usize) -> PlanL
         marks,
         done,
         total: rep.items.len(),
+        points_done: None,
+        points_total: None,
         carried: r.carried.len(),
         burndown: None,
     }
@@ -381,7 +457,7 @@ pub fn slice(store: &Store, p: &str, scope: Scope, today: Date) -> Result<PlanSl
     let (from, to, lanes, undated) = match scope {
         Scope::Current => {
             let mut lanes: Vec<PlanLane> = running(&b.sprints, today)
-                .map(|s| sprint_lane(store, p, s, today, true))
+                .map(|s| sprint_lane(&b, store, p, s, today, true, Count::Estimate))
                 .collect();
             for rep in &reports {
                 let r = &rep.release;
@@ -403,7 +479,7 @@ pub fn slice(store: &Store, p: &str, scope: Scope, today: Date) -> Result<PlanSl
                 .sprints
                 .iter()
                 .filter(|s| s.state_on(today) == SprintState::Planned)
-                .map(|s| sprint_lane(store, p, s, today, false))
+                .map(|s| sprint_lane(&b, store, p, s, today, false, Count::Estimate))
                 .collect();
             for rep in &reports {
                 let r = &rep.release;
@@ -434,7 +510,7 @@ pub fn slice(store: &Store, p: &str, scope: Scope, today: Date) -> Result<PlanSl
                 .sprints
                 .iter()
                 .filter(|s| s.state_on(today) == SprintState::Closed)
-                .map(|s| sprint_lane(store, p, s, today, false))
+                .map(|s| sprint_lane(&b, store, p, s, today, false, Count::Items))
                 .collect();
             for rep in &reports {
                 let r = &rep.release;
@@ -532,6 +608,8 @@ fn milestone_lane(b: &Board, m: &crate::models::Milestone, today: Date) -> PlanL
         marks: Vec::new(),
         done,
         total: items.len(),
+        points_done: None,
+        points_total: None,
         carried: 0,
         burndown: None,
     }
@@ -586,9 +664,215 @@ pub fn place(
     (String::new(), String::new(), "undated")
 }
 
+/// One item in an opened row, placed on the row's timeline by [`place`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PlacedItem {
+    pub code: String,
+    pub title: String,
+    pub status: String,
+    /// The item's first and last day; empty when undated.
+    pub from: String,
+    pub to: String,
+    /// `sprint`, `moves`, `start` or `undated`: the rule that placed it.
+    pub placed: String,
+    /// On the project's dependency critical path.
+    pub critical: bool,
+    /// The planning decisions waiting on the item (FTR-049); empty until then.
+    pub pending: Vec<String>,
+}
+
+/// An opened row's body: its items placed, a milestone's items by status, and what it carried out.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RowBody {
+    pub key: String,
+    pub items: Vec<PlacedItem>,
+    /// A milestone's item codes per displayed status, in the workflow's order and dependencies
+    /// first; a status none of them is in is left out. Empty for a sprint or a release.
+    pub by_status: Vec<(String, Vec<String>)>,
+    /// What a sprint or a release carried out, and where to (a sprint's carries have no `why`).
+    pub carried: Vec<releases::Carry>,
+}
+
+/// One opened row (FTR-043 R-3): the items of `sprint:<code>`, `release:<version>` or
+/// `milestone:<code>`, each placed and marked when it is on the dependency critical path. A key of
+/// another kind, or naming a row the board does not hold, is a 404.
+pub fn row(store: &Store, p: &str, key: &str, _today: Date) -> Result<RowBody> {
+    let b = board(store, p)?;
+    let missing = || CoreError::NoSuchRoute(format!("no plan row {key}"));
+    let (kind, code) = key.split_once(':').ok_or_else(missing)?;
+    let in_items = |codes: &[String]| -> Vec<&FeatureItem> {
+        codes
+            .iter()
+            .filter_map(|c| b.project.features.iter().find(|f| &f.code == c))
+            .collect()
+    };
+    let (items, carried, by_status): (Vec<&FeatureItem>, Vec<releases::Carry>, _) = match kind {
+        "sprint" => {
+            let s = b
+                .sprints
+                .iter()
+                .find(|s| s.code == code)
+                .ok_or_else(missing)?;
+            let items = b
+                .project
+                .features
+                .iter()
+                .filter(|f| f.sprint.as_deref() == Some(code))
+                .collect();
+            let carried = s
+                .carried
+                .iter()
+                .map(|c| releases::Carry {
+                    code: c.code.clone(),
+                    to: c.to.clone(),
+                    why: String::new(),
+                })
+                .collect();
+            (items, carried, Vec::new())
+        }
+        "release" => {
+            let rep = releases::report_all(store, p)?
+                .into_iter()
+                .find(|r| r.release.version == code)
+                .ok_or_else(missing)?;
+            (in_items(&rep.items), rep.release.carried, Vec::new())
+        }
+        "milestone" => {
+            if !b.project.milestones.iter().any(|m| m.code == code) {
+                return Err(CoreError::MilestoneNotFound(code.to_string()));
+            }
+            let items: Vec<&FeatureItem> = b
+                .project
+                .features
+                .iter()
+                .filter(|f| f.milestone == code)
+                .collect();
+            let deps_of = |c: &str| -> Vec<String> {
+                items
+                    .iter()
+                    .find(|f| f.code == c)
+                    .map(|f| {
+                        f.depends_on
+                            .iter()
+                            .filter_map(|d| {
+                                let (dp, dc) = crate::graph::parse_ref(d, p);
+                                (dp == p).then_some(dc)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let by_status = b
+                .project
+                .config
+                .displayed_states
+                .iter()
+                .filter_map(|state| {
+                    let codes: Vec<String> = items
+                        .iter()
+                        .filter(|f| &f.status == state)
+                        .map(|f| f.code.clone())
+                        .collect();
+                    (!codes.is_empty())
+                        .then(|| (state.clone(), crate::graph::order_by_deps(&codes, deps_of)))
+                })
+                .collect();
+            (items, Vec::new(), by_status)
+        }
+        _ => return Err(missing()),
+    };
+    let critical = if items.is_empty() {
+        BTreeSet::new()
+    } else {
+        crate::graph::DependencyView::build(store, None)?
+            .schedule(Some(p))
+            .critical
+    };
+    let items = items
+        .into_iter()
+        .map(|f| {
+            let (from, to, placed) = place(f, &b.project.config, &b.sprints);
+            PlacedItem {
+                code: f.code.clone(),
+                title: f.title.clone(),
+                status: f.status.clone(),
+                from,
+                to,
+                placed: placed.to_string(),
+                critical: critical.contains(&crate::graph::qualify(p, &f.code)),
+                pending: Vec::new(),
+            }
+        })
+        .collect();
+    Ok(RowBody {
+        key: key.to_string(),
+        items,
+        by_status,
+        carried,
+    })
+}
+
+/// One project's row on the portfolio's timeline (FTR-043 R-7).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PortfolioLane {
+    pub project: String,
+    /// The project's name, else its id.
+    pub label: String,
+    /// Its running sprint's band.
+    pub bands: Vec<PlanBand>,
+    /// Its releases in flight, as diamonds at their targets.
+    pub marks: Vec<PlanMark>,
+}
+
+/// The portfolio's timeline (FTR-043 R-7): one lane per project with sprints or releases on,
+/// holding its running sprint's band and its releases-in-flight diamonds, over the Current tab's
+/// window. A project with neither cadence on has no lane.
+pub fn portfolio(store: &Store, today: Date) -> Result<Vec<PortfolioLane>> {
+    let mut lanes = Vec::new();
+    for p in store.list_projects()? {
+        let b = board(store, &p)?;
+        let cadence = &b.project.config.cadence;
+        if !cadence.sprints && !cadence.releases {
+            continue;
+        }
+        let bands = if cadence.sprints {
+            running(&b.sprints, today)
+                .flat_map(|s| sprint_lane(&b, store, &p, s, today, false, Count::Estimate).bands)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let marks = if cadence.releases {
+            b.releases
+                .iter()
+                .filter(|r| releases::scope_of(r) == Scope::Current)
+                .flat_map(in_flight_marks)
+                .filter(|m| m.kind == "diamond")
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let name = b.project.config.name.trim();
+        lanes.push(PortfolioLane {
+            label: if name.is_empty() {
+                p.clone()
+            } else {
+                name.to_string()
+            },
+            project: p,
+            bands,
+            marks,
+        });
+    }
+    Ok(lanes)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Scope, place, slice, summary, window};
+    use super::{Scope, place, portfolio, row, slice, summary, window};
     use crate::releases::{Carry as ReleaseCarry, Release, ReleaseState, StageChange};
     use crate::sprints::{Carry as SprintCarry, Sprint, SprintState};
     use crate::{FeatureItem, ProjectConfig, Store};
@@ -1073,9 +1357,11 @@ mod tests {
             (tab.from.as_str(), tab.to.as_str()),
             ("2026-08-15", "2026-11-14")
         );
-        // SP-001: P1 (3) done of P1 + P2 (5) committed; P2 carried to SP-002.
+        // SP-001 counts items: P1 delivered of P1 and P2 committed; P2 carried to SP-002. The
+        // estimate stays beside them: 3 of 5 points.
         let sp1 = &tab.lanes[0];
-        assert_eq!((sp1.done, sp1.total, sp1.carried), (3, 5, 1));
+        assert_eq!((sp1.done, sp1.total, sp1.carried), (1, 2, 1));
+        assert_eq!((sp1.points_done, sp1.points_total), (Some(3.0), Some(5.0)));
         assert_eq!(sp1.state, "closed");
         assert_eq!(sp1.bands.len(), 1);
         // v0.1.0: one shipped of one item; C carried to v0.4.0.
@@ -1090,6 +1376,220 @@ mod tests {
         let sp0 = &tab.lanes[3];
         assert!(sp0.bands.is_empty() && sp0.marks.is_empty());
         assert_eq!(sp0.to, "2026-06-14");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Add an item to `shop` in milestone `ms`, planned into `sprint`; returns its code.
+    fn add_item(store: &Store, title: &str, ms: &str, sprint: Option<&str>) -> String {
+        let f = store.add_feature("shop", title, "", ms, None).unwrap();
+        let mut f = store
+            .load_meta("shop")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        f.sprint = sprint.map(str::to_string);
+        store.persist_feature_for_test("shop", &f).unwrap();
+        f.code
+    }
+
+    /// FTR-043 R-3: an opened row lists its items, each placed by `place` and marked when it is on
+    /// the dependency critical path; a milestone's items come by status, dependencies first; a
+    /// sprint's and a release's carries come with them; an unknown row is a 404.
+    #[test]
+    fn a_rows_items_mark_the_critical_path() {
+        let (store, codes, dir) = board("row");
+        // In SP-003, in M4: W needs X, X needs Y (a chain of three), and Z stands alone. W is
+        // added first, so the board's order is not the dependency order.
+        let w = add_item(&store, "W", "M4", Some("SP-003"));
+        let x = add_item(&store, "X", "M4", Some("SP-003"));
+        let y = add_item(&store, "Y", "M4", Some("SP-003"));
+        let z = add_item(&store, "Z", "M4", Some("SP-003"));
+        let needs = |code: &str, dep: &str| {
+            store
+                .set_feature_attrs(
+                    "shop",
+                    code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec![dep.to_string()]),
+                )
+                .unwrap();
+        };
+        needs(&w, &x);
+        needs(&x, &y);
+        store.move_feature("shop", &z, "Scheduled").unwrap();
+
+        let body = row(&store, "shop", "sprint:SP-003", TODAY).unwrap();
+        assert_eq!(body.key, "sprint:SP-003");
+        let got: Vec<(&str, &str, &str, &str, bool)> = body
+            .items
+            .iter()
+            .map(|i| {
+                (
+                    i.code.as_str(),
+                    i.from.as_str(),
+                    i.to.as_str(),
+                    i.placed.as_str(),
+                    i.critical,
+                )
+            })
+            .collect();
+        fn sp3(c: &str, critical: bool) -> (&str, &str, &str, &str, bool) {
+            (c, "2026-11-29", "2026-12-12", "sprint", critical)
+        }
+        assert_eq!(
+            got,
+            [
+                sp3(w.as_str(), true),
+                sp3(x.as_str(), true),
+                sp3(y.as_str(), true),
+                sp3(z.as_str(), false)
+            ]
+        );
+        assert!(body.items.iter().all(|i| i.pending.is_empty()));
+        assert_eq!(body.items[0].title, "W");
+        assert!(body.by_status.is_empty() && body.carried.is_empty());
+
+        // The milestone's items by displayed status, in the workflow's order, dependencies first.
+        let config = store.load_meta("shop").unwrap().config;
+        let first = store
+            .load_meta("shop")
+            .unwrap()
+            .feature(&w)
+            .unwrap()
+            .status
+            .clone();
+        let pos = |s: &str| config.displayed_states.iter().position(|d| d == s).unwrap();
+        assert!(
+            pos(&first) < pos("Scheduled"),
+            "{:?}",
+            config.displayed_states
+        );
+        let m4 = row(&store, "shop", "milestone:M4", TODAY).unwrap();
+        assert_eq!(
+            m4.by_status,
+            [
+                (first, vec![y.clone(), x.clone(), w.clone()]),
+                ("Scheduled".to_string(), vec![z.clone()])
+            ]
+        );
+        assert_eq!(m4.items.len(), 4);
+
+        // A sprint's carries, with no why; a release's, with its own.
+        let sp1 = row(&store, "shop", "sprint:SP-001", TODAY).unwrap();
+        assert_eq!(
+            sp1.carried
+                .iter()
+                .map(|c| (c.code.as_str(), c.to.as_str(), c.why.as_str()))
+                .collect::<Vec<_>>(),
+            [(codes["P2"].as_str(), "SP-002", "")]
+        );
+        assert_eq!(
+            sp1.items
+                .iter()
+                .map(|i| i.code.as_str())
+                .collect::<Vec<_>>(),
+            [codes["P1"].as_str()]
+        );
+        let v1 = row(&store, "shop", "release:v0.1.0", TODAY).unwrap();
+        assert_eq!(
+            v1.items
+                .iter()
+                .map(|i| (i.code.as_str(), i.placed.as_str()))
+                .collect::<Vec<_>>(),
+            [(codes["P1"].as_str(), "moves")]
+        );
+        assert_eq!(v1.carried[0].code, codes["C"]);
+        assert_eq!(v1.carried[0].to, "v0.4.0");
+
+        // An unknown row, or a key of no kind, is a 404.
+        for key in [
+            "sprint:SP-404",
+            "release:v9",
+            "milestone:M9",
+            "SP-003",
+            "goal:G-1",
+        ] {
+            let e = row(&store, "shop", key, TODAY).unwrap_err();
+            assert_eq!(e.status(), 404, "{key}: {e}");
+        }
+        assert_eq!(
+            row(&store, "nowhere", "sprint:SP-001", TODAY)
+                .unwrap_err()
+                .status(),
+            404
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-043 R-7: the portfolio's timeline has one row per project with sprints or releases on:
+    /// its running sprint's band and its releases-in-flight diamonds. One with sprints off has no
+    /// band; one with neither cadence has no row.
+    #[test]
+    fn the_portfolio_timeline_has_one_row_per_project() {
+        let (store, _codes, dir) = board("portfolio");
+        store
+            .init_project("ops", ProjectConfig::default_for("ops"))
+            .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/ops/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        crate::atomic::write(
+            store.project_dir("ops").join("releases.yaml"),
+            crate::yaml::to_string(&vec![
+                Release {
+                    stage: "candidate".into(),
+                    ..release("r1", "2026-11-21")
+                },
+                release("r2", "2026-11-22"),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        store
+            .init_project("bare", ProjectConfig::default_for("bare"))
+            .unwrap();
+
+        let lanes = portfolio(&store, TODAY).unwrap();
+        let mut projects: Vec<&str> = lanes.iter().map(|l| l.project.as_str()).collect();
+        projects.sort();
+        assert_eq!(projects, ["ops", "shop"], "{lanes:?}");
+        let lane = |p: &str| lanes.iter().find(|l| l.project == p).unwrap();
+        let shop = lane("shop");
+        assert!(!shop.label.is_empty());
+        assert_eq!(
+            shop.bands
+                .iter()
+                .map(|b| (b.from.as_str(), b.to.as_str()))
+                .collect::<Vec<_>>(),
+            [("2026-11-15", "2026-11-28")]
+        );
+        assert_eq!(
+            shop.marks
+                .iter()
+                .map(|m| (m.at.as_str(), m.kind.as_str(), m.label.as_str()))
+                .collect::<Vec<_>>(),
+            [("2026-11-20", "diamond", "v0.2.0")]
+        );
+        // Sprints off: no band; only the release at a stage is in flight.
+        let ops = lane("ops");
+        assert!(ops.bands.is_empty(), "{ops:?}");
+        assert_eq!(
+            ops.marks
+                .iter()
+                .map(|m| (m.at.as_str(), m.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("2026-11-21", "diamond")]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
