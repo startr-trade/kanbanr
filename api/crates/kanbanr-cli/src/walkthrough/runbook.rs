@@ -27,9 +27,11 @@ pub enum ItemSel {
     Newest,
     /// By code.
     Code(String),
-    /// The item whose title contains this text (case-insensitive); the newest when several do.
+    /// The item whose title contains this text (case-insensitive); several equal fits are
+    /// ambiguous (`ambiguous-selector`), never a guess.
     TitleContains(String),
-    /// The item whose title matches this pattern (case-insensitive); the newest when several do.
+    /// The item whose title matches this pattern (case-insensitive); several equal fits are
+    /// ambiguous (`ambiguous-selector`), never a guess.
     TitleMatches(String),
     /// The item a step's `names:` bound to this name (`item: {named: basket}`). The run reads it
     /// as the bound code before acting; a name never bound is a finding, never a guess.
@@ -398,12 +400,15 @@ pub struct PageClaim {
 /// What the step's conversation must have done: a question asked (or not), a thing said.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TalkClaim {
-    /// A question matching this was asked during the step.
+    /// A question matching this was asked during the step (or its span, with `since`).
     pub asked: Option<String>,
-    /// No question matching this was asked during the step.
+    /// No question matching this was asked during the step (or its span, with `since`).
     pub not_asked: Option<String>,
-    /// Claude's final text of the step matches this.
+    /// Claude's final text of the step matches this: always the step's own text.
     pub said: Option<String>,
+    /// The first step of the span `asked` and `not_asked` read (DEF-087): every step from this
+    /// one to the claim's own. None reads the claim's step alone.
+    pub since: Option<String>,
 }
 
 /// What a step expects afterwards.
@@ -413,11 +418,38 @@ pub struct Expect {
     pub truth: Option<TruthClaim>,
     pub page: Option<PageClaim>,
     pub talk: Option<TalkClaim>,
+    /// An item-scoped button that must not be offered (`offer: {page, button, subject}` with
+    /// `absent: true`, DEF-076 Q1): it holds when the page does not offer that button for that
+    /// subject, and is a finding when it does. Lint keeps `offer` and `absent` together.
+    pub offer: Option<Offer>,
+    pub absent: bool,
 }
 
 impl Expect {
     pub fn is_empty(&self) -> bool {
-        self.board.is_none() && self.truth.is_none() && self.page.is_none() && self.talk.is_none()
+        self.board.is_none()
+            && self.truth.is_none()
+            && self.page.is_none()
+            && self.talk.is_none()
+            && self.offer.is_none()
+    }
+}
+
+impl Offer {
+    /// The verdict of an absent-offer claim, given whether the page offers the button for the
+    /// subject: `None` when it holds, else the finding's text.
+    pub fn judge_absent(&self, offered: bool) -> Option<String> {
+        offered.then(|| {
+            format!(
+                "\"{}\" is offered on the {} page for {}",
+                self.button,
+                self.page,
+                self.subject
+                    .as_ref()
+                    .map(ItemSel::describe)
+                    .unwrap_or_else(|| "no subject".into())
+            )
+        })
     }
 }
 
@@ -482,6 +514,7 @@ impl Step {
             if let Some(TruthClaim::Merged { item }) = &mut e.truth {
                 sels.push(item);
             }
+            sels.extend(e.offer.as_mut().and_then(|o| o.subject.as_mut()));
         }
         sels
     }
@@ -779,6 +812,16 @@ struct RawOffer {
     subject: Option<RawItem>,
 }
 
+impl RawOffer {
+    fn into_offer(self) -> Offer {
+        Offer {
+            page: self.page,
+            button: self.button,
+            subject: self.subject.map(|s| s.item.into_sel()),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawRelease {
@@ -940,6 +983,8 @@ struct RawTalk {
     asked: Option<String>,
     not_asked: Option<String>,
     said: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -949,6 +994,9 @@ struct RawExpect {
     truth: Option<RawTruthClaim>,
     page: Option<PageClaim>,
     talk: Option<RawTalk>,
+    offer: Option<RawOffer>,
+    #[serde(default)]
+    absent: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1049,11 +1097,7 @@ impl Runbook {
         for (i, s) in raw.steps.into_iter().enumerate() {
             let id = s.id.unwrap_or_else(|| format!("#{}", i + 1));
             let decide = s.decide.map(|d| d.into_decision(&id)).transpose()?;
-            let offer = s.offer.map(|o| Offer {
-                page: o.page,
-                button: o.button,
-                subject: o.subject.map(|s| s.item.into_sel()),
-            });
+            let offer = s.offer.map(RawOffer::into_offer);
             let press = s.press.map(|p| Press {
                 page: p.page,
                 button: p.button,
@@ -1069,7 +1113,10 @@ impl Runbook {
                         asked: t.asked,
                         not_asked: t.not_asked,
                         said: t.said,
+                        since: t.since,
                     }),
+                    offer: e.offer.map(RawOffer::into_offer),
+                    absent: e.absent,
                 }),
             };
             let only_if = s.only_if.map(|o| o.board.into_claim(&id)).transpose()?;
@@ -1155,6 +1202,7 @@ fn selectors(s: &Step) -> Vec<&ItemSel> {
         if let Some(TruthClaim::Merged { item }) = &e.truth {
             sels.push(item);
         }
+        sels.extend(e.offer.as_ref().and_then(|o| o.subject.as_ref()));
     }
     sels
 }
@@ -1208,6 +1256,20 @@ pub fn lint_warnings(rb: &Runbook) -> Vec<LintError> {
     };
     let mut warned = std::collections::BTreeSet::new();
     for (i, s) in rb.steps.iter().enumerate() {
+        // DEF-087 R-4: with no subject, a press clicks the first button on the whole page whose
+        // label starts with its text ("Accept" can hit an ADR's Accept on the Review page).
+        if let Some(p) = &s.press
+            && p.page == "review"
+            && p.subject.is_none()
+        {
+            out.push(LintError {
+                step: s.id.clone(),
+                message: format!(
+                    "a press on the review page with no subject clicks the first button whose label starts with \"{}\"; name the subject",
+                    p.button
+                ),
+            });
+        }
         for sel in selectors(s) {
             if matches!(sel, ItemSel::Newest | ItemSel::Code(_) | ItemSel::Named(_)) {
                 continue;
@@ -1255,6 +1317,12 @@ fn title_patterns(s: &Step) -> Vec<String> {
     }
     sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
     sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
+    sels.extend(
+        s.expect
+            .as_ref()
+            .and_then(|e| e.offer.as_ref())
+            .and_then(|o| o.subject.as_ref()),
+    );
     let mut out: Vec<String> = sels
         .into_iter()
         .filter_map(|i| match i {
@@ -1317,7 +1385,7 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
         }
     }
     let mut seen = std::collections::BTreeSet::new();
-    for s in &rb.steps {
+    for (i, s) in rb.steps.iter().enumerate() {
         if s.id.trim().is_empty() || s.id.starts_with('#') {
             out.push(err(&s.id, "the step has no id".into()));
         }
@@ -1395,6 +1463,53 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
                         format!("talk.{what} `{p}` does not compile: {why}"),
                     ));
                 }
+            }
+            // DEF-087 R-2: a span starts at this step or an earlier one, and widens a question
+            // claim.
+            if let Some(since) = &t.since {
+                match rb.steps.iter().position(|o| o.id == *since) {
+                    None => out.push(err(&s.id, format!("talk.since `{since}` names no step"))),
+                    Some(j) if j > i => out.push(err(
+                        &s.id,
+                        format!("talk.since `{since}` names a later step"),
+                    )),
+                    Some(_) => {}
+                }
+                if t.asked.is_none() && t.not_asked.is_none() {
+                    out.push(err(
+                        &s.id,
+                        "talk.since widens asked and not_asked; this talk has neither".into(),
+                    ));
+                }
+            }
+        }
+        // DEF-076 Q1: an expected offer says the button is absent for one item; a decide step's
+        // `offer` checks one that is present.
+        if let Some(e) = &s.expect {
+            match (&e.offer, e.absent) {
+                (Some(o), true) => {
+                    if o.subject.is_none() {
+                        out.push(err(
+                            &s.id,
+                            "an absent offer claim names its subject: it is about one item's button".into(),
+                        ));
+                    }
+                    if !matches!(o.page.as_str(), "review" | "releases") {
+                        out.push(err(
+                            &s.id,
+                            format!("an offer's page is review or releases, not '{}'", o.page),
+                        ));
+                    }
+                }
+                (Some(_), false) => out.push(err(
+                    &s.id,
+                    "an `expect.offer` claims the button is not offered and says `absent: true`; a decide step's `offer` checks one that is".into(),
+                )),
+                (None, true) => out.push(err(
+                    &s.id,
+                    "`expect.absent` names no `expect.offer`".into(),
+                )),
+                (None, false) => {}
             }
         }
     }
@@ -1923,5 +2038,128 @@ steps:
             why.contains("step a") && why.contains("configured"),
             "{why}"
         );
+    }
+
+    /// DEF-087 R-1: a talk claim's `since` is read from the runbook; an unknown talk key is
+    /// still refused.
+    #[test]
+    fn talk_since_is_read_from_the_runbook() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: s\nprocess: p\nsteps:\n  - id: \"2.1\"\n    say: \"hi\"\n  - id: \"2.2\"\n    expect: {talk: {asked: \"x\", since: \"2.1\"}}\n```",
+        )
+        .unwrap();
+        let talk = rb.steps[1].expect.as_ref().unwrap().talk.clone().unwrap();
+        assert_eq!(talk.since.as_deref(), Some("2.1"));
+        assert_eq!(talk.asked.as_deref(), Some("x"));
+        let without = Runbook::parse(
+            "```yaml\nrunbook: s\nprocess: p\nsteps:\n  - id: a\n    expect: {talk: {asked: \"x\"}}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            without.steps[0]
+                .expect
+                .as_ref()
+                .unwrap()
+                .talk
+                .as_ref()
+                .unwrap()
+                .since,
+            None
+        );
+        let why = Runbook::parse(
+            "```yaml\nrunbook: s\nprocess: p\nsteps:\n  - id: a\n    expect: {talk: {asked: \"x\", until: \"b\"}}\n```",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(why.contains("unknown field `until`"), "{why}");
+    }
+
+    /// DEF-087 R-2: lint refuses a `since` that names no step, a later step, or widens a talk
+    /// with no question claim; one naming the claim's own step lints clean. `run` lints first and
+    /// bails on any error, so such a runbook never starts.
+    #[test]
+    fn a_talk_since_names_an_earlier_step() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: s\nprocess: p\nsteps:\n  - id: \"2.1\"\n    say: \"hi\"\n  - id: \"2.2\"\n    expect: {talk: {asked: \"x\", since: \"9.9\"}}\n  - id: \"2.3\"\n    expect: {talk: {not_asked: \"x\", since: \"2.4\"}}\n  - id: \"2.4\"\n    expect: {talk: {said: \"x\", since: \"2.1\"}}\n  - id: \"2.5\"\n    expect: {talk: {asked: \"x\", since: \"2.5\"}}\n  - id: \"2.6\"\n    expect: {talk: {not_asked: \"x\", since: \"2.1\"}}\n```",
+        )
+        .unwrap();
+        let all: Vec<String> = lint(&rb).iter().map(LintError::to_string).collect();
+        assert_eq!(
+            all,
+            [
+                "step 2.2: talk.since `9.9` names no step",
+                "step 2.3: talk.since `2.4` names a later step",
+                "step 2.4: talk.since widens asked and not_asked; this talk has neither",
+            ],
+            "{all:?}"
+        );
+    }
+
+    /// DEF-087 R-4: a press on the Review page with no subject is warned (it clicks the first
+    /// button whose label starts with its text); with a subject, or on the Releases page, it is
+    /// not. A warning never stops a run.
+    #[test]
+    fn a_press_with_no_subject_on_the_review_page_is_warned() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: w\nprocess: p\nsteps:\n  - id: a\n    press: {page: review, button: Accept}\n  - id: b\n    press: {page: review, button: Accept, subject: {item: FTR-001}}\n  - id: c\n    press: {page: releases, button: \"Cut v0.1.0\"}\n```",
+        )
+        .unwrap();
+        assert!(lint(&rb).is_empty(), "{:?}", lint(&rb));
+        let w: Vec<String> = lint_warnings(&rb)
+            .iter()
+            .map(LintError::to_string)
+            .collect();
+        assert_eq!(
+            w,
+            [
+                "step a: a press on the review page with no subject clicks the first button whose label starts with \"Accept\"; name the subject"
+            ],
+            "{w:?}"
+        );
+    }
+
+    /// DEF-076 Q1: `expect: {offer: {page, button, subject}, absent: true}` is an item-scoped
+    /// claim that the button is not offered: it holds when the page offers no such button for the
+    /// subject and is a finding when it does. Lint keeps `offer` and `absent` together and needs a
+    /// subject; a named subject is read as its bound code like every other selector.
+    #[test]
+    fn an_absent_offer_claim_passes_only_when_the_subject_has_no_such_button() {
+        let rb = Runbook::parse(
+            "```yaml\nrunbook: o\nprocess: p\nsteps:\n  - id: a\n    say: \"Add the basket.\"\n    names: {basket: new_item}\n  - id: b\n    expect: {offer: {page: review, button: Passed, subject: {item: {named: basket}}}, absent: true}\n```",
+        )
+        .unwrap();
+        assert_eq!(lint(&rb), Vec::<LintError>::new());
+        let e = rb.steps[1].expect.as_ref().unwrap();
+        assert!(e.absent && !e.is_empty());
+        let names = BTreeMap::from([("basket".to_string(), "FEAT-002".to_string())]);
+        let read = rb.steps[1].with_names(&names).unwrap();
+        let offer = read.expect.unwrap().offer.unwrap();
+        assert_eq!(
+            offer,
+            Offer {
+                page: "review".into(),
+                button: "Passed".into(),
+                subject: Some(ItemSel::Code("FEAT-002".into())),
+            }
+        );
+        assert_eq!(offer.judge_absent(false), None);
+        assert_eq!(
+            offer.judge_absent(true).as_deref(),
+            Some("\"Passed\" is offered on the review page for FEAT-002")
+        );
+        // An offer under expect without `absent`, `absent` alone, no subject, a wrong page.
+        let bad = Runbook::parse(
+            "```yaml\nrunbook: o\nprocess: p\nsteps:\n  - id: a\n    expect: {offer: {page: review, button: Passed, subject: {item: FTR-001}}}\n  - id: b\n    expect: {absent: true}\n  - id: c\n    expect: {offer: {page: review, button: Passed}, absent: true}\n  - id: d\n    expect: {offer: {page: board, button: Passed, subject: {item: FTR-001}}, absent: true}\n```",
+        )
+        .unwrap();
+        let all: Vec<String> = lint(&bad).iter().map(LintError::to_string).collect();
+        let has = |step: &str, needle: &str| {
+            all.iter()
+                .any(|e| e.starts_with(&format!("step {step}: ")) && e.contains(needle))
+        };
+        assert!(has("a", "says `absent: true`"), "{all:?}");
+        assert!(has("b", "names no `expect.offer`"), "{all:?}");
+        assert!(has("c", "names its subject"), "{all:?}");
+        assert!(has("d", "not 'board'"), "{all:?}");
     }
 }
