@@ -379,6 +379,24 @@ pub fn redate_notes(text: &str, ymd: &str) -> Option<String> {
     Some(out)
 }
 
+/// The link from the file at `from` to the file at `to`, both repository- or board-relative with
+/// `/` separators: the common leading folders dropped, one `../` per folder left in `from`, then
+/// the rest of `to`. `v0.6.0.md` when both are in one folder.
+pub fn relative_link(from: &str, to: &str) -> String {
+    let from: Vec<&str> = from.split('/').filter(|s| !s.is_empty()).collect();
+    let to: Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let from_dirs = &from[..from.len().saturating_sub(1)];
+    let to_dirs = &to[..to.len().saturating_sub(1)];
+    let common = from_dirs
+        .iter()
+        .zip(to_dirs)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut out = "../".repeat(from_dirs.len() - common);
+    out.push_str(&to[common..].join("/"));
+    out
+}
+
 /// The span of the date in the `## [{number}] - {date}` heading.
 fn changelog_date_span(text: &str, number: &str) -> Option<(usize, usize)> {
     let want = format!("## [{number}]");
@@ -899,6 +917,24 @@ mod tests {
         assert_eq!(
             redate_changelog("## [1.0.0] - 2026-05-01", "1.0.0", "2026-11-01").unwrap(),
             "## [1.0.0] - 2026-11-01"
+        );
+    }
+
+    /// DEF-078 R-1: a patch's notes link the parent's notes from where the patch's notes sit.
+    #[test]
+    fn a_relative_link_reaches_the_parents_notes() {
+        assert_eq!(
+            relative_link(
+                "docs/guide/releases/v0.6.1.md",
+                "docs/guide/releases/v0.6.0.md"
+            ),
+            "v0.6.0.md"
+        );
+        assert_eq!(relative_link("notes/v2.md", "docs/v1.md"), "../docs/v1.md");
+        assert_eq!(relative_link("a.md", "b/c.md"), "b/c.md");
+        assert_eq!(
+            relative_link("releases/v1.0.1.md", "releases/v1.0.0.md"),
+            "v1.0.0.md"
         );
     }
 }
