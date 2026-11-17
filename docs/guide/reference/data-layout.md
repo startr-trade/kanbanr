@@ -82,6 +82,23 @@ git directory (`.git/worktrees/<name>/`): it cannot be committed, survives `git 
 with the worktree. A task records when its state last changed (`changed_at`), which agent drift is
 measured from.
 
+**What a task records** (FTR-060). Beside `key`, `text`, `state` and `changed_at`, a task may
+record, each absent when empty:
+- `depends_on`: the tasks it waits on, as written after trimming: `T3` (its own list),
+  `TL-002/T3` (another list of its item), `CODE/TL-001/T3` (another item), or
+  `project:CODE/TL-001/T3` (another project); duplicates dropped, order kept;
+- `writes` and `reads`: the files it writes and only reads, repository-relative and
+  `/`-separated, with no `..`, no leading `/` or `./`, and a folder ending in `/`. A task with no
+  `writes` has an unknown footprint: it runs alone within its item;
+- `estimate_h`: its estimate in agent-hours, more than 0.
+
+The project's `config.yaml` may carry `tasks: {append_only: [...]}`: the files every item appends
+to, which never make two tasks conflict (absent, it reads as `["CHANGELOG.md"]`). A build scope in
+`scopes.yaml` that covers one task records it as `task` (`TL-001/T3`), and its `branch` is the item
+branch with `--tl-001-t3` added. Which scope works a task is read from `scopes.yaml`, never stored
+on the task. A kanbanr older than 0.8.0 keeps these keys and writes them back unchanged; it reads
+a task scope as covering the whole item, so install 0.8.0 before issuing one.
+
 **Builds** (FTR-062). How agents' builds share the machine is the project's `build:` key in
 `config.yaml`, absent until something is set (`kanbanr config build`); every field is optional
 and falls back to its default: `slots`, `jobs_per_slot` (5), `reserve_cpus` (2), `reserve_mem_gib`

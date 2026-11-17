@@ -283,8 +283,19 @@ body)` shapes the daemon would *read*): create/edit projects, features (never de
 todo-lists, milestones, config, docs — plus `POST /projects/:p/batch` for a bundle in one commit.
 Each write appends to the activity log and commits the data repo. The **batch** body is
 `{ "operations": [ { "op": "...", ... } ] }` with op types `feature.add`, `feature.edit`,
-`feature.move`, `milestone.add`, `todo.add`, `task.add`, `task.state`, `doc.folder`, `doc.write`;
-created items may carry a `ref` alias later ops reference; the first failure names its index.
+`feature.move`, `milestone.add`, `todo.add`, `task.add`, `task.edit`, `task.state`, `doc.folder`,
+`doc.write`; created items may carry a `ref` alias later ops reference; the first failure names
+its index.
+
+`POST /projects/{p}/features/{code}/todos/{todo}/tasks` (and the batch op `task.add`) takes, beside
+`text` and `key`, what the task records (FTR-060), each optional: `depends_on` (task refs: `T3`,
+`TL-002/T3`, `CODE/TL-001/T3`, `project:CODE/TL-001/T3`), `writes` and `reads` (repository-relative
+paths, a folder ending in `/`) and `estimate_h` (agent-hours, more than 0).
+`PATCH /projects/{p}/features/{code}/todos/{todo}/tasks/{key}` (and the batch op `task.edit`)
+changes them and `text`: a field not named stays, an empty list or a `null` estimate clears it; it
+never changes the state, and a Completed task can still be edited. An unknown or cyclic dependency,
+a bad path or an estimate of 0 is refused and changes nothing; in a batch the refs are checked once
+every op has applied. It answers the task.
 
 `PUT /projects/{p}/features/{code}/todos/{todo}/tasks/{key}` sets a task's state (`state`, and
 `hold_advance`). It also takes what the agent reports with the change (FTR-061), each optional and

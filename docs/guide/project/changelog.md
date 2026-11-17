@@ -18,6 +18,10 @@ All notable changes to kanbanr are documented here. The format follows
   worktrees, an opt-in mold linker, a content-keyed cache of the built monitor, checks chosen by
   what a change touches, a merge queue that integrates one checked batch at a time, and a bench that
   keeps before-and-after timings (FTR-062).
+- Tasks record the tasks they wait on, the files they write and read, and an estimate in
+  agent-hours; `kanbanr ready --tasks --lanes N` lists what can start now and proposes
+  conflict-free tasks, critical path first; a build scope can cover one task on its own branch;
+  scope drift names a task whose commits touched files it did not declare (FTR-060).
 - **A content catalog and the project's facts (FTR-005).** `kanbanr facts set` records what the
   project is; `kanbanr catalog init` lists what it must document, by question and perspective, each
   row with its source and drift protection, and a row that does not apply says why. The Catalog
