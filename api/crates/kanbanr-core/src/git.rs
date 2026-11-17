@@ -1649,6 +1649,10 @@ static PATH_HISTORY_WALKS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 static PATH_HISTORY_WALKS_BY_REPO: std::sync::Mutex<Vec<(std::path::PathBuf, u64)>> =
     std::sync::Mutex::new(Vec::new());
 
+/// Extensions run, by repository.
+static PATH_HISTORY_EXTENDS_BY_REPO: std::sync::Mutex<Vec<(std::path::PathBuf, u64)>> =
+    std::sync::Mutex::new(Vec::new());
+
 #[cfg(test)]
 thread_local! {
     static WALKS_HERE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -1666,6 +1670,20 @@ pub fn path_history_walks_of(dir: &Path) -> u64 {
         return 0;
     };
     PATH_HISTORY_WALKS_BY_REPO
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(d, _)| *d == git_dir)
+        .map_or(0, |(_, n)| *n)
+}
+
+/// Extensions run for the repository holding `dir`: walks of the new commits only, on top of a
+/// kept history (MNT-014).
+pub fn path_history_extends_of(dir: &Path) -> u64 {
+    let Some(git_dir) = git_dir_of(dir) else {
+        return 0;
+    };
+    PATH_HISTORY_EXTENDS_BY_REPO
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
@@ -1723,21 +1741,96 @@ pub fn path_history(dir: &Path) -> Result<std::sync::Arc<PathHistory>, HistoryEr
     if let Some(h) = held.as_ref() {
         return Ok(h.clone());
     }
+    // A kept history of an older HEAD of this repository that this HEAD descends from grows by the
+    // new commits (MNT-014); anything else walks in full.
+    if !head.is_empty()
+        && let Some(grown) = extend_kept(&root, &counted, &head)
     {
-        let mut by = PATH_HISTORY_WALKS_BY_REPO
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match by.iter_mut().find(|(d, _)| *d == counted) {
-            Some((_, n)) => *n += 1,
-            None => by.push((counted.clone(), 1)),
-        }
+        bump(&PATH_HISTORY_EXTENDS_BY_REPO, &counted);
+        let built = std::sync::Arc::new(grown);
+        *held = Some(built.clone());
+        return Ok(built);
     }
+    bump(&PATH_HISTORY_WALKS_BY_REPO, &counted);
     let built = std::sync::Arc::new(walk_path_history(&root, &head).map_err(|m| HistoryError {
         repo: root.clone(),
         reason: HistoryReason::Other(m),
     })?);
     *held = Some(built.clone());
     Ok(built)
+}
+
+fn bump(counts: &std::sync::Mutex<Vec<(std::path::PathBuf, u64)>>, git_dir: &Path) {
+    let mut by = counts.lock().unwrap_or_else(|e| e.into_inner());
+    match by.iter_mut().find(|(d, _)| d == git_dir) {
+        Some((_, n)) => *n += 1,
+        None => by.push((git_dir.to_path_buf(), 1)),
+    }
+}
+
+/// The kept history of this repository whose HEAD is an ancestor of `head`, grown by the commits
+/// `H0..head`. `None` when there is none, or any step fails: the caller walks in full.
+fn extend_kept(root: &Path, git_dir: &Path, head: &str) -> Option<PathHistory> {
+    let kept: Vec<std::sync::Arc<PathHistory>> = {
+        let cache = PATH_HISTORY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        cache
+            .iter()
+            .filter(|((d, h), _)| d == git_dir && !h.is_empty() && h != head)
+            // A slot being built is skipped; this thread holds its own and never waits.
+            .filter_map(|(_, slot)| slot.try_lock().ok()?.clone())
+            .collect()
+    };
+    for old in kept {
+        let base = old.head.as_str();
+        if crate::coderepo::git_raw(root, &["merge-base", "--is-ancestor", base, head]).is_err() {
+            continue;
+        }
+        let range = format!("{base}..{head}");
+        let Ok(raw) = crate::coderepo::git_raw(
+            root,
+            &[
+                "-c",
+                "core.quotePath=false",
+                "log",
+                "--raw",
+                "-M",
+                "--no-abbrev",
+                "--format=%x1e%H%x1f%cI%x1f%ct%x1f%P%x1f%s",
+                &range,
+            ],
+        ) else {
+            continue;
+        };
+        let mut new = PathHistory {
+            head: head.to_string(),
+            ..PathHistory::default()
+        };
+        parse_path_history(&String::from_utf8_lossy(&raw), &mut new);
+        let shift = new.commits.len();
+        let mut touches = new.touches;
+        for (path, list) in &old.touches {
+            let mut shifted: Vec<Touch> = list
+                .iter()
+                .map(|t| Touch {
+                    commit: t.commit + shift,
+                    ..t.clone()
+                })
+                .collect();
+            touches
+                .entry(path.clone())
+                .or_default()
+                .append(&mut shifted);
+        }
+        let mut commits = new.commits;
+        commits.extend(old.commits.iter().cloned());
+        return Some(PathHistory {
+            head: head.to_string(),
+            commits,
+            touches,
+            merges: new.merges + old.merges,
+        });
+    }
+    None
 }
 
 /// Run the one walk and parse it.
@@ -2651,21 +2744,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// DEF-106 R-5: a commit moves HEAD, and the next ask walks again and sees it.
+    /// DEF-106 R-5: a commit moves HEAD, and the next ask sees it. Since MNT-014 it grows the kept
+    /// walk by the new commit rather than walking again.
     #[test]
     fn a_new_head_walks_again() {
         let dir = fixture("ph-new");
         let first = path_history(&dir).unwrap();
         let before = path_history_walks_here();
+        let extends = path_history_extends_of(&dir);
         put(&dir, 10, "add e", &[("e.txt", "e\n")]);
         let second = path_history(&dir).unwrap();
-        assert_eq!(path_history_walks_here() - before, 1);
+        assert_eq!(path_history_walks_here() - before, 0);
+        assert_eq!(path_history_extends_of(&dir) - extends, 1);
         assert_ne!(first.head(), second.head());
         assert!(first.last_change(&["e.txt"]).is_none());
         assert_eq!(second.last_change(&["e.txt"]).unwrap().subject, "add e");
         // And an unchanged HEAD does not.
         let _ = path_history(&dir).unwrap();
-        assert_eq!(path_history_walks_here() - before, 1);
+        assert_eq!(path_history_extends_of(&dir) - extends, 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2857,6 +2953,72 @@ mod tests {
         assert_eq!(stats[0], HistoryStats { opens: 1, walks: 1 });
         assert_eq!(stats[1], HistoryStats { opens: 1, walks: 0 });
         assert_eq!(stats[2], HistoryStats { opens: 1, walks: 0 });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Every field of two histories, for the extension tests.
+    fn same_history(a: &PathHistory, b: &PathHistory) {
+        assert_eq!(a.head, b.head);
+        assert_eq!(a.commits, b.commits);
+        assert_eq!(a.merges, b.merges);
+        assert_eq!(a.touches, b.touches);
+    }
+
+    /// MNT-014 R-1: a new commit grows the kept walk instead of walking again.
+    #[test]
+    fn a_new_commit_extends_the_walk() {
+        let dir = shared_fixture("ph-extend");
+        let first = path_history(&dir).unwrap();
+        let walks = path_history_walks_of(&dir);
+        let extends = path_history_extends_of(&dir);
+        put(&dir, 20, "new f", &[("f.md", "x1\nx2\nx3\nx4\nx5\nx6\n")]);
+        put(
+            &dir,
+            21,
+            "new g",
+            &[("g.md", "g\n"), ("f2.md", "changed\n")],
+        );
+        let grown = path_history(&dir).unwrap();
+        assert_eq!(path_history_walks_of(&dir), walks, "no full walk");
+        assert_eq!(path_history_extends_of(&dir) - extends, 1);
+        assert_eq!(grown.commits.len(), first.commits.len() + 2);
+        // The extended history is a fresh full walk, field by field.
+        let fresh = walk_path_history(
+            Repository::discover(&dir).unwrap().workdir().unwrap(),
+            &grown.head,
+        )
+        .unwrap();
+        same_history(&grown, &fresh);
+        // And it answers.
+        assert_eq!(grown.touches("g.md").len(), 1);
+        assert_eq!(grown.touches("g.md")[0].index, 0);
+        // The same HEAD again is a hit.
+        let again = path_history(&dir).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&grown, &again));
+        assert_eq!(path_history_extends_of(&dir) - extends, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-1: a HEAD that is not a descendant of the kept one walks in full.
+    #[test]
+    fn a_rewritten_head_walks_in_full() {
+        let dir = shared_fixture("ph-rewrite");
+        put(&dir, 20, "extra one", &[("e1.md", "1\n")]);
+        put(&dir, 21, "extra two", &[("e2.md", "2\n")]);
+        let _ = path_history(&dir).unwrap();
+        let walks = path_history_walks_of(&dir);
+        let extends = path_history_extends_of(&dir);
+        g(&dir, None, &["reset", "-q", "--hard", "HEAD~2"]);
+        put(&dir, 22, "other", &[("o.md", "o\n")]);
+        let rewritten = path_history(&dir).unwrap();
+        assert_eq!(path_history_walks_of(&dir) - walks, 1, "a full walk");
+        assert_eq!(path_history_extends_of(&dir), extends);
+        let fresh = walk_path_history(
+            Repository::discover(&dir).unwrap().workdir().unwrap(),
+            &rewritten.head,
+        )
+        .unwrap();
+        same_history(&rewritten, &fresh);
         let _ = std::fs::remove_dir_all(dir);
     }
 
