@@ -386,6 +386,10 @@ jobs:
       # empty are distinct states, the empty one offering a sentence to copy (FTR-046).
       - name: The UI kit's figures and states say what they show in text
         run: npm run check:ui-figures
+      # The Review page's groups carry counts and open on the largest, a selection stays inside one
+      # group, a prepared batch arrives selected, and the URL names the group and open rows (FTR-038).
+      - name: The Review page groups decisions
+        run: npm run check:review-groups
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

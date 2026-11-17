@@ -324,6 +324,110 @@ export interface PendingReview {
   overrides?: OverrideView[];
   /** The change since the last decision touched only tests (FTR-039); absent when false. */
   tests_only?: boolean;
+  /** The release the item is planned into (FTR-038); absent when none. */
+  release?: string;
+  /** The sprint the item is in (FTR-038); absent when none. */
+  sprint?: string;
+  /** When the item last changed: its `updated_at` (FTR-038). */
+  changed_at?: string;
+}
+
+/** One decision group, counted: a tab on the Review page (FTR-038, `GET /review/summary`). */
+export interface GroupCount {
+  /** approve, ratify, design-review, docs-folded, release-signoff, signoff-<name>, which-release,
+   * manual, delegation, delegated or adr. */
+  key: string;
+  label: string;
+  /** The rows in the group. */
+  count: number;
+  /** The group button's verb: "Approve", "Ratify", "Sign off", "Plan into", "Confirm", "Grant",
+   * "Keep" or "Accept". */
+  action: string;
+  /** The rows that can be decided now. */
+  ready: number;
+  /** The rows with an open prepared record. */
+  prepared: number;
+}
+
+/** One row of a group: one decision waiting on one thing (FTR-038). */
+export interface ReviewRow {
+  /** Unique within the group: the item's code, `<CODE>/<R-n>/<test>` for a manual check, the
+   * delegation's id, the delegated decision's id, or the ADR's id. */
+  key: string;
+  code: string;
+  title: string;
+  /** What is waiting, in a few words. */
+  what: string;
+  /** What a yes records. */
+  records: string;
+  release: string;
+  sprint: string;
+  changed_at: string;
+  /** Empty when the row can be decided; else one sentence naming who provides what is missing. */
+  blocked: string;
+  pills: string[];
+  /** The open prepared record's id; empty when none. */
+  prepared: string;
+  /** That record's batch; empty when none. */
+  batch: string;
+  /** What the group decision sends back. */
+  rev: string;
+  spec_rev: string;
+  signoff: string;
+  requirement: string;
+  test: string;
+}
+
+/** One group's rows, in the page's default order (FTR-038, `GET /review/groups/{key}`). */
+export interface GroupSlice {
+  key: string;
+  label: string;
+  action: string;
+  rows: ReviewRow[];
+  /** The planned releases, in file order: for `which-release` only. */
+  choices: string[];
+}
+
+/** One row's full evidence, read when the row is opened (FTR-038, `GET /review/groups/{key}/rows/{row}`). */
+export interface RowEvidence {
+  entry: PendingReview | null;
+  manual: ManualWaiting | null;
+  adr: Adr | null;
+  delegated: DelegatedDecision | null;
+  delegation: DelegationView | null;
+  prepared: PreparedView | null;
+}
+
+/** One selected row of a group decision, with the pins the slice showed (FTR-038). */
+export interface DecisionItem {
+  key: string;
+  code: string;
+  rev: string;
+  spec_rev: string;
+  signoff: string;
+  requirement: string;
+  test: string;
+  prepared: string;
+}
+
+/** What `POST /review/decide` takes: one decision over the rows the person selected (FTR-038). */
+export interface GroupDecision {
+  group: string;
+  /** The group's action; `undo` for the delegated group's second button; `reject` to turn down
+   * the selected prepared records. */
+  action: string;
+  by: string;
+  /** The release, for `which-release`; empty otherwise. */
+  target: string;
+  reason: string;
+  items: DecisionItem[];
+}
+
+/** What a group decision answers: each row, and the verdict it made or why it was refused. */
+export interface GroupDecisionAnswer {
+  group: string;
+  action: string;
+  results: { key: string; made?: string; error?: string }[];
 }
 
 /** One override Claude made past a gate, as the Review page shows it (DEF-043). */

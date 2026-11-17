@@ -30,6 +30,13 @@ export const urls = {
   sprint: (p: string, s: string) => apiUrl(`${project(p)}/sprints/${enc(s)}`),
   gitModel: (p: string) => apiUrl(`${project(p)}/git/model`),
   docTree: (p: string) => apiUrl(`${project(p)}/docs`),
+  /** The Review page's decision groups, counted (FTR-038). */
+  reviewSummary: (p: string) => apiUrl(`${project(p)}/review/summary`),
+  /** One review group's rows (FTR-038). */
+  reviewGroup: (p: string, key: string) => apiUrl(`${project(p)}/review/groups/${enc(key)}`),
+  /** One row's full evidence (FTR-038); a manual row's key `<CODE>/<R-n>/<test>` is one segment. */
+  reviewRow: (p: string, key: string, row: string) =>
+    apiUrl(`${project(p)}/review/groups/${enc(key)}/rows/${enc(row)}`),
   /** The latest background drift result, with the flags unless `flags` is false (FTR-045). */
   driftLatest: (p: string, flags = true) =>
     apiUrl(`${project(p)}/drift/latest${flags ? "" : "?flags=false"}`),

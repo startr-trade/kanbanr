@@ -47,7 +47,8 @@
     "check:review-check-id": "node scripts/check-review-check-id.mjs",
     "check:ui-table": "node scripts/check-ui-table.mjs",
     "check:ui-charts": "node scripts/check-ui-charts.mjs",
-    "check:ui-figures": "node scripts/check-ui-figures.mjs"
+    "check:ui-figures": "node scripts/check-ui-figures.mjs",
+    "check:review-groups": "node scripts/check-review-groups.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

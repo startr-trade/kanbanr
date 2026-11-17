@@ -1,7 +1,7 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -379,6 +379,24 @@ export const api = {
       `${verdict} a delegated decision`,
       `kanbanr decisions review ${decision} --${verdict}`,
     ),
+  /** The Review page's decision groups, each counted; empty groups are absent (FTR-038). */
+  getReviewSummary: (id: string) => getJson<GroupCount[]>(urls.reviewSummary(id)),
+  /** One review group's rows, in the page's default order (FTR-038). */
+  getReviewGroup: (id: string, key: string) => getJson<GroupSlice>(urls.reviewGroup(id, key)),
+  /** One row's full evidence, read when the row is opened (FTR-038). */
+  getReviewRow: (id: string, key: string, row: string) => getJson<RowEvidence>(urls.reviewRow(id, key, row)),
+  /**
+   * One decision over the rows the person selected in one group (FTR-038): each row gets its own
+   * verdict, pinned to what the page showed, in one commit. A refused row is named in its result
+   * and the rest still go through.
+   */
+  decideGroup: (id: string, body: GroupDecision) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/review/decide`,
+      body,
+      "take a group decision",
+      "kanbanr review",
+    ) as Promise<GroupDecisionAnswer>,
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
