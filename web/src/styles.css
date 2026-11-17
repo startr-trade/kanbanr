@@ -687,6 +687,20 @@ summary:focus-visible,
 .release-body .ui-table { width: 100%; }
 .release-body .ui-table td:nth-child(2) { width: 100%; }
 .releases-filter { margin: var(--sp-2) 0; }
+/* Narrow (T6): below DataTable's 720 px breakpoint the item table keeps ID, Title and Status and its
+   cells wrap rather than scroll; below 640 px the header stacks to one column (the title, then the chips
+   and the stepper, which may shrink and wraps its steps, then the next step's button and line). */
+@media (max-width: 720px) {
+  .release-body .ui-table td { white-space: normal; overflow-wrap: anywhere; }
+  .release-body .ui-table td:nth-child(2) { width: auto; }
+}
+@media (max-width: 640px) {
+  .release-head > .ui-row > .ui-row-head { grid-template-columns: minmax(0, 1fr); }
+  .release-head > .ui-row > .ui-row-head > .ui-row-meta { grid-row: 2; grid-column: 1; }
+  .release-head > .ui-row > .ui-row-head > .ui-row-actions { grid-row: 3; }
+  .release-head .ui-stepper { min-width: 0; }
+  .release-action-header { align-items: flex-start; }
+}
 
 /* A release's notes, read and edited on its branch (FEAT-216): collapsed until opened, the editor
    in the theme's own colours (it reuses `.reason`) and monospace, since the notes are markdown. */

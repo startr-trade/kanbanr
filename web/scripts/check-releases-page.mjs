@@ -14,7 +14,9 @@
 //     release shows "next: …" and reads no plan.
 //   web::check_release_item_table_sorts_filters_and_narrows (R-4) — ITEM_COLUMNS with sortRows and
 //     filterRows: Tests sorts by its ratio, an item naming none last; narrow keeps ID, Title and
-//     Status; an open release draws its table with a linked ID.
+//     Status; an open release draws its table with a linked ID. At 390 px the open release's table
+//     draws only ID, Title and Status, with the rest under each row's "More"; below 720 px its cells
+//     wrap, and below 640 px the header stacks to one column with a stepper that may shrink (T6).
 //   web::check_releases_url_names_the_tab_and_open_releases (R-5) — `?tab=planned#v0.8.0` selects
 //     Planned and opens v0.8.0 alone; the filter box shows and writes `?q=`.
 //   web::check_releases_page_reads_only_what_is_open (R-6) — the sources read the summary, one
@@ -176,6 +178,44 @@ const row = (r, scope, next, open, url = "/p/shop/releases") =>
 const plans = (r) => r.filter((u) => u.endsWith("/plan")).map((u) => u.split("/").slice(-2, -1)[0]);
 const itemReads = (r) => r.filter((u) => u.endsWith("/items")).map((u) => u.split("/").slice(-2, -1)[0]);
 
+/** Render with the browser's width at `px`: `matchMedia` answers `(max-width: N px)` for that width. */
+async function atWidth(px, draw) {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "window");
+  const before = globalThis.window;
+  globalThis.window = {
+    innerWidth: px,
+    matchMedia: (q) => {
+      const max = /max-width:\s*(\d+)px/.exec(q);
+      return { matches: max ? px <= Number(max[1]) : false, addEventListener() {}, removeEventListener() {} };
+    },
+  };
+  try {
+    return await draw();
+  } finally {
+    if (had) globalThis.window = before;
+    else delete globalThis.window;
+  }
+}
+/** The declarations of `selector`'s rules inside `@media (max-width: <px>px)` blocks of `css`. */
+function narrowRule(css, px, selector) {
+  const out = [];
+  const at = new RegExp(`@media\\s*\\(max-width:\\s*${px}px\\)\\s*\\{`, "g");
+  let m;
+  while ((m = at.exec(css)) !== null) {
+    let depth = 1;
+    let j = m.index + m[0].length;
+    for (; j < css.length && depth > 0; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}") depth--;
+    }
+    for (const r of css.slice(m.index + m[0].length, j - 1).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (r[1].split(",").map((x) => x.trim()).includes(selector)) out.push(r[2]);
+    }
+    at.lastIndex = j;
+  }
+  return out.join(";");
+}
+
 await check(
   "web::check_releases_tabs_carry_counts_and_open_current_first",
   "the tabs are Current, Planned and Released with the summary's counts, an empty one hidden unless all are, and the page opens on Current when a release is in flight.",
@@ -275,7 +315,7 @@ await check(
 
 await check(
   "web::check_release_item_table_sorts_filters_and_narrows",
-  "Tests sorts by its ratio with an item naming none last, the filter matches any column, narrow keeps ID, Title and Status, and an open release draws its table with a linked ID.",
+  "Tests sorts by its ratio with an item naming none last, the filter matches any column, narrow keeps ID, Title and Status, an open release draws its table with a linked ID, and at 390 px the table keeps ID, Title and Status, its cells wrap and the header stacks.",
   async (expect, problems) => {
     const tests = ITEM_COLUMNS.find((c) => c.key === "tests");
     expect("Tests ascending by ratio", sortRows(ITEM_COLUMNS.length ? ITEMS : [], tests, "asc").map((r) => r.code), ["FTR-2", "FTR-1", "FTR-9", "FTR-3"]);
@@ -295,6 +335,21 @@ await check(
     expect("its caption", text(table.querySelector("caption")), "Items in v0.8.0");
     expect("one row per item", table.querySelectorAll("tbody tr").length, ITEMS.length);
     expect("the ID links to the item", table.querySelector("tbody tr td a")?.getAttribute("href"), "/p/shop/feature/FTR-1");
+    // T6: at 390 px the table keeps ID, Title and Status, and each row's first cell folds the rest.
+    const phone = await atWidth(390, () => row(CURRENT[0], "current", "production", true));
+    const small = phone.document.querySelector(".release-body table.ui-table");
+    if (!small) return problems.push("at 390 px the open release draws no item table");
+    expect("at 390 px: the columns", [...small.querySelectorAll("thead th")].map(text), ["ID", "Title", "Status"]);
+    expect(
+      "at 390 px: the rest under More",
+      [...(small.querySelector("tbody tr td details.ui-table-detail")?.querySelectorAll("dt") ?? [])].map(text),
+      ["Kind", "Sprint", "Tests", "Approval", "Design review", "Docs folded", "Carried to"],
+    );
+    const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    if (!/white-space:\s*normal/.test(narrowRule(css, 720, ".release-body .ui-table td"))) problems.push("below 720 px the item table's cells do not wrap");
+    const head = narrowRule(css, 640, ".release-head > .ui-row > .ui-row-head");
+    if (!/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*(;|$)/.test(head)) problems.push(`below 640 px the release header is not one column: ${head}`);
+    if (!/min-width:\s*0/.test(narrowRule(css, 640, ".release-head .ui-stepper"))) problems.push("below 640 px the stepper keeps its minimum width");
   },
 );
 
