@@ -59,8 +59,20 @@ gates:
 current stage. "Changed" is read from the board's git history: the doc now, against the doc in the
 last board commit before the item entered the stage. A change written but not yet committed
 counts. An item that names no docs passes, since not every change touches the architecture;
-`kanbanr doctor` points it out when the next stage asks for `docs_updated`, so a missing list is
-seen rather than waved through.
+`kanbanr check` warns "declares no docs" on the next stage that asks for `docs_updated`, the move
+into it prints the same warning, and `kanbanr doctor` points it out, so a missing list is seen
+rather than waved through. The warning never blocks the move.
+
+When the person confirms an item changes no doc, its definition records why, and the warning
+stops:
+
+```yaml
+affects_no_docs: "test-only: the change adds tests and touches no design"
+```
+
+It sits beside `affects_docs` and, like it, does not reopen the item's approval. `kanbanr feature
+show` and the item's page print it as "Changes no docs". If an item names docs and also records
+`affects_no_docs`, the named docs are judged and `kanbanr doctor` asks you to remove one.
 
 `docs_updated` also reads the board docs a Design links under its `Affects docs` heading, as
 `/p/<project>/docs/file/<path>`. Each must have changed since the item entered its stage, and one

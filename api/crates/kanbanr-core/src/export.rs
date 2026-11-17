@@ -299,6 +299,12 @@ pub(crate) fn definition_sections(
         let docs: Vec<String> = def.affects_docs.iter().map(|d| format!("`{d}`")).collect();
         out.push_str(&format!("- **Affects docs:** {}\n", docs.join(", ")));
     }
+    if !def.affects_no_docs.trim().is_empty() {
+        out.push_str(&format!(
+            "- **Changes no docs:** {}\n",
+            def.affects_no_docs.trim()
+        ));
+    }
     match def.approval_state() {
         // Said differently on purpose: agreement after the fact is a real resolution and not the
         // same claim as agreement before the work (FEAT-080).
@@ -689,6 +695,22 @@ mod tests {
             md.contains("**changed since sign-off**: the spec changed"),
             "{md}"
         );
+    }
+
+    /// DEF-075 R-1: `feature show` prints why an item changes no docs, and nothing when unset.
+    #[test]
+    fn feature_show_prints_why_an_item_changes_no_docs() {
+        let mut f = item("FEAT-001", None);
+        f.definition = Some(crate::models::FeatureDefinition {
+            statement: "s".into(),
+            affects_no_docs: "test-only".into(),
+            ..Default::default()
+        });
+        let md = super::to_markdown(&f, None, None);
+        assert!(md.contains("- **Changes no docs:** test-only\n"), "{md}");
+        f.definition.as_mut().unwrap().affects_no_docs = String::new();
+        let md = super::to_markdown(&f, None, None);
+        assert!(!md.contains("Changes no docs"), "{md}");
     }
 
     #[test]

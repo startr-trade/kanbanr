@@ -410,6 +410,9 @@ jobs:
       # each section and links each line or offers its sentence to copy (FTR-048).
       - name: The Needs-you badge and drawer show what waits on the person
         run: npm run check:needs-you
+      # The item page says why an item changes no doc, as a plain line under Affects docs (DEF-075).
+      - name: The item page shows why an item changes no docs
+        run: npm run check:feature-no-docs
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
