@@ -295,6 +295,10 @@ jobs:
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button
         run: npm run check:prepared
+      # An open prepared record no form on a release's entry shows is listed there under Prepared,
+      # not required, with Confirm and Reject (DEF-095).
+      - name: The Releases page lists prepared records no form shows
+        run: npm run check:releases-prepared
       # A disabled Approve or Ratify says beneath it what is missing and who provides it (DEF-064).
       - name: A disabled Approve or Ratify button says what is missing and who provides it
         run: npm run check:review-blocked

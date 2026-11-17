@@ -485,6 +485,17 @@ same whichever you use. A read-only monitor shows the command instead.
   tag's commit. Confirming Claude's prepared result (or recording it with **Record result**) ships
   the release. A failed result keeps it tagged and the panel offers the patch release. This is
   `kanbanr gate record <gate> --passed --commit <tag>`, or `kanbanr release promote <VERSION>`.
+- **Prepared, not required.** A record Claude prepared for a release that no form on its card
+  shows, such as a gate result for a gate no release stage asks for, or a confirmation for a stage
+  other than the next one, is listed in the release's card under **Prepared, not required**,
+  below its button and above its notes. A gate result no stage asks for reads "no stage asks for
+  \<gate\>". Each has its own button (**Record \<gate\> passed on \<commit\>**), **Edit** and
+  **Reject**, as in [Prepared by Claude](#prepared-by-claude), so nothing waits unseen. A prepared
+  gate result goes stale once its release is cut after it was prepared, or its release branch
+  moves past its commit; it then shows why and has no button. `kanbanr prepare list --release
+  <VERSION>` lists the same records. An answered one names its release only by the tag commit, so
+  `--all --release <VERSION>` can miss an answered result whose commit is only on the release
+  branch.
 - **Release notes.** A release with a branch has a **Release notes** section, collapsed until
   opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
   8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;
