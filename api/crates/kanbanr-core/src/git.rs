@@ -1175,6 +1175,307 @@ pub fn file_history(dir: &Path, rel: &str) -> Result<Vec<FileVersion>, HistoryEr
     Ok(out)
 }
 
+// ---- one rename-aware walk of a repository's history per HEAD (DEF-106) ----
+
+/// How many repositories' walks are kept at once (least recently used out).
+pub const PATH_HISTORY_SLOTS: usize = 4;
+
+/// A commit of a [`PathHistory`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitMeta {
+    pub sha: String,
+    /// The committer date, RFC 3339 (`%cI`).
+    pub at: String,
+    pub subject: String,
+}
+
+/// One change to one path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Touch {
+    /// Index into `commits`, newest first.
+    commit: usize,
+    /// 40 hex; empty when the path was deleted.
+    blob: String,
+    /// The path it was renamed from.
+    from: Option<String>,
+}
+
+/// One version of a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathVersion {
+    pub sha: String,
+    pub at: String,
+    pub subject: String,
+    pub path: String,
+    /// Empty when this commit deleted the path.
+    pub blob: String,
+}
+
+/// The history of a repository at one HEAD, from one `git log --raw -M`.
+#[derive(Debug, Default)]
+pub struct PathHistory {
+    head: String,
+    commits: Vec<CommitMeta>,
+    touches: std::collections::HashMap<String, Vec<Touch>>,
+}
+
+impl PathHistory {
+    /// The commit the history was walked at (empty for a repository with no commits).
+    pub fn head(&self) -> &str {
+        &self.head
+    }
+
+    /// The newest commit touching any of `rels` (repository-relative, `/`-separated); the answer of
+    /// `git log -1 --format=%cI -- <rels>`.
+    pub fn last_change(&self, rels: &[&str]) -> Option<&CommitMeta> {
+        rels.iter()
+            .filter_map(|r| self.touches.get(*r)?.first())
+            .map(|t| t.commit)
+            .min()
+            .map(|i| &self.commits[i])
+    }
+
+    /// Each version of `rel`, newest first, following renames backwards as
+    /// `git log --follow -- <rel>` does. A deletion is an entry with an empty blob.
+    pub fn versions(&self, rel: &str) -> Vec<PathVersion> {
+        let mut out = Vec::new();
+        let mut cur = rel.to_string();
+        let mut newest_allowed = 0usize;
+        loop {
+            let Some(list) = self.touches.get(&cur) else {
+                break;
+            };
+            let mut next: Option<(String, usize)> = None;
+            for t in list.iter().filter(|t| t.commit >= newest_allowed) {
+                let c = &self.commits[t.commit];
+                out.push(PathVersion {
+                    sha: c.sha.clone(),
+                    at: c.at.clone(),
+                    subject: c.subject.clone(),
+                    path: cur.clone(),
+                    blob: t.blob.clone(),
+                });
+                if let Some(from) = &t.from {
+                    // The rename commit also deleted the old name: take the old name's history from
+                    // the commits before it.
+                    next = Some((from.clone(), t.commit + 1));
+                    break;
+                }
+            }
+            match next {
+                Some((from, at)) => {
+                    cur = from;
+                    newest_allowed = at;
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// A blob's UTF-8 text from the repository holding `dir`; `None` if it is missing or not text.
+    pub fn blob_text(&self, dir: &Path, blob: &str) -> Option<String> {
+        let repo = Repository::discover(dir).ok()?;
+        let oid = git2::Oid::from_str(blob).ok()?;
+        let b = repo.find_blob(oid).ok()?;
+        std::str::from_utf8(b.content()).ok().map(str::to_string)
+    }
+
+    /// A commit's full message from the repository holding `dir`.
+    pub fn message(&self, dir: &Path, sha: &str) -> Option<String> {
+        let repo = Repository::discover(dir).ok()?;
+        let oid = git2::Oid::from_str(sha).ok()?;
+        let c = repo.find_commit(oid).ok()?;
+        Some(String::from_utf8_lossy(c.message_bytes()).into_owned())
+    }
+}
+
+type HistorySlot = std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<PathHistory>>>>;
+
+static PATH_HISTORY_CACHE: std::sync::Mutex<Vec<((std::path::PathBuf, String), HistorySlot)>> =
+    std::sync::Mutex::new(Vec::new());
+static PATH_HISTORY_WALKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static WALKS_HERE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The walks run in this process so far, for tests and the bench.
+pub fn path_history_walks() -> u64 {
+    PATH_HISTORY_WALKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The walks run by this thread, so a test is not counted against by the others running beside it.
+#[cfg(test)]
+pub(crate) fn path_history_walks_here() -> u64 {
+    WALKS_HERE.with(std::cell::Cell::get)
+}
+
+/// The history of the repository holding `dir`, at its HEAD, from one `git log --raw -M`. It is
+/// kept for the last [`PATH_HISTORY_SLOTS`] (repository, HEAD) pairs; a second caller for one pair
+/// waits for the first and shares its answer.
+pub fn path_history(dir: &Path) -> Result<std::sync::Arc<PathHistory>, HistoryError> {
+    let repo = open_history(dir)?;
+    let git_dir = repo
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| repo.path().to_path_buf());
+    let head = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| c.id().to_string())
+        .unwrap_or_default();
+    let root = repo.workdir().unwrap_or(repo.path()).to_path_buf();
+    let key = (git_dir, head.clone());
+
+    let slot: HistorySlot = {
+        let mut cache = PATH_HISTORY_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(i);
+            cache.insert(0, entry);
+        } else {
+            cache.insert(0, (key, HistorySlot::default()));
+            cache.truncate(PATH_HISTORY_SLOTS);
+        }
+        cache[0].1.clone()
+    };
+    let mut held = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(h) = held.as_ref() {
+        return Ok(h.clone());
+    }
+    let built = std::sync::Arc::new(walk_path_history(&root, &head).map_err(|m| HistoryError {
+        repo: root.clone(),
+        reason: HistoryReason::Other(m),
+    })?);
+    *held = Some(built.clone());
+    Ok(built)
+}
+
+/// Run the one walk and parse it.
+fn walk_path_history(root: &Path, head: &str) -> Result<PathHistory, String> {
+    PATH_HISTORY_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    WALKS_HERE.with(|c| c.set(c.get() + 1));
+    let mut h = PathHistory {
+        head: head.to_string(),
+        ..PathHistory::default()
+    };
+    if head.is_empty() {
+        return Ok(h);
+    }
+    let raw = crate::coderepo::git_raw(
+        root,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "log",
+            "--no-merges",
+            "--root",
+            "--raw",
+            "-M",
+            "--no-abbrev",
+            "--format=%x1e%H%x1f%cI%x1f%s",
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    parse_path_history(&String::from_utf8_lossy(&raw), &mut h);
+    Ok(h)
+}
+
+/// Parse the log's records (split on `\x1e`): the first line is `sha\x1fdate\x1fsubject`, each
+/// later line starting with `:` is a raw entry `:<mode> <mode> <old> <new> <status>\t<path>[\t<path2>]`.
+fn parse_path_history(text: &str, h: &mut PathHistory) {
+    for rec in text.split('\u{1e}').filter(|r| !r.trim().is_empty()) {
+        let mut lines = rec.lines();
+        let Some(first) = lines.next() else { continue };
+        let mut f = first.splitn(3, '\u{1f}');
+        let (Some(sha), Some(at), subject) = (f.next(), f.next(), f.next().unwrap_or_default())
+        else {
+            continue;
+        };
+        let idx = h.commits.len();
+        h.commits.push(CommitMeta {
+            sha: sha.to_string(),
+            at: at.to_string(),
+            subject: subject.to_string(),
+        });
+        for line in lines.filter(|l| l.starts_with(':')) {
+            let mut cols = line.split('\t');
+            let Some(meta) = cols.next() else { continue };
+            let mut m = meta.split(' ');
+            let new = m.nth(3).unwrap_or_default();
+            let status = m.next().unwrap_or_default();
+            let Some(path) = cols.next() else { continue };
+            let mut touch = |path: &str, blob: &str, from: Option<String>| {
+                h.touches.entry(path.to_string()).or_default().push(Touch {
+                    commit: idx,
+                    blob: blob.to_string(),
+                    from,
+                });
+            };
+            match status.chars().next() {
+                Some('D') => touch(path, "", None),
+                Some('R') => {
+                    if let Some(to) = cols.next() {
+                        touch(path, "", None);
+                        touch(to, new, Some(path.to_string()));
+                    }
+                }
+                Some('C') => {
+                    if let Some(to) = cols.next() {
+                        touch(to, new, None);
+                    }
+                }
+                Some('A' | 'M' | 'T') => touch(path, new, None),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `file` relative to the root of the repository holding `dir`, `/`-joined.
+pub fn rel_path(dir: &Path, file: &Path) -> Option<String> {
+    let repo = Repository::discover(dir).ok()?;
+    let workdir = resolved(repo.workdir()?)?;
+    let full = resolved_file(file)?;
+    Some(slash_joined(full.strip_prefix(&workdir).ok()?))
+}
+
+/// The paths with uncommitted changes (modified, staged, deleted or untracked) in the repository
+/// holding `dir`, relative to its root. An error gives none.
+pub fn dirty_paths(dir: &Path) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Some(root) = Repository::discover(dir)
+        .ok()
+        .and_then(|r| r.workdir().map(Path::to_path_buf))
+    else {
+        return out;
+    };
+    let Ok(raw) = crate::coderepo::git_raw(
+        &root,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    ) else {
+        return out;
+    };
+    let text = String::from_utf8_lossy(&raw);
+    let mut entries = text.split('\0').filter(|e| !e.is_empty());
+    while let Some(e) = entries.next() {
+        if e.len() < 4 {
+            continue;
+        }
+        out.insert(e[3..].to_string());
+        // A rename or copy lists its origin as the next entry.
+        if matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C') {
+            if let Some(from) = entries.next() {
+                out.insert(from.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// The one-doc walk `DocHistory` replaced, kept as the reference its answers are checked against
 /// (DEF-022).
 #[cfg(test)]
@@ -1765,5 +2066,229 @@ mod tests {
             "a second run changes nothing"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- DEF-106: the shared path history ----
+
+    /// Run the real `git` in `dir` with a fixed identity and, when given, a committer date.
+    fn g(dir: &Path, date: Option<&str>, args: &[&str]) -> String {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir);
+        if let Some(d) = date {
+            cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A commit of `files` (path, text) on the day `n` of January 2026.
+    fn put(dir: &Path, n: u32, msg: &str, files: &[(&str, &str)]) {
+        for (path, text) in files {
+            let full = dir.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, text).unwrap();
+        }
+        g(dir, None, &["add", "-A"]);
+        g(
+            dir,
+            Some(&format!("2026-01-{n:02}T10:00:00+00:00")),
+            &["commit", "-q", "-m", msg],
+        );
+    }
+
+    /// A repository with edits, a rename, a delete and a merge.
+    fn fixture(name: &str) -> PathBuf {
+        let dir = temp(name);
+        g(&dir, None, &["init", "-q"]);
+        put(
+            &dir,
+            1,
+            "add a and c",
+            &[("docs/a.md", "one\ntwo\nthree\nfour\n"), ("c.txt", "c1\n")],
+        );
+        put(
+            &dir,
+            2,
+            "edit a",
+            &[("docs/a.md", "one\ntwo\nthree\nfour\nfive\n")],
+        );
+        g(&dir, None, &["checkout", "-q", "-b", "side"]);
+        put(&dir, 3, "side adds s", &[("s.txt", "s\n")]);
+        g(&dir, None, &["checkout", "-q", "main"]);
+        put(&dir, 4, "edit c", &[("c.txt", "c2\n")]);
+        g(
+            &dir,
+            Some("2026-01-05T10:00:00+00:00"),
+            &["merge", "-q", "--no-ff", "-m", "merge side", "side"],
+        );
+        g(&dir, None, &["mv", "docs/a.md", "docs/b.md"]);
+        g(
+            &dir,
+            Some("2026-01-06T10:00:00+00:00"),
+            &["commit", "-q", "-m", "rename a to b"],
+        );
+        put(
+            &dir,
+            7,
+            "edit b",
+            &[("docs/b.md", "one\ntwo\nthree\nfour\nfive\nsix\n")],
+        );
+        put(&dir, 8, "add d", &[("d.txt", "d\n")]);
+        g(&dir, None, &["rm", "-q", "d.txt"]);
+        g(
+            &dir,
+            Some("2026-01-09T10:00:00+00:00"),
+            &["commit", "-q", "-m", "drop d"],
+        );
+        dir
+    }
+
+    /// DEF-106 R-6: the newest change over any of some paths is what `git log -1` says.
+    #[test]
+    fn path_history_last_change_matches_git_log_one() {
+        let dir = fixture("ph-last");
+        let h = path_history(&dir).unwrap();
+        for rels in [
+            vec!["docs/b.md"],
+            vec!["c.txt"],
+            vec!["s.txt"],
+            vec!["docs/a.md"],
+            vec!["d.txt"],
+            // Not ["c.txt", "s.txt"]: git shows the merge itself for paths changed on both of its
+            // sides, and the walk leaves merges out by design (a board's history is linear).
+            vec!["c.txt", "d.txt"],
+            vec!["c.txt", "docs/b.md"],
+        ] {
+            let mut args = vec!["log", "-1", "--format=%cI", "--"];
+            args.extend(rels.iter().copied());
+            let want = g(&dir, None, &args);
+            let got = h
+                .last_change(&rels)
+                .map(|c| c.at.clone())
+                .unwrap_or_default();
+            assert_eq!(got, want, "{rels:?}");
+        }
+        assert!(h.last_change(&["never.md"]).is_none());
+        assert!(h.last_change(&[]).is_none());
+        assert_eq!(h.head(), g(&dir, None, &["rev-parse", "HEAD"]));
+        assert_eq!(
+            rel_path(&dir, &dir.join("docs").join("b.md")).as_deref(),
+            Some("docs/b.md")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-6: a path's versions run back through its renames as `git log --follow` does.
+    #[test]
+    fn path_history_versions_follow_renames_as_git_log_follow() {
+        let dir = fixture("ph-follow");
+        let h = path_history(&dir).unwrap();
+        let want: Vec<String> = g(
+            &dir,
+            None,
+            &["log", "--follow", "--format=%H", "--", "docs/b.md"],
+        )
+        .lines()
+        .map(str::to_string)
+        .collect();
+        let got = h.versions("docs/b.md");
+        assert_eq!(got.iter().map(|v| v.sha.clone()).collect::<Vec<_>>(), want);
+        assert_eq!(want.len(), 4, "edit b, rename, edit a, add: {want:?}");
+        assert_eq!(got[0].path, "docs/b.md");
+        assert_eq!(
+            got[1].path, "docs/b.md",
+            "the rename commit lands on the new name"
+        );
+        assert_eq!(got[2].path, "docs/a.md");
+        assert_eq!(got[3].subject, "add a and c");
+        // The blob of each version is what the commit holds, readable in-process.
+        let text = h.blob_text(&dir, &got[0].blob).unwrap();
+        assert!(text.ends_with("six\n"), "{text}");
+        assert!(h.blob_text(&dir, &got[3].blob).unwrap().starts_with("one"));
+        assert!(
+            h.message(&dir, &got[3].sha)
+                .unwrap()
+                .starts_with("add a and c")
+        );
+        // A deletion is an entry without a blob.
+        let d = h.versions("d.txt");
+        assert_eq!(d.len(), 2);
+        assert!(d[0].blob.is_empty() && !d[1].blob.is_empty());
+        assert!(h.versions("never.md").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-5: any number of paths asked of one revision is one walk.
+    #[test]
+    fn one_revision_walks_history_once_for_every_path_asked() {
+        let dir = fixture("ph-once");
+        let before = path_history_walks_here();
+        let total = path_history_walks();
+        for _ in 0..5 {
+            let h = path_history(&dir).unwrap();
+            for rel in ["docs/b.md", "c.txt", "s.txt", "d.txt"] {
+                let _ = h.last_change(&[rel]);
+                let _ = h.versions(rel);
+            }
+        }
+        assert_eq!(path_history_walks_here() - before, 1);
+        assert!(path_history_walks() > total);
+        // A second thread asking at the same moment shares the answer.
+        let d2 = dir.clone();
+        let other = std::thread::spawn(move || path_history(&d2).unwrap().head().to_string())
+            .join()
+            .unwrap();
+        assert_eq!(other, path_history(&dir).unwrap().head());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-5: a commit moves HEAD, and the next ask walks again and sees it.
+    #[test]
+    fn a_new_head_walks_again() {
+        let dir = fixture("ph-new");
+        let first = path_history(&dir).unwrap();
+        let before = path_history_walks_here();
+        put(&dir, 10, "add e", &[("e.txt", "e\n")]);
+        let second = path_history(&dir).unwrap();
+        assert_eq!(path_history_walks_here() - before, 1);
+        assert_ne!(first.head(), second.head());
+        assert!(first.last_change(&["e.txt"]).is_none());
+        assert_eq!(second.last_change(&["e.txt"]).unwrap().subject, "add e");
+        // And an unchanged HEAD does not.
+        let _ = path_history(&dir).unwrap();
+        assert_eq!(path_history_walks_here() - before, 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An empty repository has an empty history, and a changed file shows as dirty.
+    #[test]
+    fn path_history_of_an_empty_repository_is_empty_and_dirty_paths_lists_edits() {
+        let dir = temp("ph-empty");
+        g(&dir, None, &["init", "-q"]);
+        let h = path_history(&dir).unwrap();
+        assert!(h.head().is_empty() && h.last_change(&["x"]).is_none());
+        put(&dir, 1, "x", &[("x.txt", "1")]);
+        assert!(dirty_paths(&dir).is_empty());
+        std::fs::write(dir.join("x.txt"), "2").unwrap();
+        std::fs::write(dir.join("new file.txt"), "n").unwrap();
+        let dirty = dirty_paths(&dir);
+        assert!(
+            dirty.contains("x.txt") && dirty.contains("new file.txt"),
+            "{dirty:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
