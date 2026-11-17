@@ -97,6 +97,37 @@ The monitor reads four of these instead of the whole project (DEF-081):
 - `GET /api/projects/{project}/features` is every item without its specification, or only those in
   `status` or `milestone` when they are given. Any other query parameter is a `400`.
 
+## Several boards
+
+A daemon started with `kanbanr serve --board A --board B` serves several boards read-only
+([Several boards on one server](../using/the-monitor.md#several-boards-on-one-server)). A daemon
+over one data folder answers as a list of one board, named after its folder, so a client needs no
+second code path.
+
+- `GET /api/boards` lists the boards in the order they were given. Each `BoardInfo` has the
+  board's `name`, its `projects`, and, when the board is a git repository, its `head` commit and
+  `head_at`, the commit's time in RFC 3339 UTC. `writer` is the kanbanr that last wrote the board.
+  `history_unreadable` says why the board's history cannot be read, such as "it is not a git
+  repository". `shadowed` lists the projects also on an earlier board, which this one does not
+  serve. No field names a path on the server or a remote URL. A daemon older than v0.8.0 answers
+  `404`; treat that as one board.
+- `GET /api/projects` lists every board's projects, board by board in order. Each
+  `ProjectSummary` has `board`, the name of the board it is served from. A client must ignore the
+  field when it is absent.
+- Every route under `/api/projects/{project}` answers from that project's own board, including
+  its history, approvals, drift and retrospective. A project id is on one board only: the daemon
+  refuses to start over two boards that hold the same project, and a project added later to a
+  second board is still served from the first.
+- The reads that are not about one project (`/api/portfolio`, `/api/portfolio/rollups`,
+  `/api/portfolio/board`, and the internal `/api/doctor`, `/api/processes`, `/api/critical-path`,
+  `/api/gantt`, `/api/ready`, `/api/blocked`, `/api/graph` and `/api/query`) take
+  `?board=<name>` and answer that board only. With no `board` parameter they answer the first
+  board. A name no board has is `404 no board named '<name>'`. Nothing merges across boards. In
+  v0.8.0 `board` is not yet a parameter in the OpenAPI document.
+- A dependency on a project of another board, `<project>:<code>`, is never resolved. It is treated
+  as not done, so the item that names it shows as blocked on its own board, whatever the other
+  board says.
+
 ## Versioning
 
 Version 1 is the paths in use today, under `/api/...`. Additions — a new route, a new field, a new

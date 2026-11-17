@@ -28,6 +28,9 @@ All notable changes to kanbanr are documented here. The format follows
 - The Review page groups waiting decisions by the decision they need, as tabs with counts; the
   person selects within one group and records that decision for all of them with one confirmation,
   one verdict per item in one commit (FTR-038).
+- `kanbanr serve --board <path>`, repeatable: one read-only server shows several boards' projects
+  together, each read from its own board, with the boards listed at `/api/boards` and on the home
+  page (FTR-040).
 
 ### Changed
 
