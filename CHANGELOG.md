@@ -62,7 +62,7 @@ All notable changes to kanbanr are documented here. The format follows
   HEAD and in its history, before the board is published (MNT-012).
 - **Test durations are kept and shown (FTR-058).** Capture reads cargo-nextest's lines and keeps the
   duration Vitest, Playwright and nextest print, in one `timings/` file per run beside the results;
-  `kanbanr capture --junit <report>` reads a nextest JUnit report; `feature show`, `kanbanr check`
+  `kanbanr capture --junit <report>` reads a nextest JUnit report, and `make ci` captures its own; `feature show`, `kanbanr check`
   and the item page show a test's last duration, and `kanbanr report --tests` lists the slowest
   tests and those that slowed most since the last release.
 

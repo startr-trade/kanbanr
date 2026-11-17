@@ -168,6 +168,20 @@ class ScopedWrites(Board):
         self.assertIsNotNone(allowed)
         self.assertIn("SC-1: record 6 test result(s) from a run", allowed or [])
 
+    def test_a_capture_record_with_a_timings_file_passes(self) -> None:
+        """FTR-058 R-10: the run's timings file is part of a capture record; a gates file is not."""
+        self.write("projects/p/scopes.yaml", SCOPES)
+        self.commit("issue agent scope SC-1 (build, FEAT-1)", at="2026-10-22T01:00:00Z")
+        base = self.head()
+        self.write("projects/p/features/Planned/FEAT-1.yaml", "code: FEAT-1\nrun: yes\n")
+        self.write("projects/p/timings/20261022T021500Z-0123456.yaml", "rows: []\n")
+        self.commit("record 6 test result(s) from a run", TRAILER, "2026-10-22T02:15:00Z")
+        allowed = ci_local.allowed_during_run(self.board, base, self.head())
+        self.assertIn("SC-1: record 6 test result(s) from a run", allowed or [])
+        self.write("projects/p/gates/x.yaml", "gate: x\n")
+        self.commit("record 6 test result(s) from a run", TRAILER, "2026-10-22T02:16:00Z")
+        self.assertIsNone(ci_local.allowed_during_run(self.board, base, self.head()))
+
     def test_an_unmarked_capture_record_still_fails(self) -> None:
         self.assertIsNone(self.capture_record(""))
 
@@ -477,6 +491,38 @@ class KeptRuns(unittest.TestCase):
         self.assertEqual((kept / "junit.missing").read_text(),
                          "no JUnit report: the step ran cargo test, which writes none")
 
+
+    def test_a_clean_run_captures_its_kept_report_at_head(self) -> None:
+        """FTR-058 R-10: the kept JUnit report is captured at HEAD, only on a clean tree."""
+        folder = self.tmp / "run"
+        folder.mkdir()
+        self.assertIsNone(ci_local.capture_kept_run(folder, self.HEAD))
+        (folder / "junit.xml").write_text("<testsuites/>")
+        self.assertEqual(
+            ci_local.capture_kept_run(folder, self.HEAD),
+            ["capture", "--junit", str(folder / "junit.xml"), "--rev", self.HEAD],
+        )
+        calls: list[list[str]] = []
+
+        def fake_sh(cmd, cwd, env=None, **_):
+            calls.append(list(cmd))
+            if cmd[:2] == ["git", "rev-parse"]:
+                return True, self.HEAD + "\n"
+            if cmd[:2] == ["git", "status"]:
+                return True, dirty[0]
+            return True, "kanbanr: recorded 3 test result(s) and 3 duration(s)\n"
+
+        dirty = [""]
+        with mock.patch.object(ci_local, "sh", fake_sh), mock.patch.object(
+            ci_local.shutil, "which", return_value="/bin/kanbanr"
+        ):
+            ci_local.record_kept_run(folder)
+            self.assertEqual(sum(c[0] == "/bin/kanbanr" for c in calls), 1)
+            self.assertIn("--junit", calls[-1])
+            calls.clear()
+            dirty = [" M x\n"]
+            ci_local.record_kept_run(folder)
+            self.assertEqual(sum(c[0] == "/bin/kanbanr" for c in calls), 0)
 
 
 class HeavySteps(unittest.TestCase):
