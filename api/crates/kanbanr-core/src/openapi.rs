@@ -499,6 +499,39 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::prepared::PreparedView>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/planning",
+            summary: "The person's planning decisions made on the monitor pages (FTR-049), oldest \
+                      first: each with its derived state (pending until Claude carries it out or \
+                      declines it) and its outcome",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "state",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::OneOf(&crate::planning::STATES),
+                    description: "Only decisions in this state; every decision when absent.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::planning::PlanningView>>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/planning/{id}/check",
+            summary: "A planning decision checked, with nothing changed (FTR-049): the reasons to \
+                      decline it, the warnings for Claude to judge, and the nearest valid move",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "id",
+                    location: In::Path,
+                    required: true,
+                    kind: Kind::String,
+                    description: "The decision's id, such as PD-3.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::planning::Assessment>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/releases/{version}/plan",
             summary: "What promoting a release would do, with nothing changed: the button, each \
                       step and condition, what is missing and, for the cut, what ships. The \

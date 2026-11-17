@@ -111,6 +111,8 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
             | ["projects", _, "prepared", _, "confirm" | "reject"]
             | ["projects", _, "prepared", "batch", _, "confirm" | "reject"]
             | ["projects", _, "review", "decide"]
+            // A planning decision from a page (FTR-049); declining one is not a verdict.
+            | ["projects", _, "planning"]
     )
 }
 
@@ -143,6 +145,8 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
                 // (FTR-033).
                 | ["projects", _, "baseline", "revisions" | "packs"]
                 | ["projects", _, "baseline", "revisions", _, "withdraw"]
+                // A planning decision's decline says where it was declined (FTR-049).
+                | ["projects", _, "planning", _, "decline"]
         ),
         // A pack removed says where it was removed (FTR-033).
         "DELETE" => matches!(seg.as_slice(), ["projects", _, "baseline", "packs", _]),
@@ -184,11 +188,14 @@ pub enum Verdict {
     /// Accepting a proposed revision of the project's engineering baseline (FTR-033). The
     /// person's alone in every mode: no delegation covers it.
     AcceptBaseline,
+    /// Planning items into a sprint or a release, or out of their sprint, from a monitor page
+    /// (FTR-049). The person's alone in every mode; Claude carries it out or declines it.
+    PlanningDecision,
 }
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 19] = [
+    pub const ALL: [Verdict; 20] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -208,6 +215,7 @@ impl Verdict {
         Verdict::ReviewDecision,
         Verdict::GroupDecision,
         Verdict::AcceptBaseline,
+        Verdict::PlanningDecision,
     ];
 
     /// Is this verdict taken on the Releases page (rather than the Review page)?
@@ -260,6 +268,11 @@ impl DecisionContext<'_> {
     }
 }
 
+/// Why Claude may not record a planning decision (FTR-049 R-2).
+pub const PLANNING_REFUSAL: &str = "a planning decision is the person's: ask the person to make \
+                                    it on the Plan page, or plan it yourself with `kanbanr sprint \
+                                    plan` when the person asked you to in the conversation";
+
 const PREPARE_INSTEAD: &str = "Prepare its record instead (`kanbanr prepare …`) and tell the \
                                person where it waits.";
 
@@ -303,6 +316,11 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
                  person's in every mode: link them the group (FTR-038)."
             )),
         };
+    }
+    // A planning decision is the person's in every mode (FTR-049): no delegation covers it, and
+    // Claude's own plan changes go through the plan commands, not this route.
+    if verdict == Verdict::PlanningDecision && taker == Taker::Claude {
+        return Some(PLANNING_REFUSAL.to_string());
     }
     let (Some(d), Some(project)) = (ctx.decisions, ctx.project) else {
         return match taker {
@@ -371,6 +389,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "review", "decide"]) => Verdict::GroupDecision,
         // Accepting a baseline revision (FTR-033).
         ("POST", ["projects", _, "baseline", "revisions", _, "accept"]) => Verdict::AcceptBaseline,
+        // A planning decision from a page (FTR-049).
+        ("POST", ["projects", _, "planning"]) => Verdict::PlanningDecision,
         _ => return None,
     })
 }
@@ -716,7 +736,9 @@ mod tests {
                     | Verdict::ReviewDecision
                     | Verdict::AcceptBaseline
             );
-            let says = if decisions {
+            let says = if v == Verdict::PlanningDecision {
+                "Plan page"
+            } else if decisions {
                 "the person's own"
             } else {
                 "kanbanr prepare"
@@ -866,6 +888,108 @@ mod tests {
                     None,
                     "{mode}/{origin:?}"
                 );
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-049 R-2: recording a planning decision is a verdict route, stamped with its origin, and
+    /// refused to Claude in every mode, a granted delegation for every verdict included; a person
+    /// is never refused it. Declining one is not a verdict: Claude declines.
+    #[test]
+    fn a_planning_decision_is_refused_to_claude() {
+        let route = "/projects/demo/planning";
+        assert_eq!(
+            verdict_of_route("POST", route),
+            Some(Verdict::PlanningDecision)
+        );
+        assert_eq!(verdict_of_route("GET", route), None);
+        assert!(is_verdict_route("POST", route));
+        assert!(!is_verdict_route("GET", route));
+        assert!(stamps_origin("POST", route));
+        assert!(Verdict::ALL.contains(&Verdict::PlanningDecision));
+        assert_eq!(
+            Verdict::ALL.len(),
+            Verdict::ALL
+                .iter()
+                .filter(|v| **v != Verdict::PlanningDecision)
+                .count()
+                + 1
+        );
+        // Declining, and the reads, are not verdicts.
+        let decline = "/projects/demo/planning/PD-1/decline";
+        assert_eq!(verdict_of_route("POST", decline), None);
+        assert!(!is_verdict_route("POST", decline));
+        assert!(stamps_origin("POST", decline));
+        assert_eq!(
+            verdict_of_route("GET", "/projects/demo/planning/PD-1/check"),
+            None
+        );
+        // No CLI command records one.
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        for path in [
+            &["planning", "list"][..],
+            &["planning", "decline"],
+            &["sprint", "plan"],
+        ] {
+            assert_eq!(verdict_of_command(path, &w(&[])), None, "{path:?}");
+        }
+
+        let claude = Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| "1".to_string()));
+        assert_eq!(Taker::of_origin(claude), Taker::Claude);
+        let ctx = DecisionContext::monitor_mode();
+        let why = verdict_refusal(Verdict::PlanningDecision, Taker::of_origin(claude), &ctx)
+            .expect("Claude is refused a planning decision");
+        assert_eq!(why, PLANNING_REFUSAL);
+        assert!(
+            why.contains("Plan page") && why.contains("kanbanr sprint plan"),
+            "{why}"
+        );
+        assert_eq!(
+            verdict_refusal(Verdict::PlanningDecision, Taker::Person, &ctx),
+            None
+        );
+
+        let (store, dir) = board();
+        let project = store.load_meta("demo").unwrap();
+        let claudes = json!({"by": "Claude", "delegation": "DLG-001", "action": "into-sprint"});
+        let persons = json!({"by": "Ada", "action": "into-sprint"});
+        for mode in ["monitor", "delegated", "conversation"] {
+            let d: crate::decisions::Decisions = crate::yaml::from_str(&format!(
+                "modes:\n- {{mode: {mode}, by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n\
+                 delegations:\n- id: DLG-001\n  verdicts: [approve, ratify]\n  all: true\n  \
+                 until: '2099-01-01T00:00:00Z'\n  \
+                 proposed: {{by: Claude, at: '2026-11-01T00:00:00Z', origin: conversation}}\n  \
+                 granted: {{by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n"
+            ))
+            .unwrap();
+            for origin in [
+                Origin::Conversation,
+                Origin::Delegated,
+                Origin::Monitor,
+                Origin::Terminal,
+            ] {
+                let taker = Taker::of_origin(origin);
+                let body = match taker {
+                    Taker::Claude => &claudes,
+                    Taker::Person => &persons,
+                };
+                let ctx = DecisionContext {
+                    decisions: Some(&d),
+                    project: Some(&project),
+                    method: "POST",
+                    path: route,
+                    body: Some(body),
+                    origin: Some(origin),
+                    now: "2026-11-17T00:00:00Z".into(),
+                };
+                let got = verdict_refusal(Verdict::PlanningDecision, taker, &ctx);
+                match taker {
+                    Taker::Claude => {
+                        assert_eq!(got.as_deref(), Some(PLANNING_REFUSAL), "{mode}/{origin:?}")
+                    }
+                    Taker::Person => assert_eq!(got, None, "{mode}/{origin:?}"),
+                }
             }
         }
         let _ = std::fs::remove_dir_all(dir);

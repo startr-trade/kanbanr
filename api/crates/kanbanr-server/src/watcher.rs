@@ -66,7 +66,8 @@ pub fn tags_for(rel: &str) -> Vec<String> {
         ["milestones", _, ..] => one("milestones"),
         ["timings", _, ..] => one("timings"),
         [
-            folder @ ("prepared" | "manual" | "gates" | "pins" | "activity" | "events"),
+            folder
+            @ ("prepared" | "manual" | "gates" | "pins" | "activity" | "events" | "planning"),
             _,
             ..,
         ] => one(folder),
@@ -309,6 +310,8 @@ mod tests {
             ("pins/a.yaml", &["pins"]),
             ("activity/2026-11.yaml", &["activity"]),
             ("events/e.yaml", &["events"]),
+            ("planning/PD-1.yaml", &["planning"]),
+            ("planning/PD-1.outcome.yaml", &["planning"]),
             ("timings/20261116T172031Z-0123456.yaml", &["timings"]),
             ("processes/p.yaml", &["*"]),
             ("", &["*"]),
