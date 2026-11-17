@@ -179,12 +179,39 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
         ));
     }
 
-    let items = client
+    // The queue's entries; those every decision of which a delegation in force holds are Claude's,
+    // not the person's (DEF-104).
+    let queue = client
         .get(&format!("/projects/{p}/review"))
         .ok()
         .and_then(|r| serde_json::from_str::<Value>(&r).ok())
-        .map(|v| ids(&v, "code"))
         .unwrap_or_default();
+    let entries = queue.as_array().cloned().unwrap_or_default();
+    let items: Vec<String> = ids(
+        &Value::Array(
+            entries
+                .iter()
+                .filter(|e| e["claudes"] != true)
+                .cloned()
+                .collect(),
+        ),
+        "code",
+    );
+    let mut held: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for e in &entries {
+        let mut ids: Vec<&str> = e["held"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| h["delegation"].as_str())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        for id in ids {
+            *held.entry(id.to_string()).or_default() += 1;
+        }
+    }
+    let held: Vec<(String, usize)> = held.into_iter().collect();
     let adrs: Vec<String> = client
         .get(&format!("/projects/{p}/adrs"))
         .ok()
@@ -213,7 +240,7 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
                 .count()
         })
         .unwrap_or(0);
-    if !items.is_empty() || !adrs.is_empty() || baseline > 0 {
+    if !items.is_empty() || !adrs.is_empty() || baseline > 0 || !held.is_empty() {
         let mut body = format!(
             "{} item(s) and {} proposed decision(s) need a verdict. Offer to review them here,\n\
              one question each — see the skill's \"Waiting decisions\" — rather than sending the user\n\
@@ -221,6 +248,9 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
             items.len(),
             adrs.len()
         );
+        if !held.is_empty() {
+            body.push_str(&format!("\n{}", recover::held_line(&held)));
+        }
         if baseline > 0 {
             body.push_str(&format!("\n{}", recover::baseline_line(baseline)));
         }
@@ -333,6 +363,7 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
             adrs,
             prepared,
             baseline,
+            held,
         },
         sprint: sprint_line(client, p, project),
         release: release_line(client, p, project),

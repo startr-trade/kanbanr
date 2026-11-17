@@ -681,6 +681,10 @@
       "Attention": {
         "description": "Everything waiting, and how many of it are the person's own decisions.",
         "properties": {
+          "delegated": {
+            "$ref": "#/components/schemas/DelegatedAttention",
+            "description": "What Claude holds and decided under a delegation, while one is in force or has just ended\n(DEF-104). Absent in `monitor` mode."
+          },
           "lines": {
             "description": "In section order: decisions, releases, health, records.",
             "items": {
@@ -2139,6 +2143,52 @@
         ],
         "type": "object"
       },
+      "DelegatedAttention": {
+        "description": "Needs you in delegated (autonomous) mode: what Claude decided and holds (DEF-104).",
+        "properties": {
+          "decided": {
+            "description": "The verdicts Claude recorded that the person has not yet kept or undone, newest first, at\nmost [`DECIDED_MAX`].",
+            "items": {
+              "$ref": "#/components/schemas/DelegatedDecision"
+            },
+            "type": "array"
+          },
+          "decided_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ending": {
+            "description": "Delegations ending within [`ENDING_SOON_HOURS`], or ended or revoked within them.",
+            "items": {
+              "$ref": "#/components/schemas/DelegationEnding"
+            },
+            "type": "array"
+          },
+          "holds": {
+            "description": "The decisions each delegation in force still holds.",
+            "items": {
+              "$ref": "#/components/schemas/DelegationHold"
+            },
+            "type": "array"
+          },
+          "in_force": {
+            "description": "The delegations in force, in file order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "in_force",
+          "decided",
+          "decided_total",
+          "holds",
+          "ending"
+        ],
+        "type": "object"
+      },
       "DelegatedDecision": {
         "description": "A delegated decision waiting for the person to keep or undo it.",
         "properties": {
@@ -2180,6 +2230,92 @@
           "at",
           "status",
           "undo_route"
+        ],
+        "type": "object"
+      },
+      "DelegatedGap": {
+        "description": "A gap Claude holds under a delegation in force (DEF-104).",
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/Check",
+            "description": "`signoff` or `approved`."
+          },
+          "delegation": {
+            "description": "The delegation that holds it, `DLG-001`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The sign-off's name; empty for an approval.",
+            "type": "string"
+          },
+          "until": {
+            "description": "When the delegation ends (RFC 3339), so a surface can say \"until 4 Dec\" and stop calling it\nClaude's once it has passed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "name",
+          "delegation",
+          "until"
+        ],
+        "type": "object"
+      },
+      "DelegationEnding": {
+        "description": "A delegation that ends soon, or just ended, and how many decisions return to the person.",
+        "properties": {
+          "at": {
+            "description": "When it ends, ended or was revoked (RFC 3339).",
+            "type": "string"
+          },
+          "delegation": {
+            "type": "string"
+          },
+          "returns": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DelegationState",
+            "description": "`granted` (ends soon), `ended` or `revoked`."
+          }
+        },
+        "required": [
+          "delegation",
+          "state",
+          "at",
+          "returns"
+        ],
+        "type": "object"
+      },
+      "DelegationHold": {
+        "description": "What one delegation in force still holds.",
+        "properties": {
+          "delegation": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "until": {
+            "type": "string"
+          },
+          "verdicts": {
+            "description": "In the delegation's own `verdicts` order, zero counts left out.",
+            "items": {
+              "$ref": "#/components/schemas/HeldCount"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "delegation",
+          "until",
+          "total",
+          "verdicts"
         ],
         "type": "object"
       },
@@ -3972,6 +4108,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "held": {
+            "description": "The rows Claude holds under a delegation in force: listed, not in `count` (DEF-104).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
           "key": {
             "type": "string"
           },
@@ -3997,7 +4139,8 @@
           "count",
           "action",
           "ready",
-          "prepared"
+          "prepared",
+          "held"
         ],
         "type": "object"
       },
@@ -4092,6 +4235,47 @@
           "answer",
           "pass",
           "heard_at"
+        ],
+        "type": "object"
+      },
+      "Held": {
+        "description": "A verdict Claude holds under a delegation in force (DEF-104).",
+        "properties": {
+          "delegation": {
+            "description": "The delegation that holds it, `DLG-001`.",
+            "type": "string"
+          },
+          "until": {
+            "description": "When the delegation ends (RFC 3339).",
+            "type": "string"
+          },
+          "verdict": {
+            "description": "`approve`, `ratify` or `signoff:<name>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "delegation",
+          "until"
+        ],
+        "type": "object"
+      },
+      "HeldCount": {
+        "properties": {
+          "count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "verdict": {
+            "description": "`approve`, `ratify` or `signoff:<name>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "count"
         ],
         "type": "object"
       },
@@ -5548,12 +5732,19 @@
             },
             "type": "array"
           },
+          "delegated": {
+            "description": "The sign-off and approval gaps a delegation in force holds for Claude (DEF-104); counted in\n`missing`, left out of `for_you`.",
+            "items": {
+              "$ref": "#/components/schemas/DelegatedGap"
+            },
+            "type": "array"
+          },
           "ends": {
             "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
             "type": "boolean"
           },
           "for_you": {
-            "description": "How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).",
+            "description": "How many of `missing` the person settles: sign-offs and the `approved` check that no\ndelegation in force holds (DEF-020, DEF-104).",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
@@ -8417,6 +8608,10 @@
             "description": "`docs-folded` is among them and the item lists no documents: the sign-off confirms that it\nchanges none (DEF-033).",
             "type": "boolean"
           },
+          "claudes": {
+            "description": "Nothing in this entry is the person's: every verdict it asks is held and no release is\nasked (DEF-104).",
+            "type": "boolean"
+          },
           "code": {
             "type": "string"
           },
@@ -8430,6 +8625,13 @@
           "finished": {
             "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
             "type": "boolean"
+          },
+          "held": {
+            "description": "The verdicts this entry asks that Claude holds under a delegation in force, in the order\n`asked` lists them (DEF-104).",
+            "items": {
+              "$ref": "#/components/schemas/Held"
+            },
+            "type": "array"
           },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
@@ -8551,6 +8753,14 @@
             "type": "string"
           },
           "code": {
+            "type": "string"
+          },
+          "held_by": {
+            "description": "The delegation under which Claude holds this row's decision (DEF-104); empty when the\ndecision is the person's. A held row is shown, last, and not counted.",
+            "type": "string"
+          },
+          "held_until": {
+            "description": "When that delegation ends (RFC 3339).",
             "type": "string"
           },
           "key": {
