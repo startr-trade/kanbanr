@@ -7,7 +7,8 @@
 //
 // Cases, named as the board's tests are: web::doc_views_show_source_when_katalogr_is_absent (R-5),
 // web::doc_views_draw_with_pele_and_show_position_and_id (R-6),
-// web::doc_views_figure_is_a_section_with_position_and_source_under_it (R-13).
+// web::doc_views_figure_is_a_section_with_position_and_source_under_it (R-13),
+// web::releases_page_names_the_snapshot_repos (R-9).
 //
 // Usage: npm run check:katalogr
 import { JSDOM } from "jsdom";
@@ -15,7 +16,7 @@ import createDOMPurify from "dompurify";
 import { readFileSync } from "node:fs";
 import { render } from "pele";
 import { safeSvg } from "../src/markdownHtml.ts";
-import { caption, figureElement, pairBlocks, saidElement, saidFor, webViewFor } from "../src/docViews.ts";
+import { caption, figureElement, pairBlocks, saidElement, saidFor, snapshotLine, webViewFor } from "../src/docViews.ts";
 
 const { window } = new JSDOM("");
 const purifier = createDOMPurify(window);
@@ -136,6 +137,40 @@ const notExactView = blockViewOf(contract.not_exact);
       }
     }
   }
+}
+
+// ---- R-9: the Releases page names the snapshot's repos: saved, skipped, absent; never a button ----
+{
+  const t = "releases_page_names_the_snapshot_repos";
+  const saved = {
+    version: "v0.8.0",
+    snapshot: {
+      state: "saved",
+      dir: "releases/v0.8.0/views",
+      at: "0123456789abcdef0123456789abcdef01234567",
+      repos: ["kanbanr", "katalogr"],
+      blocks: 2,
+      views: 3,
+      reason: "",
+    },
+  };
+  const line = snapshotLine(saved);
+  if (!line) fail(t, "a saved snapshot gave no line");
+  else {
+    const text = `${line.before}${line.dir ?? ""}${line.after}`;
+    for (const want of ["2 blocks", "3 views", "0123456", "releases/v0.8.0/views", "kanbanr", "katalogr", "before pushing a public board"]) {
+      if (!text.includes(want)) fail(t, `the saved line "${text}" lacks "${want}"`);
+    }
+    if (line.dir !== "releases/v0.8.0/views") fail(t, "the saved line does not carry the folder to link");
+    if (text.includes("0123456789abcdef")) fail(t, "the saved line shows the whole commit");
+  }
+  const one = snapshotLine({ version: "v1", snapshot: { ...saved.snapshot, blocks: 1, views: 1, repos: ["kanbanr"] } });
+  if (!one || !`${one.before}${one.after}`.includes("1 block,") || !`${one.before}${one.after}`.includes("1 view ")) fail(t, "one block and one view are not said in the singular");
+  const skipped = snapshotLine({ version: "v0.8.0", snapshot: { state: "skipped", dir: "", at: "", repos: [], blocks: 0, views: 0, reason: "katalogr is not installed (nothing named katalogr on PATH)" } });
+  if (!skipped || !skipped.before.startsWith("no system views: katalogr is not installed") || skipped.dir) fail(t, "a skipped snapshot does not say no system views and why");
+  if (snapshotLine({ version: "v0.7.0" }) !== null) fail(t, "a release with no record shows a line");
+  // The line is plain text and a link, never an action.
+  if (Object.keys(line ?? {}).some((k) => /click|on[A-Z]|action/.test(k))) fail(t, "the line carries an action");
 }
 
 if (problems.length) {
