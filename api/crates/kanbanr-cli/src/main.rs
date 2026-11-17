@@ -14914,11 +14914,13 @@ mod tests {
         let this = include_str!("main.rs");
         let help = between(this, "enum GateCmd {", Some("enum ReleaseCmd"));
         let run = between(this, "fn run_gate(", Some("fn run_release("));
-        let page = include_str!("../../../../web/src/pages/ReleasesPage.tsx");
+        // FTR-041 T4 moved the gate-result form into ReleaseActions.tsx; it ends where the cut
+        // preview starts.
+        let page = include_str!("../../../../web/src/pages/releases/ReleaseActions.tsx");
         let form = between(
             page,
             "function RecordResult(",
-            Some("function ReleaseNotesSection"),
+            Some("function CutPreviewList"),
         );
         let guide = include_str!("../../../../docs/guide/using/processes.md");
         let guide = between(guide, "### Gate results", Some("\n## "));
