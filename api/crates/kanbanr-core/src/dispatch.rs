@@ -1108,6 +1108,19 @@ fn dispatch_routes(
             if store.load_meta(p)?.config.cadence.git_model {
                 report.issues.extend(git_drift(store, p, repo));
             }
+            // From the project folder, the evidence reconciled with the code (MNT-001 R-8). A
+            // reconciliation that cannot run steps aside (ADR-0004).
+            if let Some(repo) = repo
+                && let Ok(r) = crate::evidence::reconcile(store, p, repo)
+                && let Some(message) = crate::evidence::evidence_summary(&r)
+            {
+                report.issues.push(crate::doctor::Issue {
+                    severity: crate::doctor::Severity::Warning,
+                    project: p.to_string(),
+                    code: None,
+                    message,
+                });
+            }
             ser(&report)
         }
         // The checkout's live position (FTR-003).

@@ -1963,6 +1963,22 @@ pub fn reconcile(
     ))
 }
 
+/// The doctor's evidence line (MNT-001 R-8): how many recorded results name a test not in the
+/// repository, how many greens name a revision that never held their test, and how many manual
+/// checks are open, pointing at `kanbanr tests`; `None` when all three are zero.
+pub fn evidence_summary(r: &Reconciliation) -> Option<String> {
+    let (vanished, misattributed, manual) =
+        (r.vanished.len(), r.misattributed.len(), r.manual.open);
+    if vanished == 0 && misattributed == 0 && manual == 0 {
+        return None;
+    }
+    Some(format!(
+        "evidence: {vanished} recorded result(s) name a test not in the repository, \
+         {misattributed} green result(s) name a revision that never held the test, \
+         {manual} manual check(s) open — kanbanr tests"
+    ))
+}
+
 /// One imported item's provenance, and whether its file source is still there.
 #[derive(Debug, Clone, Serialize)]
 pub struct SourceRow {

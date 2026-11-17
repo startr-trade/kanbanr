@@ -18441,3 +18441,80 @@ fn tests_reports_open_manual_checks_per_release() {
     );
     assert!(text.contains("  walkthrough tests open: 1\n"), "{text}");
 }
+
+/// MNT-001 R-8: from the project folder, `kanbanr doctor` carries one evidence warning with the
+/// reconciliation's counts, and the core doctor route answers the same line, so the monitor's
+/// Workflow page shows it too; from outside the project folder there is no repository to
+/// reconcile against, so no evidence line.
+#[test]
+fn doctor_summarises_the_evidence_when_run_from_the_project_folder() {
+    let fx = JsonFixture::new("mnt001-doctor");
+    std::fs::create_dir_all(fx.work.join("src")).unwrap();
+    std::fs::write(fx.work.join("src").join("lib.rs"), "fn kept() {}\n").unwrap();
+    mnt001_commit_all(&fx);
+    let def = fx.home.join("FEAT-001-def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart\nrequirements:\n  - kind: functional\n    \
+         text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it.\"\n    tests:\n      \
+         - name: 'cart::tests::gone'\n        kind: unit\n        state: green\n        \
+         checked_rev: 1a2b3c4\n      \
+         - name: 'manual: the cart reads clearly'\n        kind: manual\n        state: planned\n",
+    )
+    .unwrap();
+    fx.run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    let line = "evidence: 1 recorded result(s) name a test not in the repository, \
+                0 green result(s) name a revision that never held the test, \
+                1 manual check(s) open — kanbanr tests";
+
+    let text = fx.run(&["doctor"]);
+    assert_eq!(text.matches(line).count(), 1, "{text}");
+
+    // The core route the monitor reads carries the same line.
+    let where_json = fx.json(&["--json", "where"]);
+    let board = PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    let store = kanbanr_core::store::Store::new(&board);
+    let body = kanbanr_core::dispatch::dispatch_in(
+        &store,
+        "GET",
+        "/projects/shop/doctor",
+        None,
+        Some(&fx.work),
+    )
+    .unwrap();
+    let report: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let messages: Vec<&str> = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|i| i["message"].as_str())
+        .collect();
+    assert_eq!(messages.iter().filter(|m| **m == line).count(), 1, "{body}");
+
+    // From outside the project folder: no repository, no evidence line.
+    let o = Command::new(cli())
+        .args([
+            "--data-dir",
+            board.to_str().unwrap(),
+            "--project",
+            "shop",
+            "doctor",
+        ])
+        .current_dir(&fx.home)
+        .env("HOME", &fx.home)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI");
+    let outside = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{o:?}");
+    assert!(!outside.contains("evidence:"), "{outside}");
+}
