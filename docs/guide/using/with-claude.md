@@ -396,6 +396,25 @@ When a saved process changes, each project using it is told: at the start of the
 Claude mentions it once and asks whether to update. It never updates on its own. See
 [Processes](processes.md#designing-a-process-with-claude).
 
+## Beside other tools
+
+Other tools use the same hooks as kanbanr: katalogr, a command wrapper such as `rtk`, a git hook
+manager (husky, lefthook, the pre-commit framework), or hooks of your own. kanbanr keeps its rules
+whatever they do:
+
+- Its Claude Code guards only ever refuse a call or stay silent. They never allow or rewrite one,
+  so another hook cannot undo their answer, and every commit rule they apply is applied again by
+  the git hooks.
+- A command run through a known wrapper (`rtk`, `rtk proxy`, `sudo`, `env`, `time`, `nice`,
+  `nohup`, `command`, `exec`) is judged as the bare command. A test run through `rtk`, which
+  condenses output, is still captured, and Claude is told how many results were read and asked to
+  rerun it bare or as `rtk proxy …` for the rest.
+- If another tool replaces one of kanbanr's git hooks, a hook manager points `core.hooksPath`
+  elsewhere, or an installer drops kanbanr's Claude Code hooks from the settings, `kanbanr doctor`,
+  `kanbanr git status` and the session start say so, with the fix that keeps both tools' hooks.
+  Claude runs that fix and tells you; it never deletes the other tool's hook.
+- Installing or removing kanbanr's Claude Code hooks touches only kanbanr's own entries.
+
 ## In other workflows
 
 The same conversation, with only as many decisions as each workflow asks for:

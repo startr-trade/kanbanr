@@ -29,8 +29,6 @@ impl fmt::Display for Finding {
 /// The git hooks of the repository at `root` that kanbanr installs and that do not run: absent,
 /// replaced by another tool's, or bypassed by a `core.hooksPath` that points where none of
 /// kanbanr's hooks are. Empty when `root` is not a repository.
-// doctor, git status and recover call it from FTR-059 T6, which lands after this.
-#[allow(dead_code)]
 pub fn git_hook_findings(root: &Path) -> Vec<Finding> {
     if coderepo::repo_root_in(root).is_none() {
         return Vec::new();
@@ -86,8 +84,6 @@ pub fn git_hook_findings(root: &Path) -> Vec<Finding> {
 /// The Claude Code events kanbanr registers that no settings file of `project_root` (the
 /// project's two, then the user's) registers. Empty when any of them enables the kanbanr plugin,
 /// which brings its own hooks.
-// doctor and recover call it from FTR-059 T6, which lands after this.
-#[allow(dead_code)]
 pub fn claude_hook_findings(project_root: &Path) -> Vec<Finding> {
     claude_findings_in(&kanbanr_core::claude::settings_files(project_root))
 }

@@ -4590,14 +4590,16 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
             let ctx = scm_context(cli, client)?;
             let item = branch_item(&ctx);
             println!("repo:    {}", ctx.root.display());
-            println!(
-                "hooks:   {}",
-                if scm::hooks_installed(&ctx.root) {
-                    "installed"
-                } else {
-                    "not installed (kanbanr git install-hooks)"
+            // FTR-059 R-1: each kanbanr git hook that does not run, with its fix.
+            let findings = hookhealth::git_hook_findings(&ctx.root);
+            if findings.is_empty() {
+                println!("hooks:   installed");
+            } else {
+                println!("hooks:");
+                for f in &findings {
+                    println!("  {f}");
                 }
-            );
+            }
             println!("branch:  {}", ctx.branch.as_deref().unwrap_or("(detached)"));
             println!("default: {}", coderepo::default_branch(&ctx.root));
             match item {
@@ -9643,6 +9645,22 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
         )
     };
     let mut report: Value = serde_json::from_str(&resp)?;
+    // FTR-059 R-1, R-8: in a tracked repository, a kanbanr hook that does not run is a warning.
+    if !all_projects
+        && let Some(p) = scope.first()
+        && let Some(root) = code_repo()
+        && project::find_marker(&root, project::home_dir().as_deref()).is_some()
+        && let Some(issues) = report["issues"].as_array_mut()
+    {
+        let findings = hookhealth::git_hook_findings(&root)
+            .into_iter()
+            .chain(hookhealth::claude_hook_findings(&root));
+        for f in findings {
+            issues.push(
+                json!({ "severity": "warning", "project": p, "code": null, "message": f.to_string() }),
+            );
+        }
+    }
     // A project on a personal process: only this machine has the process to compare with (FEAT-170).
     for p in scope {
         let Ok(project) = get_project(client, &p) else {

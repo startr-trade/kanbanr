@@ -65,9 +65,9 @@ pub struct Inputs {
     pub sprint: Option<String>,
     /// The release line(s), when a release is planned.
     pub release: Option<String>,
-    /// The brief form's tail, in priority order (dropped last-first): `Hooks`, `Agents at work`,
-    /// `The project's process`, `The project's practice packs`, `Lessons`, `Recent activity`. An
-    /// empty section is skipped.
+    /// The brief form's tail, in priority order (dropped last-first): `kanbanr's hooks`, `Agents
+    /// at work`, `The project's process`, `The project's practice packs`, `Lessons`, `Recent
+    /// activity`. An empty section is skipped.
     pub optional: Vec<Section>,
     /// The closing paragraph.
     pub footer: String,

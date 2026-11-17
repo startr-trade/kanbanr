@@ -7,7 +7,9 @@
 //! (ADR-0004).
 
 use crate::backend::Backend;
-use crate::{Cli, activity_text, board_text, decisions_summary, get_project, lessons_text};
+use crate::{
+    Cli, activity_text, board_text, decisions_summary, get_project, hookhealth, lessons_text,
+};
 use crate::{process_status_text, project_drift, scope_drift_text, scope_list_text};
 use kanbanr_core::recover::{self, Inputs, Line, Section, Waiting};
 use kanbanr_core::{Project, project};
@@ -270,7 +272,24 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
         full.push(s.clone());
     }
 
-    let mut optional = vec![section("Hooks", String::new())];
+    // FTR-059 R-1, R-8: the kanbanr hooks that do not run, git's then Claude Code's, one line
+    // each. The first optional section, so the last to be dropped.
+    let hooks = crate::code_repo()
+        .filter(|root| project::find_marker(root, project::home_dir().as_deref()).is_some())
+        .map(|root| {
+            hookhealth::git_hook_findings(&root)
+                .into_iter()
+                .chain(hookhealth::claude_hook_findings(&root))
+                .map(|f| format!("- {f}\n"))
+                .collect::<String>()
+        })
+        .filter(|body| !body.is_empty())
+        .map(|body| section("kanbanr's hooks", body));
+    if let Some(h) = &hooks {
+        full.push(h.clone());
+    }
+
+    let mut optional: Vec<Section> = hooks.into_iter().collect();
     optional.extend(agents);
     optional.extend(process);
     optional.extend(packs);
