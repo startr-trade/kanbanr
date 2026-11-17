@@ -48,6 +48,10 @@ const SIGNOFF_PREFIX: &str = "signoff-";
 const IN_CONVERSATION: &str = "Decisions are taken in the conversation in this project";
 /// What a manual check with nothing prepared says: the person's own observation is never taken in
 /// bulk.
+/// The action word of retiring checks left on a shipped release (DEF-113): the manual group's
+/// own, beside `undo` and `reject`.
+pub const RETIRE: &str = "retire";
+
 const DO_THE_CHECK: &str = "Do the check, then press Passed or Failed in the row.";
 
 /// One decision group, counted: a tab on the Review page.
@@ -121,6 +125,10 @@ pub struct GroupSlice {
     /// [`crate::manual::holding`]): for `manual` only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub holding: Vec<String>,
+    /// The releases that have shipped ([`crate::manual::shipped`]): for `manual` only. The page
+    /// sets the checks left on them apart, to retire (FTR-057's sections, DEF-113).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shipped: Vec<String>,
 }
 
 /// One row's full evidence: what the row's body shows when it is opened.
@@ -1241,6 +1249,11 @@ pub fn slice(store: &Store, p: &str, key: &str, repo: Option<&Path>) -> Result<G
         } else {
             Vec::new()
         },
+        shipped: if key == MANUAL {
+            crate::manual::shipped(store, p)?
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -1401,7 +1414,8 @@ pub struct GroupDecision {
     pub by: String,
     /// The release, for `which-release`.
     pub target: String,
-    /// A reason; no group action needs one (R-11), so it is kept only where a route takes it.
+    /// A reason; no group action needs one (R-11), so it is kept only where a route takes it: a
+    /// retirement's (DEF-113).
     pub reason: String,
     pub items: Vec<DecisionItem>,
 }
@@ -1493,7 +1507,8 @@ pub fn ops(
     let own = group.action.to_ascii_lowercase();
     let undo = action == "undo" && d.group == DELEGATED;
     let reject = action == "reject";
-    if !(action == own || undo || reject) {
+    let retire = action == RETIRE && d.group == MANUAL;
+    if !(action == own || undo || reject || retire) {
         return Err(refuse(format!(
             "'{}' is not a decision the {} group takes: it takes {}",
             d.action, group.label, group.action
@@ -1506,6 +1521,40 @@ pub fn ops(
             group.choices.join(", ")
         )));
     }
+    // A retirement closes checks of shipped releases without judging them (DEF-113): the person's
+    // own, with one reason kept for every row, read against the project once.
+    let retiring = if retire {
+        if !matches!(
+            origin,
+            crate::origin::Origin::Monitor | crate::origin::Origin::Terminal
+        ) {
+            return Err(refuse(
+                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024)"
+                    .into(),
+            ));
+        }
+        let reason = d.reason.trim();
+        if reason.is_empty() {
+            return Err(refuse(
+                "a retirement keeps its reason: give one for the checks you retire".into(),
+            ));
+        }
+        if reason.chars().count() > crate::manual::NOTE_MAX {
+            return Err(refuse(format!(
+                "the reason is longer than {} characters",
+                crate::manual::NOTE_MAX
+            )));
+        }
+        Some((
+            reason.to_string(),
+            store.load_meta(p)?,
+            crate::releases::load(store, p)?,
+            crate::manual::results(store, p, None)?,
+        ))
+    } else {
+        None
+    };
     let pins = |item: &DecisionItem| {
         let mut b = json!({"by": by});
         for (k, v) in [("rev", &item.rev), ("spec_rev", &item.spec_rev)] {
@@ -1529,7 +1578,8 @@ pub fn ops(
                 group.label
             )));
         };
-        if !row.blocked.is_empty() {
+        // An unprepared due check is blocked for Confirm; Retire is its own action (DEF-113).
+        if !row.blocked.is_empty() && !(retire && row.blocked == DO_THE_CHECK) {
             return Err(refuse(format!(
                 "{} cannot be decided here: {}",
                 row.code, row.blocked
@@ -1542,7 +1592,33 @@ pub fn ops(
             )));
         }
         let code = segment(&row.code);
-        let op = if reject {
+        let op = if let Some((reason, project, releases, kept)) = &retiring {
+            if !row.prepared.is_empty() || !item.prepared.is_empty() {
+                return Err(refuse(format!(
+                    "{} has a prepared result: confirm or reject it in its row",
+                    row.code
+                )));
+            }
+            crate::manual::retirable(
+                project,
+                releases,
+                kept,
+                &row.code,
+                &row.requirement,
+                &row.test,
+            )?;
+            VerdictOp {
+                key: row.key.clone(),
+                method: "POST".into(),
+                path: format!(
+                    "/projects/{p}/features/{code}/tests/{}/{}/retire",
+                    segment(&row.requirement),
+                    segment(&row.test)
+                ),
+                body: json!({"by": by, "note": reason}),
+                resolution: None,
+            }
+        } else if reject {
             if row.prepared.is_empty() {
                 return Err(refuse(format!(
                     "{} has nothing prepared to reject: only prepared records are turned down \
@@ -2775,6 +2851,231 @@ mod tests {
             )
             .is_err()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board with releases, v0.6.0 shipped and v0.8.0 planned (DEF-113), and manual checks due:
+    /// each item has one manual test. Returns the store, its folder and the items `[s1, s2, s3,
+    /// current, early]`: s1 to s3 in v0.6.0, `current` in v0.8.0, `early` in v0.6.0 but before its
+    /// build stage.
+    fn retire_board() -> (Store, std::path::PathBuf, [String; 5]) {
+        let (store, dir) = board();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        // Entering Scheduled makes the branch, so Scheduled is the build stage (DEF-076): `early`,
+        // still at Planned, is not yet due.
+        let mut config = store.read_project_config("demo").unwrap();
+        config
+            .gates
+            .get_mut("Scheduled")
+            .unwrap()
+            .on_enter
+            .push(crate::config::Action::Branch);
+        store.save_config("demo", &config).unwrap();
+        for v in ["v0.6.0", "v0.8.0"] {
+            crate::releases::add(&store, "demo", v, "", "").unwrap();
+        }
+        let mut codes = Vec::new();
+        for (title, version, due) in [
+            ("S1", "v0.6.0", true),
+            ("S2", "v0.6.0", true),
+            ("S3", "v0.6.0", true),
+            ("Current", "v0.8.0", true),
+            ("Early", "v0.6.0", false),
+        ] {
+            let code = define(
+                &store,
+                title,
+                FeatureDefinition {
+                    requirements: vec![Requirement {
+                        text: "THE SYSTEM SHALL do it".into(),
+                        tests: vec![TestRef {
+                            name: "manual: the person judges it".into(),
+                            kind: "manual".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..statement(title)
+                },
+            );
+            if due {
+                store.approve_feature("demo", &code, "Ada").unwrap();
+                store.move_feature("demo", &code, "Scheduled").unwrap();
+                store.move_feature("demo", &code, "Completed").unwrap();
+            }
+            crate::releases::plan(&store, "demo", version, std::slice::from_ref(&code)).unwrap();
+            codes.push(code);
+        }
+        let file = store.project_dir("demo").join("releases.yaml");
+        let mut all = crate::releases::load(&store, "demo").unwrap();
+        for r in &mut all {
+            if r.version == "v0.6.0" {
+                r.state = crate::releases::ReleaseState::Shipped;
+            }
+        }
+        std::fs::write(&file, crate::yaml::to_string(&all).unwrap()).unwrap();
+        assert!(crate::git::commit_local(&dir, "the board"));
+        (store, dir.clone(), codes.try_into().unwrap())
+    }
+
+    /// DEF-113 R-2: the manual slice names the shipped releases, and no other group's does.
+    #[test]
+    fn the_manual_slice_names_the_shipped_releases() {
+        let (store, dir, _) = retire_board();
+        let manual = slice(&store, "demo", MANUAL, None).unwrap();
+        assert_eq!(manual.shipped, ["v0.6.0"]);
+        let approve = slice(&store, "demo", APPROVE, None).unwrap();
+        assert!(approve.shipped.is_empty());
+        let text = serde_json::to_value(&approve).unwrap();
+        assert!(text.get("shipped").is_none(), "{text}");
+        let text = serde_json::to_value(&manual).unwrap();
+        assert_eq!(text["shipped"], serde_json::json!(["v0.6.0"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-113 R-7: retiring over a selection keeps one reason for each row, refuses what it must
+    /// with nothing to write, and applied through the decide route keeps each result in one commit.
+    #[test]
+    fn retire_over_a_selection_keeps_one_reason_for_each() {
+        use crate::origin::Origin;
+        use serde_json::json;
+        let (store, dir, [s1, s2, s3, current, early]) = retire_board();
+        // The third has a prepared passed result, which keeps the group's Confirm.
+        crate::prepared::prepare(
+            &store,
+            "demo",
+            &json!({"kind": "manual-test",
+                "subject": {"item": s3, "requirement": "R-1",
+                    "test": "manual: the person judges it"},
+                "fields": {"state": "green", "checked_rev": "abc1234"},
+                "sources": [{"label": "what the person said", "url": ""}],
+                "origin": "conversation"}),
+            None,
+        )
+        .unwrap();
+        let group = slice(&store, "demo", MANUAL, None).unwrap();
+        let item = |code: &str| {
+            let r = group.rows.iter().find(|r| r.code == code).unwrap();
+            DecisionItem {
+                key: r.key.clone(),
+                code: r.code.clone(),
+                requirement: r.requirement.clone(),
+                test: r.test.clone(),
+                prepared: r.prepared.clone(),
+                ..Default::default()
+            }
+        };
+        let decision = |codes: &[&str], reason: &str| GroupDecision {
+            group: MANUAL.into(),
+            action: "Retire".into(),
+            by: "Ada".into(),
+            reason: reason.into(),
+            items: codes.iter().map(|c| item(c)).collect(),
+            ..Default::default()
+        };
+        let why = "shipped in v0.6.0; not judged then, and not worth judging now";
+        let ops = ops(
+            &store,
+            "demo",
+            &decision(&[&s1, &s2], why),
+            Origin::Monitor,
+            None,
+        )
+        .unwrap();
+        assert_eq!(ops.len(), 2);
+        for (op, code) in ops.iter().zip([&s1, &s2]) {
+            assert_eq!(op.method, "POST");
+            assert_eq!(
+                op.path,
+                format!(
+                    "/projects/demo/features/{code}/tests/R-1/manual%3A%20the%20person%20judges%20it/retire"
+                )
+            );
+            assert_eq!(op.body, json!({"by": "Ada", "note": why}));
+            assert!(op.resolution.is_none());
+        }
+        // Refused, with nothing to write.
+        let refused = |codes: &[&str], reason: &str, origin: Origin| {
+            super::ops(&store, "demo", &decision(codes, reason), origin, None)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(refused(&[&s1], "  ", Origin::Monitor).contains("keeps its reason"));
+        assert!(
+            refused(
+                &[&s1],
+                &"x".repeat(crate::manual::NOTE_MAX + 1),
+                Origin::Monitor
+            )
+            .contains("longer than")
+        );
+        assert!(refused(&[&current], why, Origin::Monitor).contains("which has not shipped"));
+        assert!(refused(&[&s3], why, Origin::Monitor).contains("has a prepared result"));
+        assert!(refused(&[&early], why, Origin::Monitor).contains("opens at"));
+        for origin in [Origin::Conversation, Origin::Delegated] {
+            assert!(refused(&[&s1], why, origin).contains("the person's own"));
+        }
+        // One bad row refuses the whole request.
+        assert!(refused(&[&s1, &current], why, Origin::Monitor).contains("which has not shipped"));
+        // `retire` is the manual group's alone.
+        let mut other = decision(&[&s1], why);
+        other.group = APPROVE.into();
+        assert!(super::ops(&store, "demo", &other, Origin::Monitor, None).is_err());
+
+        // Through the decide route: one commit, each result kept.
+        let commits = |dir: &std::path::Path| {
+            crate::coderepo::git(dir, &["rev-list", "--count", "HEAD"])
+                .unwrap()
+                .trim()
+                .parse::<usize>()
+                .unwrap()
+        };
+        let before = commits(&dir);
+        let body = serde_json::to_value(decision(&[&s1, &s2], why)).unwrap();
+        let out = crate::write::apply_as(
+            &store,
+            &dir,
+            crate::git::PushPolicy::Off,
+            "POST",
+            "/projects/demo/review/decide",
+            Some(&body),
+            None,
+            &crate::eventing::NullSender,
+            &crate::agentscope::ProcessScope::Unscoped,
+            Origin::Monitor,
+        )
+        .unwrap();
+        let answer: serde_json::Value = serde_json::from_str(&out.body).unwrap();
+        assert!(
+            answer["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r.get("error").is_none()),
+            "{answer}"
+        );
+        assert_eq!(commits(&dir), before + 1);
+        let kept = crate::manual::results(&store, "demo", None).unwrap();
+        assert_eq!(kept.len(), 2);
+        for k in &kept {
+            assert_eq!(
+                (
+                    k.state.as_str(),
+                    k.note.as_str(),
+                    k.by.as_str(),
+                    k.origin.as_str()
+                ),
+                ("retired", why, "Ada", "monitor")
+            );
+        }
+        // The group no longer lists them.
+        let left: Vec<String> = slice(&store, "demo", MANUAL, None)
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|r| r.code)
+            .collect();
+        assert!(!left.contains(&s1) && !left.contains(&s2), "{left:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1067,7 +1067,7 @@ mod tests {
             &retirement(&shipped, "manual: reads well", "not judged"),
         )
         .unwrap();
-        assert_eq!(names(&store), [sibling.clone()]);
+        assert_eq!(names(&store), std::slice::from_ref(&sibling));
         let mut red = retirement(&shipped, "manual: reads well", "");
         red.state = "red".into();
         red.at = "2026-11-17T11:00:00Z".into();
@@ -1148,7 +1148,7 @@ mod tests {
             &shipped,
             "manual: reads well",
             "again",
-            &format!("'manual: reads well' was retired by Ada L on 2026-11-17"),
+            "'manual: reads well' was retired by Ada L on 2026-11-17",
         );
         assert_eq!(results(&store, "demo", None).unwrap().len(), 1);
         // Only `retire` takes the state.
