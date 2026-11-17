@@ -919,10 +919,88 @@ pub struct NextStage {
     /// The stage the item reaches next in the workflow's order, the one the Review page asks
     /// sign-offs for (DEF-020). A card speaks only of this one.
     pub immediate: bool,
-    /// How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).
+    /// How many of `missing` the person settles: sign-offs and the `approved` check that no
+    /// delegation in force holds (DEF-020, DEF-104).
     pub for_you: usize,
     /// What the stage lacks, by family (FTR-078), copied from the gate.
     pub checks: Vec<CheckTally>,
+    /// The sign-off and approval gaps a delegation in force holds for Claude (DEF-104); counted in
+    /// `missing`, left out of `for_you`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegated: Vec<DelegatedGap>,
+}
+
+/// A gap Claude holds under a delegation in force (DEF-104).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DelegatedGap {
+    /// `signoff` or `approved`.
+    pub check: Check,
+    /// The sign-off's name; empty for an approval.
+    pub name: String,
+    /// The delegation that holds it, `DLG-001`.
+    pub delegation: String,
+    /// When the delegation ends (RFC 3339), so a surface can say "until 4 Dec" and stop calling it
+    /// Claude's once it has passed.
+    pub until: String,
+}
+
+/// The sign-off a sign-off gap's label names: the text between its first two `'`.
+pub fn signoff_name(label: &str) -> Option<&str> {
+    let rest = &label[label.find('\'')? + 1..];
+    let name = &rest[..rest.find('\'')?];
+    (!name.is_empty()).then_some(name)
+}
+
+/// The verdict a gap asks for, if it asks one: `approved` is an approval, a sign-off gap with a
+/// name in its label is that sign-off (DEF-104). Ratifying is not a card gap.
+pub fn verdict_of_gap(code: &str, gap: &Gap) -> Option<crate::decisions::Verdict> {
+    use crate::decisions::{Verdict, VerdictKind};
+    match gap.check {
+        Check::Approved => Some(Verdict {
+            kind: VerdictKind::Approve,
+            code: code.to_string(),
+            signoff: String::new(),
+        }),
+        Check::Signoff => signoff_name(&gap.label).map(|name| Verdict {
+            kind: VerdictKind::Signoff,
+            code: code.to_string(),
+            signoff: name.to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// The gaps Claude holds under a delegation in force at `now`, in gap order, one per
+/// (check, name) pair (DEF-104).
+pub fn delegated_gaps(
+    gaps: &[Gap],
+    d: &crate::decisions::Decisions,
+    item: &FeatureItem,
+    now: &str,
+) -> Vec<DelegatedGap> {
+    let mut out: Vec<DelegatedGap> = Vec::new();
+    for g in gaps {
+        let Some(v) = verdict_of_gap(&item.code, g) else {
+            continue;
+        };
+        let Some(holder) = crate::decisions::holder(d, &v, item, now) else {
+            continue;
+        };
+        if out
+            .iter()
+            .any(|x| x.check == g.check && x.name == v.signoff)
+        {
+            continue;
+        }
+        out.push(DelegatedGap {
+            check: g.check,
+            name: v.signoff,
+            delegation: holder.id.clone(),
+            until: holder.until.clone(),
+        });
+    }
+    out
 }
 
 /// One card's readiness: its gaps, and its next stages.
@@ -1112,6 +1190,9 @@ impl ProjectReadiness {
         let project = store.load_for_gates(p)?;
         let charter = crate::charter::load(store, p)?;
         let ctx = Context::load_in(store, p, &project.config, repo);
+        // An unreadable decisions.yaml reads as nothing delegated: every gap is the person's.
+        let decisions = crate::decisions::load(store, p).unwrap_or_default();
+        let now = crate::now_rfc3339();
         Ok(Self(
             project
                 .features
@@ -1131,27 +1212,34 @@ impl ProjectReadiness {
                             let first = immediate_status(&project, &gates).map(str::to_owned);
                             gates
                                 .into_iter()
-                                .map(|n| NextStage {
-                                    ends: crate::graph::is_terminal_status(
-                                        &project.config,
-                                        &n.status,
-                                    ) && !project.config.is_no_op(&n.status),
-                                    immediate: first.as_deref() == Some(n.status.as_str()),
-                                    for_you: n
-                                        .gaps
-                                        .iter()
-                                        .filter(|g| {
-                                            matches!(g.check, Check::Signoff | Check::Approved)
-                                        })
-                                        .count(),
-                                    checks: n.checks,
-                                    status: n.status,
-                                    missing: n.gaps.len(),
-                                    signoffs: n.signoffs_needed,
-                                    tasks_open: f
-                                        .all_tasks()
-                                        .filter(|t| t.state != crate::models::TaskState::Completed)
-                                        .count(),
+                                .map(|n| {
+                                    let delegated = delegated_gaps(&n.gaps, &decisions, f, &now);
+                                    NextStage {
+                                        ends: crate::graph::is_terminal_status(
+                                            &project.config,
+                                            &n.status,
+                                        ) && !project.config.is_no_op(&n.status),
+                                        immediate: first.as_deref() == Some(n.status.as_str()),
+                                        for_you: n
+                                            .gaps
+                                            .iter()
+                                            .filter(|g| {
+                                                matches!(g.check, Check::Signoff | Check::Approved)
+                                            })
+                                            .count()
+                                            - delegated.len(),
+                                        delegated,
+                                        checks: n.checks,
+                                        status: n.status,
+                                        missing: n.gaps.len(),
+                                        signoffs: n.signoffs_needed,
+                                        tasks_open: f
+                                            .all_tasks()
+                                            .filter(|t| {
+                                                t.state != crate::models::TaskState::Completed
+                                            })
+                                            .count(),
+                                    }
                                 })
                                 .collect()
                         },
@@ -3726,6 +3814,130 @@ mod tests {
         let operations = card.next.iter().find(|n| n.status == "Operations").unwrap();
         assert_eq!(operations.for_you, 1, "the release sign-off");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A delegated-mode `decisions.yaml` for the card tests: DLG-001 covers `approve` and the
+    /// `docs-folded` sign-off, granted (unless `revoked`), until `until`.
+    fn delegate(store: &crate::Store, until: &str, revoked: bool, delegated: bool) {
+        use crate::decisions::{Decisions, Delegation, Mode, ModeChange, Stamp};
+        let stamp = |origin: &str| Stamp {
+            by: "Ada".into(),
+            at: "2026-11-01T00:00:00+00:00".into(),
+            origin: origin.into(),
+            ..Default::default()
+        };
+        let d = Decisions {
+            modes: if delegated {
+                vec![ModeChange {
+                    mode: Mode::Delegated,
+                    by: "Ada".into(),
+                    at: "2026-11-01T00:00:00+00:00".into(),
+                    origin: "monitor".into(),
+                    reason: String::new(),
+                    extra: Default::default(),
+                }]
+            } else {
+                vec![]
+            },
+            delegations: vec![Delegation {
+                id: "DLG-001".into(),
+                verdicts: vec!["approve".into(), "signoff:docs-folded".into()],
+                until: until.into(),
+                proposed: stamp("conversation"),
+                granted: Some(stamp("monitor")),
+                revoked: revoked.then(|| stamp("monitor")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        std::fs::write(
+            store.project_dir("demo").join("decisions.yaml"),
+            crate::yaml::to_string(&d).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// DEF-104 R-1: while a delegation in force covers a sign-off or approval, the card counts it
+    /// as the delegation's, not the person's; `missing` still counts it.
+    #[test]
+    fn a_delegated_signoff_is_not_counted_as_the_persons() {
+        let (store, dir, code) = togaf_item_at_implementation("delegated");
+        delegate(&store, "2099-01-01T00:00:00+00:00", false, true);
+        let card = card_of(&store, &code);
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!(migration.missing, 3, "the stage still lacks them");
+        assert_eq!(
+            migration.for_you, 0,
+            "approval and docs-folded are Claude's"
+        );
+        let held: Vec<(Check, &str, &str)> = migration
+            .delegated
+            .iter()
+            .map(|g| (g.check, g.name.as_str(), g.delegation.as_str()))
+            .collect();
+        assert_eq!(
+            held,
+            vec![
+                (Check::Approved, "", "DLG-001"),
+                (Check::Signoff, "docs-folded", "DLG-001")
+            ]
+        );
+        assert!(
+            migration
+                .delegated
+                .iter()
+                .all(|g| g.until.starts_with("2099"))
+        );
+        // A sign-off the delegation does not name stays the person's.
+        let operations = card.next.iter().find(|n| n.status == "Operations").unwrap();
+        assert_eq!(operations.for_you, 1);
+        assert!(operations.delegated.is_empty());
+        // Monitor mode: nothing is Claude's.
+        delegate(&store, "2099-01-01T00:00:00+00:00", false, false);
+        let card = card_of(&store, &code);
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!((migration.for_you, migration.delegated.len()), (2, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-104 R-2: an expired or revoked delegation gives its gaps back to the person.
+    #[test]
+    fn an_expired_delegation_returns_the_gap_to_the_person() {
+        let (store, dir, code) = togaf_item_at_implementation("expired");
+        for (until, revoked) in [
+            ("2026-11-02T00:00:00+00:00", false),
+            ("2099-01-01T00:00:00+00:00", true),
+        ] {
+            delegate(&store, until, revoked, true);
+            let card = card_of(&store, &code);
+            let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+            assert_eq!(migration.for_you, 2, "{until} revoked={revoked}");
+            assert!(migration.delegated.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-104: the sign-off a gap names is read from its label, in each of the four forms.
+    #[test]
+    fn a_signoff_gap_names_its_signoff() {
+        assert_eq!(
+            signoff_name("no sign-off 'design-review'"),
+            Some("design-review")
+        );
+        assert_eq!(
+            signoff_name("sign-off 'docs-folded' lapsed"),
+            Some("docs-folded")
+        );
+        assert_eq!(
+            signoff_name("sign-off 'release' withdrawn"),
+            Some("release")
+        );
+        assert_eq!(
+            signoff_name("sign-off 'design-review': spec changed"),
+            Some("design-review")
+        );
+        assert_eq!(signoff_name("no goal link"), None);
+        assert_eq!(signoff_name("sign-off '' lapsed"), None);
     }
 
     /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
