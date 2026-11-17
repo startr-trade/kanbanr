@@ -3357,3 +3357,254 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// MNT-014 R-3: the board's reads on a history of 10,000 commits, as the monitor and the CLI make
+/// them. Run: `cargo test -p kanbanr-core --release git::perf -- --ignored --nocapture`.
+#[cfg(test)]
+mod perf {
+    use super::*;
+    use crate::models::FeatureDefinition;
+    use crate::readiness::{Check, Condition};
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    const COMMITS: usize = 10_000;
+    const ITEMS: usize = 200;
+    const DOCS: usize = 40;
+    const T0: i64 = 1_700_000_000;
+
+    fn run(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A board in a temporary repository: `items` items in the first stage, each declaring one of
+    /// `DOCS` docs, with a gate on the next stage that asks for `docs_updated`, then `COMMITS`
+    /// commits that change those docs, made with `git fast-import`.
+    fn generated_board(tag: &str, items: usize) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-git-perf-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                warns: vec![Condition::Check(Check::DocsUpdated)],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let docs_rel = "projects/demo/docs/architecture";
+        let docs = dir.join(docs_rel);
+        std::fs::create_dir_all(&docs).unwrap();
+        for d in 0..DOCS {
+            std::fs::write(docs.join(format!("d{d}.md")), "v0").unwrap();
+        }
+        for i in 0..items {
+            let item = store
+                .add_feature("demo", &format!("Item {i}"), "", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: format!("Item {i}"),
+                        affects_docs: vec![format!("architecture/d{}.md", i % DOCS)],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        assert!(commit(&dir, "Ada", "ada@example.com", "board"));
+        let branch = run(&dir, &["symbolic-ref", "--short", "HEAD"]);
+        let head = run(&dir, &["rev-parse", "HEAD"]);
+        let mut stream = String::new();
+        for i in 0..COMMITS {
+            let msg = "docs";
+            let body = format!("v{}", i + 1);
+            stream.push_str(&format!(
+                "commit refs/heads/{branch}\ncommitter T <t@example.com> {} +0000\ndata {}\n{msg}\n",
+                T0 + i as i64 * 60,
+                msg.len()
+            ));
+            if i == 0 {
+                stream.push_str(&format!("from {head}\n"));
+            }
+            stream.push_str(&format!(
+                "M 100644 inline {docs_rel}/d{}.md\ndata {}\n{body}\n\n",
+                i % DOCS,
+                body.len()
+            ));
+        }
+        let mut child = std::process::Command::new("git")
+            .args(["fast-import", "--quiet"])
+            .current_dir(&dir)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stream.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        run(&dir, &["reset", "-q", "--hard", "HEAD"]);
+        dir
+    }
+
+    fn copy_dir(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let target = to.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                copy_dir(&e.path(), &target);
+            } else {
+                std::fs::copy(e.path(), &target).unwrap();
+            }
+        }
+    }
+
+    /// What a read costs: the time, the full walks and the extensions it caused.
+    struct Cost {
+        took: Duration,
+        walks: u64,
+        extends: u64,
+    }
+
+    fn measure(dir: &Path, read: &dyn Fn()) -> Cost {
+        let (walks, extends) = (path_history_walks_of(dir), path_history_extends_of(dir));
+        let started = Instant::now();
+        read();
+        Cost {
+            took: started.elapsed(),
+            walks: path_history_walks_of(dir) - walks,
+            extends: path_history_extends_of(dir) - extends,
+        }
+    }
+
+    /// Reads one board cold, again warm, and after one more commit.
+    fn three_reads(label: &str, base: &Path, read: &dyn Fn(&crate::Store)) -> [Cost; 3] {
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-git-perf-copy-{}-{}-{}",
+            label.replace(' ', "-"),
+            std::process::id(),
+            base.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        copy_dir(base, &dir);
+        let store = crate::Store::new(dir.clone());
+        let go = || read(&store);
+        let cold = measure(&dir, &go);
+        let warm = measure(&dir, &go);
+        std::fs::write(
+            dir.join("projects/demo/docs/architecture/d0.md"),
+            "one more",
+        )
+        .unwrap();
+        run(&dir, &["add", "-A"]);
+        run(&dir, &["commit", "-q", "-m", "one more"]);
+        let grown = measure(&dir, &go);
+        for (what, c) in [
+            ("cold", &cold),
+            ("warm", &warm),
+            ("after one commit", &grown),
+        ] {
+            eprintln!(
+                "{label}, {what}: {:?}, {} full walks, {} extensions",
+                c.took, c.walks, c.extends
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        [cold, warm, grown]
+    }
+
+    /// MNT-014 R-3: a board read and the doctor, on 10,000 commits and 200 items, with 1 history
+    /// question and with 200: at most one full walk each; a second read at the same revision walks
+    /// none; after one commit the next read extends the walk and makes no full one. The counts are
+    /// asserted in every build; the times only in release.
+    #[test]
+    #[ignore = "a timing budget: run with --ignored in release"]
+    fn board_read_on_ten_thousand_commits() {
+        let one = generated_board("one", 1);
+        let many = generated_board("many", ITEMS);
+        let board = |s: &crate::Store| {
+            crate::readiness::ProjectReadiness::load_in(s, "demo", None).unwrap();
+        };
+        let doctor = |s: &crate::Store| {
+            crate::doctor::run_project(s, "demo").unwrap();
+        };
+        let timed = cfg!(not(debug_assertions));
+        let mut by_reader = Vec::new();
+        for (name, read) in [
+            ("board", &board as &dyn Fn(&crate::Store)),
+            ("doctor", &doctor as &dyn Fn(&crate::Store)),
+        ] {
+            let few = three_reads(&format!("{name} 1 question"), &one, read);
+            let lots = three_reads(&format!("{name} {ITEMS} questions"), &many, read);
+            for c in [&few, &lots] {
+                assert!(c[0].walks <= 1, "{name}: a cold read walks once at most");
+                assert_eq!((c[1].walks, c[1].extends), (0, 0), "{name}: a warm read");
+                // The doctor of this generated board asks no history question (it has no grants
+                // or accepted baseline revisions), so it may walk and extend nothing.
+                let asked = c[0].walks == 1;
+                assert_eq!(c[2].walks, 0, "{name}: after a commit, no full walk");
+                assert_eq!(c[2].extends, u64::from(asked), "{name}: after a commit");
+                if timed {
+                    assert!(c[1].took <= Duration::from_millis(350), "{name} warm");
+                    assert!(c[2].took <= Duration::from_millis(400), "{name} extension");
+                }
+            }
+            if timed {
+                assert!(
+                    lots[0].took <= few[0].took.mul_f64(1.15) + Duration::from_millis(50),
+                    "{name}: {ITEMS} questions {:?} against 1 question {:?}",
+                    lots[0].took,
+                    few[0].took
+                );
+            }
+            by_reader.push((name, lots));
+        }
+        if timed {
+            assert!(
+                by_reader[0].1[0].took <= Duration::from_millis(1500),
+                "cold board read"
+            );
+            assert!(
+                by_reader[1].1[0].took <= Duration::from_millis(2000),
+                "cold doctor"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&one);
+        let _ = std::fs::remove_dir_all(&many);
+    }
+}

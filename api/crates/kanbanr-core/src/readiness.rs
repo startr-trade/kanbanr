@@ -2681,11 +2681,16 @@ pub fn check_board(
     let ctx = Context::load_in(store, p, &project.config, repo);
     let baseline_note = baseline_note(&ctx);
     let baseline_gates_unrecorded = baseline_gates_unrecorded(store, p, &project.config.cadence);
-    let items = features
+    // Pass 1: each item's view, what its next stage asks, and whether it sits at docs-folded
+    // (FEAT-117, FEAT-119).
+    let views: Vec<(
+        &FeatureItem,
+        Option<ReadinessView>,
+        Vec<crate::docsbuilt::Unbuilt>,
+        bool,
+    )> = features
         .into_iter()
         .map(|f| {
-            // What each item's next stage asks, with the project's unit and active sprint in hand
-            // (FEAT-117, FEAT-119).
             let view = ReadinessView::load_in(store, p, &f.code, repo).ok();
             let docs_unbuilt = view
                 .as_ref()
@@ -2711,15 +2716,36 @@ pub fn check_board(
                             .iter()
                             .any(|s| s == crate::method::DOCS_FOLDED)
                 });
-            let texts_to_settle = match repo {
-                Some(repo) if at_docs_folded => {
-                    crate::docdrift::flags_for_item(store, p, &f.code, repo)
-                        .map(|flags| crate::review::split_settled(store, p, &f.code, flags).0)
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|fl| fl.target.key())
-                        .collect()
-                }
+            (f, view, docs_unbuilt, at_docs_folded)
+        })
+        .collect();
+    // Pass 2: the drift of every item at docs-folded, asked once (MNT-014): one context, so one
+    // read of the board, its history and the code repository's log for all of them. An error
+    // leaves every item's texts empty, as one item's error always did.
+    let folded: Vec<&str> = views
+        .iter()
+        .filter(|(_, _, _, at)| *at)
+        .map(|(f, ..)| f.code.as_str())
+        .collect();
+    let drift = match repo {
+        Some(repo) if !folded.is_empty() => {
+            crate::docdrift::drift_ctx(store, p, &folded, repo).ok()
+        }
+        _ => None,
+    };
+    let items = views
+        .into_iter()
+        .map(|(f, view, docs_unbuilt, at_docs_folded)| {
+            let texts_to_settle = match &drift {
+                Some(ctx) if at_docs_folded => crate::docdrift::flags_for_item_in(ctx, &f.code)
+                    .map(|flags| {
+                        crate::review::split_settled_in(ctx.records(), ctx.board(), &f.code, flags)
+                            .0
+                    })
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|fl| fl.target.key())
+                    .collect(),
                 _ => Vec::new(),
             };
             ItemCheck {
@@ -5848,5 +5874,96 @@ mod tests {
             "{next:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MNT-014 R-1: `check_board` over three items at `docs-folded` makes one log of the code
+    /// repository, not one per item.
+    #[test]
+    fn check_makes_one_code_log_for_every_docs_folded_item() {
+        use crate::docdrift::testkit::{code_commit, git_env, scratch};
+        let dir = scratch("check-logs");
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::config::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                signoffs: vec!["docs-folded".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let repo = scratch("check-logs-code");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        let mut codes = Vec::new();
+        for i in 0..3 {
+            let f = store
+                .add_feature("demo", &format!("Item {i}"), "# x", "M", None)
+                .unwrap();
+            let def: crate::models::FeatureDefinition = crate::yaml::from_str(
+                "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    tests:\n      - name: t::x\n        kind: unit\n        state: planned\n",
+            )
+            .unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(def))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada").unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+            store
+                .add_task(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "one",
+                    None,
+                    &crate::store::TaskFields::default(),
+                )
+                .unwrap();
+            store
+                .set_task_state(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "T1",
+                    crate::models::TaskState::Completed,
+                )
+                .unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            store
+                .write_doc(
+                    "demo",
+                    &format!("design/d{i}.md"),
+                    &format!(
+                        "---\nitems: [{}]\n---\n\n# D\n\nRun with --flag-{i}.\n",
+                        f.code
+                    ),
+                )
+                .unwrap();
+            code_commit(
+                &repo,
+                &format!("src/f{i}.rs"),
+                &format!("let a = \"--flag-{i}\";\n"),
+                &format!("add\n\nRefs: kanbanr:{}", f.code),
+                "2099-01-01T00:00:00+00:00",
+            );
+            codes.push(f.code);
+        }
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        let logs = crate::docdrift::items_logs_here();
+        let report = check_board(&store, "demo", None, Some(&repo)).unwrap();
+        assert_eq!(report.items.len(), 3);
+        for item in &report.items {
+            assert_eq!(item.texts_to_settle.len(), 1, "{}", item.code);
+        }
+        assert_eq!(crate::docdrift::items_logs_here() - logs, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
