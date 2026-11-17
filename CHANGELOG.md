@@ -76,6 +76,9 @@ All notable changes to kanbanr are documented here. The format follows
   <V> --reason …` steps a mistaken stage back while nothing is pushed or tagged (DEF-034).
 - A manual check opens only once its item reaches its build stage: before then the Review page
   offers no Passed or Failed and kanbanr refuses the result (DEF-076).
+- A release is not ready for the stage that moves main, or the cut, while a planned item's branch
+  is not merged into it, and integrating a planned item into its own release needs no override
+  (DEF-077).
 
 ## [0.7.0] - 2026-11-16
 

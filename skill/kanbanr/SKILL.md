@@ -934,6 +934,10 @@ branches; fix it before going on.
   `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
   stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
+- Before Promote to main, every planned item is integrated into the release: move it to its
+  integrate status from the project folder. That merge needs no `--override`. Under the git model
+  kanbanr asks `items_merged` of the stage that moves main (or the cut) when no earlier stage does;
+  `release stages` and the plan show it as `items_merged (implied)` (DEF-077).
 - **Before a candidate's release sign-off, run the walkthroughs** (FTR-037):
   `kanbanr walkthrough run walkthroughs/<process>.md` drives the guide headlessly on a scratch
   project inside a fence, takes each decision on the scratch board as the scripted person, and
@@ -1383,7 +1387,8 @@ Treat kanbanr updates as part of doing the work, not an afterthought:
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
   On a project with releases, an item planned into a release that has not been cut stays where it
   is, however its last task or sign-off arrives: the cut moves it to its end status. A move of your
-  own to an end status needs a `--override "<reason>"`.
+  own to an end status needs a `--override "<reason>"`, except the move that integrates the item
+  into its own open release's branch (its branch is merged there): that needs no override.
 - **Before merging a sprint or cutting a release**, run `kanbanr doctor` and fix every coverage
   rule it lists, so the architecture views describe everything that ships.
 
