@@ -39,6 +39,8 @@ All notable changes to kanbanr are documented here. The format follows
 - The monitor no longer loads the whole board on every page: pages read a compact index and their
   own slice, responses are gzipped and revalidated by board revision, and live updates re-read
   only what changed (DEF-081).
+- `kanbanr release notes --changelog` keeps one `## [N]` section: a body's own heading is dropped,
+  and copies already in the changelog are removed and counted (DEF-088).
 - A walkthrough's results name the commit of the build it ran, and a dirty or unknown build is
   refused unless `--rev` names one; the Review page shows each result's check id (DEF-089).
 - A delegation whose grant cannot be checked, because the board's git history cannot be read (for

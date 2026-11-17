@@ -483,9 +483,98 @@ fn section_span(text: &str, number: &str) -> Option<(usize, usize)> {
     start.map(|s| (s, text.len()))
 }
 
+/// `text` with the section of `## [{number}]` replaced by `body`, as `fill_section`, and how many
+/// later copies of that heading were removed. The body's own leading `## [{number}]` heading (after
+/// any blank lines; any date or suffix after the `]`) is dropped first. Every `## [{number}]`
+/// heading after the first, with its body up to the next `## ` line or link reference definition,
+/// is removed. A refusal when the heading is not there.
+pub fn fill_section_counted(
+    text: &str,
+    number: &str,
+    body: &str,
+) -> Result<(String, usize), String> {
+    let body = strip_own_heading(body, number);
+    let filled = fill_section_raw(text, number, body)?;
+    Ok(drop_later_copies(&filled, number))
+}
+
+/// Whether `line` is a heading of version `number`: `## [{number}]`, the `]` included, so
+/// `## [0.1.0-rc1]` is not a heading of `0.1.0` (the test `has_heading` and `section_span` use).
+fn is_heading_of(line: &str, want: &str) -> bool {
+    line.trim_start().starts_with(want)
+}
+
+/// `body` without its own leading `## [{number}]` heading line (after any blank lines); `body`
+/// unchanged when it does not start with one.
+fn strip_own_heading<'a>(body: &'a str, number: &str) -> &'a str {
+    let want = format!("## [{number}]");
+    let mut pos = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            pos += line.len();
+            continue;
+        }
+        if is_heading_of(line, &want) {
+            return &body[pos + line.len()..];
+        }
+        break;
+    }
+    body
+}
+
+/// `text` with every `## [{number}]` section after the first removed (heading and body, up to the
+/// next `## ` line or link reference definition), and how many were removed. Unchanged, 0, when
+/// there is at most one.
+pub fn drop_later_copies(text: &str, number: &str) -> (String, usize) {
+    let want = format!("## [{number}]");
+    if text.lines().filter(|l| is_heading_of(l, &want)).count() < 2 {
+        return (text.to_string(), 0);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut seen_first = false;
+    let mut skipping = false;
+    let mut removed = 0;
+    // A removal point leaves at most one blank line behind.
+    let collapse = |out: &mut String| {
+        while out.ends_with("\n\n\n") {
+            out.pop();
+        }
+    };
+    for line in text.split_inclusive('\n') {
+        if is_heading_of(line, &want) {
+            if seen_first {
+                skipping = true;
+                removed += 1;
+                continue;
+            }
+            seen_first = true;
+            out.push_str(line);
+            continue;
+        }
+        if skipping {
+            if line.starts_with("## ") || is_link_ref(line) {
+                skipping = false;
+                collapse(&mut out);
+                out.push_str(line);
+            }
+            continue;
+        }
+        out.push_str(line);
+    }
+    if skipping {
+        collapse(&mut out);
+    }
+    (out, removed)
+}
+
 /// `text` with the section of `## [{number}]` replaced by `body`: one blank line, `body` trimmed
 /// at the end, one blank line. A refusal when the heading is not there.
 pub fn fill_section(text: &str, number: &str, body: &str) -> Result<String, String> {
+    fill_section_counted(text, number, body).map(|(t, _)| t)
+}
+
+/// Today's fill: the first section's body replaced, nothing else read or touched.
+fn fill_section_raw(text: &str, number: &str, body: &str) -> Result<String, String> {
     let Some((start, end)) = section_span(text, number) else {
         return Err(format!("there is no ## [{number}] heading to fill"));
     };
@@ -586,6 +675,71 @@ mod tests {
         );
         let only = changelog_entries(&[item("defect", "DEF-1", "x")]);
         assert!(only.starts_with("### Fixed") && !only.contains("Added"));
+    }
+
+    /// DEF-088 R-1: a body that starts with its own `## [N]` heading (any date) gives one heading,
+    /// the changelog's own; a heading of another version (`-rc1`) is not taken for it.
+    #[test]
+    fn a_body_with_its_own_heading_leaves_one_heading() {
+        let text = "# C\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-16\n\n## [0.0.1]\n- a\n";
+        let count = |t: &str| t.lines().filter(|l| l.starts_with("## [0.1.0]")).count();
+        for body in [
+            "\n## [0.1.0] - 2026-11-16\n\n### Added\n- x\n",
+            "\n## [0.1.0] - 2026-11-17\n\n### Added\n- x\n",
+        ] {
+            let (out, n) = fill_section_counted(text, "0.1.0", body).unwrap();
+            assert_eq!(n, 0, "{out}");
+            assert_eq!(count(&out), 1, "{out}");
+            let after: Vec<&str> = out
+                .lines()
+                .skip_while(|l| !l.starts_with("## [0.1.0]"))
+                .filter(|l| !l.trim().is_empty())
+                .take(2)
+                .collect();
+            assert_eq!(after, ["## [0.1.0] - 2026-11-16", "### Added"], "{out}");
+            assert!(out.contains("## [0.0.1]\n- a\n"), "{out}");
+        }
+        let (out, _) = fill_section_counted(text, "0.1.0", "## [0.1.0-rc1]\n- r\n").unwrap();
+        assert_eq!(count(&out), 1, "{out}");
+        assert!(out.contains("## [0.1.0-rc1]\n- r\n"), "boundary: {out}");
+    }
+
+    /// DEF-088 R-1: a body without a heading is filled byte for byte as before.
+    #[test]
+    fn a_body_without_a_heading_is_filled_as_before() {
+        let text = "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n## [0.0.1] - 2026-01-01\n- old\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.0.1]: https://x/tag/v0.0.1\n";
+        assert_eq!(
+            fill_section(text, "0.1.0", "### Added\n\n- thing (FEAT-1)\n\n").unwrap(),
+            "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n### Added\n\n- thing (FEAT-1)\n\n## [0.0.1] - 2026-01-01\n- old\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.0.1]: https://x/tag/v0.0.1\n"
+        );
+        assert_eq!(
+            fill_section("## [1.0.0]\n- a\n\n[1.0.0]: u\n", "1.0.0", "- b\n").unwrap(),
+            "## [1.0.0]\n\n- b\n\n[1.0.0]: u\n"
+        );
+        assert_eq!(
+            fill_section("## [2.0.0]\ntail", "2.0.0", "x").unwrap(),
+            "## [2.0.0]\n\nx\n"
+        );
+        assert!(fill_section(text, "9.9.9", "x").is_err());
+    }
+
+    /// DEF-088 R-2: one write keeps the first `## [N]` section, fills it, and removes the later
+    /// copies with their bodies; what follows them stays.
+    #[test]
+    fn one_write_removes_later_copies_of_the_section() {
+        let text = "# C\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-16\n\n### Added\n- one\n\n## [0.1.0] - 2026-11-16\n\n### Added\n- two\n\n## [0.1.0] - 2026-11-16\n- three\n\n## [0.0.1]\n- a\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.1.0]: https://x/tag/v0.1.0\n";
+        let (out, n) = fill_section_counted(text, "0.1.0", "### Fixed\n- y\n").unwrap();
+        assert_eq!(n, 2, "{out}");
+        assert_eq!(
+            out,
+            "# C\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-16\n\n### Fixed\n- y\n\n## [0.0.1]\n- a\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.1.0]: https://x/tag/v0.1.0\n"
+        );
+        let once = "# C\n\n## [0.1.0]\n- a\n\n## [0.0.1]\n- b\n";
+        assert_eq!(drop_later_copies(once, "0.1.0"), (once.to_string(), 0));
+        assert_eq!(
+            drop_later_copies("## [0.1.0]\n- a\n\n## [0.1.0]\n- b\n", "0.1.0"),
+            ("## [0.1.0]\n- a\n\n".to_string(), 1)
+        );
     }
 
     fn p(version: &str) -> Placeholders {

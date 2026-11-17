@@ -5203,6 +5203,7 @@ pub fn redate_release(
             sha: tip.clone(),
             notes: notes_now(&tip),
             main_moved: String::new(),
+            changelog_copies_removed: 0,
         });
     }
     let main = project
@@ -5227,6 +5228,7 @@ pub fn redate_release(
         sha: new.clone(),
         notes: notes_now(&new),
         main_moved,
+        changelog_copies_removed: 0,
     })
 }
 
@@ -5239,6 +5241,14 @@ pub struct NotesSaved {
     /// Set when main held the release and was moved with the notes: what to do next.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub main_moved: String,
+    /// How many later copies of the version's `## [N]` changelog section the write removed
+    /// (DEF-088); 0, and left out, when there were none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub changelog_copies_removed: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Commit `text` as a release's notes onto `release/<V>`, without checking it out (FEAT-216), and
@@ -5339,6 +5349,7 @@ pub fn set_release_notes(
         }
     }
     let mut changelog_changed = false;
+    let mut copies_removed = 0;
     if let (Some(body), Some(c)) = (changelog, &cfg.changelog) {
         prep::check_repo_path(c).map_err(CoreError::Unsupported)?;
         let current = read(c)?
@@ -5355,8 +5366,10 @@ pub fn set_release_notes(
                     ))
                 })?
         };
-        let filled = prep::fill_section(&base, &ph.number, body)
+        let (filled, removed) = prep::fill_section_counted(&base, &ph.number, body)
             .map_err(|e| CoreError::Unsupported(format!("{c}: {e}")))?;
+        // The same text goes to each copy, so the count is the same for each (DEF-088).
+        copies_removed = removed;
         for target in std::iter::once(c).chain(cfg.changelog_copies.iter()) {
             prep::check_repo_path(target).map_err(CoreError::Unsupported)?;
             if read(target)?.as_deref() != Some(filled.as_str()) {
@@ -5375,6 +5388,7 @@ pub fn set_release_notes(
             sha: tip.clone(),
             notes: notes_at(&project, &release, repo, &path, shown, &tip),
             main_moved: String::new(),
+            changelog_copies_removed: 0,
         });
     }
     let by = if by.trim().is_empty() {
@@ -5401,6 +5415,7 @@ pub fn set_release_notes(
         sha: new.clone(),
         notes: notes_at(&project, &release, repo, &path, shown, &new),
         main_moved,
+        changelog_copies_removed: copies_removed,
     })
 }
 
@@ -7330,6 +7345,53 @@ pub(crate) mod tests {
             "{err}"
         );
         assert!(!err.contains("nothing has written"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-088 R-2: a changelog with the version's section three times is repaired by one
+    /// `release notes --changelog` write, which says how many copies it removed.
+    #[test]
+    fn a_changelog_write_repairs_a_tripled_section_and_says_so() {
+        let (store, dir, repo) = notes_fixture("notes-tripled");
+        let copy = "## [0.2.0] - 2026-11-16\n\n### Added\n\n- Gates.\n\n";
+        let tripled = format!(
+            "# Changelog\n\n## [Unreleased]\n\n{copy}{copy}{copy}## [0.1.0] - 2026-01-01\n\n- old\n\n\
+             [Unreleased]: https://example.com/r/compare/v0.2.0...HEAD\n"
+        );
+        let files: Vec<(String, String)> = ["CHANGELOG.md", "docs/changelog.md"]
+            .iter()
+            .map(|p| (p.to_string(), tripled.clone()))
+            .collect();
+        coderepo::commit_files(&repo, "release/v0.2.0", &files, "three copies").unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            None,
+            Some("## [0.2.0] - 2026-11-16\n\n### Fixed\n- y\n"),
+            "Ada",
+        )
+        .unwrap();
+        assert_eq!(saved.changelog_copies_removed, 2);
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
+            saved.sha
+        );
+        for c in ["CHANGELOG.md", "docs/changelog.md"] {
+            let text = coderepo::read_blob(&repo, &saved.sha, c)
+                .unwrap()
+                .unwrap()
+                .1;
+            let headings = text.lines().filter(|l| l.starts_with("## [0.2.0]")).count();
+            assert_eq!(headings, 1, "{c}: {text}");
+            assert!(text.contains("### Fixed\n- y\n"), "{c}: {text}");
+            assert!(
+                text.contains("## [0.1.0] - 2026-01-01\n\n- old\n\n[Unreleased]:"),
+                "{c}: {text}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

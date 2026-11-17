@@ -12492,6 +12492,15 @@ fn release_notes(
             "\nchangelog: ## [{}] in {file} updated",
             version.trim_start_matches('v')
         ));
+        // DEF-088: copies of the section already in the changelog were removed.
+        let removed = v["changelog_copies_removed"].as_u64().unwrap_or(0);
+        if removed > 0 {
+            said.push_str(&format!(
+                "\nchangelog: removed {removed} later {} of ## [{}] from {file}",
+                if removed == 1 { "copy" } else { "copies" },
+                version.trim_start_matches('v')
+            ));
+        }
     }
     if let Some(moved) = v["main_moved"].as_str().filter(|m| !m.is_empty()) {
         said.push_str(&format!("\n{moved}"));

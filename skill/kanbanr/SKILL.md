@@ -962,7 +962,8 @@ branches; fix it before going on.
   `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor. Write the
   notes and the changelog section together: `kanbanr release notes <V> --file notes.md --changelog
   section.md`. Candidate fills the section from what ships (or says why it cannot); rewrite it for
-  readers with the notes. Never open a fix item to change the changelog or the notes of a release
+  readers with the notes. A changelog body may carry its own `## [N]` heading or not; one write
+  leaves one section and removes any copies. Never open a fix item to change the changelog or the notes of a release
   under test.
 - **A merge sends a promoted release back.** When a move merges an item into a release that is past
   candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
