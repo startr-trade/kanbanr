@@ -679,6 +679,8 @@ export interface Release {
     origin?: string;
     /** The requirements accepted shipping untested at the cut, as CODE/R-n (DEF-043). */
     accepted_untested?: string[];
+    /** The stage this change undid (`kanbanr release undo`, DEF-034); absent on every other change. */
+    undoes?: string;
   }[];
   /** Who cut the release and from where (DEF-028). Absent means unknown. */
   shipped_by?: string;
@@ -693,6 +695,43 @@ export interface Release {
   tag_commit?: string;
   /** The patch release that replaced it after its tag's CI run failed; its tag stays in git. */
   superseded_by?: string;
+  /** For a patch: what its parent shipped, which the patch keeps (FEAT-184). */
+  included?: string[];
+}
+
+/** The Releases page's tab a release falls in (FTR-041): the route's words; the page labels `past` Released. */
+export type Scope = "current" | "planned" | "past";
+
+/** The Releases page's counts per tab and the tab it opens on: `GET /projects/{p}/releases/summary` (FTR-041). */
+export interface ReleasesSummary {
+  current: number;
+  planned: number;
+  past: number;
+  /** `current` when any release is in flight, else `planned` when any is planned, else `past`. */
+  open: string;
+}
+
+/** One row of a release's item table: `GET /projects/{p}/releases/{v}/items` (FTR-041). */
+export interface ReleaseItemRow {
+  code: string;
+  title: string;
+  kind: string;
+  status: string;
+  sprint: string;
+  /** Tests named across the definition's requirements that are green. */
+  tests_green: number;
+  /** Every test named across the definition's requirements. */
+  tests_named: number;
+  /** `approved` (ratified counts), `lapsed`, `added` or `none`. */
+  approval: string;
+  /** `signed`, `lapsed`, or empty when never given. */
+  design_review: string;
+  /** `signed`, `lapsed`, or empty when never given. */
+  docs_folded: string;
+  /** The release a carried item moved to, or `unplanned`; empty for an item not carried. */
+  carried_to: string;
+  /** An end status, or a stage marked `done` (FEAT-137). */
+  finished: boolean;
 }
 
 /** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
