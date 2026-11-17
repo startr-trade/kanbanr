@@ -36,6 +36,21 @@ fn with_diagram_warnings(
     ser(&v)
 }
 
+/// A write's response with the query-block problems of the doc as `query_block_warnings`
+/// (FTR-016), only when there are any; the body is returned as it was otherwise.
+fn with_query_block_warnings(
+    body: String,
+    problems: &[crate::katalogr::query::QueryProblem],
+) -> Result<String> {
+    if problems.is_empty() {
+        return Ok(body);
+    }
+    let mut v: Value = serde_json::from_str(&body)
+        .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+    v["query_block_warnings"] = json!(problems);
+    ser(&v)
+}
+
 /// The earlier verdict a repeat approval or ratification of `code` collides with, if any (DEF-028).
 fn repeat_approval(
     store: &Store,
@@ -3184,8 +3199,15 @@ fn dispatch_routes(
             } else {
                 Vec::new()
             };
+            // FTR-016: a bad `katalogr-query` block is reported, never refused.
+            let query_problems = if crate::diagrams::is_markdown_path(&path) {
+                crate::katalogr::query::problems(&format!("docs/{path}"), &content)
+            } else {
+                Vec::new()
+            };
             let saved = store.write_doc(p, &path, &content)?;
-            with_diagram_warnings(json!({ "path": saved }).to_string(), &warnings)
+            let body = with_diagram_warnings(json!({ "path": saved }).to_string(), &warnings)?;
+            with_query_block_warnings(body, &query_problems)
         }
         ("DELETE", ["projects", p, "docs", "content"]) => {
             let rel = query_param(query, "path").unwrap_or_default();
@@ -4684,6 +4706,58 @@ mod tests {
         assert_eq!(r[0]["diagram_warnings"][0]["file"], "FEAT-002 spec");
         assert!(r[1].get("diagram_warnings").is_none());
         assert_eq!(r[2]["diagram_warnings"][0]["rule"], "unknown_statement");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-016 R-2: a doc write with a bad and a good query block answers 200, writes the doc and
+    /// names the bad block with its line as `query_block_warnings`; a batch `doc.write` does the same.
+    #[test]
+    fn a_doc_write_reports_bad_query_blocks_and_still_writes() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-qb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        let content = "# Views\n\n```katalogr-query\nstructure --level file\n```\n\n\
+                       ```katalogr-query\nstructure --level galaxy\n```\n";
+        let doc = call(
+            "PUT",
+            "/projects/demo/docs/content",
+            json!({ "path": "arch/views.md", "content": content }),
+        );
+        assert_eq!(doc["path"], "arch/views.md");
+        let w = doc["query_block_warnings"].as_array().expect("warnings");
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert_eq!(w[0]["file"], "docs/arch/views.md");
+        assert_eq!(w[0]["line"], 7);
+        assert!(!w[0]["reason"].as_str().unwrap().is_empty());
+        assert_eq!(store.read_doc("demo", "arch/views.md").unwrap(), content);
+
+        let clean = call(
+            "PUT",
+            "/projects/demo/docs/content",
+            json!({ "path": "arch/ok.md", "content": "```katalogr-query\nstructure\n```\n" }),
+        );
+        assert!(clean.get("query_block_warnings").is_none());
+
+        let batch = call(
+            "POST",
+            "/projects/demo/batch",
+            json!({ "operations": [
+                { "op": "doc.write", "path": "b.md", "content": content },
+                { "op": "doc.write", "path": "c.md", "content": "plain\n" },
+            ]}),
+        );
+        let r = batch["results"].as_array().unwrap();
+        assert_eq!(r[0]["query_block_warnings"][0]["file"], "docs/b.md");
+        assert_eq!(r[0]["query_block_warnings"][0]["line"], 7);
+        assert!(r[1].get("query_block_warnings").is_none());
+        assert!(store.read_doc("demo", "b.md").is_ok(), "the doc is written");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

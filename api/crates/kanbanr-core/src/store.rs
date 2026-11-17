@@ -3842,6 +3842,12 @@ impl Store {
                     } else {
                         Vec::new()
                     };
+                    // FTR-016: a bad `katalogr-query` block is reported on this op, never refused.
+                    let query_problems = if crate::diagrams::is_markdown_path(&path) {
+                        crate::katalogr::query::problems(&format!("docs/{path}"), &content)
+                    } else {
+                        Vec::new()
+                    };
                     let saved = if dry_run {
                         self.doc_path(id, &path)?;
                         path
@@ -3853,10 +3859,14 @@ impl Store {
                         });
                         Self::doc_rel_display(&self.docs_dir(id), &resolved)
                     };
-                    Ok(with_diagram_warnings(
+                    let mut result = with_diagram_warnings(
                         serde_json::json!({"op":"doc.write","path":saved}),
                         &warnings,
-                    ))
+                    );
+                    if !query_problems.is_empty() {
+                        result["query_block_warnings"] = serde_json::json!(query_problems);
+                    }
+                    Ok(result)
                 }
             })();
 
