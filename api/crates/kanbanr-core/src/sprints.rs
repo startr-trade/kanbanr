@@ -416,6 +416,90 @@ pub fn plan(store: &Store, id: &str, code: &str, items: &[String]) -> Result<Pla
     })
 }
 
+/// [`plan`], carrying out the person's planning decision `decision` (FTR-049). The decision must
+/// be pending and name exactly this sprint and these items, checked before anything is written;
+/// then the items are planned and the outcome `carried` is written, by `by` from `origin`, in the
+/// same dispatch, so the change and its outcome land in one commit. If the outcome cannot be
+/// written, the items' sprints are put back and the error is returned.
+pub fn plan_for_decision(
+    store: &Store,
+    id: &str,
+    code: &str,
+    items: &[String],
+    decision: &str,
+    by: &str,
+    origin: &str,
+) -> Result<Planned> {
+    use crate::planning;
+    planning::check_carry(store, id, decision, planning::INTO_SPRINT, code, items)?;
+    let before = planning::snapshot(store, id, items, |f| f.sprint.clone())?;
+    let planned = plan(store, id, code, items)
+        .and_then(|planned| {
+            planning::carry(
+                store,
+                id,
+                decision,
+                planning::INTO_SPRINT,
+                code,
+                items,
+                by,
+                origin,
+            )
+            .map(|()| planned)
+        })
+        .map_err(|e| {
+            planning::restore(
+                store,
+                id,
+                before,
+                |f| f.sprint.clone(),
+                Store::set_feature_sprint,
+                e,
+            )
+        })?;
+    Ok(planned)
+}
+
+/// [`unplan`], carrying out the person's decision `decision` to take these items out of their
+/// sprint (FTR-049), as [`plan_for_decision`] does for planning them in.
+pub fn unplan_for_decision(
+    store: &Store,
+    id: &str,
+    items: &[String],
+    decision: &str,
+    by: &str,
+    origin: &str,
+) -> Result<Unplanned> {
+    use crate::planning;
+    planning::check_carry(store, id, decision, planning::OUT_OF_SPRINT, "", items)?;
+    let before = planning::snapshot(store, id, items, |f| f.sprint.clone())?;
+    let unplanned = unplan(store, id, items)
+        .and_then(|unplanned| {
+            planning::carry(
+                store,
+                id,
+                decision,
+                planning::OUT_OF_SPRINT,
+                "",
+                items,
+                by,
+                origin,
+            )
+            .map(|()| unplanned)
+        })
+        .map_err(|e| {
+            planning::restore(
+                store,
+                id,
+                before,
+                |f| f.sprint.clone(),
+                Store::set_feature_sprint,
+                e,
+            )
+        })?;
+    Ok(unplanned)
+}
+
 /// One item taken out of a sprint.
 #[derive(Debug, Clone, Serialize)]
 pub struct Left {
