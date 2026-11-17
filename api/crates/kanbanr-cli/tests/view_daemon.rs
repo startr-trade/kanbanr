@@ -2086,3 +2086,183 @@ fn the_meta_route_reports_a_newer_writer_than_the_running_monitor() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-058 R-9: the timings routes answer what the functions derive from the kept runs: each of an
+/// item's tests' last duration (and every test's with no code), and the slowest and slowing report
+/// against the newest shipped release, `top` capped at 100. Both are reads, served read-only.
+#[test]
+fn the_timings_routes_answer_last_durations_and_the_report() {
+    use kanbanr_core::models::{FeatureDefinition, Requirement, TestRef};
+    use kanbanr_core::timings::{self, TimingRow, TimingRun};
+
+    let base = scratch("timings");
+    let data = base.join("data");
+    // The board is this test's own, under the system temp folder (L-41).
+    assert!(data.starts_with(std::env::temp_dir()));
+    let run = |args: &[&str]| {
+        let o = cli_cmd()
+            .args(args)
+            .env("HOME", base.join("home"))
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["--project", "demo", "project", "init", "demo"]);
+    run(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--code",
+        "MS-1",
+    ]);
+    run(&[
+        "--project",
+        "demo",
+        "feature",
+        "add",
+        "--title",
+        "Login",
+        "--milestone",
+        "MS-1",
+    ]);
+
+    let store = kanbanr_core::Store::new(data.clone());
+    let code = store.load_meta("demo").unwrap().features[0].code.clone();
+    let test = |name: &str, kind: &str| TestRef {
+        name: name.into(),
+        kind: kind.into(),
+        ..TestRef::default()
+    };
+    store
+        .set_feature_definition(
+            "demo",
+            &code,
+            Some(FeatureDefinition {
+                statement: "Login works".into(),
+                requirements: vec![Requirement {
+                    id: "R-1".into(),
+                    text: "WHEN a person logs in THE SYSTEM SHALL let them in".into(),
+                    tests: vec![test("a", "unit"), test("b", "unit"), test("m", "manual")],
+                    ..Requirement::default()
+                }],
+                ..FeatureDefinition::default()
+            }),
+        )
+        .unwrap();
+    kanbanr_core::dispatch::dispatch(
+        &store,
+        "PUT",
+        "/projects/demo/config/cadence",
+        Some(&serde_json::json!({"releases": true})),
+    )
+    .unwrap();
+    std::fs::write(
+        data.join("projects").join("demo").join("releases.yaml"),
+        "- version: v0.1.0\n  state: shipped\n  shipped_at: 2026-11-10T00:00:00Z\n",
+    )
+    .unwrap();
+    let row = |code: &str, test: &str, ms: u64| TimingRow {
+        code: code.into(),
+        requirement: "R-1".into(),
+        test: test.into(),
+        passed: true,
+        ms,
+        ..TimingRow::default()
+    };
+    for (at, rows) in [
+        (
+            "2026-11-05T00:00:00Z",
+            vec![
+                row(&code, "a", 100),
+                row(&code, "b", 50),
+                row("OTHER-9", "z", 7),
+            ],
+        ),
+        ("2026-11-09T00:00:00Z", vec![row(&code, "a", 120)]),
+        ("2026-11-12T00:00:00Z", vec![row(&code, "a", 400)]),
+    ] {
+        timings::write(
+            &store,
+            "demo",
+            &TimingRun {
+                at: at.into(),
+                rev: "0123456789abcdef".into(),
+                tests: rows,
+                ..TimingRun::default()
+            },
+        )
+        .unwrap();
+    }
+
+    let (_daemon, url) = serve_ui(&base, None);
+    let get = |path: &str| -> serde_json::Value {
+        serde_json::from_str(
+            &ureq::get(&format!("{url}/api/projects/demo{path}"))
+                .call()
+                .unwrap_or_else(|e| panic!("GET {path}: {e}"))
+                .into_string()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let status = |path: &str| match ureq::get(&format!("{url}/api/projects/demo{path}")).call() {
+        Ok(r) => r.status(),
+        Err(ureq::Error::Status(s, _)) => s,
+        Err(e) => panic!("GET {path}: {e}"),
+    };
+
+    // One item: its tracked tests' last durations, newest wins; another item's rows are not in it.
+    let item = get(&format!("/timings?code={code}"));
+    assert_eq!(
+        item,
+        serde_json::to_value(timings::last_view(&store, "demo", Some(&code)).unwrap()).unwrap()
+    );
+    assert_eq!(
+        item,
+        serde_json::json!({"tests": [
+            {"code": code, "requirement": "R-1", "test": "a", "ms": 400, "at": "2026-11-12T00:00:00Z"},
+            {"code": code, "requirement": "R-1", "test": "b", "ms": 50, "at": "2026-11-05T00:00:00Z"},
+        ]})
+    );
+    // No code: every test's.
+    let all = get("/timings");
+    assert_eq!(
+        all,
+        serde_json::to_value(timings::last_view(&store, "demo", None).unwrap()).unwrap()
+    );
+    assert_eq!(all["tests"].as_array().unwrap().len(), 3, "{all}");
+
+    // The report, against the newest shipped release.
+    let report = get("/timings/report");
+    assert_eq!(
+        report,
+        serde_json::to_value(timings::report_read(&store, "demo", 10).unwrap()).unwrap()
+    );
+    assert_eq!(report["baseline"]["version"], "v0.1.0");
+    assert_eq!(report["slowest"][0]["test"], "a");
+    assert_eq!(report["slowing"].as_array().unwrap().len(), 1, "{report}");
+    assert_eq!(report["slowing"][0]["grew_ms"], 280);
+    let top1 = get("/timings/report?top=1");
+    assert_eq!(top1["slowest"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        get("/timings/report?top=100000"),
+        serde_json::to_value(timings::report_read(&store, "demo", 100).unwrap()).unwrap()
+    );
+
+    // A bad top, an unknown parameter or an unknown item is refused.
+    assert_eq!(status("/timings/report?top=x"), 400);
+    assert_eq!(status("/timings?nope=1"), 400);
+    assert_eq!(status("/timings?code=NOPE-404"), 404);
+
+    let _ = std::fs::remove_dir_all(&base);
+}

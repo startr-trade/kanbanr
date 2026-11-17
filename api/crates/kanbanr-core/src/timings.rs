@@ -9,8 +9,10 @@
 use crate::error::{CoreError, Result};
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// The project folder that holds the kept runs.
 pub const FOLDER: &str = "timings";
@@ -102,8 +104,16 @@ pub fn write(store: &Store, id: &str, run: &TimingRun) -> Result<PathBuf> {
 
 /// Every kept run, oldest first by file name. A file that cannot be read is skipped.
 pub fn runs(store: &Store, id: &str) -> Result<Vec<TimingRun>> {
+    Ok(files(store, id)
+        .iter()
+        .filter_map(|p| read_run(p))
+        .collect())
+}
+
+/// The kept run files, oldest first by name, none of them read.
+fn files(store: &Store, id: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir(store, id)) else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
@@ -111,14 +121,14 @@ pub fn runs(store: &Store, id: &str) -> Result<Vec<TimingRun>> {
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("yaml") && p.is_file())
         .collect();
     paths.sort_by_cached_key(|p| order(p));
-    Ok(paths
-        .iter()
-        .filter_map(|p| {
-            std::fs::read_to_string(p)
-                .ok()
-                .and_then(|s| crate::yaml::from_str::<TimingRun>(&s).ok())
-        })
-        .collect())
+    paths
+}
+
+/// One run file, or `None` when it cannot be read.
+fn read_run(path: &std::path::Path) -> Option<TimingRun> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| crate::yaml::from_str::<TimingRun>(&s).ok())
 }
 
 /// The order of a run file's name: its stamp, then the clash number (`-2` after the first), so
@@ -168,6 +178,158 @@ pub fn last_for(runs: &[TimingRun], code: &str) -> BTreeMap<TestKey, (u64, Strin
     }
     out
 }
+
+/// [`last_for`] read from the kept files, bounded (R-11): newest first, stopping once each test in
+/// `wanted` has met its newest row, so a read costs the runs since each asked test was last timed,
+/// not every run kept. Rows of the item's other tests met on the way are kept too, as `last_for`
+/// keeps them. With nothing wanted, nothing is read.
+pub fn last_for_read(
+    store: &Store,
+    id: &str,
+    code: &str,
+    wanted: &BTreeSet<TestKey>,
+) -> BTreeMap<TestKey, (u64, String)> {
+    let mut out: BTreeMap<TestKey, (u64, String)> = BTreeMap::new();
+    if wanted.is_empty() {
+        return out;
+    }
+    let mut missing = wanted.len();
+    for path in files(store, id).iter().rev() {
+        let Some(run) = read_run(path) else { continue };
+        for row in run.tests.into_iter().filter(|r| r.code == code) {
+            let key = (row.code, row.requirement, row.test);
+            if out.contains_key(&key) {
+                continue;
+            }
+            if wanted.contains(&key) {
+                missing -= 1;
+            }
+            out.insert(key, (row.ms, run.at.clone()));
+        }
+        if missing == 0 {
+            break;
+        }
+    }
+    out
+}
+
+/// The runs the report needs (R-11): those after the baseline's `shipped_at`, and the newest at or
+/// before it, oldest first. Only those files are read; the file name's stamp tells which they are.
+/// With no baseline (or a `shipped_at` that is not a time), every kept run.
+pub fn runs_since(store: &Store, id: &str, baseline: Option<&Baseline>) -> Result<Vec<TimingRun>> {
+    let Some(b) = baseline else {
+        return runs(store, id);
+    };
+    let Ok(shipped) = OffsetDateTime::parse(b.shipped_at.trim(), &Rfc3339) else {
+        return runs(store, id);
+    };
+    let s = shipped.to_offset(time::UtcOffset::UTC);
+    let cut = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        s.year(),
+        u8::from(s.month()),
+        s.day(),
+        s.hour(),
+        s.minute(),
+        s.second()
+    );
+    let paths = files(store, id);
+    // Files stamped before the shipping second are all at or before it; from that second on, a
+    // run's own `at` decides.
+    let first = paths.partition_point(|p| order(p).0 < cut);
+    let mut tail: Vec<TimingRun> = paths[first..].iter().filter_map(|p| read_run(p)).collect();
+    let after = tail
+        .iter()
+        .position(|r| crate::cmp_instants(&r.at, &b.shipped_at) == std::cmp::Ordering::Greater)
+        .unwrap_or(tail.len());
+    let mut out: Vec<TimingRun> = Vec::with_capacity(tail.len() - after + 1);
+    let newest_before = if after > 0 {
+        tail.drain(..after).next_back()
+    } else {
+        paths[..first].iter().rev().find_map(|p| read_run(p))
+    };
+    out.extend(newest_before);
+    out.extend(tail);
+    Ok(out)
+}
+
+/// One test's last duration, as `GET /projects/{p}/timings` lists it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct LastTiming {
+    pub code: String,
+    pub requirement: String,
+    pub test: String,
+    /// Whole milliseconds.
+    pub ms: u64,
+    /// When the run that timed it applied (RFC 3339, UTC).
+    pub at: String,
+}
+
+/// The answer of `GET /projects/{p}/timings`: each test's last duration, by code, requirement and
+/// test name.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TimingsView {
+    pub tests: Vec<LastTiming>,
+}
+
+impl TimingsView {
+    fn from_last(last: BTreeMap<TestKey, (u64, String)>) -> Self {
+        TimingsView {
+            tests: last
+                .into_iter()
+                .map(|((code, requirement, test), (ms, at))| LastTiming {
+                    code,
+                    requirement,
+                    test,
+                    ms,
+                    at,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The last durations the route answers: for one item, its tracked tests' (manual and walkthrough
+/// ones are never timed) through [`last_for_read`]; with no code, every test's over every kept
+/// run. An unknown project or item is an error.
+pub fn last_view(store: &Store, id: &str, code: Option<&str>) -> Result<TimingsView> {
+    let project = store.load_meta(id)?;
+    let Some(code) = code else {
+        return Ok(TimingsView::from_last(last(&runs(store, id)?)));
+    };
+    let feature = project.feature(code)?;
+    let wanted: BTreeSet<TestKey> = feature
+        .definition
+        .iter()
+        .flat_map(|d| d.requirements.iter())
+        .flat_map(|r| {
+            r.tests
+                .iter()
+                .filter(|t| !crate::evidence::is_unsearchable(&t.kind))
+                .map(|t| (feature.code.clone(), r.id.clone(), t.name.clone()))
+        })
+        .collect();
+    Ok(TimingsView::from_last(last_for_read(
+        store,
+        id,
+        &feature.code,
+        &wanted,
+    )))
+}
+
+/// The report the route answers: over the runs since the baseline ([`runs_since`]), `top` capped
+/// at 100. An unknown project is an error.
+pub fn report_read(store: &Store, id: &str, top: usize) -> Result<TimingReport> {
+    store.load_meta(id)?;
+    let base = baseline(store, id)?;
+    let kept = runs_since(store, id, base.as_ref())?;
+    Ok(report(&kept, base, top.min(MAX_TOP)))
+}
+
+/// The most rows either list of the report route gives.
+pub const MAX_TOP: usize = 100;
 
 /// The release the report compares with: the newest shipped one.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -580,7 +742,9 @@ mod tests {
     /// FTR-058 R-11: on 500 kept runs of 1,300 rows, `last` for one item (`last_for`) stays under
     /// 150 ms and `report` under 1 s. The fixture is generated in memory: what is measured is the
     /// two derivations, not the YAML parse of 65 MB of run files (printed for reference from one
-    /// file).
+    /// file). Then the reads the routes make from disk, bounded (`last_for_read`, `report_read`
+    /// over the 50-run window since the baseline), within the same budgets. The budgets are a release
+    /// build's; a debug build is given ten times as long, and the times are printed either way.
     #[test]
     fn reads_stay_within_budget_on_500_runs() {
         // 100 items of 13 tests each.
@@ -630,10 +794,74 @@ mod tests {
             "timings budget: read one run file {read_one:?}, last for one item {last_one:?}, \
              report {rep:?}"
         );
+        // The budgets are a release build's; a debug build gets ten times as long (as FTR-060's).
+        let scale: u128 = if cfg!(debug_assertions) { 10 } else { 1 };
         assert!(
-            last_one.as_millis() < 150,
+            last_one.as_millis() < 150 * scale,
             "last for one item took {last_one:?}"
         );
-        assert!(rep.as_millis() < 1000, "report took {rep:?}");
+        assert!(rep.as_millis() < 1000 * scale, "report took {rep:?}");
+
+        // The bounded disk reads the routes make: 290 kept files, of which only the 50-run window
+        // since the baseline (the newest at or before it, and 49 after) is read for the report,
+        // and only the newest file for one item whose tests it timed. The 240 older runs are kept
+        // with one row each, so writing the fixture stays cheap; reading them is what the bound
+        // avoids.
+        let (store, dir) = scratch("bounded");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        std::fs::write(
+            store.project_dir("demo").join("releases.yaml"),
+            "- version: v0.7.0\n  state: shipped\n  shipped_at: 2026-11-01T04:00:00Z\n",
+        )
+        .unwrap();
+        let mut on_disk: Vec<TimingRun> = Vec::new();
+        for (r, k) in kept.iter().enumerate().take(290) {
+            let run = if r < 240 {
+                TimingRun {
+                    tests: k.tests[..1].to_vec(),
+                    ..k.clone()
+                }
+            } else {
+                k.clone()
+            };
+            write(&store, "demo", &run).unwrap();
+            on_disk.push(run);
+        }
+        let wanted: BTreeSet<TestKey> = last_for(&on_disk, "FTR-042").into_keys().collect();
+        let t = std::time::Instant::now();
+        let one = last_for_read(&store, "demo", "FTR-042", &wanted);
+        let read_last = t.elapsed();
+        assert_eq!(one, last_for(&on_disk, "FTR-042"));
+        let t = std::time::Instant::now();
+        let r = report_read(&store, "demo", 10).unwrap();
+        let read_rep = t.elapsed();
+        assert_eq!(
+            r.runs, 50,
+            "the report reads the window since the baseline only"
+        );
+        assert_eq!(
+            r.slowing,
+            report(&on_disk, r.baseline.clone(), 10).slowing,
+            "the window gives the slowing list all the kept runs would"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        eprintln!(
+            "timings budget, bounded disk reads: last for one item {read_last:?}, \
+             report over the 50-run window {read_rep:?}"
+        );
+        assert!(
+            read_last.as_millis() < 150 * scale,
+            "reading last for one item took {read_last:?}"
+        );
+        assert!(
+            read_rep.as_millis() < 1000 * scale,
+            "reading the report took {read_rep:?}"
+        );
     }
 }

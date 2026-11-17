@@ -349,6 +349,38 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::gates::GateResult>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/timings",
+            summary: "Each test's last duration from the kept runs (FTR-058): with code, the \
+                      item's tracked tests only, by requirement and test name",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "code",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only this item's tests.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::timings::TimingsView>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/timings/report",
+            summary: "The slowest tests by last duration, and those whose time grew most since \
+                      the newest shipped release, derived from the kept runs since it",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "top",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::Integer,
+                    description: "How many rows each list gives: 10 by default, at most 100.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::timings::TimingReport>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/decisions",
             summary: "Where the project's decisions are taken (FTR-028): the mode and its \
                       history, every delegation with where it stands, the decisions Claude took \

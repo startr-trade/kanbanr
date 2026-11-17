@@ -399,6 +399,23 @@
         ],
         "type": "object"
       },
+      "Baseline": {
+        "description": "The release the report compares with: the newest shipped one.",
+        "properties": {
+          "shipped_at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "shipped_at"
+        ],
+        "type": "object"
+      },
       "BoardCard": {
         "description": "A single feature as it appears on the cross-project board.",
         "properties": {
@@ -2947,6 +2964,38 @@
         ],
         "type": "object"
       },
+      "LastTiming": {
+        "description": "One test's last duration, as `GET /projects/{p}/timings` lists it.",
+        "properties": {
+          "at": {
+            "description": "When the run that timed it applied (RFC 3339, UTC).",
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "ms": {
+            "description": "Whole milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requirement",
+          "test",
+          "ms",
+          "at"
+        ],
+        "type": "object"
+      },
       "Latest": {
         "description": "The latest background drift result for a project, kept in the daemon's memory only (ADR-0005).",
         "properties": {
@@ -5351,6 +5400,77 @@
         ],
         "type": "string"
       },
+      "SlowRow": {
+        "description": "A test among the slowest, by its last duration.",
+        "properties": {
+          "at": {
+            "description": "When the run that timed it applied.",
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requirement",
+          "test",
+          "ms",
+          "at"
+        ],
+        "type": "object"
+      },
+      "SlowingRow": {
+        "description": "A test whose time grew since the baseline.",
+        "properties": {
+          "before_ms": {
+            "description": "The newest duration at or before the baseline.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "code": {
+            "type": "string"
+          },
+          "grew_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "now_ms": {
+            "description": "The last duration.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requirement",
+          "test",
+          "before_ms",
+          "now_ms",
+          "grew_ms"
+        ],
+        "type": "object"
+      },
       "Source": {
         "additionalProperties": true,
         "description": "Where an imported feature came from (FEAT-042). This is a record of history, not a live\npointer: the original text is preserved in the feature's spec, so nothing depends on the\nsource still existing (a deleted file, rewritten git history, a removed issue).",
@@ -5918,6 +6038,61 @@
           "green"
         ],
         "type": "string"
+      },
+      "TimingReport": {
+        "description": "The slowest tests and those that slowed most since the last shipped release, derived from the\nkept runs only.",
+        "properties": {
+          "baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Baseline"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runs": {
+            "description": "How many kept runs it was derived from.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "slowest": {
+            "items": {
+              "$ref": "#/components/schemas/SlowRow"
+            },
+            "type": "array"
+          },
+          "slowing": {
+            "items": {
+              "$ref": "#/components/schemas/SlowingRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "baseline",
+          "slowest",
+          "slowing"
+        ],
+        "type": "object"
+      },
+      "TimingsView": {
+        "description": "The answer of `GET /projects/{p}/timings`: each test's last duration, by code, requirement and\ntest name.",
+        "properties": {
+          "tests": {
+            "items": {
+              "$ref": "#/components/schemas/LastTiming"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tests"
+        ],
+        "type": "object"
       },
       "TodoList": {
         "additionalProperties": true,
@@ -8066,6 +8241,107 @@
           }
         },
         "summary": "One sprint's report"
+      }
+    },
+    "/api/projects/{project}/timings": {
+      "get": {
+        "operationId": "getProjectsTimings",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this item's tests.",
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimingsView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Each test's last duration from the kept runs (FTR-058): with code, the item's tracked tests only, by requirement and test name"
+      }
+    },
+    "/api/projects/{project}/timings/report": {
+      "get": {
+        "operationId": "getProjectsTimingsReport",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many rows each list gives: 10 by default, at most 100.",
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimingReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The slowest tests by last duration, and those whose time grew most since the newest shipped release, derived from the kept runs since it"
       }
     },
     "/api/projects/{project}/views/docs": {
