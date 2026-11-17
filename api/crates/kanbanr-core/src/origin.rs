@@ -139,7 +139,13 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
                 | ["projects", _, "decisions", "delegations", _, "revoke"]
                 | ["projects", _, "features", _, "move"]
                 | ["projects", _, "batch"]
+                // A baseline proposal, a withdrawal and a pack added say where they came from
+                // (FTR-033).
+                | ["projects", _, "baseline", "revisions" | "packs"]
+                | ["projects", _, "baseline", "revisions", _, "withdraw"]
         ),
+        // A pack removed says where it was removed (FTR-033).
+        "DELETE" => matches!(seg.as_slice(), ["projects", _, "baseline", "packs", _]),
         // A manual test's kept result says where it was recorded (DEF-040).
         "PUT" => matches!(
             seg.as_slice(),
@@ -175,11 +181,14 @@ pub enum Verdict {
     /// One decision for several rows of a Review page group (FTR-038): each row's own verdict,
     /// in one commit. The person's alone in every mode.
     GroupDecision,
+    /// Accepting a proposed revision of the project's engineering baseline (FTR-033). The
+    /// person's alone in every mode: no delegation covers it.
+    AcceptBaseline,
 }
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 18] = [
+    pub const ALL: [Verdict; 19] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -198,6 +207,7 @@ impl Verdict {
         Verdict::GrantDelegation,
         Verdict::ReviewDecision,
         Verdict::GroupDecision,
+        Verdict::AcceptBaseline,
     ];
 
     /// Is this verdict taken on the Releases page (rather than the Review page)?
@@ -277,6 +287,11 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
             )),
         };
     }
+    // Accepting a baseline revision is the person's in every mode (FTR-033): no delegation covers
+    // it, and there is no record to prepare; the revision itself waits on the Baseline page.
+    if verdict == Verdict::AcceptBaseline && taker == Taker::Claude {
+        return Some(crate::decisions::ACCEPT_BASELINE_REFUSAL.to_string());
+    }
     // A group decision is the person's in every mode (FTR-038): no delegation covers it as a
     // whole, and each verdict it expands into is judged on its own by the write path.
     if verdict == Verdict::GroupDecision {
@@ -354,6 +369,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "prepared", "batch", _, "reject"]) => Verdict::RejectPrepared,
         // One decision for several rows of a Review group (FTR-038).
         ("POST", ["projects", _, "review", "decide"]) => Verdict::GroupDecision,
+        // Accepting a baseline revision (FTR-033).
+        ("POST", ["projects", _, "baseline", "revisions", _, "accept"]) => Verdict::AcceptBaseline,
         _ => return None,
     })
 }
@@ -493,6 +510,8 @@ pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {
         ["release", "add"] if has("--from-failed-tag") => Some(Verdict::PatchFromTag),
         // A gate result recorded by hand is a verdict on the release (FTR-002).
         ["gate", "record"] => Some(Verdict::GateResult),
+        // Accepting a baseline revision is the person's (FTR-033).
+        ["baseline", "accept"] => Some(Verdict::AcceptBaseline),
         _ => None,
     }
 }
@@ -692,7 +711,10 @@ mod tests {
             // The decisions routes have no record to prepare: they are the person's own (FTR-028).
             let decisions = matches!(
                 v,
-                Verdict::SetDecisionMode | Verdict::GrantDelegation | Verdict::ReviewDecision
+                Verdict::SetDecisionMode
+                    | Verdict::GrantDelegation
+                    | Verdict::ReviewDecision
+                    | Verdict::AcceptBaseline
             );
             let says = if decisions {
                 "the person's own"
