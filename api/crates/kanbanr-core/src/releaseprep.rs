@@ -1012,7 +1012,7 @@ mod tests {
         );
         for dir in [
             "docs/guide/releases",
-            "docs/src/releases",
+            "docs/older/releases",
             "docs/old/releases",
         ] {
             std::fs::create_dir_all(repo.join(dir)).unwrap();
@@ -1026,7 +1026,10 @@ mod tests {
         // Today's path is on the branch: it wins, whatever came before.
         assert_eq!(
             found(
-                &["docs/guide/releases/index.md", "docs/src/releases/index.md"],
+                &[
+                    "docs/guide/releases/index.md",
+                    "docs/older/releases/index.md"
+                ],
                 Need::File
             ),
             Some(("docs/guide/releases/index.md".to_string(), 0))
@@ -1036,12 +1039,12 @@ mod tests {
             found(
                 &[
                     "docs/book/releases/index.md",
-                    "docs/src/releases/index.md",
+                    "docs/older/releases/index.md",
                     "docs/old/releases/index.md"
                 ],
                 Need::File
             ),
-            Some(("docs/src/releases/index.md".to_string(), 1))
+            Some(("docs/older/releases/index.md".to_string(), 1))
         );
         assert_eq!(
             found(
@@ -1055,17 +1058,17 @@ mod tests {
             Some(("docs/old/releases/index.md".to_string(), 2))
         );
         // A folder is not a file.
-        assert_eq!(found(&["docs/src/releases"], Need::File), None);
+        assert_eq!(found(&["docs/older/releases"], Need::File), None);
         // A file about to be created goes where its folder is.
         assert_eq!(
             found(
                 &[
                     "docs/book/releases/v0.2.1.md",
-                    "docs/src/releases/v0.2.1.md"
+                    "docs/older/releases/v0.2.1.md"
                 ],
                 Need::Dir
             ),
-            Some(("docs/src/releases/v0.2.1.md".to_string(), 1))
+            Some(("docs/older/releases/v0.2.1.md".to_string(), 1))
         );
         assert_eq!(
             found(&["docs/guide/releases/v0.2.1.md"], Need::Dir),

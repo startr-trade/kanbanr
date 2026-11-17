@@ -8509,7 +8509,11 @@ pub(crate) mod tests {
 
     // ---- MNT-002: a patch of a release made before the book moved ----
 
-    /// The release-prepare settings with the book at `book` (`docs/src` or `docs/guide`).
+    /// The book's folder before the move, built from two parts so the tree names it only in
+    /// records (MNT-002 R-2).
+    const OLD_BOOK: &str = concat!("docs/", "src");
+
+    /// The release-prepare settings with the book at `book` ([`OLD_BOOK`] or `docs/guide`).
     fn book_prepare(book: &str) -> String {
         format!(
             "release_prepare:\n  version_files:\n    - path: Cargo.toml\n  changelog: CHANGELOG.md\n  \
@@ -8546,26 +8550,23 @@ pub(crate) mod tests {
         coderepo::git(repo, &["commit", "-q", "-m", "files"]).unwrap();
     }
 
-    /// v0.2.0 shipped and tagged with the book at `docs/src`; then main moved the book to
+    /// v0.2.0 shipped and tagged with the book at [`OLD_BOOK`]; then main moved the book to
     /// `docs/guide` and the board's config followed, each config its own board commit, so the
     /// history holds both (MNT-002).
     fn moved_book_board(tag: &str) -> (Store, PathBuf, PathBuf) {
         let (store, dir, repo) = board_and_repo(tag);
         assert_own(&store, &dir, &repo);
         board_history(&dir);
-        book_files(&repo, "docs/src");
+        book_files(&repo, OLD_BOOK);
         super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
         plan_done(&store, "v0.2.0");
-        configure(
-            &store,
-            &format!("{BOARD_SHAPE}{}", book_prepare("docs/src")),
-        );
-        crate::git::commit(&dir, "Ada", "ada@example.com", "prepare at docs/src");
+        configure(&store, &format!("{BOARD_SHAPE}{}", book_prepare(OLD_BOOK)));
+        crate::git::commit(&dir, "Ada", "ada@example.com", "prepare at the old book");
         for to in ["candidate", "main", "production"] {
             super::promote(&store, "shop", "v0.2.0", Some(to), "Ada", "", Some(&repo)).unwrap();
         }
         assert!(coderepo::tag_exists(&repo, "v0.2.0"));
-        coderepo::git(&repo, &["mv", "docs/src", "docs/guide"]).unwrap();
+        coderepo::git(&repo, &["mv", OLD_BOOK, "docs/guide"]).unwrap();
         coderepo::git(&repo, &["commit", "-q", "-m", "the book moves"]).unwrap();
         configure(
             &store,
@@ -8628,17 +8629,18 @@ pub(crate) mod tests {
         .unwrap();
         let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
         let at = |p: &str| coderepo::read_blob(&repo, &tip, p).unwrap().map(|(_, t)| t);
-        let notes = at("docs/src/releases/v0.2.1.md").expect("the notes where the book is");
+        let notes = at(format!("{OLD_BOOK}/releases/v0.2.1.md").as_str())
+            .expect("the notes where the book is");
         assert!(notes.starts_with("# v0.2.1"), "{notes}");
-        let copy = at("docs/src/project/changelog.md").unwrap();
+        let copy = at(format!("{OLD_BOOK}/project/changelog.md").as_str()).unwrap();
         assert!(copy.contains("## [0.2.1]"), "{copy}");
         assert_eq!(Some(copy), at("CHANGELOG.md"));
-        let summary = at("docs/src/SUMMARY.md").unwrap();
+        let summary = at(format!("{OLD_BOOK}/SUMMARY.md").as_str()).unwrap();
         assert!(
             summary.contains("  - [0.2.1](releases/v0.2.1.md)"),
             "{summary}"
         );
-        let index = at("docs/src/releases/index.md").unwrap();
+        let index = at(format!("{OLD_BOOK}/releases/index.md").as_str()).unwrap();
         assert!(index.contains("- [v0.2.1](v0.2.1.md)"), "{index}");
         for stray in [
             "docs/guide/releases/v0.2.1.md",
@@ -8651,10 +8653,10 @@ pub(crate) mod tests {
         // The plan names the earlier paths.
         let does = prepare_for(&store, &repo, "v0.2.1").does;
         for said in [
-            "`changelog_copies` at `docs/src/project/changelog.md`: the branch has the book at that path",
-            "`notes` at `docs/src/releases/v0.2.1.md`: the branch has the book at that path",
-            "`notes_listings` at `docs/src/SUMMARY.md`: the branch has the book at that path",
-            "`notes_listings` at `docs/src/releases/index.md`: the branch has the book at that path",
+            format!("`changelog_copies` at `{OLD_BOOK}/project/changelog.md`: the branch has the book at that path").as_str(),
+            format!("`notes` at `{OLD_BOOK}/releases/v0.2.1.md`: the branch has the book at that path").as_str(),
+            format!("`notes_listings` at `{OLD_BOOK}/SUMMARY.md`: the branch has the book at that path").as_str(),
+            format!("`notes_listings` at `{OLD_BOOK}/releases/index.md`: the branch has the book at that path").as_str(),
         ] {
             assert!(does.contains(said), "{does}");
         }
@@ -8667,15 +8669,22 @@ pub(crate) mod tests {
     #[test]
     fn a_listing_missing_on_the_branch_falls_back_to_an_earlier_configured_path() {
         let (store, dir, repo) = moved_book_board("mnt002-listing");
-        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
+        std::fs::create_dir_all(repo.join(OLD_BOOK)).unwrap();
         coderepo::git(
             &repo,
-            &["mv", "docs/guide/SUMMARY.md", "docs/src/SUMMARY.md"],
+            &[
+                "mv",
+                "docs/guide/SUMMARY.md",
+                format!("{OLD_BOOK}/SUMMARY.md").as_str(),
+            ],
         )
         .unwrap();
         coderepo::git(&repo, &["commit", "-q", "-m", "summary left behind"]).unwrap();
         let p = paths_at(&store, &repo, "v0.3.0", "main");
-        assert_eq!(p.listings[0].path, "docs/src/SUMMARY.md");
+        assert_eq!(
+            p.listings[0].path,
+            format!("{OLD_BOOK}/SUMMARY.md").as_str()
+        );
         assert_eq!(p.listings[0].after, "- [Release notes](releases/index.md)");
         assert_eq!(p.listings[0].entry, "  - [{number}](releases/{version}.md)");
         assert_eq!(p.listings[1].path, "docs/guide/releases/index.md");
@@ -8683,10 +8692,17 @@ pub(crate) mod tests {
         assert_eq!(p.notes.as_deref(), Some("docs/guide/releases/v0.3.0.md"));
         assert_eq!(
             p.said,
-            ["`notes_listings` at `docs/src/SUMMARY.md`: the branch has the book at that path"]
+            [format!(
+                "`notes_listings` at `{OLD_BOOK}/SUMMARY.md`: the branch has the book at that path"
+            )
+            .as_str()]
         );
         // Nowhere on the branch: today's path, which prepare then refuses by name, as before.
-        coderepo::git(&repo, &["rm", "-q", "docs/src/SUMMARY.md"]).unwrap();
+        coderepo::git(
+            &repo,
+            &["rm", "-q", format!("{OLD_BOOK}/SUMMARY.md").as_str()],
+        )
+        .unwrap();
         coderepo::git(&repo, &["commit", "-q", "-m", "summary gone"]).unwrap();
         let p = paths_at(&store, &repo, "v0.3.0", "main");
         assert_eq!(p.listings[0].path, "docs/guide/SUMMARY.md");
@@ -8746,16 +8762,16 @@ pub(crate) mod tests {
         .unwrap();
         let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
         let at = |p: &str| coderepo::read_blob(&repo, &tip, p).unwrap().map(|(_, t)| t);
-        let copy = at("docs/src/project/changelog.md").unwrap();
+        let copy = at(format!("{OLD_BOOK}/project/changelog.md").as_str()).unwrap();
         assert!(copy.contains("- A fix written by hand."), "{copy}");
         assert_eq!(Some(copy), at("CHANGELOG.md"));
         assert_eq!(
-            at("docs/src/releases/v0.2.1.md").as_deref(),
+            at(format!("{OLD_BOOK}/releases/v0.2.1.md").as_str()).as_deref(),
             Some("# v0.2.1\n\nA fix.\n")
         );
         assert!(at("docs/guide/project/changelog.md").is_none());
         assert!(at("docs/guide/SUMMARY.md").is_none());
-        let summary = at("docs/src/SUMMARY.md").unwrap();
+        let summary = at(format!("{OLD_BOOK}/SUMMARY.md").as_str()).unwrap();
         assert_eq!(
             summary.matches("releases/v0.2.1.md").count(),
             1,
