@@ -78,6 +78,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- One Plan page replaces the Gantt and Schedule pages: Current, Planned and Past tabs of sprints, releases and milestones on a timeline with today in focus; a row opens to its items placed by their sprint or their own moves, never at a made-up date; the portfolio shows one row per project (FTR-043).
 - History questions (has a doc changed since its sign-off, what did an approval or a grant cover, past notes settings, the texts to settle) are answered from one walk of the board's history per revision, kept by the monitor and grown by each new commit, so `kanbanr check`, `kanbanr doctor` and the monitor's reads no longer slow down with every question asked (MNT-014).
 - The Board no longer pages its lanes: each lane is grouped by what its items need next (waiting on you, ready, an agent on it, blocked or stalled, building, needs definition, waiting on another item), with a bar of its groups, its flow over the last 7 days and at most one insight; cards draw their tasks and the next stage's checks in words, and at most one curious fact. Open groups and the order are kept in the URL (FTR-078).
 - The product guide moved from `docs/src` to `docs/guide`, and `docs/system` holds the system
