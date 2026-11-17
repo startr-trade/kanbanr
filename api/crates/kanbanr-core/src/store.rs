@@ -417,8 +417,20 @@ impl Store {
             .effective_gates()
             .values()
             .any(|g| g.signoffs.iter().any(|s| s == crate::method::DOCS_FOLDED));
+        // `design-review` is held while the Design touches an unanswered baseline area
+        // (FTR-033 R-2), which reads the spec.
+        let design_review = self
+            .project_dir(id)
+            .join(crate::baseline::BASELINE_FILE)
+            .exists()
+            && project
+                .config
+                .effective_gates()
+                .values()
+                .any(|g| g.signoffs.iter().any(|s| s == crate::method::DESIGN_REVIEW));
         if pinned
             || docs_folded
+            || design_review
             || project
                 .config
                 .effective_gates()

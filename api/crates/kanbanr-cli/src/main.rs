@@ -7635,6 +7635,28 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         println!("        {}", t.as_str().unwrap_or(""));
                     }
                 }
+                // The baseline areas the design touches that are not answered (FTR-033 R-2).
+                let open_areas = r["open_areas"].as_array().cloned().unwrap_or_default();
+                if !open_areas.is_empty() {
+                    println!(
+                        "    Open questions of this design (ask the person, then `kanbanr baseline propose`):"
+                    );
+                    for a in &open_areas {
+                        let tokens: Vec<&str> = a["tokens"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|t| t.as_str())
+                            .collect();
+                        println!(
+                            "        {} ({}, pack {}): it says `{}`",
+                            a["area"].as_str().unwrap_or(""),
+                            a["title"].as_str().unwrap_or(""),
+                            a["pack"].as_str().unwrap_or(""),
+                            tokens.join("`, `")
+                        );
+                    }
+                }
                 // A manual test nobody ran: a note, not a gap (DEF-003).
                 for open in r["open_manual"].as_array().into_iter().flatten() {
                     println!("    manual test not run: {}", open.as_str().unwrap_or(""));
@@ -7663,6 +7685,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         }
                     }
                 }
+            }
+            // A baseline with nothing accepted yet: said once (FTR-033).
+            if let Some(note) = reports.iter().find_map(|r| r["baseline_note"].as_str()) {
+                println!("\nnote: {note}");
             }
             println!("\n{ready}/{} ready", reports.len());
             Ok(())

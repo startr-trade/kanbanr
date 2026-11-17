@@ -1088,6 +1088,11 @@
             "const": "design_sections",
             "description": "The spec's Design holds the subsections the item's kind asks for (FTR-006,\n[`crate::design`]). Judged too wherever a gate asks for the Design section.",
             "type": "string"
+          },
+          {
+            "const": "baseline",
+            "description": "Every accepted engineering-baseline entry the Design touches is named under its\n`### Baseline` with a test or a reason, and the Design names no other option of an\nanswered area without one (FTR-033). Judged too wherever a gate asks for the Design.",
+            "type": "string"
           }
         ]
       },
