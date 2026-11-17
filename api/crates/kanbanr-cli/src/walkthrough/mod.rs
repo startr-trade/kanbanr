@@ -1606,9 +1606,20 @@ impl Running {
             && expect.absent
         {
             let found = match self.monitor.as_ref() {
-                Some(m) => m
-                    .offers(&project, offer, None)
-                    .map(|f| matches!(f, Found::Offered)),
+                Some(m) => {
+                    let known = match &offer.subject {
+                        Some(sel) => m.resolve(&project, sel).map(|r| r.is_some()),
+                        None => Ok(true),
+                    };
+                    known.and_then(|known| {
+                        if known {
+                            m.offers(&project, offer, None)
+                                .map(|f| (true, matches!(f, Found::Offered)))
+                        } else {
+                            Ok((false, false))
+                        }
+                    })
+                }
                 None => Err(anyhow!("no monitor")),
             };
             let board = format!(
@@ -1616,11 +1627,15 @@ impl Running {
                 offer.button, offer.page
             );
             match found {
-                Ok(offered) => {
-                    if let Some(truth) = offer.judge_absent(offered) {
-                        self.finding(id, "offer-present", board, truth);
+                Ok((known, offered)) => {
+                    if let Some((kind, truth)) = offer.judge_absent(known, offered) {
+                        self.finding(id, kind, board, truth);
                         *ok = false;
-                        why.push("a button the guide says is absent was offered".into());
+                        why.push(if known {
+                            "a button the guide says is absent was offered".into()
+                        } else {
+                            "the absent-offer claim's subject matches no item".into()
+                        });
                     }
                 }
                 Err(e) => {
