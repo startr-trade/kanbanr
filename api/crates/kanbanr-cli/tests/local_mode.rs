@@ -15454,3 +15454,536 @@ fn feature_define_refuses_a_second_manual_test() {
     assert_eq!(tests[0]["name"], first);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// ---- FTR-033 P7: `kanbanr profile …` and `kanbanr baseline …` ----------------------------------
+
+/// The board of a togaf scratch, checked to be this test's own under the system temp folder
+/// (L-41, compared resolved: L-46).
+fn ftr033_board(base: &std::path::Path) -> std::path::PathBuf {
+    let data = base.join("code").join("shop.kanbanr");
+    let tmp = std::env::temp_dir().canonicalize().unwrap();
+    assert!(
+        data.canonicalize().unwrap().starts_with(&tmp),
+        "{} is not under {}",
+        data.display(),
+        tmp.display()
+    );
+    data
+}
+
+/// The board's HEAD and its `git status --porcelain`: what a read must leave as it was.
+fn ftr033_board_state(data: &std::path::Path) -> (String, String) {
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(data)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    (git(&["rev-parse", "HEAD"]), git(&["status", "--porcelain"]))
+}
+
+/// A facts record ([FTR-005]'s `facts.yaml`) written onto the board and committed, as a facts
+/// write would leave it.
+fn ftr033_write_facts(data: &std::path::Path, yaml: &str) {
+    std::fs::write(data.join("projects").join("shop").join("facts.yaml"), yaml).unwrap();
+    for args in [
+        &["add", "-A"][..],
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@x",
+            "commit",
+            "-q",
+            "-m",
+            "facts",
+        ],
+    ] {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(data)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+fn ftr033_json(o: &Output) -> serde_json::Value {
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+/// The asked area `id` of a `profile ask --json`, and its options' ids in order.
+fn ftr033_asked(v: &serde_json::Value, id: &str) -> (serde_json::Value, Vec<String>) {
+    let area = v["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id)
+        .unwrap_or_else(|| panic!("'{id}' is not asked: {v}"))
+        .clone();
+    let ids = area["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["id"].as_str().unwrap().to_string())
+        .collect();
+    (area, ids)
+}
+
+/// FTR-033 R-1: `kanbanr profile ask --json` in a project folder with a `package.json` prefills
+/// `stack: node`; with a facts record saying `languages: [rust]` it prefills `stack: rust` first.
+/// It exits 0 and leaves the board's HEAD and status as they were.
+#[test]
+fn profile_ask_json_prefills_detected_answers_and_changes_nothing() {
+    let (base, work) = togaf_scratch("ftr033-ask");
+    togaf_board(&base, &work);
+    let data = ftr033_board(&base);
+    std::fs::write(work.join("package.json"), "{\"name\": \"shop\"}\n").unwrap();
+
+    let before = ftr033_board_state(&data);
+    let v = ftr033_json(&run_in(&base, &work, &["profile", "ask", "--json"]));
+    assert_eq!(v["at"], "setup", "{v}");
+    assert_eq!(v["packs"][0]["name"], "core", "{v}");
+    let (stack, ids) = ftr033_asked(&v, "stack");
+    assert_eq!(ids[0], "node", "{stack}");
+    assert_eq!(stack["options"][0]["detected"], true, "{stack}");
+    assert!(
+        stack["records_to"]
+            .as_str()
+            .unwrap()
+            .contains("baseline.yaml"),
+        "{stack}"
+    );
+    assert_eq!(
+        ftr033_board_state(&data),
+        before,
+        "profile ask changed the board"
+    );
+
+    // The facts record comes first: rust is detected from it, ahead of the package.json.
+    ftr033_write_facts(&data, "schema: 1\nlanguages: [rust]\n");
+    let before = ftr033_board_state(&data);
+    let v = ftr033_json(&run_in(&base, &work, &["profile", "ask", "--json"]));
+    let (stack, ids) = ftr033_asked(&v, "stack");
+    assert_eq!(ids[0], "rust", "{stack}");
+    assert_eq!(stack["options"][0]["detected"], true, "{stack}");
+    assert!(
+        stack["detected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["evidence"]
+                .as_str()
+                .unwrap_or("")
+                .contains("languages=rust")),
+        "{stack}"
+    );
+    // Explaining an area changes nothing either.
+    let explained = ftr033_json(&run_in(
+        &base,
+        &work,
+        &["profile", "ask", "--explain", "stack"],
+    ));
+    assert_eq!(explained["area"], "stack", "{explained}");
+    assert!(
+        explained["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| !o["why"].as_str().unwrap().is_empty()),
+        "{explained}"
+    );
+    assert_eq!(
+        ftr033_board_state(&data),
+        before,
+        "profile ask changed the board"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-033 R-1: facts saying `parts: [web-ui]` and `data: [sql]` propose `web` and `data` beside
+/// `core` in `profile ask --json`'s `propose_packs`.
+#[test]
+fn setup_proposes_packs_from_the_facts() {
+    let (base, work) = togaf_scratch("ftr033-propose-packs");
+    togaf_board(&base, &work);
+    let data = ftr033_board(&base);
+    ftr033_write_facts(&data, "schema: 1\nparts: [web-ui]\ndata: [sql]\n");
+    let v = ftr033_json(&run_in(&base, &work, &["profile", "ask", "--json"]));
+    let packs: Vec<&str> = v["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(packs, ["core"], "{v}");
+    let proposed: Vec<&str> = v["propose_packs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no propose_packs: {v}"))
+        .iter()
+        .map(|p| p.as_str().unwrap())
+        .collect();
+    assert!(proposed.contains(&"web"), "{proposed:?}");
+    assert!(proposed.contains(&"data"), "{proposed:?}");
+    assert!(!proposed.contains(&"core"), "{proposed:?}");
+    assert!(!proposed.contains(&"api"), "{proposed:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A kanbanr command run inside a Claude Code session (`CLAUDECODE` set), with no hook installed.
+fn ftr033_in_session(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env_remove("KANBANR_PROFILES_DIR")
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap()
+}
+
+/// FTR-033 R-3: inside a Claude session `kanbanr baseline accept` is refused by core itself (the
+/// hook is not in play), naming the Baseline page, and leaves no commit; `propose` and `withdraw`
+/// from the same session succeed; from the person's terminal `accept` succeeds and its commit
+/// carries `Kanbanr-Origin: terminal`.
+#[test]
+fn baseline_accept_from_a_claude_session_is_refused_by_core() {
+    let (base, work) = togaf_scratch("ftr033-accept");
+    togaf_board(&base, &work);
+    let data = ftr033_board(&base);
+    let ok = |o: Output| -> String {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let said = ok(run_in(&base, &work, &["profile", "add", "core"]));
+    assert!(said.contains("shop follows core v"), "{said}");
+    let answers = base.join("answers.yaml");
+    std::fs::write(&answers, "answers:\n  - {area: stack, options: [rust]}\n").unwrap();
+    let answers = answers.to_str().unwrap();
+
+    let said = ok(ftr033_in_session(
+        &base,
+        &work,
+        &["baseline", "propose", "--answers", answers],
+    ));
+    assert!(said.contains("B-001 constraint: "), "{said}");
+    assert!(said.contains("(ADR on acceptance)"), "{said}");
+    assert!(
+        said.contains("REV-001 waits on the Baseline page"),
+        "{said}"
+    );
+
+    let before = ftr033_board_state(&data);
+    let o = ftr033_in_session(&base, &work, &["baseline", "accept", "REV-001"]);
+    assert!(
+        !o.status.success(),
+        "a session accepted a baseline revision"
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("Baseline page"), "{err}");
+    assert_eq!(
+        ftr033_board_state(&data),
+        before,
+        "a refused acceptance made a commit"
+    );
+
+    ok(ftr033_in_session(
+        &base,
+        &work,
+        &["baseline", "withdraw", "REV-001", "--reason", "asked again"],
+    ));
+    let said = ok(ftr033_in_session(
+        &base,
+        &work,
+        &["baseline", "propose", "--answers", answers],
+    ));
+    assert!(said.contains("REV-002 waits"), "{said}");
+
+    // The person, at their own terminal.
+    let said = ok(run_in(&base, &work, &["baseline", "accept", "REV-002"]));
+    assert!(said.contains("REV-002 accepted by"), "{said}");
+    assert!(said.contains("recorded as ADR-"), "{said}");
+    let log = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(&data)
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&log.stdout);
+    assert!(log.contains("accept baseline revision REV-002"), "{log}");
+    assert!(log.contains("Kanbanr-Origin: terminal"), "{log}");
+    let v = ftr033_json(&run_in(&base, &work, &["--json", "baseline", "show"]));
+    let states: Vec<&str> = v["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["state"].as_str().unwrap())
+        .collect();
+    assert_eq!(states, ["withdrawn", "accepted"], "{v}");
+    let text = ok(run_in(&base, &work, &["baseline", "show"]));
+    assert!(text.contains("stack (core): answered: rust"), "{text}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-033 R-3: an accepted baseline entry whose option requires a gate at a release stage
+/// (`delivery: github-actions` → `ci` at main) refuses `release promote` to that stage, naming the
+/// gate and the entry, until a passed result is recorded for the release tip.
+#[test]
+fn promote_is_refused_until_the_baselines_gate_has_passed() {
+    let (base, work) = release_scratch_with("ftr033-promote", false);
+    let ok = |args: &[&str]| -> String {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(&["profile", "add", "core"]);
+    let answers = base.join("answers.yaml");
+    std::fs::write(
+        &answers,
+        "answers:\n  - {area: delivery, options: [github-actions]}\n",
+    )
+    .unwrap();
+    let said = ok(&[
+        "baseline",
+        "propose",
+        "--answers",
+        answers.to_str().unwrap(),
+    ]);
+    assert!(
+        said.contains("on acceptance, stage main requires a passed `ci` result"),
+        "{said}"
+    );
+    let said = ok(&["baseline", "accept", "REV-001"]);
+    assert!(
+        said.contains("stage main now requires a passed `ci` result"),
+        "{said}"
+    );
+
+    ok(&["release", "promote", "v1.0.0"]);
+    let o = run_in(&base, &work, &["release", "promote", "v1.0.0", "main"]);
+    assert!(!o.status.success(), "promoted without the baseline's gate");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("`ci`"), "{err}");
+    assert!(err.contains("(B-00"), "{err}");
+
+    let tip = rev(&base, &work, "release/v1.0.0");
+    ok(&["gate", "record", "ci", "--passed", "--commit", &tip]);
+    ok(&["release", "promote", "v1.0.0", "main"]);
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["stage"], "main", "{r}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The board pack the update test saves, at `version` 1 or 2: v2 adds the `cache` area and
+/// recommends `files` instead of `postgres`.
+fn ftr033_store_pack(v2: bool) -> String {
+    let (pg, files) = if v2 {
+        ("false", "true")
+    } else {
+        ("true", "false")
+    };
+    let mut yaml = format!(
+        r#"profile:
+  name: store
+  description: The store, for the test
+  version: 1
+areas:
+  - id: datastore
+    title: The data store
+    asks: setup
+    touches: [table]
+    question: Which store keeps the data?
+    options:
+      - id: postgres
+        label: PostgreSQL
+        recommended: {pg}
+        why: One relational database
+        fits_when: Several writers
+        costs: A server to run
+        records:
+          - {{kind: constraint, text: PostgreSQL is the store}}
+      - id: files
+        label: Files
+        recommended: {files}
+        why: Plain files
+        fits_when: One writer
+        costs: No queries
+        records:
+          - {{kind: constraint, text: Files are the store}}
+"#
+    );
+    if v2 {
+        yaml.push_str(
+            r#"  - id: cache
+    title: The cache
+    asks: setup
+    touches: [cache]
+    question: Is there a cache?
+    options:
+      - id: none
+        label: No cache
+        why: Nothing to run
+        fits_when: Small
+        costs: Every read hits the store
+        records:
+          - {kind: non_goal, text: No cache}
+"#,
+        );
+    }
+    yaml
+}
+
+/// FTR-033 R-5: a board pack followed and answered; saving its v2 (a new area, a changed
+/// recommendation) is reported by `doctor` and `profile status --if-changed` and changes no
+/// answer; `profile update --dry-run` changes nothing; `profile update` adopts v2, keeping every
+/// answer and entry, and `profile ask` then lists the new area.
+#[test]
+fn profile_update_is_reported_and_adopted_only_on_request_with_answers_kept() {
+    let (base, work) = togaf_scratch("ftr033-update");
+    togaf_board(&base, &work);
+    let data = ftr033_board(&base);
+    let ok = |args: &[&str]| -> String {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let file = base.join("store.yaml");
+    std::fs::write(&file, ftr033_store_pack(false)).unwrap();
+    let said = ok(&["profile", "check", file.to_str().unwrap()]);
+    assert!(
+        said.contains("checks clean: 1 areas (1 at setup), 2 options"),
+        "{said}"
+    );
+    let said = ok(&[
+        "profile",
+        "save",
+        "store",
+        "--from-file",
+        file.to_str().unwrap(),
+    ]);
+    assert!(said.contains("saved pack store v1 to the board"), "{said}");
+    ok(&["profile", "add", "store"]);
+    let answers = base.join("answers.yaml");
+    std::fs::write(
+        &answers,
+        "answers:\n  - {area: datastore, options: [postgres]}\n",
+    )
+    .unwrap();
+    ok(&[
+        "baseline",
+        "propose",
+        "--answers",
+        answers.to_str().unwrap(),
+    ]);
+    ok(&["baseline", "accept", "REV-001"]);
+    let answered = || {
+        let v = ftr033_json(&run_in(&base, &work, &["--json", "baseline", "show"]));
+        let store_area = v["areas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "datastore")
+            .cloned()
+            .unwrap();
+        (store_area, v["revisions"].clone())
+    };
+    let kept = answered();
+    assert_eq!(kept.0["status"], "answered", "{}", kept.0);
+    let applied = data
+        .join("projects")
+        .join("shop")
+        .join("packs")
+        .join("store.yaml");
+    let applied_v1 = std::fs::read_to_string(&applied).unwrap();
+
+    // v2 is saved: reported, never applied by itself.
+    std::fs::write(&file, ftr033_store_pack(true)).unwrap();
+    let said = ok(&[
+        "profile",
+        "save",
+        "store",
+        "--from-file",
+        file.to_str().unwrap(),
+    ]);
+    assert!(said.contains("saved pack store v2"), "{said}");
+    let doctor = run_in(&base, &work, &["doctor"]);
+    let doctor = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    assert!(doctor.contains("1 new area to answer (cache)"), "{doctor}");
+    assert!(
+        doctor.contains("1 recommendation changed (datastore)"),
+        "{doctor}"
+    );
+    let status = ok(&["profile", "status", "--if-changed"]);
+    assert!(status.contains("1 new area to answer (cache)"), "{status}");
+    assert!(
+        status.contains("1 recommendation changed (datastore)"),
+        "{status}"
+    );
+    assert!(status.contains("kanbanr profile update store"), "{status}");
+    assert_eq!(answered(), kept, "saving a new version changed an answer");
+    let diff = ok(&["profile", "diff", "store"]);
+    assert!(diff.contains("+ area 'cache'"), "{diff}");
+
+    // A dry run changes nothing.
+    let before = ftr033_board_state(&data);
+    let said = ok(&["profile", "update", "--dry-run"]);
+    assert!(said.contains("would update to store v2"), "{said}");
+    assert!(said.contains("(dry run: nothing changed)"), "{said}");
+    assert_eq!(
+        ftr033_board_state(&data),
+        before,
+        "a dry run changed the board"
+    );
+    assert_eq!(std::fs::read_to_string(&applied).unwrap(), applied_v1);
+
+    // On request it is adopted, every answer kept.
+    let said = ok(&["profile", "update", "store"]);
+    assert!(said.contains("now follows store v2"), "{said}");
+    assert!(said.contains("answers kept: 1"), "{said}");
+    assert!(
+        std::fs::read_to_string(&applied)
+            .unwrap()
+            .contains("id: cache"),
+        "the applied copy has no new area"
+    );
+    let (area, revisions) = answered();
+    assert_eq!(revisions, kept.1, "updating a pack changed a revision");
+    assert_eq!(area["status"], "answered", "{area}");
+    assert_eq!(area["options"], kept.0["options"], "{area}");
+    assert_eq!(area["entries"], kept.0["entries"], "{area}");
+    let status = ok(&["profile", "status"]);
+    assert!(
+        status.contains("shop follows store v2 (board), current"),
+        "{status}"
+    );
+    let v = ftr033_json(&run_in(&base, &work, &["profile", "ask", "--json"]));
+    ftr033_asked(&v, "cache");
+    assert!(
+        !v["ask"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == "datastore"),
+        "an answered area is asked again: {v}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
