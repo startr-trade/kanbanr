@@ -1,5 +1,6 @@
 # How code is validated and audited before it is deployed (15 Nov 2026): each answer can require
-# a gate at a release stage. `why`, `fits_when` and `costs` marked TODO(P12) are written by P12.
+# a gate at a release stage. Every option teaches: its `why`, `fits_when` and `costs` are shown
+# when the area is asked.
 profile:
   name: devsecops
   description: Review, static analysis, the supply chain, secrets, artifacts, deployment and rollback
@@ -35,7 +36,7 @@ areas:
       - id: none
         label: No review
         why: Nothing is reviewed before merge
-        fits_when: TODO(P12)
+        fits_when: "A solo prototype whose code nobody else reads"
         costs: No second look
         records:
           - {kind: non_goal, text: No review before merge}
@@ -108,7 +109,7 @@ areas:
       - id: pinned-lockfiles
         label: Locked builds
         why: The build uses the dependencies that were reviewed
-        fits_when: TODO(P12)
+        fits_when: "Anything built in CI or released, which is nearly always"
         costs: Deliberate upgrades
         mentions: [locked builds, --locked]
         records:
@@ -151,9 +152,9 @@ areas:
           - {kind: constraint, text: "The host's secret scanning is on"}
       - id: none
         label: No secret scanning
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Nothing checks for committed secrets"
+        fits_when: "A private experiment with no credentials anywhere"
+        costs: "A leaked key is found by whoever finds it first, perhaps an attacker"
         records:
           - {kind: non_goal, text: No secret scanning}
 
@@ -179,7 +180,7 @@ areas:
       - id: checksums
         label: Checksums
         why: Anyone can verify what they downloaded
-        fits_when: TODO(P12)
+        fits_when: "Any release asset people download"
         costs: Nothing
         mentions: [checksums, SHA-256 in the release]
         records:
@@ -207,9 +208,9 @@ areas:
         fits_when: One developer with Claude
         costs: Being there for the clicks
         mentions: [release stages, Promote to main, cut]
-        records: &deploy
-          - {kind: constraint, text: "A deployment to production needs {label}"}
-          - {kind: practice, text: Every deployment names the release it deploys}
+        records:
+          - {kind: constraint, text: "A deployment to production needs the person to promote the release on the monitor"}
+          - &names-release {kind: practice, text: Every deployment names the release it deploys}
       - id: protected-environment
         label: A protected environment
         why: The host holds the deploy until an approver agrees
@@ -219,14 +220,16 @@ areas:
         asks_value: who approves
         records:
           - {kind: constraint, text: "A deployment to production needs the approval of {value} on the protected environment"}
-          - {kind: practice, text: Every deployment names the release it deploys}
+          - *names-release
       - id: automatic-on-green
         label: Automatic on a green main
         why: Every green main deploys
         fits_when: Strong tests and easy rollback
         costs: No human pause
         mentions: [deploy on green main]
-        records: *deploy
+        records:
+          - {kind: constraint, text: A deployment to production goes out automatically when main is green}
+          - *names-release
 
   - id: deployment-audit
     title: Deployment audit
@@ -255,9 +258,9 @@ areas:
           - {kind: constraint, text: "Every production deployment has a change record in {value}"}
       - id: none
         label: Not recorded
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Deployments are not traced to any record"
+        fits_when: "A product nobody deploys to production yet"
+        costs: "Who deployed what, and when, cannot be shown afterwards"
 
   - id: rollback
     title: Rollback
@@ -286,6 +289,6 @@ areas:
           - {kind: practice, text: A rollback is rehearsed before the first production release and its steps are in the runbook}
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No way back from a bad release is planned yet"
+        fits_when: "Before the first production release"
+        costs: "A bad release is fixed forward, under pressure"

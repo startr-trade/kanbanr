@@ -2231,6 +2231,92 @@ areas:
         }
     }
 
+    /// R-1 (P12): every option teaches. A built-in pack whose option lacks `why`, `fits_when` or
+    /// `costs` is refused, naming the area and the option; the same gap in a board or personal
+    /// pack is a warning only. The ten shipped packs carry all three on every option, with no
+    /// placeholder left.
+    #[test]
+    fn a_built_in_option_without_reasoning_is_refused() {
+        let with = |name: &str, missing: &str| {
+            let field = |f: &str, text: &str| {
+                if f == missing {
+                    String::new()
+                } else {
+                    format!("{f}: {text}, ")
+                }
+            };
+            pack(&format!(
+                "profile: {{name: {name}, version: 1}}\nareas:\n  - id: style\n    title: t\n    \
+                 asks: setup\n    question: q\n    options:\n      - {{id: plain, label: Plain, \
+                 {}{}{}}}\n",
+                field("why", "w"),
+                field("fits_when", "f"),
+                field("costs", "c"),
+            ))
+        };
+        for missing in ["why", "fits_when", "costs"] {
+            // `core` is a built-in pack's name: the gap is refused.
+            let problems: Vec<String> = with("core", missing)
+                .problems()
+                .iter()
+                .map(|p| p.to_string())
+                .collect();
+            assert_eq!(
+                problems
+                    .iter()
+                    .filter(|p| p.contains("area 'style': option 'plain' lacks its reasoning"))
+                    .count(),
+                1,
+                "{missing}: {problems:?}"
+            );
+            // A board or personal pack is warned, not refused.
+            let team = with("team", missing);
+            assert!(
+                !team
+                    .problems()
+                    .iter()
+                    .any(|p| p.to_string().contains("lacks its reasoning")),
+                "{missing}"
+            );
+            assert_eq!(
+                team.warnings()
+                    .iter()
+                    .filter(|w| w.contains("option 'plain' lacks `why`, `fits_when` or `costs`"))
+                    .count(),
+                1,
+                "{missing}: {:?}",
+                team.warnings()
+            );
+        }
+        assert!(with("core", "none").problems().is_empty());
+
+        // The shipped packs: every option's reasoning is written, none a placeholder.
+        for (name, text) in STARTER {
+            assert!(
+                !text.contains("TODO"),
+                "built-in pack {name} still holds a TODO placeholder"
+            );
+            let f = builtin(name).unwrap();
+            assert!(f.problems().is_empty(), "{name}: {:?}", f.problems());
+            for a in &f.areas {
+                for o in &a.options {
+                    for (field, v) in [
+                        ("why", &o.why),
+                        ("fits_when", &o.fits_when),
+                        ("costs", &o.costs),
+                    ] {
+                        assert!(
+                            !v.trim().is_empty(),
+                            "{name}: area '{}': option '{}': `{field}` is empty",
+                            a.id,
+                            o.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// R-5: a pack that defines an area another followed pack defines is refused, naming both;
     /// `requires` is honoured.
     #[test]

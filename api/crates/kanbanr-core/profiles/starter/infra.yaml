@@ -1,5 +1,5 @@
 # Where infrastructure state lives, and how environments differ.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: infra
   description: Infrastructure state and environments
@@ -15,18 +15,18 @@ areas:
     options:
       - id: remote-state-per-environment
         label: Remote state, one per environment
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "State is kept in a shared, locked backend, one for each environment"
+        fits_when: "More than one person or the pipeline applies changes, or there is more than one environment"
+        costs: "A backend to set up and protect, since state can hold secrets"
         mentions: [remote state, workspace]
         records:
           - {kind: constraint, text: "Infrastructure state is remote, one per environment"}
           - &modules {kind: practice, text: Environments are the same modules with different variables}
       - id: local-state
         label: Local state
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "State is kept in a file on the machine that applies it"
+        fits_when: "One person and one environment, while experimenting"
+        costs: "Lost with the machine; two people applying at once can corrupt it"
         records:
           - {kind: constraint, text: Infrastructure state is kept locally}
           - *modules
