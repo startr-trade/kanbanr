@@ -24,6 +24,7 @@ import {
   StatTile,
   Tabs,
   Timeline,
+  WorkingState,
   parseTokens,
   ratio,
   stepsFromStages,
@@ -106,6 +107,8 @@ function Kit(p: { theme: Theme }) {
   const [open, setOpen] = useOpenRows(`${k}open`);
   const [selected, setSelected] = useState(new Set<string>());
   const steps = stepsFromStages(STAGES, STAGE_CURRENT, STAGE_HISTORY, false);
+  // A read that began a moment ago, so the gallery shows the line with its seconds.
+  const [workingSince] = useState(() => Date.now() - 12_000);
   return (
     <>
       <h2>{k === "dark" ? "Dark theme" : "Light theme"}</h2>
@@ -210,6 +213,7 @@ function Kit(p: { theme: Theme }) {
 
       <Section title="States" level={3} id={`${k}-states`}>
         <LoadingState />
+        <WorkingState label="Counting what is waiting…" since={workingSince} />
         <ErrorState error="The board could not be read: connection refused" retry={() => undefined} />
         <Empty title="Nothing is ready to pick up" ask={ASK}>
           <p>Every item in the sprint is waiting on another.</p>

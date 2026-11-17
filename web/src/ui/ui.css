@@ -319,6 +319,7 @@ a.ui-progress:hover .ui-progress-bar { outline: 1px solid var(--accent); }
 
 /* The three states (R-6): loading, an error, empty. */
 .ui-loading { color: var(--text-muted); padding: var(--sp-4) 0; }
+.ui-working { color: var(--text-muted); padding: var(--sp-2) 0; }
 .ui-error {
   display: flex;
   flex-wrap: wrap;
