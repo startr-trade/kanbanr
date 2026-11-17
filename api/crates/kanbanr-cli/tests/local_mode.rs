@@ -19891,6 +19891,135 @@ fn a_cut_without_katalogr_ships_with_a_warning() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A PATH with no `katalogr` on it: the folders of the real PATH that hold none, plus, for a folder
+/// that does hold one, a private folder with symlinks to the `git` and `sh` found there.
+#[cfg(unix)]
+fn path_without_katalogr(base: &Path) -> std::ffi::OsString {
+    let private = base.join("path-without-katalogr");
+    std::fs::create_dir_all(&private).unwrap();
+    let mut kept: Vec<PathBuf> = vec![private.clone()];
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        if !dir.is_dir() {
+            continue;
+        }
+        if !dir.join("katalogr").exists() {
+            kept.push(dir);
+            continue;
+        }
+        for tool in ["git", "sh"] {
+            let (from, to) = (dir.join(tool), private.join(tool));
+            if from.exists() && !to.exists() {
+                std::os::unix::fs::symlink(&from, &to).unwrap();
+            }
+        }
+    }
+    std::env::join_paths(kept).unwrap()
+}
+
+/// FTR-016 R-10: with no katalogr on PATH and its address at a closed port, a doc holding a query
+/// block is written, `doctor` and `katalogr status` answer in plain sentences with exit 0, and the
+/// cut ships and says why it saved no system views.
+#[cfg(unix)]
+#[test]
+fn kanbanr_works_with_no_katalogr_anywhere() {
+    let (base, work) = release_scratch("katalogr-nowhere");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let path = path_without_katalogr(&base);
+    let url = std::ffi::OsString::from(kanbanr_core::katalogr::fake::closed_port_url());
+    let env: [(&str, &std::ffi::OsStr); 2] = [
+        ("PATH", path.as_os_str()),
+        ("KANBANR_KATALOGR_URL", url.as_os_str()),
+    ];
+    // The board is the test's own, before the first write.
+    let board = ok(run_in_with(&base, &work, &["where"], &env));
+    let board = PathBuf::from(String::from_utf8(board.stdout).unwrap().trim());
+    assert!(
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {}",
+        board.display()
+    );
+    assert!(
+        std::env::split_paths(&path).all(|d| !d.join("katalogr").exists()),
+        "katalogr is still on PATH"
+    );
+
+    let wrote = ok(run_in_with(
+        &base,
+        &work,
+        &[
+            "doc",
+            "add",
+            "design/views.md",
+            "--content",
+            "# Views\n\n```katalogr-query\nstructure --level file\n```\n",
+        ],
+        &env,
+    ));
+    assert!(
+        !String::from_utf8_lossy(&wrote.stderr).contains("query block:"),
+        "a good block is not warned about: {}",
+        String::from_utf8_lossy(&wrote.stderr)
+    );
+    let shown = ok(run_in_with(
+        &base,
+        &work,
+        &["doc", "show", "design/views.md"],
+        &env,
+    ));
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("structure --level file"));
+
+    let doctor = ok(run_in_with(&base, &work, &["doctor"], &env));
+    let doctor = String::from_utf8_lossy(&doctor.stdout).to_string();
+    assert!(
+        !doctor.contains("katalogr-query") && !doctor.contains("query block:"),
+        "a good block is no doctor finding: {doctor}"
+    );
+
+    let status = ok(run_in_with(&base, &work, &["katalogr", "status"], &env));
+    let status = String::from_utf8_lossy(&status.stdout).to_string();
+    assert!(
+        status.contains(&format!(
+            "katalogr is not running at {}",
+            url.to_string_lossy()
+        )),
+        "{status}"
+    );
+
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0"],
+        &env,
+    ));
+    commit_on(&base, &work, "release/v1.0.0", "fixed on the release\n");
+    ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+        &env,
+    ));
+    let o = ok(run_in_with(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+        &env,
+    ));
+    let said = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(
+        said.contains("no system views saved: katalogr is not installed"),
+        "{said}"
+    );
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "shipped", "{r}");
+    assert_eq!(r["snapshot"]["state"], "skipped", "{r}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A scratch board with one item that is defined and not yet approved, set to conversation mode
 /// from the terminal (FTR-035).
 fn conversation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
