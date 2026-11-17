@@ -181,6 +181,47 @@ The image's health check asks for `/healthz` as `localhost`, so a probe of your 
 The monitor the binary serves reads the same `config.json`, with the defaults: `/api`, browser
 routing, and decisions offered when the daemon allows writes.
 
+### Several boards on one server
+
+One read-only monitor can show the projects of several boards together:
+
+```
+kanbanr serve --board /srv/boards/kanbanr --board /srv/boards/katalogr
+```
+
+Use it for a public site that shows boards with different writers. Each board stays its own git
+repository, with its own remote and its own people who may push to it. A data folder is the
+sharing boundary (`ADR-0007`), and this keeps it: the server reads each board, writes none, and
+resolves nothing from one board to another.
+
+- **Read-only.** `--board` refuses `--allow-writes` and `--allow-remote-writes`, so no decision
+  can be taken on such a site. Decisions stay with each board's own writers, in Claude Code or a
+  local monitor.
+- **Each project from its own board.** A project's items, docs, history, approvals, drift and
+  retrospective are read from the board that holds it. A change pulled into one board refreshes the
+  pages open on its projects.
+- **Names.** A board is named after the last folder of its path as you wrote it (`kanbanr` and
+  `katalogr` above). Two boards with one name, a path that is not a board (it has no `projects/`
+  folder) and one project on two boards are refused, and the server does not start.
+- **The first board wins.** When a project appears on a second board after the server started,
+  the first board keeps serving it, the server prints a note once, and `/api/boards` lists the
+  project under the second board's `shadowed`.
+- **Nothing resolves across boards.** A dependency on another board's project, such as
+  `katalogr:FTR-001` on the kanbanr board, is shown as external and is never resolved: the item
+  that names it stays blocked, whatever the other board says. The portfolio and the other
+  workspace-wide reads show one board at a time, the first unless the address names another with
+  `?board=<name>` (`/portfolio?board=katalogr`). A view that resolves across boards is `FEAT-074`,
+  not built.
+
+`/api/boards` lists the boards, each with its projects and its last commit
+([HTTP API](../reference/http-api.md#several-boards)). On two copies of kanbanr's own board (one
+project of about 400 items each), its first answer after a start took 4 to 7 ms, and 49 ms the
+first time the folders were read from disk (a debug build on a busy 12-core machine, November
+2026). Later answers come from the daemon's cache until a board changes.
+
+A data folder served without `--board` is a list of one board, and the monitor shows it as it
+always did.
+
 ### Mirroring to GitHub issues
 
 If collaborators follow your GitHub issues, kanbanr can keep issues in step with the board using

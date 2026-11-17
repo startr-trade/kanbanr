@@ -1525,6 +1525,7 @@ kanbanr serve                       # the monitor is built into the binary; noth
 kanbanr open                        # open it in the browser
 kanbanr open --check [--json]       # is the monitor up, with writes; its Review and Releases addresses
 ```
+`kanbanr serve --board A --board B` shows several boards read-only; it is for a hosted site, never for writing.
 
 ## Command reference
 

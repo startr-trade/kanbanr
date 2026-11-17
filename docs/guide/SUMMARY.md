@@ -17,6 +17,7 @@
 - [Tying code to the reason for it](using/traceability.md)
 - [Living architecture docs](using/living-docs.md)
 - [Sharing and the live monitor](using/the-monitor.md)
+- [Hosting a read-only monitor](using/hosting.md)
 - [Configuring the workflow](using/workflow.md)
 - [Processes: presets, gates and sign-offs](using/processes.md)
 - [Documentation folders](using/documentation.md)
