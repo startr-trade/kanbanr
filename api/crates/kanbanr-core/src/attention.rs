@@ -240,7 +240,7 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
     // An unreadable decisions.yaml reads as nothing delegated: every decision is the person's.
     let delegations = crate::decisions::load(store, p).unwrap_or_default();
     let mut holds = crate::reviewgroups::Holds::default();
-    match crate::reviewgroups::summary_with_holds(store, p, repo, &now) {
+    match crate::reviewgroups::summary_with_holds_shared(store, p, repo) {
         Ok((groups, held)) => {
             holds = held;
             let in_force = delegations.mode() == crate::decisions::Mode::Delegated

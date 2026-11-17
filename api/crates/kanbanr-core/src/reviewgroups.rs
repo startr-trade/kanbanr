@@ -13,7 +13,8 @@ use crate::manual::ManualWaiting;
 use crate::prepared::PreparedView;
 use crate::review::{ApprovalKind, ReviewEntry};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// Approve a definition never approved, lapsed, or added to.
 const APPROVE: &str = "approve";
@@ -258,6 +259,55 @@ fn blocked_sentence(key: &str, entry: &ReviewEntry, mode: Mode) -> String {
     String::new()
 }
 
+/// Every group key in the fixed order: system-baseline, approve, ratify, the sign-offs in the
+/// order the process's gates name them, which-release, manual, delegation, delegated, adr,
+/// recode. `entries` are the queue's: a sign-off asked again after its gate was changed still has
+/// a group, after the rest.
+fn keys_of(config: &crate::config::ProjectConfig, entries: &[ReviewEntry]) -> Vec<String> {
+    let gates = config.effective_gates();
+    let mut signoffs: Vec<String> = Vec::new();
+    let mut push = |k: String| {
+        if !signoffs.contains(&k) {
+            signoffs.push(k);
+        }
+    };
+    let mut staged: Vec<(&String, &crate::config::Gate)> = gates.iter().collect();
+    staged.sort_by_key(|(status, _)| {
+        config
+            .statuses
+            .iter()
+            .position(|s| s == *status)
+            .unwrap_or(usize::MAX)
+    });
+    for (_, gate) in staged {
+        for name in &gate.signoffs {
+            push(signoff_key(name));
+        }
+    }
+    // A sign-off asked again after its gate was changed still has a group, after the rest.
+    let mut others: Vec<String> = entries
+        .iter()
+        .flat_map(group_keys)
+        .filter(|k| signoff_of_key(k).is_some())
+        .collect();
+    others.sort();
+    for k in others {
+        push(k);
+    }
+    let mut keys = vec![
+        SYSTEM_BASELINE.to_string(),
+        APPROVE.to_string(),
+        RATIFY.to_string(),
+    ];
+    keys.extend(signoffs);
+    keys.extend(
+        [WHICH_RELEASE, MANUAL, DELEGATION, DELEGATED, ADR, RECODE]
+            .into_iter()
+            .map(String::from),
+    );
+    keys
+}
+
 /// A row built for a group, and whether it counts (a manual check not yet due does not).
 struct Built {
     row: ReviewRow,
@@ -288,7 +338,7 @@ impl Board {
     }
 
     fn load_at(store: &Store, p: &str, repo: Option<&Path>, now: &str) -> Result<Board> {
-        let decisions = crate::decisions::view(store, p, repo, None, now)?;
+        let decisions = crate::decisions::view_parts(store, p, repo, now)?;
         let all: Vec<crate::decisions::Delegation> = decisions
             .delegations
             .iter()
@@ -331,50 +381,7 @@ impl Board {
     /// order the process's gates name them, which-release, manual, delegation, delegated, adr,
     /// recode.
     fn keys(&self) -> Vec<String> {
-        let config = &self.meta.config;
-        let gates = config.effective_gates();
-        let mut signoffs: Vec<String> = Vec::new();
-        let mut push = |k: String| {
-            if !signoffs.contains(&k) {
-                signoffs.push(k);
-            }
-        };
-        let mut staged: Vec<(&String, &crate::config::Gate)> = gates.iter().collect();
-        staged.sort_by_key(|(status, _)| {
-            config
-                .statuses
-                .iter()
-                .position(|s| s == *status)
-                .unwrap_or(usize::MAX)
-        });
-        for (_, gate) in staged {
-            for name in &gate.signoffs {
-                push(signoff_key(name));
-            }
-        }
-        // A sign-off asked again after its gate was changed still has a group, after the rest.
-        let mut others: Vec<String> = self
-            .entries
-            .iter()
-            .flat_map(group_keys)
-            .filter(|k| signoff_of_key(k).is_some())
-            .collect();
-        others.sort();
-        for k in others {
-            push(k);
-        }
-        let mut keys = vec![
-            SYSTEM_BASELINE.to_string(),
-            APPROVE.to_string(),
-            RATIFY.to_string(),
-        ];
-        keys.extend(signoffs);
-        keys.extend(
-            [WHICH_RELEASE, MANUAL, DELEGATION, DELEGATED, ADR, RECODE]
-                .into_iter()
-                .map(String::from),
-        );
-        keys
+        keys_of(&self.meta.config, &self.entries)
     }
 
     /// The open prepared record of `kind` whose subject matches `item`, `signoff`, `requirement`
@@ -952,12 +959,157 @@ fn unknown_group(key: &str) -> CoreError {
     not_waiting(format!("there is no review group '{key}'"))
 }
 
+// ---- one read of the board per revision (DEF-106) -----------------------------------------------
+
+/// How many (board, project) snapshots are kept at once.
+const SHARED_SLOTS: usize = 4;
+
+/// What a snapshot of the review board was read at: it is reused while all of this is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReviewRev {
+    data_dir: PathBuf,
+    project: String,
+    /// The board repository's HEAD, empty without a commit.
+    board_head: String,
+    /// The project's uncommitted files with their sizes and modification times, hashed.
+    board_dirty: String,
+    /// The code repository's fingerprint, empty without one.
+    code: String,
+    /// The UTC day, so a delegation that ended is noticed.
+    day: String,
+}
+
+type SharedSlot = Arc<Mutex<Option<(ReviewRev, Arc<Board>)>>>;
+
+static SHARED: Mutex<Vec<((PathBuf, String), SharedSlot)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+thread_local! {
+    static COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The snapshots computed on this thread, so a test is not counted against by the others.
+#[cfg(test)]
+fn computed_here() -> u64 {
+    COMPUTED.with(std::cell::Cell::get)
+}
+
+fn rev_of(store: &Store, p: &str, repo: Option<&Path>) -> ReviewRev {
+    let data_dir = store.data_dir().to_path_buf();
+    let prefix = format!("projects/{p}/");
+    let mut dirty: Vec<String> = crate::git::dirty_paths(&data_dir)
+        .into_iter()
+        .filter(|f| f.starts_with(&prefix))
+        .collect();
+    dirty.sort();
+    let mut seen = String::new();
+    for f in &dirty {
+        let (len, at) = std::fs::metadata(data_dir.join(f)).map_or((0, 0), |m| {
+            let at = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            (m.len(), at)
+        });
+        seen.push_str(&format!("{f}\0{len}\0{at}\n"));
+    }
+    ReviewRev {
+        board_head: crate::git::head_commit(&data_dir).unwrap_or_default(),
+        board_dirty: crate::hash::stable_hash(&seen),
+        code: repo.map(crate::coderepo::fingerprint).unwrap_or_default(),
+        day: crate::now_rfc3339().chars().take(10).collect(),
+        project: p.to_string(),
+        data_dir,
+    }
+}
+
+/// The review board of the current revision: read once, and shared by the summary, every slice,
+/// the queue, the decisions and the attention badge until the board or the code repository
+/// changes. Concurrent callers at one revision compute it once; an error is returned and not kept.
+fn shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Arc<Board>> {
+    #[cfg(test)]
+    if crate::git::shared_off() {
+        return Ok(Arc::new(Board::load(store, p, repo)?));
+    }
+    // A board that is not a git repository cannot say when it changed, so nothing is kept.
+    if crate::git::head_commit(store.data_dir()).is_none()
+        && git2::Repository::open(store.data_dir()).is_err()
+    {
+        return Ok(Arc::new(Board::load(store, p, repo)?));
+    }
+    let rev = rev_of(store, p, repo);
+    let slot: SharedSlot = {
+        let mut slots = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (rev.data_dir.clone(), p.to_string());
+        match slots.iter().position(|(k, _)| *k == key) {
+            Some(at) => {
+                let kept = slots.remove(at);
+                slots.push(kept);
+            }
+            None => {
+                if slots.len() >= SHARED_SLOTS {
+                    slots.remove(0);
+                }
+                slots.push((key, Arc::new(Mutex::new(None))));
+            }
+        }
+        slots.last().map(|(_, s)| s.clone()).unwrap_or_default()
+    };
+    let mut held = slot.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, board)) = held.as_ref()
+        && *at == rev
+    {
+        return Ok(board.clone());
+    }
+    #[cfg(test)]
+    COMPUTED.with(|c| c.set(c.get() + 1));
+    let board = Arc::new(Board::load(store, p, repo)?);
+    *held = Some((rev, board.clone()));
+    Ok(board)
+}
+
+/// The review queue of the current revision, as [`crate::review::pending`] gives it, from the
+/// shared read.
+pub fn queue_shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<ReviewEntry>> {
+    Ok(shared(store, p, repo)?.entries.clone())
+}
+
+/// One decision group the config can have, named before any is counted: a tab the page draws at
+/// once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct GroupOutline {
+    pub key: String,
+    pub label: String,
+    pub action: String,
+}
+
+/// Every group the process's config can have, in the order of the page, from the config alone: no
+/// item is loaded. A sign-off asked again after its gate changed is not here; it arrives with the
+/// summary.
+pub fn outline(store: &Store, p: &str) -> Result<Vec<GroupOutline>> {
+    let config = store.read_project_config(p)?;
+    Ok(keys_of(&config, &[])
+        .into_iter()
+        .map(|key| {
+            let (label, action) = label_and_action(&key);
+            GroupOutline {
+                action: action.to_string(),
+                label,
+                key,
+            }
+        })
+        .collect())
+}
+
 // ---- reads -------------------------------------------------------------------------------------
 
 /// Every non-empty decision group of project `p`, counted, in the fixed order. A group whose rows
 /// Claude all holds is listed with a count of 0 and its `held` rows (DEF-104).
 pub fn summary(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<GroupCount>> {
-    summary_with_holds(store, p, repo, &crate::now_rfc3339()).map(|x| x.0)
+    let board = shared(store, p, repo)?;
+    summary_of(&board).map(|x| x.0)
 }
 
 /// What Claude holds and what returns to the person, read with the summary (DEF-104).
@@ -987,7 +1139,21 @@ pub fn summary_with_holds(
     repo: Option<&Path>,
     now: &str,
 ) -> Result<(Vec<GroupCount>, Holds)> {
-    let board = Board::load_at(store, p, repo, now)?;
+    summary_of(&Board::load_at(store, p, repo, now)?)
+}
+
+/// [`summary_with_holds`] for the instant now, from the shared read of the board (DEF-106): what
+/// the attention badge counts.
+pub fn summary_with_holds_shared(
+    store: &Store,
+    p: &str,
+    repo: Option<&Path>,
+) -> Result<(Vec<GroupCount>, Holds)> {
+    let board = shared(store, p, repo)?;
+    summary_of(&board)
+}
+
+fn summary_of(board: &Board) -> Result<(Vec<GroupCount>, Holds)> {
     let groups = board
         .keys()
         .into_iter()
@@ -1019,7 +1185,7 @@ pub fn slice(store: &Store, p: &str, key: &str, repo: Option<&Path>) -> Result<G
     if !is_known(key) {
         return Err(unknown_group(key));
     }
-    let board = Board::load(store, p, repo)?;
+    let board = shared(store, p, repo)?;
     let mut rows: Vec<ReviewRow> = board.rows(key).into_iter().map(|b| b.row).collect();
     board.order(&mut rows);
     let (label, action) = label_and_action(key);
@@ -1100,7 +1266,7 @@ pub fn evidence(
             out.manual = Some(m);
         }
         DELEGATION | DELEGATED => {
-            let view = crate::decisions::view(store, p, repo, None, &crate::now_rfc3339())?;
+            let view = crate::decisions::view_parts(store, p, repo, &crate::now_rfc3339())?;
             if key == DELEGATION {
                 out.delegation = Some(
                     view.delegations
@@ -1518,6 +1684,165 @@ mod tests {
             statement: s.into(),
             ..Default::default()
         }
+    }
+
+    /// A board in its own git repository with a few waiting decisions: an approval, a lapsed
+    /// approval and an item waiting on a sign-off.
+    fn board_with_decisions() -> (Store, std::path::PathBuf) {
+        let (store, dir) = board();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        define(&store, "Never approved", statement("Never approved"));
+        let lapsed = define(&store, "Lapsed", statement("Lapsed"));
+        store.approve_feature("demo", &lapsed, "Ada").unwrap();
+        store
+            .set_feature_definition("demo", &lapsed, Some(statement("Lapsed, changed")))
+            .unwrap();
+        let signed = define(&store, "Signed", statement("Waits on its sign-offs"));
+        store.approve_feature("demo", &signed, "Ada").unwrap();
+        assert!(crate::git::commit_local(&dir, "the board"));
+        (store, dir)
+    }
+
+    /// DEF-106 R-1: the outline names every group the config can have, in the page's order, from
+    /// the config alone: no item is loaded.
+    #[test]
+    fn the_outline_names_every_group_the_config_can_have() {
+        let (store, dir) = board();
+        let loads = store.loads();
+        let out = outline(&store, "demo").unwrap();
+        assert_eq!(store.loads(), loads, "the config alone, no board load");
+        let keys: Vec<&str> = out.iter().map(|g| g.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "system-baseline",
+                "approve",
+                "ratify",
+                "design-review",
+                "docs-folded",
+                "which-release",
+                "manual",
+                "delegation",
+                "delegated",
+                "adr",
+                "recode"
+            ]
+        );
+        let docs = out.iter().find(|g| g.key == "docs-folded").unwrap();
+        assert_eq!(docs.label, "Sign off docs-folded");
+        assert_eq!(docs.action, "Sign off");
+        assert_eq!(out[1].label, "Approve");
+        // Every group the summary can list is in the outline.
+        let (board_store, board_dir) = board_with_decisions();
+        for g in summary(&board_store, "demo", None).unwrap() {
+            assert!(keys.contains(&g.key.as_str()), "{}", g.key);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(board_dir);
+    }
+
+    /// DEF-106 R-5: the summary, three slices, the queue, the decisions and the attention badge of
+    /// one revision are one computation of the queue and one walk of the board's history.
+    #[test]
+    fn one_revision_computes_the_queue_once() {
+        let (store, dir) = board_with_decisions();
+        let (computed, walks) = (computed_here(), crate::git::path_history_walks_here());
+        let groups = summary(&store, "demo", None).unwrap();
+        assert!(!groups.is_empty());
+        for key in ["approve", "ratify", "design-review"] {
+            slice(&store, "demo", key, None).unwrap();
+        }
+        let queue = queue_shared(&store, "demo", None).unwrap();
+        assert_eq!(
+            serde_json::to_value(&queue).unwrap(),
+            serde_json::to_value(crate::review::pending(&store, "demo", None).unwrap()).unwrap()
+        );
+        crate::decisions::view(&store, "demo", None, None, &crate::now_rfc3339()).unwrap();
+        crate::attention::attention(&store, "demo", None).unwrap();
+        assert_eq!(computed_here() - computed, 1, "one queue for every read");
+        assert!(crate::git::path_history_walks_here() - walks <= 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-5: a board commit, an uncommitted board edit and a code commit each give a new
+    /// snapshot; nothing changing gives the same one.
+    #[test]
+    fn a_board_or_code_change_computes_it_again() {
+        use crate::docdrift::testkit::{code_commit, git_env, scratch};
+        let (store, dir) = board_with_decisions();
+        let repo = scratch("rev-code");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        code_commit(&repo, "a.txt", "one\n", "one", "2026-11-01T10:00:00+00:00");
+        let computed = |f: &dyn Fn()| {
+            let before = computed_here();
+            f();
+            computed_here() - before
+        };
+        let read = || {
+            summary(&store, "demo", Some(&repo)).unwrap();
+        };
+        assert_eq!(computed(&read), 1, "the first read computes");
+        assert_eq!(computed(&read), 0, "nothing changed");
+        // An uncommitted board edit.
+        define(&store, "Another", statement("Another"));
+        assert_eq!(computed(&read), 1, "an uncommitted board edit");
+        assert_eq!(computed(&read), 0);
+        // A second edit to the same, already modified file set.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let docs = store.project_dir("demo").join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("a.md"), "one").unwrap();
+        assert_eq!(computed(&read), 1, "a new uncommitted file");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(docs.join("a.md"), "two and more").unwrap();
+        assert_eq!(computed(&read), 1, "a second edit to it");
+        // A board commit.
+        assert!(crate::git::commit_local(&dir, "board"));
+        assert_eq!(computed(&read), 1, "a board commit");
+        assert_eq!(computed(&read), 0);
+        // A code commit.
+        code_commit(&repo, "b.txt", "two\n", "two", "2026-11-02T10:00:00+00:00");
+        assert_eq!(computed(&read), 1, "a code commit");
+        // An uncommitted edit to the code repository.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(repo.join("a.txt"), "edited\n").unwrap();
+        assert_eq!(computed(&read), 1, "an uncommitted code edit");
+        assert_eq!(computed(&read), 0);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    /// DEF-106 R-6: the summary, every slice and the queue from the shared read equal those of a
+    /// read with every shared path switched off.
+    #[test]
+    fn summary_slices_and_queue_match_the_unshared_answers() {
+        let (store, dir) = board_with_decisions();
+        let answers = || {
+            let summary = summary(&store, "demo", None).unwrap();
+            let slices: Vec<serde_json::Value> = outline(&store, "demo")
+                .unwrap()
+                .iter()
+                .map(|g| {
+                    serde_json::to_value(slice(&store, "demo", &g.key, None).unwrap()).unwrap()
+                })
+                .collect();
+            let queue = queue_shared(&store, "demo", None).unwrap();
+            serde_json::json!({
+                "summary": summary,
+                "slices": slices,
+                "queue": queue,
+            })
+        };
+        let shared = answers();
+        crate::git::set_shared_off(true);
+        let unshared = answers();
+        crate::git::set_shared_off(false);
+        assert_eq!(shared, unshared);
+        assert!(
+            !shared["summary"].as_array().unwrap().is_empty(),
+            "the fixture waits on decisions"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// DEF-104 (supports R-4): a row whose decision a delegation holds is shown last, with a pill,
