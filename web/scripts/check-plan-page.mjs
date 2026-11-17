@@ -402,7 +402,7 @@ await check(
   "the portfolio reads /portfolio/plan through the shared cache, and its Now timeline draws one lane per project: a running sprint's band, a release's diamond, an empty lane for a project with no cadence, and one today line.",
   async (expect, problems) => {
     const page = src("pages/PortfolioPage.tsx");
-    if (!/useQuery<PortfolioPlan>\(\s*null\s*,\s*urls\.portfolioPlan\(\)\s*,\s*\[\s*"\*"\s*\]\s*\)/.test(page)) problems.push('PortfolioPage.tsx does not read urls.portfolioPlan() with useQuery(null, …, ["*"])');
+    if (!/useQuery<PortfolioPlan>\(\s*null\s*,\s*urls\.portfolioPlan\([^)]*\)\s*,\s*\[\s*"\*"\s*\]\s*\)/.test(page)) problems.push('PortfolioPage.tsx does not read urls.portfolioPlan(…) with useQuery(null, …, ["*"])');
     if (/\bgetGantt\b|portfolio\/gantt/.test(page)) problems.push("PortfolioPage.tsx reads the Mermaid Gantt");
 
     const plan = {
