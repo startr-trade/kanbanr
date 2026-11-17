@@ -589,6 +589,14 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::planning::Assessment>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/recode",
+            summary: "What a bulk recode would do, with nothing changed (FTR-056): each item whose \
+                      code's prefix is not its kind's, with the code it would become, and the \
+                      plan's revision. Applying it is the person's `POST` with that revision",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::aliases::RecodePlan>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/releases/{version}/plan",
             summary: "What promoting a release would do, with nothing changed: the button, each \
                       step and condition, what is missing and, for the cut, what ships. The \

@@ -113,6 +113,8 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
             | ["projects", _, "review", "decide"]
             // A planning decision from a page (FTR-049); declining one is not a verdict.
             | ["projects", _, "planning"]
+            // The bulk recode of codes to their kinds' prefixes (FTR-056).
+            | ["projects", _, "recode"]
     )
 }
 
@@ -196,11 +198,14 @@ pub enum Verdict {
     /// Planning items into a sprint or a release, or out of their sprint, from a monitor page
     /// (FTR-049). The person's alone in every mode; Claude carries it out or declines it.
     PlanningDecision,
+    /// Recoding every item to its kind's prefix in one change (FTR-056). The person's alone in
+    /// every mode, a delegation included: it renames a hundred items in one step.
+    Recode,
 }
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 20] = [
+    pub const ALL: [Verdict; 21] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -221,6 +226,7 @@ impl Verdict {
         Verdict::GroupDecision,
         Verdict::AcceptBaseline,
         Verdict::PlanningDecision,
+        Verdict::Recode,
     ];
 
     /// Is this verdict taken on the Releases page (rather than the Review page)?
@@ -278,6 +284,12 @@ pub const PLANNING_REFUSAL: &str = "a planning decision is the person's: ask the
                                     it on the Plan page, or plan it yourself with `kanbanr sprint \
                                     plan` when the person asked you to in the conversation";
 
+/// Why Claude may not apply a recode plan (FTR-056).
+pub const RECODE_REFUSAL: &str = "a recode is the person's own, in every decision mode, a \
+                                  delegation included: it renames many items in one step, and \
+                                  the person confirms the plan on the Review page or runs \
+                                  `kanbanr feature recode --apply --rev <rev>` in their terminal";
+
 const PREPARE_INSTEAD: &str = "Prepare its record instead (`kanbanr prepare …`) and tell the \
                                person where it waits.";
 
@@ -321,6 +333,11 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
                  person's in every mode: link them the group (FTR-038)."
             )),
         };
+    }
+    // A recode renames a hundred or more items in one step, so it is the person's in every mode
+    // (FTR-056): no delegation covers it. Claude prints the plan and prepares it.
+    if verdict == Verdict::Recode && taker == Taker::Claude {
+        return Some(format!("{RECODE_REFUSAL} {PREPARE_INSTEAD}"));
     }
     // A planning decision is the person's in every mode (FTR-049): no delegation covers it, and
     // Claude's own plan changes go through the plan commands, not this route.
@@ -396,6 +413,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "baseline", "revisions", _, "accept"]) => Verdict::AcceptBaseline,
         // A planning decision from a page (FTR-049).
         ("POST", ["projects", _, "planning"]) => Verdict::PlanningDecision,
+        // Recoding every item to its kind's prefix (FTR-056).
+        ("POST", ["projects", _, "recode"]) => Verdict::Recode,
         _ => return None,
     })
 }
@@ -537,6 +556,8 @@ pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {
         ["gate", "record"] => Some(Verdict::GateResult),
         // Accepting a baseline revision is the person's (FTR-033).
         ["baseline", "accept"] => Some(Verdict::AcceptBaseline),
+        // Applying a recode plan is the person's (FTR-056); printing it is not a verdict.
+        ["feature", "recode"] if has("--apply") => Some(Verdict::Recode),
         _ => None,
     }
 }

@@ -2509,6 +2509,18 @@ fn dispatch_routes(
             let state = query_param(query, "state").filter(|v| !v.is_empty());
             ser(&crate::planning::list(store, p, state.as_deref())?)
         }
+        // FTR-056: what a bulk recode would do, with nothing written; `{rev}` applies exactly
+        // that plan (the person's verdict: refused to Claude in every mode, and stamped).
+        ("GET", ["projects", p, "recode"]) => {
+            only_params(query, &[])?;
+            ser(&crate::aliases::recode_plan(&store.load_meta(p)?))
+        }
+        ("POST", ["projects", p, "recode"]) => {
+            let rev = str_field(b, "rev")
+                .filter(|r| !r.trim().is_empty())
+                .ok_or_else(|| CoreError::Unsupported("recode needs `rev`, the plan's".into()))?;
+            ser(&store.apply_recode(p, rev.trim())?)
+        }
         // A decision checked against frozen scope, dependencies, capacity and dates (FTR-049).
         ("GET", ["projects", p, "planning", id, "check"]) => ser(&crate::planning::assess(
             store,
@@ -3590,6 +3602,24 @@ pub fn commit_message_after(
     {
         return format!("propose delegation {id}");
     }
+    // FTR-056: one commit for the whole recode, with a trailer for every new code.
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "recode"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(renames) = v["renames"].as_array()
+        && !renames.is_empty()
+    {
+        let refs: Vec<String> = renames
+            .iter()
+            .filter_map(|r| r["to"].as_str())
+            .map(|c| format!("kanbanr:{c}"))
+            .collect();
+        return format!(
+            "recode {} items to their kinds' prefixes\n\nRefs: {}",
+            renames.len(),
+            refs.join(", ")
+        );
+    }
     // FTR-033: the revision's id, and whether a pack was added or updated at which version.
     if method.eq_ignore_ascii_case("POST")
         && matches!(segs.as_slice(), ["projects", _, "baseline", "revisions"])
@@ -3764,6 +3794,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             }
         }
         ["projects", _p, "planning", id, "decline"] => format!("decline planning decision {id}"),
+        ["projects", _p, "recode"] => "recode items to their kinds' prefixes".into(),
         [
             "projects",
             _p,
