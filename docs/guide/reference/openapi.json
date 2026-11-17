@@ -516,6 +516,74 @@
         ],
         "type": "object"
       },
+      "Attention": {
+        "description": "Everything waiting, and how many of it are the person's own decisions.",
+        "properties": {
+          "lines": {
+            "description": "In section order: decisions, releases, health, records.",
+            "items": {
+              "$ref": "#/components/schemas/AttentionLine"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "The sum of the counts of the lines that are the person's (`yours`).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "type": "object"
+      },
+      "AttentionLine": {
+        "description": "One kind of thing waiting, counted, with where to see it or what to ask Claude.",
+        "properties": {
+          "ask": {
+            "description": "The sentence to ask Claude with, when no page shows it.",
+            "type": "string"
+          },
+          "count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "A review group's key, as the Review page names it, or `release`, `red-tests`,\n`doctor-errors`, `git-doctor`, `retro-due`, or `read-error` for a source that could not be\nread.",
+            "type": "string"
+          },
+          "label": {
+            "description": "\"Approve\", \"v0.8.0 at candidate\", \"Red tests\", \"Doctor errors\", \"Retro due: SP-003\".",
+            "type": "string"
+          },
+          "section": {
+            "$ref": "#/components/schemas/Section"
+          },
+          "to": {
+            "description": "The monitor page that shows it; absent when no page does.",
+            "type": "string"
+          },
+          "tone": {
+            "description": "`info`, `warn` or `error`.",
+            "type": "string"
+          },
+          "yours": {
+            "description": "The person's own decision, counted in [`Attention::total`].",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "section",
+          "label",
+          "count",
+          "tone",
+          "yours"
+        ],
+        "type": "object"
+      },
       "Baseline": {
         "description": "The release the report compares with: the newest shipped one.",
         "properties": {
@@ -6148,6 +6216,16 @@
         ],
         "type": "object"
       },
+      "Section": {
+        "description": "Where a line is shown in the drawer.",
+        "enum": [
+          "decisions",
+          "releases",
+          "health",
+          "records"
+        ],
+        "type": "string"
+      },
       "SettledText": {
         "properties": {
           "check": {
@@ -7549,6 +7627,47 @@
           }
         },
         "summary": "The project's architecture decision records"
+      }
+    },
+    "/api/projects/{project}/attention": {
+      "get": {
+        "operationId": "getProjectsAttention",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attention"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What needs the person, each kind counted, the person's own decisions totalled"
       }
     },
     "/api/projects/{project}/baseline": {

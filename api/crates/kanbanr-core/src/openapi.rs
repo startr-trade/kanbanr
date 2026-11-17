@@ -592,6 +592,13 @@ pub fn public_routes() -> Vec<RouteDoc> {
             ],
             response: Response::Json(schema_of::<crate::docdrift::Latest>),
         },
+        // ---- what needs the person (FTR-048) ----
+        RouteDoc {
+            path: "/api/projects/{project}/attention",
+            summary: "What needs the person, each kind counted, the person's own decisions totalled",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::attention::Attention>),
+        },
         // ---- items, filtered (FTR-048) ----
         RouteDoc {
             path: "/api/projects/{project}/items",

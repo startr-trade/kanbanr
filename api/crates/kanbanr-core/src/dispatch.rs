@@ -2831,6 +2831,12 @@ fn dispatch_routes(
             )?)
         }
 
+        // ---- what needs the person (FTR-048) ----
+        ("GET", ["projects", p, "attention"]) => {
+            only_params(query, &[])?;
+            ser(&crate::attention::attention(store, p, repo)?)
+        }
+
         // ---- items, filtered (FTR-048) ----
         ("GET", ["projects", p, "items"]) => {
             let filter = crate::items::parse_filter(query)?;
