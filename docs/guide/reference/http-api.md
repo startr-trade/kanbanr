@@ -29,6 +29,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/meta` | — | JSON `Meta` | What this daemon can do, and who an approval here would be attributed to |
 | `GET /api/openapi.json` | — | JSON `object` | This description of the public read API |
 | `GET /api/projects` | — | JSON `ProjectSummary[]` | The projects on the board |
+| `GET /api/boards` | — | JSON `BoardInfo[]` | The boards this server shows, in order, each with its projects |
 | `GET /api/projects/{project}` | — | JSON `Project` | A project: its configuration, milestones and items |
 | `GET /api/projects/{project}/index` | — | JSON `CompactIndex` | The project's compact index |
 | `GET /api/projects/{project}/config` | — | JSON `ProjectConfig` | The project's configuration |

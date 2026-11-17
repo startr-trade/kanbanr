@@ -170,6 +170,13 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[],
             response: Response::Json(schema_of::<Vec<crate::dispatch::ProjectSummary>>),
         },
+        // Several boards on one read-only server (FTR-040): a data folder is a list of one.
+        RouteDoc {
+            path: "/api/boards",
+            summary: "The boards this server shows, in order, each with its projects",
+            params: &[],
+            response: Response::Json(schema_of::<Vec<crate::boards::BoardInfo>>),
+        },
         RouteDoc {
             path: "/api/projects/{project}",
             summary: "A project: its configuration, milestones and items",

@@ -293,6 +293,8 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
         .replace("{version}", "1.0");
     let mut out = vec![];
     match path {
+        // The board list (FTR-040 R-8): the fixture's data folder served as a list of one.
+        "/api/boards" => out.push(base),
         "/api/projects/{project}/workflow" => out.push(format!("{base}?format=mermaid")),
         "/api/projects/{project}/docs/content" => out.push(format!("{base}?path=guide/intro.md")),
         "/api/projects/{project}/docs/raw" => {
