@@ -338,11 +338,13 @@ pub struct CrateInfo {
     pub deps: Vec<String>,
     /// Its binary target's name, for a binary crate.
     pub bin: Option<String>,
+    /// It has a library target (a target of kind `lib`): its modules are tested through it.
+    pub has_lib: bool,
 }
 
 /// The workspace's crates out of `cargo metadata --no-deps --format-version 1`: each package's
-/// name, its folder (its manifest's, relative to `repo_root`), its path dependencies and its
-/// binary target.
+/// name, its folder (its manifest's, relative to `repo_root`), its path dependencies, its
+/// binary target and whether it has a library target.
 pub fn workspace_from_metadata(json: &str, repo_root: &Path) -> crate::Result<Vec<CrateInfo>> {
     let bad = |why: String| crate::CoreError::Unsupported(format!("cargo metadata: {why}"));
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(e.to_string()))?;
@@ -390,21 +392,21 @@ pub fn workspace_from_metadata(json: &str, repo_root: &Path) -> crate::Result<Ve
             .collect();
         deps.sort();
         deps.dedup();
-        let bin = p["targets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|t| {
+        let of_kind = |kind: &str| {
+            p["targets"].as_array().into_iter().flatten().find(|t| {
                 t["kind"]
                     .as_array()
-                    .is_some_and(|k| k.iter().any(|k| k == "bin"))
+                    .is_some_and(|k| k.iter().any(|k| k == kind))
             })
-            .and_then(|t| t["name"].as_str().map(String::from));
+        };
+        let bin = of_kind("bin").and_then(|t| t["name"].as_str().map(String::from));
+        let has_lib = of_kind("lib").is_some();
         out.push(CrateInfo {
             name,
             dir,
             deps,
             bin,
+            has_lib,
         });
     }
     Ok(out)
@@ -527,15 +529,21 @@ fn task_test(c: &CrateInfo, path: &str) -> Option<Vec<String>> {
     let rel = path.get(c.dir.len() + 1..)?;
     let base = ["cargo", "test", "--locked", "-p", c.name.as_str()];
     let mut argv = strings(&base);
-    // A binary crate's modules are tested through its binary.
-    let target: Vec<String> = match &c.bin {
+    // `main.rs` is tested through the binary; a module through the library when the crate has
+    // one, else through its binary (a binary-only crate).
+    let binary: Vec<String> = match &c.bin {
         Some(b) => strings(&["--bin", b]),
         None => strings(&["--lib"]),
+    };
+    let target: Vec<String> = if c.has_lib {
+        strings(&["--lib"])
+    } else {
+        binary.clone()
     };
     if let Some(src) = rel.strip_prefix("src/") {
         match src {
             "lib.rs" => argv.push("--lib".into()),
-            "main.rs" => argv.extend(target),
+            "main.rs" => argv.extend(binary),
             _ => {
                 let (module, nested) = match src.split_once('/') {
                     Some((m, _)) => (m, true),
@@ -1149,6 +1157,51 @@ mod tests {
             .iter()
             .map(|c| format!("{}$ {}", c.dir, c.argv.join(" ")))
             .collect()
+    }
+
+    #[test]
+    fn a_crate_with_a_library_runs_its_modules_through_the_library() {
+        // `app` has a library and a binary; `tool` is binary-only.
+        let json = r#"{
+          "packages": [
+            {"name": "app", "manifest_path": "/repo/api/crates/app/Cargo.toml",
+             "dependencies": [],
+             "targets": [{"kind": ["lib"], "name": "app"}, {"kind": ["bin"], "name": "app-cli"}]},
+            {"name": "tool", "manifest_path": "/repo/api/crates/tool/Cargo.toml",
+             "dependencies": [],
+             "targets": [{"kind": ["bin"], "name": "tool"}]}
+          ]
+        }"#;
+        let ws = workspace_from_metadata(json, Path::new("/repo")).unwrap();
+        assert!(ws[0].has_lib && ws[0].bin.as_deref() == Some("app-cli"));
+        assert!(!ws[1].has_lib && ws[1].bin.as_deref() == Some("tool"));
+        let a = affected(
+            &paths(&[
+                "api/crates/app/src/store.rs",
+                "api/crates/app/src/main.rs",
+                "api/crates/tool/src/walk.rs",
+            ]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        let l = lines(&a);
+        assert!(
+            l.contains(&"api$ cargo test --locked -p app --lib store::".to_string()),
+            "a module of a crate with a library runs through the library: {l:?}"
+        );
+        assert!(
+            l.contains(&"api$ cargo test --locked -p app --bin app-cli".to_string()),
+            "main.rs runs through the binary: {l:?}"
+        );
+        assert!(
+            l.contains(&"api$ cargo test --locked -p tool --bin tool walk::".to_string()),
+            "a binary-only crate's module runs through its binary: {l:?}"
+        );
+        assert!(
+            !l.iter().any(|c| c.contains("--bin app-cli store::")),
+            "{l:?}"
+        );
     }
 
     #[test]
