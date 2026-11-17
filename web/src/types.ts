@@ -459,6 +459,9 @@ export interface GroupSlice {
   choices: string[];
   /** The releases whose items the manual group lists first, newest first (FTR-057): for `manual` only. */
   holding?: string[];
+  /** The releases that have shipped, in file order (DEF-113): for `manual` only. The page lists
+   * their unjudged checks apart, where the person may retire them. */
+  shipped?: string[];
 }
 
 /** One row's full evidence, read when the row is opened (FTR-038, `GET /review/groups/{key}/rows/{row}`). */
@@ -492,6 +495,7 @@ export interface GroupDecision {
   by: string;
   /** The release, for `which-release`; empty otherwise. */
   target: string;
+  /** A reason, kept where a route takes it: a retirement's (DEF-113). */
   reason: string;
   items: DecisionItem[];
 }
@@ -1011,7 +1015,7 @@ export interface ManualResult {
   code: string;
   requirement: string;
   test: string;
-  /** green | red */
+  /** green | red | retired */
   state: string;
   by: string;
   at: string;

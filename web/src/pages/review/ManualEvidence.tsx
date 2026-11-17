@@ -69,7 +69,7 @@ export function ManualEvidence({
           view={prepared}
           writable={writable}
           busy={busy}
-          label={prepared.fields?.state === "red" ? "Record failed" : "Record passed"}
+          label={prepared.fields?.state === "red" ? "Record failed" : prepared.fields?.state === "retired" ? "Record retired" : "Record passed"}
           onConfirm={(edits) => onConfirm(prepared, edits)}
           onReject={(reason) => onReject(prepared, reason)}
         />

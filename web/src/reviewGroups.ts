@@ -202,7 +202,7 @@ export function askText(slice: GroupSlice, sel: Selection, rows: ReviewRow[], ta
  * The decision the second press posts (`api.decideGroup`): each selected row with the pins the
  * slice showed, and its prepared record when it has one, so that record resolves. `action`
  * defaults to the group's; the delegated group's second button sends `undo`, and turning prepared
- * records down sends `reject`.
+ * records down sends `reject`; retiring shipped manual checks sends `retire` with `reason` (DEF-113).
  */
 export function decisionBody(
   slice: GroupSlice,
@@ -211,6 +211,7 @@ export function decisionBody(
   by: string,
   target: string,
   action: string = slice.action,
+  reason = "",
 ): GroupDecision {
   const items: DecisionItem[] = chosen(slice, sel, rows).map((r) => ({
     key: r.key,
@@ -222,5 +223,5 @@ export function decisionBody(
     test: r.test,
     prepared: r.prepared,
   }));
-  return { group: slice.key, action, by, target, reason: "", items };
+  return { group: slice.key, action, by, target, reason, items };
 }

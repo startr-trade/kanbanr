@@ -62,6 +62,7 @@ const PAST: Record<string, string> = {
   accept: "accepted",
   undo: "undone",
   reject: "rejected",
+  retire: "retired",
 };
 const past = (action: string) => PAST[action.toLowerCase()] ?? `${action.toLowerCase()}: done`;
 
@@ -231,9 +232,9 @@ export function GroupPanel(p: {
   // The second press of an ask-first step: one decision over the chosen rows. A selection that is
   // exactly one prepared batch, confirmed or turned down, goes through FTR-037's batch route, so
   // the batch is still one action and one commit (R-5); anything else is one group decision.
-  const send = (action: string, chosen: Selection) => {
+  const send = (action: string, chosen: Selection, reason = "") => {
     const batch = action === slice.action || action === "reject" ? batchOf(slice, chosen) : null;
-    const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action);
+    const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action, reason);
     const n = body.items.length;
     const by = p.who ?? "";
     void guard.current?.run(async () => {
@@ -430,6 +431,7 @@ export function GroupPanel(p: {
             onSelect={(key, v) => setSel((s) => select(s, slice.key, key, v, slice.rows, pending))}
             onSelectItem={setSel}
             onConfirmItem={(chosen) => send(slice.action, chosen)}
+            onRetire={(chosen, reason) => send("retire", chosen, reason)}
             reasonFor={reasonFor}
             openRows={openRows}
             onOpen={setOpen}

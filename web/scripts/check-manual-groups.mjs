@@ -13,18 +13,34 @@
 // through scripts/lib/render.mjs:
 //   R-1 — each item's heading is an h3 (FTR-046's AccordionRow) naming its count, its checks
 //     beneath it;
-//   R-2 — a holding release's section comes first; "Other items" is collapsed after it; a holding
-//     release with nothing due draws no section;
+//   R-2 — a holding release's section comes first; the sections after it (DEF-113) are collapsed;
+//     a holding release with nothing due draws no section;
 //   R-3 — the check that holds Promote, and its item's heading, carry the pill naming the button;
 //   web::check_manual_item_group_confirms_its_prepared_results_together (R-4) — two prepared rows
 //     give the heading action "Confirm 2 prepared for <code>"; pressing it selects exactly those
 //     rows (itemPrepared), so actionLabel reads "Confirm 2" and askText names both checks; one
 //     prepared row offers no heading action.
+// and DEF-113, where the group says what it is for and lets the person retire what shipped unjudged:
+//   web::check_manual_checks_say_what_they_are_for (R-1) — the group starts with MANUAL_PURPOSE,
+//     with or without holding sections, read-only too;
+//   web::check_manual_checks_split_the_rest_by_release (R-2) — manualGroups splits `other` into
+//     shipped, later and unplanned; the page draws them as collapsed sections, no "Other items";
+//   web::check_manual_shipped_checks_retire_together (R-7) — Retire N asks, wants a reason, and
+//     calls onRetire with the section's selection and the trimmed reason.
 //
 // Usage: npm run check:manual-groups
-import { itemPrepared, manualGroups } from "../src/manualTests.ts";
-import { actionLabel, askText } from "../src/reviewGroups.ts";
+import { MANUAL_PURPOSE, itemPrepared, lastResultLine, manualGroups, retirable } from "../src/manualTests.ts";
+import { actionLabel, askText, decisionBody } from "../src/reviewGroups.ts";
+import { readFileSync } from "node:fs";
 import { closeRender, render } from "./lib/render.mjs";
+import { JSDOM } from "jsdom";
+
+// The pressed checks need a DOM before React loads: react-dom decides at load whether the browser
+// has an `input` event, and onChange on a text box is silent if it loaded without one.
+const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost/" });
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const waiting = (code, requirement, test, extra = {}) => ({
   row: {
@@ -44,6 +60,9 @@ const prepared = { id: "p", kind: "manual-test" };
 
 const results = [];
 const check = (name, problems) => results.push({ name, problems });
+const ok = (problems, what, cond, detail = "") => {
+  if (!cond) problems.push(`${what}${detail ? `: ${detail}` : ""}`);
+};
 const expect = (problems, what, got, want) => {
   if (JSON.stringify(got) !== JSON.stringify(want)) problems.push(`${what}: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
 };
@@ -116,7 +135,6 @@ const expect = (problems, what, got, want) => {
   check("web::check_manual_checks_mark_a_check_that_blocks_promote", problems);
 }
 
-
 // The Manual group as drawn (T4). A slice row as core builds it (reviewgroups.rs, manual_row), and
 // the waiting check it stands for, paired by its key <CODE>/<R-n>/<test>.
 const sliceRow = (code, requirement, test, extra = {}) => ({
@@ -140,7 +158,7 @@ const sliceRow = (code, requirement, test, extra = {}) => ({
   ...extra,
 });
 const manualSlice = (rows, holding = []) => ({ key: "manual", label: "Manual checks", action: "Confirm", rows, choices: [], holding });
-const drawn = (slice, manual) =>
+const drawn = (slice, manual, extra = {}) =>
   render("src/pages/review/ManualGroup.tsx", "ManualGroup", {
     project: "x",
     slice,
@@ -151,12 +169,45 @@ const drawn = (slice, manual) =>
     onSelect: () => {},
     onSelectItem: () => {},
     onConfirmItem: () => {},
+    onRetire: () => {},
     reasonFor: (r) => r.blocked,
     openRows: new Set(),
     onOpen: () => {},
     inFlight: false,
     body: (r) => `evidence of ${r.key}`,
+    ...extra,
   });
+// DEF-113 R-2: `other` is split by where each item's release stands, and `other` stays as it was.
+{
+  const problems = [];
+  const s = manualGroups(
+    [
+      waiting("FEAT-001", "R-1", "manual: shipped", { release: "v0.6.0" }),
+      waiting("FEAT-002", "R-1", "manual: later", { release: "v1.0.0" }),
+      waiting("FEAT-003", "R-1", "manual: none"),
+      waiting("FEAT-004", "R-1", "manual: candidate", { release: "v0.8.0" }),
+      waiting("FEAT-005", "R-1", "manual: also shipped", { release: "v0.5.0" }),
+    ],
+    ["v0.8.0"],
+    ["v0.6.0", "v0.5.0"],
+  );
+  expect(problems, "shipped", s.shipped.map((g) => g.code), ["FEAT-001", "FEAT-005"]);
+  expect(problems, "later", s.later.map((g) => g.code), ["FEAT-002"]);
+  expect(problems, "unplanned", s.unplanned.map((g) => g.code), ["FEAT-003"]);
+  expect(problems, "other is their union, as before", s.other.map((g) => g.code), ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-005"]);
+  expect(problems, "holding is untouched", s.holding[0]?.items.map((g) => g.code), ["FEAT-004"]);
+  const old = manualGroups([waiting("FEAT-001", "R-1", "manual: x", { release: "v0.9.0" })], []);
+  expect(problems, "without a shipped list the release is later", [old.shipped.length, old.later.length], [0, 1]);
+  expect(problems, "a retired result reads as one", lastResultLine({ code: "A", requirement: "R-1", test: "t", state: "retired", by: "Ada", at: "2026-11-12T10:00:00Z", note: "shipped, not judged" }), "retired by Ada on 12 Nov 2026: shipped, not judged");
+  expect(problems, "an unprepared due row is retirable", retirable(waiting("A", "R-1", "t")), true);
+  expect(problems, "a prepared row is not retirable", retirable({ ...waiting("A", "R-1", "t"), prepared }), false);
+  expect(problems, "a row not yet due is not retirable", retirable(waiting("A", "R-1", "t", { opens_at: "Build" })), false);
+  const slice = manualSlice([sliceRow("A", "R-1", "t")]);
+  const body = decisionBody(slice, { group: "manual", keys: new Set(["A/R-1/t"]) }, slice.rows, "Ada", "", "retire", "why");
+  expect(problems, "the decision carries the action and reason", [body.action, body.reason], ["retire", "why"]);
+  check("web::check_manual_checks_split_the_rest_by_release", problems);
+}
+
 const heads = (document) => [...document.querySelectorAll('section[id^="manual-item-"] > .ui-row-head h3')].map((h) => h.textContent.trim());
 const renderChecks = [];
 try {
@@ -178,8 +229,9 @@ try {
     if (problems.length && !items.length) problems.push(html.slice(0, 400));
     renderChecks.push(["web::check_manual_checks_group_under_their_item", problems]);
   }
-  // R-2, rendered: the holding release's section first, "Other items" collapsed after it, and a
-  // holding release with nothing due draws no section.
+  // R-2, rendered: the holding release's section first, the sections after it collapsed and named
+  // by where their items stand, and a holding release with nothing due draws no section. FTR-057's
+  // "Other items" is replaced by DEF-113's three sections, as the person decided (17 Nov 2026).
   {
     const problems = [];
     const rows = [sliceRow("FEAT-001", "R-1", "manual: other", { release: "v0.9.0" }), sliceRow("FEAT-003", "R-1", "manual: candidate", { release: "v0.8.0" })];
@@ -189,11 +241,11 @@ try {
     ];
     const { document } = await drawn(manualSlice(rows, ["v0.8.0", "v0.7.1"]), manual);
     const titles = [...document.querySelectorAll(".manual-groups h2")].map((h) => h.textContent.trim());
-    expect(problems, "the sections, holding first", titles, ["Holding v0.8.0 · 1 item, 1 check", "Other items (1)"]);
+    expect(problems, "the sections, holding first", titles, ["Holding v0.8.0 · 1 item, 1 check", "Later releases · 1 item, 1 check"]);
     expect(problems, "the holding release's item is drawn first", heads(document), ["FEAT-003 Item FEAT-003 · Completed · v0.8.0 · 1 check"]);
-    const other = document.getElementById("manual-other-head");
-    expect(problems, "Other items is collapsed", other?.getAttribute("aria-expanded"), "false");
-    if (document.getElementById("FEAT-001/R-1/manual: other")) problems.push("a check under the collapsed Other items is drawn");
+    const later = document.getElementById("manual-later-head");
+    expect(problems, "Later releases is collapsed", later?.getAttribute("aria-expanded"), "false");
+    if (document.getElementById("FEAT-001/R-1/manual: other")) problems.push("a check under the collapsed Later releases is drawn");
     if (/Holding v0\.7\.1/.test(document.body.textContent)) problems.push("a holding release with nothing due draws a section");
     renderChecks.push(["web::check_manual_checks_put_the_release_being_shipped_first", problems]);
   }
@@ -213,6 +265,61 @@ try {
     expect(problems, "so does the check", pills(document.getElementById("FEAT-011/R-2/manual: blocks")), [`warning holds ${holds}`]);
     expect(problems, "an item that holds nothing has no pill", pills(document.getElementById("manual-item-FEAT-010")), []);
     renderChecks.push(["web::check_manual_checks_mark_a_check_that_blocks_promote", problems]);
+  }
+  // DEF-113 R-1, rendered: the line on top, in every state of the group.
+  {
+    const problems = [];
+    const rows = [sliceRow("FEAT-003", "R-1", "manual: candidate", { release: "v0.8.0" })];
+    const manual = [waiting("FEAT-003", "R-1", "manual: candidate", { release: "v0.8.0" })];
+    const first = (document) => document.querySelector(".manual-groups")?.firstElementChild;
+    for (const [what, slice, props] of [
+      ["with a holding release", manualSlice(rows, ["v0.8.0"]), {}],
+      ["with none", manualSlice(rows, []), {}],
+      ["read-only", manualSlice(rows, ["v0.8.0"]), { writable: false }],
+    ]) {
+      const { document } = await drawn(slice, manual, props);
+      const el = first(document);
+      expect(problems, `the first thing ${what}`, [el?.tagName, el?.className.includes("manual-purpose"), el?.textContent], ["P", true, MANUAL_PURPOSE]);
+    }
+    expect(problems, "its words", MANUAL_PURPOSE, "A manual check is one only you can judge. An item ships when its check is recorded passed.");
+    renderChecks.push(["web::check_manual_checks_say_what_they_are_for", problems]);
+  }
+  // DEF-113 R-2, rendered: shipped, later and not planned, each collapsed and counted.
+  {
+    const problems = [];
+    const rows = [
+      sliceRow("FEAT-001", "R-1", "manual: a", { release: "v0.6.0" }),
+      sliceRow("FEAT-001", "R-2", "manual: b", { release: "v0.6.0" }),
+      sliceRow("FEAT-002", "R-1", "manual: c", { release: "v1.0.0" }),
+      sliceRow("FEAT-004", "R-1", "manual: d"),
+      sliceRow("FEAT-003", "R-1", "manual: e", { release: "v0.8.0" }),
+      sliceRow("FEAT-005", "R-1", "manual: f", { release: "v0.8.0", blocked: "Not yet" }),
+    ];
+    const manual = rows.map((r) => waiting(r.code, r.requirement, r.test, { release: r.release || undefined, ...(r.code === "FEAT-005" ? { opens_at: "Build" } : {}) }));
+    const slice = { ...manualSlice(rows, ["v0.8.0"]), shipped: ["v0.6.0", "v0.5.0"] };
+    const { document } = await drawn(slice, manual);
+    const titles = [...document.querySelectorAll(".manual-groups h2")].map((h) => h.textContent.trim());
+    expect(problems, "the sections, in order", titles, [
+      "Holding v0.8.0 · 1 item, 1 check",
+      "Shipped without a judgement · 1 item, 2 checks",
+      "Later releases · 1 item, 1 check",
+      "Not planned · 1 item, 1 check",
+      "Not due yet (1)",
+    ]);
+    expect(problems, "the holding section is open", document.getElementById("manual-holding-v0.8.0") != null && document.getElementById("manual-item-FEAT-003-head")?.getAttribute("aria-expanded"), "true");
+    for (const id of ["manual-shipped", "manual-later", "manual-unplanned", "manual-not-due"]) {
+      expect(problems, `${id} is collapsed`, document.getElementById(`${id}-head`)?.getAttribute("aria-expanded"), "false");
+    }
+    if (/Other items/.test(document.body.textContent)) problems.push("Other items is still drawn");
+    // An empty section is not drawn.
+    const some = await drawn(manualSlice([rows[2]], []), [manual[2]]);
+    expect(problems, "with only a later release, only that section", [...some.document.querySelectorAll(".manual-groups h2")].map((h) => h.textContent.trim()), ["Later releases · 1 item, 1 check"]);
+    expect(problems, "and it is open when nothing holds", some.document.getElementById("manual-later-head")?.getAttribute("aria-expanded"), "true");
+    // A project with no release at all lists its items with no section heading.
+    const bare = await drawn(manualSlice([rows[3]], []), [manual[3]]);
+    expect(problems, "no release anywhere: no section heading", [...bare.document.querySelectorAll(".manual-groups h2")].map((h) => h.textContent.trim()), []);
+    expect(problems, "but the item is listed", heads(bare.document), ["FEAT-004 Item FEAT-004 · Completed · 1 check"]);
+    renderChecks.push(["web::check_manual_checks_split_the_rest_by_release", problems]);
   }
   // R-4: one item's prepared results confirmed together.
   {
@@ -236,6 +343,89 @@ try {
     expect(problems, "one prepared row offers none", actions("manual-item-FEAT-009"), []);
     if (document.querySelector(".ask-first")) problems.push("the question shows before the first press");
     renderChecks.push(["web::check_manual_item_group_confirms_its_prepared_results_together", problems]);
+  }
+  // DEF-113 R-7, rendered and pressed: Retire N over the shipped section's own selection.
+  {
+    const problems = [];
+    document.body.innerHTML = '<div id="root"></div>';
+    const { load } = await import("./lib/render.mjs");
+    const mod = await load("src/pages/review/ManualGroup.tsx");
+    const React = (await import("react")).default;
+    const { createRoot } = await import("react-dom/client");
+    const { MemoryRouter } = await import("react-router-dom");
+    const rows = [
+      sliceRow("FEAT-001", "R-1", "manual: a", { release: "v0.6.0" }),
+      sliceRow("FEAT-001", "R-2", "manual: b", { release: "v0.6.0" }),
+      sliceRow("FEAT-002", "R-1", "manual: c", { release: "v0.5.0", prepared: "P-1" }),
+    ];
+    const manual = rows.map((r) => ({ ...waiting(r.code, r.requirement, r.test, { release: r.release }), prepared: r.prepared ? { id: r.prepared, kind: "manual-test" } : undefined }));
+    const slice = { ...manualSlice(rows, []), shipped: ["v0.6.0", "v0.5.0"] };
+    const retired = [];
+    const picked = [];
+    const props = (writable) => ({
+      project: "x", slice, rows, manual, writable,
+      sel: { group: "manual", keys: new Set() },
+      onSelect: (k, v) => picked.push([k, v]),
+      onSelectItem: () => {}, onConfirmItem: () => {},
+      onRetire: (sel, reason) => retired.push([[...sel.keys], reason]),
+      reasonFor: (r) => r.blocked, openRows: new Set(), onOpen: () => {}, inFlight: false, body: () => "",
+    });
+    const root = createRoot(document.getElementById("root"));
+    const show = (w) => React.act(() => root.render(React.createElement(MemoryRouter, null, React.createElement(mod.ManualGroup, props(w)))));
+    const text = () => document.getElementById("root").textContent;
+    const buttons = () => [...document.querySelectorAll("button")].map((b) => b.textContent.trim());
+    const click = (el) => React.act(async () => { el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const press = (label) => {
+      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === label);
+      if (!b) throw new Error(`no button "${label}" among ${JSON.stringify(buttons())}`);
+      return click(b);
+    };
+    await show(true);
+    await click(document.getElementById("manual-shipped-head"));
+    const boxes = (id) => [...document.querySelectorAll(`[id="${id}"] input[type=checkbox]`)];
+    expect(problems, "three checkboxes in the shipped section", document.querySelectorAll('[id="manual-shipped-body"] input[type=checkbox]').length, 3);
+    // The prepared row keeps the group's checkbox; the other two are the section's own.
+    await click(boxes("FEAT-002/R-1/manual: c")[0]);
+    expect(problems, "the prepared row ticks the group's selection", picked, [["FEAT-002/R-1/manual: c", true]]);
+    expect(problems, "and does not arm Retire", buttons().filter((b) => /^Retire/.test(b)), ["Retire 0"]);
+    await click(boxes("FEAT-001/R-1/manual: a")[0]);
+    await click(boxes("FEAT-001/R-2/manual: b")[0]);
+    expect(problems, "two ticked rows read Retire 2", buttons().filter((b) => /^Retire/.test(b)), ["Retire 2"]);
+    expect(problems, "and did not touch the group's selection", picked.length, 1);
+    await press("Retire 2");
+    expect(problems, "the first press calls nothing", retired.length, 0);
+    ok(problems, "it asks, naming both", text().includes("Retire FEAT-001 R-1 and FEAT-001 R-2? They stay not proven; the reason is kept with each."), text().slice(0, 500));
+    const reason = document.querySelector('input[aria-label="Reason"]');
+    expect(problems, "with a reason box", [reason != null, reason?.getAttribute("maxlength")], [true, "4000"]);
+    const second = () => [...document.querySelectorAll(".ask-first button, .retire-ask button")].find((b) => b.textContent.trim() === "Retire 2");
+    expect(problems, "the second button waits for a reason", second()?.disabled, true);
+    await React.act(async () => {
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(reason, "   ");
+      reason.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    expect(problems, "a blank reason keeps it disabled", second()?.disabled, true);
+    await React.act(async () => {
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(document.querySelector('input[aria-label="Reason"]'), "  shipped in v0.6.0; not judged  ");
+      document.querySelector('input[aria-label="Reason"]').dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    expect(problems, "a reason enables it", second()?.disabled, false);
+    await click(second());
+    expect(problems, "the second press calls onRetire with those two keys and the trimmed reason", retired, [[["FEAT-001/R-1/manual: a", "FEAT-001/R-2/manual: b"], "shipped in v0.6.0; not judged"]]);
+    expect(problems, "and the section's selection is cleared", buttons().filter((b) => /^Retire/.test(b)), ["Retire 0"]);
+    await React.act(() => root.unmount());
+    // A read-only monitor offers no Retire.
+    const ro = createRoot(document.getElementById("root"));
+    await React.act(() => ro.render(React.createElement(MemoryRouter, null, React.createElement(mod.ManualGroup, props(false)))));
+    await click(document.getElementById("manual-shipped-head"));
+    if (buttons().some((b) => /Retire|Select all/.test(b)) || document.querySelector("input[type=checkbox]")) problems.push(`a read-only render offers a way to retire: ${JSON.stringify(buttons())}`);
+    await React.act(() => ro.unmount());
+    // The GroupView sends it through the same guard as every group action.
+    const view = readFileSync(new URL("../src/pages/review/GroupView.tsx", import.meta.url), "utf8");
+    if (!/send\("retire", chosen, reason\)/.test(view)) problems.push('GroupView does not send("retire", chosen, reason)');
+    if (!/guard\.current\?\.run/.test(view)) problems.push("GroupView lost its guardInFlight");
+    renderChecks.push(["web::check_manual_shipped_checks_retire_together", problems]);
   }
 } catch (e) {
   renderChecks.push(["web::check_manual_groups_render", [`rendering the Manual group failed: ${e?.stack ?? e}`]]);

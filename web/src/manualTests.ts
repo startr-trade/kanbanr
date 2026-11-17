@@ -56,6 +56,12 @@ export interface ManualSections {
   holding: { version: string; items: ItemGroup[] }[];
   /** Every other item with a due check. */
   other: ItemGroup[];
+  /** `other`'s items whose release has shipped: checks no one judged before it did (DEF-113). */
+  shipped: ItemGroup[];
+  /** `other`'s items in a release that is neither holding nor shipped. */
+  later: ItemGroup[];
+  /** `other`'s items in no release. */
+  unplanned: ItemGroup[];
   /** Checks whose item has not reached its build stage (DEF-076). */
   notDue: ManualRow[];
 }
@@ -63,10 +69,11 @@ export interface ManualSections {
 /**
  * The due checks grouped by item, keeping the server's row order within an item; the items of
  * each holding release under it, in `holding`'s order; within a section, items with a check that
- * holds a promotion first, then the server's order; every other item in `other`. A check that is
- * not due yet (`opens_at`, DEF-076) goes to `notDue`.
+ * holds a promotion first, then the server's order; every other item in `other`, which is also
+ * split into `shipped` (its release is in `shipped`), `later` (any other release) and `unplanned`
+ * (no release), DEF-113. A check that is not due yet (`opens_at`, DEF-076) goes to `notDue`.
  */
-export function manualGroups(rows: ManualRow[], holding: string[]): ManualSections {
+export function manualGroups(rows: ManualRow[], holding: string[], shipped: string[] = []): ManualSections {
   const notDue: ManualRow[] = [];
   const items: ItemGroup[] = [];
   const byCode = new Map<string, ItemGroup>();
@@ -89,7 +96,26 @@ export function manualGroups(rows: ManualRow[], holding: string[]): ManualSectio
   const holdsFirst = (list: ItemGroup[]) => list.sort((a, b) => Number(b.holds > 0) - Number(a.holds > 0));
   const sections = holding.map((version) => ({ version, items: holdsFirst(items.filter((g) => g.release !== "" && g.release === version)) }));
   const other = holdsFirst(items.filter((g) => !holding.includes(g.release) || g.release === ""));
-  return { holding: sections, other, notDue };
+  const inShipped = (g: ItemGroup) => g.release !== "" && shipped.includes(g.release);
+  return {
+    holding: sections,
+    other,
+    shipped: other.filter(inShipped),
+    later: other.filter((g) => g.release !== "" && !inShipped(g)),
+    unplanned: other.filter((g) => g.release === ""),
+    notDue,
+  };
+}
+
+/** The line on top of the Manual group (DEF-113): what a manual check is and why it waits. */
+export const MANUAL_PURPOSE = "A manual check is one only you can judge. An item ships when its check is recorded passed.";
+
+/**
+ * Whether the page offers to retire this check (DEF-113): it has no prepared record (that one is
+ * confirmed in its row) and is due. Core decides the rest: a shipped release, not green, not retired.
+ */
+export function retirable(m: ManualRow): boolean {
+  return m.prepared === undefined && !m.row.opens_at;
 }
 
 /** A manual row's key in the Review page's Manual group (FTR-038): `<CODE>/<R-n>/<test>`. */
@@ -142,7 +168,9 @@ export function lastResultLine(last: ManualResult | null | undefined): string {
   const day = Number.isNaN(d.getTime())
     ? last.at.slice(0, 10)
     : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-  return `${last.state === "green" ? "passed" : "failed"} by ${last.by || "someone"} on ${day}`;
+  const word = last.state === "green" ? "passed" : last.state === "retired" ? "retired" : "failed";
+  const note = last.state === "retired" && last.note ? `: ${last.note}` : "";
+  return `${word} by ${last.by || "someone"} on ${day}${note}`;
 }
 
 /**
