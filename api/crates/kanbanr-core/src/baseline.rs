@@ -1032,16 +1032,21 @@ pub fn withdraw(
 
 /// Was revision `id` accepted through kanbanr? As `decisions::granted_through_kanbanr`, over
 /// `projects/<p>/baseline.yaml`: no uncommitted change to the file, and the first commit showing
-/// `id` accepted carries `Kanbanr-Origin: monitor` or `terminal`.
-pub fn accepted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
+/// `id` accepted carries `Kanbanr-Origin: monitor` or `terminal`. A history that cannot be read
+/// is an error, never "not accepted" (DEF-080: fail closed, and say why).
+pub fn accepted_through_kanbanr(
+    store: &Store,
+    p: &str,
+    id: &str,
+) -> std::result::Result<bool, crate::git::HistoryError> {
     let rel = format!("projects/{p}/{BASELINE_FILE}");
     let dir = store.data_dir();
     if let Err(dirty) = crate::git::is_clean(dir)
         && dirty.iter().any(|f| f == &rel)
     {
-        return false;
+        return Ok(false);
     }
-    let history = crate::git::file_history(dir, &rel);
+    let history = crate::git::file_history(dir, &rel)?;
     let Some(first) = history.iter().rev().find(|v| {
         crate::yaml::from_str::<Baseline>(&v.content)
             .ok()
@@ -1051,14 +1056,14 @@ pub fn accepted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
                     .any(|r| r.id == id && r.accepted.is_some())
             })
     }) else {
-        return false;
+        return Ok(false);
     };
-    first.message.lines().any(|l| {
+    Ok(first.message.lines().any(|l| {
         matches!(
             l.trim(),
             "Kanbanr-Origin: monitor" | "Kanbanr-Origin: terminal"
         )
-    })
+    }))
 }
 
 /// The ADR of an accepted constraint: (title, front matter, body). Every section is filled, so
@@ -1573,7 +1578,13 @@ pub fn view(store: &Store, p: &str, _review_url: Option<&str>) -> Result<Baselin
         .iter()
         .filter(|r| accepted.contains(r.id.as_str()))
     {
-        through.insert(r.id.as_str(), accepted_through_kanbanr(store, p, &r.id));
+        let ok = accepted_through_kanbanr(store, p, &r.id).map_err(|e| {
+            CoreError::Unsupported(format!(
+                "cannot tell whether {} was accepted through kanbanr: {e}",
+                r.id
+            ))
+        })?;
+        through.insert(r.id.as_str(), ok);
     }
     let force: BTreeSet<&str> = in_force(&b).into_iter().map(|e| e.id.as_str()).collect();
     let entry_view = |e: &Entry| EntryView {
