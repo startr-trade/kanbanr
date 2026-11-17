@@ -35,6 +35,8 @@ All notable changes to kanbanr are documented here. The format follows
 - `kanbanr serve --board <path>`, repeatable: one read-only server shows several boards' projects
   together, each read from its own board, with the boards listed at `/api/boards` and on the home
   page (FTR-040).
+- A read-only site for Kubernetes, as an OpenTofu/Terraform module that serves a list of boards
+  and keeps each current from its git remote, and a compose file for the same locally (FTR-030).
 
 ### Changed
 
