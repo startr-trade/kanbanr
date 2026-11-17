@@ -9488,4 +9488,36 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&bare);
     }
+
+    // ---- DEF-071: an existing release branch ----
+
+    fn branch_step(plan: &super::ReleasePlan) -> &super::PlanStep {
+        plan.steps
+            .iter()
+            .find(|s| s.action == super::ReleaseAction::Branch)
+            .unwrap_or_else(|| panic!("no branch step: {plan:#?}"))
+    }
+
+    /// DEF-071 R-1: a hand-made release branch one commit ahead of main blocks the branch step,
+    /// and that reason reaches the plan's `missing` list, so the plan is not ready.
+    #[test]
+    fn a_blocked_branch_step_reaches_the_plans_missing_list() {
+        let (store, dir, repo) = board_and_repo("def071-blocked");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        configure(&store, UNDO);
+        coderepo::create_branch_from(&repo, "release/v1", "main").unwrap();
+        on_release(&repo, "release/v1", "extra", "extra\n");
+        let plan = plan_to(&store, &repo, "candidate");
+        let why = branch_step(&plan)
+            .blocked
+            .clone()
+            .unwrap_or_else(|| panic!("the branch step is blocked: {plan:#?}"));
+        assert!(why.contains("release/v1 already exists"), "{why}");
+        assert!(plan.missing.contains(&why), "{:#?}", plan.missing);
+        assert!(!plan.ready);
+        clean(&dir, &repo);
+    }
 }
