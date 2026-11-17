@@ -138,7 +138,7 @@ const ITEMS = [
 // The shared cache the rendered components read through, loaded by the same Vite server, so a
 // check seeds it and records the URLs a render reads.
 const { cache } = await load("src/data/cache.ts");
-const { urls } = await load("src/data/urls.ts");
+const { TAGS, urls } = await load("src/data/urls.ts");
 const P = "shop";
 await cache.fetch(urls.releasePlan(P, "v0.8.0"), [], async () => READY);
 await cache.fetch(urls.releasePlan(P, "v0.7.1"), [], async () => BLOCKED);
@@ -331,9 +331,11 @@ await check(
       ["pages/ReleasesPage.tsx", /useQuery<ReleasesSummary>\(\s*project\s*,\s*urls\.releasesSummary\(project\)\s*,\s*\["releases", "items"\]\s*\)/, "the summary"],
       ["pages/ReleasesPage.tsx", /useQuery<Release\[\]>\(\s*project\s*,\s*urls\.releases\(project\s*,\s*scope\)\s*,\s*\["releases", "items", "gates"\]\s*\)/, "one tab's slice"],
       ["pages/releases/ReleaseBody.tsx", /useQuery<ReleaseItemRow\[\]>\(\s*project\s*,\s*urls\.releaseItems\(project\s*,\s*r\.version\)\s*,\s*\["releases", "items"\]\s*\)/, "an open release's items"],
-      ["pages/releases/ReleaseActions.tsx", /useQuery<ReleasePlan>\(\s*project\s*,\s*urls\.releasePlan\(project\s*,\s*release\.version\)\s*,\s*\["releases", "items", "gates"\]\s*\)/, "a release's plan"],
+      ["pages/releases/ReleaseActions.tsx", /useQuery<ReleasePlan>\(\s*project\s*,\s*urls\.releasePlan\(project\s*,\s*release\.version\)\s*,\s*TAGS\.releasePlan\s*\)/, "a release's plan"],
     ];
     for (const [rel, re, what] of want) if (!re.test(sources[rel])) problems.push(`${rel} does not read ${what} through useQuery with its tags`);
+    // The plan reads the code repository, which sends no events, so it is re-read on every change (DEF-081).
+    if (!TAGS.releasePlan.includes("*")) problems.push(`TAGS.releasePlan is ${JSON.stringify(TAGS.releasePlan)}: the plan reads the code repository, so it is tagged "*"`);
     if (!/<Tabs\b[^>]*param="tab"/.test(sources["pages/ReleasesPage.tsx"])) problems.push("ReleasesPage.tsx does not keep its tab in ?tab=");
     const r = sources["pages/releases/ReleaseRow.tsx"];
     if (!/<AccordionRow\b/.test(r)) problems.push("ReleaseRow.tsx is not an AccordionRow");
