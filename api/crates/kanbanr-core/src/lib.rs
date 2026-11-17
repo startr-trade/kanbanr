@@ -8744,6 +8744,158 @@ requirements:
         store.approve_feature("demo", code, "Ada L").unwrap();
     }
 
+    /// A TOGAF board with a one-row system catalog whose doc is written, baseline initialised
+    /// through the route (FTR-006). Returns the store and its temp dir.
+    fn system_baseline_board() -> (Store, tempdir::TempDirLike) {
+        use crate::catalog::{Catalog, Level, Row, Source as CatSource, SourceKind};
+        let (store, d) = togaf_board();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![Row {
+                    id: "context".into(),
+                    title: "context".into(),
+                    answers: vec!["what".into()],
+                    for_: vec!["architect".into()],
+                    level: Level::System,
+                    source: CatSource {
+                        kind: SourceKind::Written,
+                        path: "architecture/context.md".into(),
+                        ..CatSource::default()
+                    },
+                    ..Row::default()
+                }],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# Context\n\nThe system.\n",
+            )
+            .unwrap();
+        (store, d)
+    }
+
+    /// FTR-006 R-4: a new project on the togaf preset holds its first build until the person
+    /// accepts the system baseline: refused with no baseline, refused while it waits, passes once
+    /// the acceptance is recorded.
+    #[test]
+    fn the_first_build_waits_for_the_system_baseline() {
+        let (store, _d) = system_baseline_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        define_and_approve(&store, &code);
+        let first = |store: &Store| {
+            store
+                .move_feature_gated("demo", &code, "Implementation", None)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        };
+        // The part is on for a new project; there is no baseline file yet.
+        let err = first(&store).unwrap_err();
+        assert!(err.contains("no system baseline"), "{err}");
+        crate::dispatch::dispatch(&store, "POST", "/projects/demo/catalog/baseline/init", None)
+            .unwrap();
+        let err = first(&store).unwrap_err();
+        assert!(err.contains("system baseline is not accepted"), "{err}");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Vision"
+        );
+        // The person's acceptance, through the route as the terminal stamps it.
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects/demo/catalog/baseline/accept",
+            Some(&serde_json::json!({"by": "Ada L", "origin": "terminal", "note": "agreed"})),
+        )
+        .unwrap();
+        first(&store).unwrap();
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Implementation"
+        );
+    }
+
+    /// FTR-006 R-6: `GET …/catalog/baseline` answers with the state the command reads, plus the
+    /// open prepared record; init and accept answer in the same shape, and an acceptance that
+    /// names a `rev` the sources no longer match is refused.
+    #[test]
+    fn the_system_baseline_route_answers_with_the_same_state_as_the_command() {
+        let (store, _d) = system_baseline_board();
+        let get = |store: &Store| -> serde_json::Value {
+            let out =
+                crate::dispatch::dispatch(store, "GET", "/projects/demo/catalog/baseline", None)
+                    .unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+        let command_state = |store: &Store| {
+            let project = store.load_meta("demo").unwrap();
+            serde_json::to_value(crate::systembaseline::state(store, &project, None).unwrap())
+                .unwrap()
+        };
+        let route = get(&store);
+        assert_eq!(route["state"], command_state(&store));
+        assert_eq!(route["state"]["kind"], "not_initialised");
+        assert!(route.get("prepared").is_none(), "{route}");
+
+        let inited: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(
+                &store,
+                "POST",
+                "/projects/demo/catalog/baseline/init",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(inited["state"]["kind"], "awaiting");
+        assert_eq!(get(&store)["state"], command_state(&store));
+
+        // A prepared acceptance shows beside the state.
+        let record = crate::prepared::prepare(
+            &store,
+            "demo",
+            &serde_json::json!({"kind": "system-baseline", "fields": {"note": "agreed"},
+                    "sources": [{"label": "the call"}], "origin": "conversation"}),
+            None,
+        )
+        .unwrap();
+        let route = get(&store);
+        assert_eq!(route["state"], command_state(&store));
+        assert_eq!(route["prepared"]["id"], record.id.as_str());
+
+        // `rev` is what the person saw: a source that changed since refuses the acceptance.
+        let seen = route["state"]["pins_rev"].as_str().unwrap().to_string();
+        store
+            .write_doc("demo", "architecture/context.md", "# Context\n\nChanged.\n")
+            .unwrap();
+        let accept = |rev: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                "/projects/demo/catalog/baseline/accept",
+                Some(&serde_json::json!({"by": "Ada L", "origin": "terminal", "rev": rev})),
+            )
+        };
+        let err = accept(&seen).unwrap_err().to_string();
+        assert!(err.contains("changed since you looked"), "{err}");
+        let now = get(&store)["state"]["pins_rev"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let done: serde_json::Value = serde_json::from_str(&accept(&now).unwrap()).unwrap();
+        assert_eq!(done["state"], command_state(&store));
+        assert_eq!(done["state"]["kind"], "accepted");
+        assert_eq!(done["state"]["accepted"]["origin"], "terminal");
+        assert_eq!(done["state"]["accepted_count"], 1);
+    }
+
     #[test]
     fn a_chore_without_a_statement_or_requirement_is_refused_its_first_move() {
         let (store, _d) = togaf_board();

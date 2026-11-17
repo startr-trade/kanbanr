@@ -289,6 +289,14 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::catalog::CatalogStatus>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/catalog/baseline",
+            summary: "The system baseline (FTR-006): where it stands (not initialised, awaiting \
+                      acceptance, accepted or changed since), the rows that changed against the \
+                      latest acceptance, and the prepared acceptance waiting on the person",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::review::SystemBaselineReview>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/readiness",
             summary: "What each live item is missing, and its next stages, keyed by code",
             params: &[PROJECT],

@@ -43,6 +43,51 @@
       }
     },
     "schemas": {
+      "Acceptance": {
+        "additionalProperties": true,
+        "description": "One acceptance of the system baseline, by the person.",
+        "properties": {
+          "at": {
+            "default": "",
+            "type": "string"
+          },
+          "by": {
+            "default": "",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "origin": {
+            "default": "",
+            "type": "string"
+          },
+          "pins": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Pin"
+            },
+            "type": "array"
+          },
+          "prepared": {
+            "description": "The prepared record confirmed, when one was.",
+            "type": "string"
+          },
+          "rev": {
+            "default": "",
+            "description": "[`pins_rev`] of `pins`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "by",
+          "origin",
+          "rev",
+          "pins"
+        ],
+        "type": "object"
+      },
       "Action": {
         "description": "Something that happens when an item enters a status.",
         "oneOf": [
@@ -1204,6 +1249,36 @@
         "required": [
           "question",
           "perspective"
+        ],
+        "type": "object"
+      },
+      "Change": {
+        "description": "One row that differs from the latest acceptance.",
+        "properties": {
+          "missing": {
+            "type": "boolean"
+          },
+          "now": {
+            "description": "The source's hash now; empty when it is missing.",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "The pin the latest acceptance holds; empty for a row switched on since.",
+            "type": "string"
+          },
+          "row": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "source",
+          "pinned",
+          "now",
+          "missing"
         ],
         "type": "object"
       },
@@ -5673,6 +5748,30 @@
         ],
         "type": "object"
       },
+      "Pin": {
+        "additionalProperties": true,
+        "description": "One system row's source as an acceptance saw it. `rev` is empty when the source cannot be\npinned (a `katalogr:` view, an enforced source) or was missing.",
+        "properties": {
+          "rev": {
+            "default": "",
+            "type": "string"
+          },
+          "row": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "source",
+          "rev"
+        ],
+        "type": "object"
+      },
       "Place": {
         "description": "A decision waiting for someone, and where.",
         "enum": [
@@ -6285,6 +6384,61 @@
           "repo",
           "commit",
           "dirty"
+        ],
+        "type": "object"
+      },
+      "Prepared": {
+        "additionalProperties": true,
+        "description": "Evidence for one decision, prepared for the person to confirm.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "batch": {
+            "description": "The batch it belongs to (FTR-037): a walkthrough run prepares its checks as one batch, named\nfor the run, which the Review page confirms or rejects with one click. None for a record\nprepared alone; an older kanbanr keeps the key through `extra`.",
+            "type": "string"
+          },
+          "by": {
+            "description": "`Claude` when prepared in the conversation; else the preparer's name.",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": true,
+            "description": "What the verdict will carry; keys per kind.",
+            "type": "object"
+          },
+          "id": {
+            "description": "`<YYYYMMDDTHHMMSSZ>-<kind>`, with `-2`, `-3` … when taken.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`signoff`, `promotion`, `gate-result`, `ratification`, … A string, so a kind a newer\nkanbanr adds is listed by an older one rather than failing to parse.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Stamped by the front end, never the request (DEF-028).",
+            "type": "string"
+          },
+          "rev": {
+            "description": "What it was prepared against: the definition's revision, the release tip or the commit.",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Where the evidence came from: at least one.",
+            "items": {
+              "$ref": "#/components/schemas/PreparedSource"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/PreparedSubject",
+            "default": {},
+            "description": "What the decision is about; keys per kind."
+          }
+        },
+        "required": [
+          "subject"
         ],
         "type": "object"
       },
@@ -9348,6 +9502,92 @@
         ],
         "type": "object"
       },
+      "State": {
+        "description": "The system baseline as it stands, derived from the file, the catalog and the sources. Holds no\nclock and reads in row order, so two reads of one board give the same bytes.",
+        "properties": {
+          "accepted": {
+            "$ref": "#/components/schemas/Acceptance"
+          },
+          "accepted_count": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "can_accept": {
+            "type": "boolean"
+          },
+          "cannot_accept_why": {
+            "type": "string"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/StateKind"
+          },
+          "missing": {
+            "description": "Applying system rows whose written source is missing.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pins_rev": {
+            "description": "[`pins_rev`] of the pins now.",
+            "type": "string"
+          },
+          "rows": {
+            "description": "The file's recorded rows; before init, the applying system rows now.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unpinned": {
+            "description": "Rows whose source cannot be pinned: a `katalogr:` view, an enforced source, a `repo:` doc\nwith no code repository here.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "rows",
+          "accepted_count",
+          "can_accept",
+          "pins_rev"
+        ],
+        "type": "object"
+      },
+      "StateKind": {
+        "description": "Where the baseline stands.",
+        "oneOf": [
+          {
+            "const": "not_initialised",
+            "description": "No `system-baseline.yaml`.",
+            "type": "string"
+          },
+          {
+            "const": "awaiting",
+            "description": "Initialised, never accepted.",
+            "type": "string"
+          },
+          {
+            "const": "accepted",
+            "description": "Accepted, and every pinned source reads as it did.",
+            "type": "string"
+          },
+          {
+            "const": "changed",
+            "description": "Accepted, and some row changed since.",
+            "type": "string"
+          }
+        ]
+      },
       "Step": {
         "description": "From `at_h` hours on, `running` tasks run at once (with as many lanes as help).",
         "properties": {
@@ -9401,6 +9641,22 @@
           "next"
         ],
         "type": "string"
+      },
+      "SystemBaselineReview": {
+        "description": "The system baseline as the Review page and `GET /projects/{p}/catalog/baseline` show it\n(FTR-006): where it stands, and the prepared acceptance waiting on the person, if one is.",
+        "properties": {
+          "prepared": {
+            "$ref": "#/components/schemas/Prepared",
+            "description": "The open `system-baseline` prepared record, newest first; `None` when none waits."
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
       },
       "TagResult": {
         "description": "The newest result recorded for a release's tag (FTR-026), read from the board only.",
@@ -10628,6 +10884,47 @@
           }
         },
         "summary": "The project's content catalog (FTR-005): each row with whether it applies and why, its source's state and its protections, and the (question, perspective) cells no applying row fills; no rows with no catalog"
+      }
+    },
+    "/api/projects/{project}/catalog/baseline": {
+      "get": {
+        "operationId": "getProjectsCatalogBaseline",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemBaselineReview"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The system baseline (FTR-006): where it stands (not initialised, awaiting acceptance, accepted or changed since), the rows that changed against the latest acceptance, and the prepared acceptance waiting on the person"
       }
     },
     "/api/projects/{project}/charter": {

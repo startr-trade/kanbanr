@@ -3376,6 +3376,41 @@ fn dispatch_routes(
             crate::catalog::save(store, p, &catalog)?;
             ser(&crate::catalog::status(store, &store.load(p)?, repo)?)
         }
+        // ---- the system baseline (FTR-006) ----
+        ("GET", ["projects", p, "catalog", "baseline"]) => {
+            ser(&crate::review::system_baseline_review(store, p, repo)?)
+        }
+        ("POST", ["projects", p, "catalog", "baseline", "init"]) => {
+            store.load_meta(p)?;
+            crate::systembaseline::init(store, p)?;
+            ser(&crate::review::system_baseline_review(store, p, repo)?)
+        }
+        // `{note?, prepared?, rev?, by}`: the person accepts the system baseline as they saw it
+        // (`rev` is the pins' hash they were shown); theirs in every mode.
+        ("POST", ["projects", p, "catalog", "baseline", "accept"]) => {
+            let project = store.load_meta(p)?;
+            let stamp = decision_stamp(b)?;
+            if let Some(seen) = str_field(b, "rev").filter(|r| !r.trim().is_empty()) {
+                let now = crate::systembaseline::state(store, &project, repo)?;
+                if now.pins_rev != seen.trim() {
+                    return Err(CoreError::Unsupported(
+                        "the system baseline's sources changed since you looked: read it again \
+                         before accepting"
+                            .into(),
+                    ));
+                }
+            }
+            crate::systembaseline::accept(
+                store,
+                p,
+                &stamp.by,
+                &stamp.origin,
+                &str_field(b, "note").unwrap_or_default(),
+                &str_field(b, "prepared").unwrap_or_default(),
+                repo,
+            )?;
+            ser(&crate::review::system_baseline_review(store, p, repo)?)
+        }
         ("POST", ["projects", p, "catalog", "init"]) => {
             store.load_meta(p)?;
             crate::catalog::init(store, p, bool_field(b, "force").unwrap_or(false))?;
@@ -3650,6 +3685,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "facts"] => "facts: set".into(),
         ["projects", _p, "catalog"] => "catalog: set".into(),
         ["projects", _p, "catalog", "init"] => "catalog: init".into(),
+        ["projects", _p, "catalog", "baseline", "init"] => "system baseline: init".into(),
+        ["projects", _p, "catalog", "baseline", "accept"] => "system baseline: accepted".into(),
         ["projects", _p, "catalog", "add"] => format!(
             "catalog: add {}",
             body.and_then(|b| str_field(b, "id"))

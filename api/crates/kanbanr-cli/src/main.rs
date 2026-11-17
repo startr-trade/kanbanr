@@ -4247,6 +4247,22 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             && target
                 .file_name()
                 .is_some_and(|n| n == kanbanr_core::baseline::BASELINE_FILE);
+        // The system baseline is written by kanbanr only too (FTR-006).
+        let system_baseline_file = in_projects
+            && target
+                .file_name()
+                .is_some_and(|n| n == kanbanr_core::systembaseline::BASELINE_FILE);
+        if target.starts_with(&board) && system_baseline_file {
+            println!(
+                "{}",
+                json!({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": SYSTEM_BASELINE_FILE_REFUSAL,
+                }})
+            );
+            return Ok(());
+        }
         let pack_file = parent_is(1, kanbanr_core::profile::APPLIED_DIR)
             && parent_is(3, "projects")
             && target.extension().is_some_and(|e| e == "yaml");
@@ -5396,6 +5412,18 @@ const BASELINE_FILES_REFUSAL: &str = "refused: baseline.yaml and packs/*.yaml ar
     change them. Propose a revision with `kanbanr baseline propose`; the person accepts it on the \
     Baseline page.";
 
+const SYSTEM_BASELINE_FILE_REFUSAL: &str = "refused: system-baseline.yaml is the project's \
+    system baseline, written only by kanbanr: read it, never change it. The person accepts it on \
+    the Review page; prepare it with `kanbanr prepare system-baseline`.";
+
+/// Does a shell word name a project's system baseline file (`…/system-baseline.yaml`)? By path
+/// components, never a substring (L-46).
+fn names_system_baseline_file(word: &str) -> bool {
+    word.split(['/', '\\'])
+        .rfind(|s| !s.is_empty() && *s != ".")
+        .is_some_and(|last| last == kanbanr_core::systembaseline::BASELINE_FILE)
+}
+
 /// Does a shell word name a project's baseline file (`…/baseline.yaml`) or an applied pack
 /// (`…/packs/<name>.yaml`)? By path components, never a substring (L-46).
 fn names_baseline_file(word: &str) -> bool {
@@ -5470,6 +5498,15 @@ fn verdict_refusal(
     }) {
         return refused(BASELINE_FILES_REFUSAL.trim_start_matches("refused: "));
     }
+    // The system baseline's file likewise (FTR-006).
+    if commands.iter().any(|(env, words)| {
+        env.iter()
+            .chain(words)
+            .any(|w| names_system_baseline_file(w))
+            && !reader(words)
+    }) {
+        return refused(SYSTEM_BASELINE_FILE_REFUSAL.trim_start_matches("refused: "));
+    }
     // Who is calling is how core tells the person's terminal from Claude: a kanbanr command that
     // changes it is refused to the coordinator too (FTR-028).
     let runs_kanbanr = commands.iter().any(|(_, words)| {
@@ -5497,8 +5534,13 @@ fn verdict_refusal(
                 _ if w.starts_with('-') => {}
                 _ => {
                     path.push(w);
-                    if path.len() == 2
-                        || !matches!(w, "adr" | "release" | "gate" | "decisions" | "baseline")
+                    // `catalog baseline accept` is three words (FTR-006); the others, two.
+                    let words_in_path = if path[0] == "catalog" { 3 } else { 2 };
+                    if path.len() == words_in_path
+                        || !matches!(
+                            path[0],
+                            "adr" | "release" | "gate" | "decisions" | "baseline" | "catalog"
+                        )
                     {
                         break;
                     }
@@ -5552,6 +5594,9 @@ fn verdict_refusal(
                 Some(base) => format!("{base}/baseline"),
                 None => review_url.to_string(),
             }
+        } else if verdict == kanbanr_core::origin::Verdict::AcceptSystemBaseline {
+            // The system baseline waits as its own group on the Review page (FTR-006).
+            format!("{review_url}?group=system-baseline")
         } else if verdict == kanbanr_core::origin::Verdict::PlanningDecision {
             // A planning decision is made on the Plan page (FTR-049).
             match review_url.strip_suffix("/review") {
@@ -16803,6 +16848,54 @@ mod tests {
         assert!(!names_baseline_file("packs/.yaml"));
         assert!(!names_baseline_file("system-baseline.yaml"));
         assert!(!names_baseline_file("profiles/starter/web.yaml"));
+    }
+
+    /// FTR-006 R-3: the hook refuses `kanbanr catalog baseline accept` and any write to a
+    /// project's system-baseline.yaml, by path components; reading it, initialising it and
+    /// preparing its acceptance pass.
+    #[test]
+    fn the_guard_refuses_claude_accepting_or_editing_the_system_baseline() {
+        use kanbanr_core::agentscope::Caller;
+        let url = "http://h:1/p/p/review";
+        let c = Caller::Coordinator;
+        assert!(
+            verdict_refusal("kanbanr catalog baseline accept", url, c)
+                .unwrap()
+                .contains("/p/p/review?group=system-baseline")
+        );
+        for refused in [
+            "kanbanr catalog baseline accept --note ok",
+            "kanbanr --project p catalog baseline accept",
+            "sed -i s/x/y/ ../board/projects/p/system-baseline.yaml",
+            "echo x > projects/p/system-baseline.yaml",
+        ] {
+            assert!(
+                verdict_refusal(refused, url, c).is_some(),
+                "passed: {refused}"
+            );
+        }
+        for allowed in [
+            "kanbanr catalog baseline",
+            "kanbanr catalog baseline init",
+            "kanbanr catalog show",
+            "kanbanr prepare system-baseline --note ok --source doc:architecture/context.md",
+            "cat ../board/projects/p/system-baseline.yaml",
+            "git log -p -- projects/p/system-baseline.yaml",
+            "echo x > my-system-baseline.yaml.bak",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url, c).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        assert!(names_system_baseline_file(
+            "./projects/p/system-baseline.yaml"
+        ));
+        assert!(names_system_baseline_file(
+            "projects\\p\\system-baseline.yaml"
+        ));
+        assert!(!names_system_baseline_file("baseline.yaml"));
+        assert!(!names_system_baseline_file("system-baseline.yaml.bak"));
     }
 
     /// FTR-028 R-2: the hook refuses Claude the decisions that are the person's own (the mode, a
