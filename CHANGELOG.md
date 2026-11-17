@@ -75,6 +75,10 @@ All notable changes to kanbanr are documented here. The format follows
 - Manual checks on the Review page are grouped under their item, the release being shipped first
   under `Holding v<V>`, with the checks that hold its next promotion marked; one item's prepared
   results are confirmed together (FTR-057).
+- `kanbanr tests` reconciles the board's evidence with the code: results whose test is gone (with
+  the revision they were last green at and a likely rename), greens at a revision that never held
+  the test, tests never run, open manual checks per item and per release, and finished items with
+  no definition; `kanbanr doctor` and the monitor's Workflow page carry the counts (MNT-001).
 
 ### Fixed
 

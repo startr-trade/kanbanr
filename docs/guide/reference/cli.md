@@ -53,7 +53,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr signoff <CODE> <name>` | record a named sign-off a stage's gate asks for, pinned to the current definition |
 | `kanbanr signoff <CODE> <name> --withdraw --reason "…"` | takes a sign-off back; the earlier one stays on the record and stops counting |
 | `kanbanr ratify <CODE>` | agree after the fact to work started under a recorded override |
-| `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle (`--note TEXT` is kept with a manual test's result, which a person records on the Review page's Manual checks and Claude is refused); list tracked tests and check each still exists |
+| `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests [--write] [--json]` | move a test along its lifecycle (`--note TEXT` is kept with a manual test's result, which a person records on the Review page's Manual checks and Claude is refused); reconcile the board's evidence with the code, run from the project folder: results whose test is not defined under its name (with the revision last recorded and a likely rename), greens at a revision that never held the test, tests never run or failing, unproven requirements on finished items, open manual checks per item and per release, and finished items with no definition. `--write` returns the vanished results to planned, naming each and its revision in the commit; outside a git repository the report says revisions were not checked |
 | `kanbanr defect <CODE> …` | what a defect cost and where it came from |
 
 **The engineering baseline: practice packs**
