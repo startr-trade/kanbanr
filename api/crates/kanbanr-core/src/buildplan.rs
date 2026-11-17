@@ -292,6 +292,154 @@ pub fn task_totals(rows: &[BuildRow], task: &str, since: &str) -> BuildTotals {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The build environment and the compiler cache
+// ---------------------------------------------------------------------------------------------
+
+/// The environment a build runs with, and what it had to go without.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct BuildEnv {
+    /// Variables set on the command, in this order.
+    pub set: Vec<(String, String)>,
+    /// A tool the settings ask for that is not here, in words.
+    pub notes: Vec<String>,
+}
+
+/// The rustflags variables `mold` is set through, one per Linux target it is used on.
+const MOLD_VARS: &[&str] = &[
+    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
+];
+
+/// The environment a build gets from settings `e`: always the job and test-thread caps; the
+/// project's sccache server when sccache is on and found (`cache_dir` its cache); mold when it is
+/// configured, found and this is Linux; the cached web bundle when there is one (`ui_dist`).
+pub fn build_env(
+    e: &Effective,
+    sccache_found: bool,
+    mold_found: bool,
+    linux: bool,
+    cache_dir: &Path,
+    ui_dist: Option<&Path>,
+) -> BuildEnv {
+    let mut env = BuildEnv::default();
+    let mut set = |k: &str, v: String| env.set.push((k.to_string(), v));
+    let jobs = e.jobs.to_string();
+    set("CARGO_BUILD_JOBS", jobs.clone());
+    set("NEXTEST_TEST_THREADS", jobs.clone());
+    set("RUST_TEST_THREADS", jobs);
+    if e.sccache && sccache_found {
+        set("RUSTC_WRAPPER", "sccache".into());
+        set("CARGO_INCREMENTAL", "0".into());
+        set("SCCACHE_SERVER_PORT", e.sccache_port.to_string());
+        set("SCCACHE_DIR", cache_dir.display().to_string());
+        set("SCCACHE_CACHE_SIZE", format!("{}G", e.cache_gib));
+    }
+    if e.mold && mold_found && linux {
+        for k in MOLD_VARS {
+            set(k, "-C link-arg=-fuse-ld=mold".into());
+        }
+    }
+    if let Some(d) = ui_dist {
+        set("KANBANR_UI_DIST", d.display().to_string());
+    }
+    if e.sccache && !sccache_found {
+        env.notes
+            .push("sccache not found: compiling without the shared cache".into());
+    }
+    if e.mold && !linux {
+        env.notes
+            .push("mold is used on Linux only: linking with the default linker".into());
+    } else if e.mold && !mold_found {
+        env.notes
+            .push("mold not found: linking with the default linker".into());
+    }
+    env
+}
+
+/// The project's sccache cache folder on this machine: `<machine>/sccache/<project>-<hash8>`,
+/// the hash of its main checkout's path, so two checkouts of one project keep their own.
+pub fn sccache_dir(machine: &Path, project: &str, main_root: &Path) -> PathBuf {
+    let hex = crate::hash::stable_hash(&main_root.to_string_lossy());
+    let short = hex.get(..8).unwrap_or(&hex);
+    machine.join("sccache").join(format!("{project}-{short}"))
+}
+
+/// The sccache server's base directories: the main checkout and every worktree, absolute (a
+/// relative worktree is taken from `main_root`), sorted, each once. With them a path inside any
+/// checkout hashes the same, so one worktree's compile serves the others.
+pub fn base_dirs(main_root: &Path, worktrees: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::iter::once(main_root.to_path_buf())
+        .chain(worktrees.iter().map(|w| main_root.join(w)))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// What to do about the project's cache server before a build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Restart {
+    /// It runs with the base directories wanted.
+    No,
+    /// Start it, or restart it with the base directories wanted.
+    Yes,
+    /// Its base directories are out of date, but another build is using it: leave it.
+    Deferred,
+}
+
+/// Whether the cache server must be (re)started: none running (`running` is `None`) → `Yes`;
+/// running with the base directories `wanted` → `No`; with others → `Yes`, or `Deferred` while
+/// another build uses it.
+pub fn needs_restart(
+    running: Option<&[PathBuf]>,
+    wanted: &[PathBuf],
+    others_building: bool,
+) -> Restart {
+    let Some(running) = running else {
+        return Restart::Yes;
+    };
+    let set = |d: &[PathBuf]| d.iter().cloned().collect::<BTreeSet<PathBuf>>();
+    if set(running) == set(wanted) {
+        Restart::No
+    } else if others_building {
+        Restart::Deferred
+    } else {
+        Restart::Yes
+    }
+}
+
+/// The value of the line `label` of `sccache --show-stats`: the text after the label and its
+/// padding.
+pub fn stats_value<'a>(stats: &'a str, label: &str) -> Option<&'a str> {
+    stats.lines().find_map(|l| {
+        let rest = l.strip_prefix(label)?;
+        // `Cache size` must not match `Cache size (…)`-like longer labels.
+        rest.starts_with(char::is_whitespace).then(|| rest.trim())
+    })
+}
+
+/// The base directories a running sccache server reports in `sccache --show-stats` (0.17: one
+/// `Base directories` line, comma-separated, each with a trailing `/`; `(none)` for none).
+/// `None` when the text has no such line.
+pub fn parse_base_dirs(stats: &str) -> Option<Vec<PathBuf>> {
+    let v = stats_value(stats, "Base directories")?;
+    if v.is_empty() || v == "(none)" {
+        return Some(Vec::new());
+    }
+    Some(
+        v.split(", ")
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| {
+                let t = d.trim_end_matches(['/', '\\']);
+                PathBuf::from(if t.is_empty() { d } else { t })
+            })
+            .collect(),
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
 // Affected checks
 // ---------------------------------------------------------------------------------------------
 
@@ -338,11 +486,13 @@ pub struct CrateInfo {
     pub deps: Vec<String>,
     /// Its binary target's name, for a binary crate.
     pub bin: Option<String>,
+    /// It has a library target (a target of kind `lib`): its modules are tested through it.
+    pub has_lib: bool,
 }
 
 /// The workspace's crates out of `cargo metadata --no-deps --format-version 1`: each package's
-/// name, its folder (its manifest's, relative to `repo_root`), its path dependencies and its
-/// binary target.
+/// name, its folder (its manifest's, relative to `repo_root`), its path dependencies, its
+/// binary target and whether it has a library target.
 pub fn workspace_from_metadata(json: &str, repo_root: &Path) -> crate::Result<Vec<CrateInfo>> {
     let bad = |why: String| crate::CoreError::Unsupported(format!("cargo metadata: {why}"));
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(e.to_string()))?;
@@ -390,21 +540,21 @@ pub fn workspace_from_metadata(json: &str, repo_root: &Path) -> crate::Result<Ve
             .collect();
         deps.sort();
         deps.dedup();
-        let bin = p["targets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|t| {
+        let of_kind = |kind: &str| {
+            p["targets"].as_array().into_iter().flatten().find(|t| {
                 t["kind"]
                     .as_array()
-                    .is_some_and(|k| k.iter().any(|k| k == "bin"))
+                    .is_some_and(|k| k.iter().any(|k| k == kind))
             })
-            .and_then(|t| t["name"].as_str().map(String::from));
+        };
+        let bin = of_kind("bin").and_then(|t| t["name"].as_str().map(String::from));
+        let has_lib = of_kind("lib").is_some();
         out.push(CrateInfo {
             name,
             dir,
             deps,
             bin,
+            has_lib,
         });
     }
     Ok(out)
@@ -527,15 +677,21 @@ fn task_test(c: &CrateInfo, path: &str) -> Option<Vec<String>> {
     let rel = path.get(c.dir.len() + 1..)?;
     let base = ["cargo", "test", "--locked", "-p", c.name.as_str()];
     let mut argv = strings(&base);
-    // A binary crate's modules are tested through its binary.
-    let target: Vec<String> = match &c.bin {
+    // `main.rs` is tested through the binary; a module through the library when the crate has
+    // one, else through its binary (a binary-only crate).
+    let binary: Vec<String> = match &c.bin {
         Some(b) => strings(&["--bin", b]),
         None => strings(&["--lib"]),
+    };
+    let target: Vec<String> = if c.has_lib {
+        strings(&["--lib"])
+    } else {
+        binary.clone()
     };
     if let Some(src) = rel.strip_prefix("src/") {
         match src {
             "lib.rs" => argv.push("--lib".into()),
-            "main.rs" => argv.extend(target),
+            "main.rs" => argv.extend(binary),
             _ => {
                 let (module, nested) = match src.split_once('/') {
                     Some((m, _)) => (m, true),
@@ -1095,6 +1251,216 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `sccache --show-stats` as 0.17 prints it, cut to the lines around the ones read.
+    const STATS_0_17: &str = "Compile requests                 296942
+Cache hits                       193750
+Non-cacheable reasons:
+crate-type                         7268
+
+Cache location                  Local disk: \"/home/dev/.cache/sccache-kanbanr\"
+Base directories                /work/kanbanr/, /work/kanbanr/.claude/worktrees/def-034/
+Use direct/preprocessor mode?   yes
+Version (client)                0.17.0
+Cache size                           10 GiB
+Max cache size                       10 GiB
+";
+
+    fn get<'a>(env: &'a BuildEnv, k: &str) -> Option<&'a str> {
+        env.set
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn the_build_env_points_cargo_at_the_projects_compiler_cache_with_every_worktree_as_a_base_dir()
+    {
+        let root = Path::new("/work/kanbanr");
+        let e = BuildConfig::default().effective(12, root);
+        let cache = Path::new("/m/sccache/kanbanr-0123abcd");
+
+        // sccache on and found: the wrapper and the project's server.
+        let env = build_env(&e, true, false, true, cache, None);
+        assert_eq!(get(&env, "CARGO_BUILD_JOBS"), Some("5"));
+        assert_eq!(get(&env, "NEXTEST_TEST_THREADS"), Some("5"));
+        assert_eq!(get(&env, "RUST_TEST_THREADS"), Some("5"));
+        assert_eq!(get(&env, "RUSTC_WRAPPER"), Some("sccache"));
+        assert_eq!(get(&env, "CARGO_INCREMENTAL"), Some("0"));
+        assert_eq!(
+            get(&env, "SCCACHE_DIR"),
+            Some("/m/sccache/kanbanr-0123abcd")
+        );
+        assert_eq!(get(&env, "SCCACHE_CACHE_SIZE"), Some("10G"));
+        // The port comes from the main checkout's path, the same every time.
+        let port = derived_port(root);
+        assert!((PORT_BASE..PORT_BASE + PORT_SPAN as u16).contains(&port));
+        assert_eq!(
+            get(&env, "SCCACHE_SERVER_PORT"),
+            Some(port.to_string().as_str())
+        );
+        assert_eq!(
+            BuildConfig::default().effective(4, root).sccache_port,
+            port,
+            "the port does not depend on the machine"
+        );
+        assert!(env.notes.is_empty(), "{env:?}");
+        assert_eq!(get(&env, "KANBANR_UI_DIST"), None);
+
+        // sccache not found: no wrapper, a note; the caps stay.
+        let env = build_env(&e, false, false, true, cache, None);
+        assert_eq!(get(&env, "RUSTC_WRAPPER"), None);
+        assert_eq!(get(&env, "SCCACHE_SERVER_PORT"), None);
+        assert_eq!(get(&env, "CARGO_BUILD_JOBS"), Some("5"));
+        assert_eq!(
+            env.notes,
+            ["sccache not found: compiling without the shared cache"]
+        );
+
+        // sccache off: none of it, and nothing to say.
+        let off = BuildConfig {
+            sccache: Some("off".into()),
+            jobs_per_slot: Some(3),
+            ..Default::default()
+        }
+        .effective(12, root);
+        let env = build_env(
+            &off,
+            true,
+            true,
+            true,
+            cache,
+            Some(Path::new("/m/web/k/dist")),
+        );
+        assert!(
+            env.set
+                .iter()
+                .all(|(k, _)| !k.starts_with("SCCACHE") && k != "RUSTC_WRAPPER")
+        );
+        assert_eq!(get(&env, "RUST_TEST_THREADS"), Some("3"));
+        assert_eq!(get(&env, "KANBANR_UI_DIST"), Some("/m/web/k/dist"));
+        assert!(env.notes.is_empty());
+
+        // The cache folder: per project and main checkout.
+        let m = Path::new("/m");
+        let d = sccache_dir(m, "kanbanr", root);
+        assert_eq!(d.parent(), Some(Path::new("/m/sccache")));
+        let name = d.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("kanbanr-") && name.len() == "kanbanr-".len() + 8,
+            "{name}"
+        );
+        assert_ne!(
+            d,
+            sccache_dir(m, "kanbanr", Path::new("/elsewhere/kanbanr"))
+        );
+
+        // Base directories: the main checkout and every worktree, absolute, sorted, once.
+        let dirs = base_dirs(
+            root,
+            &[
+                PathBuf::from("/work/kanbanr/.claude/worktrees/b"),
+                PathBuf::from(".claude/worktrees/a"),
+                PathBuf::from("/work/kanbanr"),
+                PathBuf::from("/work/kanbanr/.claude/worktrees/b"),
+            ],
+        );
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/work/kanbanr"),
+                PathBuf::from("/work/kanbanr/.claude/worktrees/a"),
+                PathBuf::from("/work/kanbanr/.claude/worktrees/b"),
+            ]
+        );
+
+        // Restart: none running → yes; the same set → no; another set → yes, or deferred while
+        // another build runs.
+        let one = [PathBuf::from("/work/kanbanr")];
+        assert_eq!(needs_restart(None, &dirs, false), Restart::Yes);
+        assert_eq!(needs_restart(None, &dirs, true), Restart::Yes);
+        let shuffled = [dirs[2].clone(), dirs[0].clone(), dirs[1].clone()];
+        assert_eq!(needs_restart(Some(&shuffled), &dirs, true), Restart::No);
+        assert_eq!(needs_restart(Some(&one), &dirs, false), Restart::Yes);
+        assert_eq!(needs_restart(Some(&one), &dirs, true), Restart::Deferred);
+
+        // The stats text of sccache 0.17.
+        assert_eq!(
+            parse_base_dirs(STATS_0_17),
+            Some(vec![
+                PathBuf::from("/work/kanbanr"),
+                PathBuf::from("/work/kanbanr/.claude/worktrees/def-034"),
+            ])
+        );
+        assert_eq!(
+            needs_restart(
+                parse_base_dirs(STATS_0_17).as_deref(),
+                &base_dirs(root, &[PathBuf::from(".claude/worktrees/def-034/")]),
+                false
+            ),
+            Restart::No,
+            "a reported trailing / is the same folder"
+        );
+        assert_eq!(
+            parse_base_dirs("Cache location   x\nBase directories                (none)\n"),
+            Some(vec![])
+        );
+        assert_eq!(parse_base_dirs("Compile requests 3\n"), None);
+        assert_eq!(stats_value(STATS_0_17, "Cache size"), Some("10 GiB"));
+        assert_eq!(stats_value(STATS_0_17, "Max cache size"), Some("10 GiB"));
+    }
+
+    #[test]
+    fn mold_is_used_only_where_configured_and_present() {
+        let root = Path::new("/work/kanbanr");
+        let cache = Path::new("/m/c");
+        let mold = BuildConfig {
+            linker: Some("mold".into()),
+            ..Default::default()
+        }
+        .effective(12, root);
+        let flags = |env: &BuildEnv| {
+            env.set
+                .iter()
+                .filter(|(k, _)| k.starts_with("CARGO_TARGET_") && k.ends_with("_RUSTFLAGS"))
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+        };
+        let env = build_env(&mold, true, true, true, cache, None);
+        assert_eq!(
+            flags(&env),
+            [
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-fuse-ld=mold",
+            ]
+        );
+        assert!(env.notes.is_empty());
+        // Not found: none, and a note.
+        let env = build_env(&mold, true, false, true, cache, None);
+        assert!(flags(&env).is_empty());
+        assert_eq!(
+            env.notes,
+            ["mold not found: linking with the default linker"]
+        );
+        // Not Linux: none, and a note.
+        let env = build_env(&mold, true, true, false, cache, None);
+        assert!(flags(&env).is_empty());
+        assert_eq!(
+            env.notes,
+            ["mold is used on Linux only: linking with the default linker"]
+        );
+        // Not configured (the default linker): none, whatever is installed.
+        for linker in [None, Some("default")] {
+            let e = BuildConfig {
+                linker: linker.map(String::from),
+                ..Default::default()
+            }
+            .effective(12, root);
+            let env = build_env(&e, true, true, true, cache, None);
+            assert!(flags(&env).is_empty(), "{linker:?}");
+            assert!(env.notes.is_empty());
+        }
+    }
+
     /// Four crates as `cargo metadata --no-deps` reports them: `lint` ← `core` ← `server` ←
     /// `cli` (a binary, `kanbanr`), `cli` also on `core` directly, plus a registry dependency.
     const METADATA: &str = r#"{
@@ -1149,6 +1515,51 @@ mod tests {
             .iter()
             .map(|c| format!("{}$ {}", c.dir, c.argv.join(" ")))
             .collect()
+    }
+
+    #[test]
+    fn a_crate_with_a_library_runs_its_modules_through_the_library() {
+        // `app` has a library and a binary; `tool` is binary-only.
+        let json = r#"{
+          "packages": [
+            {"name": "app", "manifest_path": "/repo/api/crates/app/Cargo.toml",
+             "dependencies": [],
+             "targets": [{"kind": ["lib"], "name": "app"}, {"kind": ["bin"], "name": "app-cli"}]},
+            {"name": "tool", "manifest_path": "/repo/api/crates/tool/Cargo.toml",
+             "dependencies": [],
+             "targets": [{"kind": ["bin"], "name": "tool"}]}
+          ]
+        }"#;
+        let ws = workspace_from_metadata(json, Path::new("/repo")).unwrap();
+        assert!(ws[0].has_lib && ws[0].bin.as_deref() == Some("app-cli"));
+        assert!(!ws[1].has_lib && ws[1].bin.as_deref() == Some("tool"));
+        let a = affected(
+            &paths(&[
+                "api/crates/app/src/store.rs",
+                "api/crates/app/src/main.rs",
+                "api/crates/tool/src/walk.rs",
+            ]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        let l = lines(&a);
+        assert!(
+            l.contains(&"api$ cargo test --locked -p app --lib store::".to_string()),
+            "a module of a crate with a library runs through the library: {l:?}"
+        );
+        assert!(
+            l.contains(&"api$ cargo test --locked -p app --bin app-cli".to_string()),
+            "main.rs runs through the binary: {l:?}"
+        );
+        assert!(
+            l.contains(&"api$ cargo test --locked -p tool --bin tool walk::".to_string()),
+            "a binary-only crate's module runs through its binary: {l:?}"
+        );
+        assert!(
+            !l.iter().any(|c| c.contains("--bin app-cli store::")),
+            "{l:?}"
+        );
     }
 
     #[test]

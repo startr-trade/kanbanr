@@ -7,6 +7,11 @@
 //! held file lock, so a crashed kanbanr gives its slot back with its process. A child is not killed
 //! with kanbanr: it is in the terminal's process group, so Ctrl-C reaches both, but a kanbanr killed
 //! alone leaves its child running, unaccounted for.
+//!
+//! A command runs with [`buildplan::build_env`]: the job and test-thread caps, and the project's
+//! own sccache server, whose base directories are the main checkout and every worktree, so a
+//! compile in one worktree serves the others. Before a cargo command the server is (re)started
+//! when its base directories are out of date, but only when no other build holds a slot.
 
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -15,7 +20,9 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use kanbanr_core::Store;
-use kanbanr_core::buildplan::{self, Affected, BuildRow, Effective, Priority, RepoShape, Tier};
+use kanbanr_core::buildplan::{
+    self, Affected, BuildRow, Effective, Priority, RepoShape, Restart, Tier,
+};
 use kanbanr_core::coderepo;
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +58,18 @@ struct Plan {
     branch: String,
     /// Whether the load and memory waits apply (Linux only).
     machine_waits: bool,
+    /// The project, which names its compiler cache folder.
+    project: String,
+    /// The main checkout: the cache server's first base directory, and where worktrees are listed.
+    main_root: PathBuf,
+    /// `sccache`, when it is on `PATH`.
+    sccache: Option<PathBuf>,
+    /// Whether `mold` is on `PATH`.
+    mold_found: bool,
 }
+
+/// The environment a command runs with: name, value.
+type Env = [(String, String)];
 
 /// Run `req.cmd` in the current directory once a build slot is free, record it in the build log
 /// of the repository at `repo`, and return its exit status.
@@ -94,6 +112,7 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
         Some(_) => Priority::Task,
     };
     let repo_dir = git_common_dir(repo).map(|c| buildplan::repo_dir(&c));
+    let path = std::env::var_os("PATH").unwrap_or_default();
     Ok(Plan {
         machine: buildplan::machine_dir(),
         repo_dir,
@@ -110,7 +129,24 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
             .unwrap_or_else(|| repo.display().to_string()),
         branch: facts.and_then(|f| f.branch).unwrap_or_default(),
         machine_waits: cfg!(target_os = "linux"),
+        project: project.to_string(),
+        main_root,
+        sccache: find_tool("sccache", &path),
+        mold_found: find_tool("mold", &path).is_some(),
     })
+}
+
+/// The program `name` in one of the folders of `path` (a `PATH` value), if any.
+fn find_tool(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .flat_map(|d| {
+            let mut c = vec![d.join(name)];
+            if cfg!(windows) {
+                c.push(d.join(format!("{name}.exe")));
+            }
+            c
+        })
+        .find(|p| p.is_file())
 }
 
 /// The agent scope bound to the worktree `facts` describes, if any.
@@ -159,10 +195,11 @@ fn git_common_dir(repo: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(out.trim()))
 }
 
-/// Run the command itself, inheriting stdio, in the current directory.
-fn spawn(cmd: &[String]) -> std::io::Result<i32> {
+/// Run the command itself with `env` added, inheriting stdio, in the current directory.
+fn spawn(cmd: &[String], env: &Env) -> std::io::Result<i32> {
     let status = std::process::Command::new(&cmd[0])
         .args(&cmd[1..])
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .status()?;
     Ok(exit_code(status))
 }
@@ -182,24 +219,43 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     -1
 }
 
-/// Wait for a slot, run `exec`, record the row. Returns the exit status and the row written.
+/// Wait for a slot, make sure of the cache server (a cargo command), run `exec` with the build
+/// environment, record the row. Returns the exit status and the row written.
 fn run_planned(
     plan: &Plan,
     req: &RunRequest,
-    exec: &dyn Fn(&[String]) -> std::io::Result<i32>,
+    exec: &dyn Fn(&[String], &Env) -> std::io::Result<i32>,
 ) -> anyhow::Result<(i32, BuildRow)> {
     let asked = Instant::now();
     let at = kanbanr_core::now_rfc3339();
     let slot = wait_for_slot(plan, &req.cmd)?;
     let queued_ms = millis(asked.elapsed());
     let mem_available_mib = plan.machine_waits.then(mem_available_mib).flatten();
+    let env = buildplan::build_env(
+        &plan.effective,
+        plan.sccache.is_some(),
+        plan.mold_found,
+        cfg!(target_os = "linux"),
+        &cache_dir(plan),
+        None,
+    );
+    let mut notes = env.notes.clone();
+    if is_cargo(&req.cmd)
+        && let Some(n) = ensure_cache_server(plan, slot.n)
+    {
+        notes.push(n);
+    }
     let started = Instant::now();
-    let result = exec(&req.cmd);
+    let result = exec(&req.cmd, &env.set);
     let run_ms = millis(started.elapsed());
-    let (exit, note) = match &result {
-        Ok(c) => (*c, String::new()),
-        Err(e) => (127, format!("could not start: {e}")),
+    let exit = match &result {
+        Ok(c) => *c,
+        Err(e) => {
+            notes.push(format!("could not start: {e}"));
+            127
+        }
     };
+    let note = notes.join("; ");
     let row = BuildRow {
         at,
         worktree: plan.worktree.clone(),
@@ -243,6 +299,200 @@ fn run_planned(
 
 fn millis(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The compiler cache server
+// ---------------------------------------------------------------------------------------------
+
+/// Is `cmd` a cargo command (the program's file name is `cargo`)?
+fn is_cargo(cmd: &[String]) -> bool {
+    cmd.first()
+        .and_then(|c| Path::new(c).file_stem())
+        .is_some_and(|s| s == "cargo")
+}
+
+fn cache_dir(plan: &Plan) -> PathBuf {
+    buildplan::sccache_dir(&plan.machine, &plan.project, &plan.main_root)
+}
+
+/// The repository's checkouts, from `git worktree list` in the main checkout: absolute paths.
+fn worktree_roots(main_root: &Path) -> Vec<PathBuf> {
+    coderepo::git(main_root, &["worktree", "list", "--porcelain"])
+        .map(|out| {
+            out.lines()
+                .filter_map(|l| l.strip_prefix("worktree "))
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Is a slot other than `held` taken by another build?
+fn others_building(machine: &Path, slots: u32, held: u32) -> bool {
+    (0..slots).filter(|n| *n != held).any(|n| {
+        open_lock(&slot_lock(machine, n))
+            .map(|f| f.try_lock_exclusive().is_err())
+            .unwrap_or(false)
+    })
+}
+
+/// The project's sccache server's settings, as environment variables for `sccache` itself.
+fn server_env(plan: &Plan, base_dirs: &std::ffi::OsStr) -> Vec<(String, std::ffi::OsString)> {
+    let e = &plan.effective;
+    vec![
+        (
+            "SCCACHE_SERVER_PORT".into(),
+            e.sccache_port.to_string().into(),
+        ),
+        ("SCCACHE_DIR".into(), cache_dir(plan).into_os_string()),
+        (
+            "SCCACHE_CACHE_SIZE".into(),
+            format!("{}G", e.cache_gib).into(),
+        ),
+        ("SCCACHE_BASEDIRS".into(), base_dirs.to_os_string()),
+    ]
+}
+
+/// `sccache <arg>` against the project's server, with no terminal attached: its output when it
+/// succeeded. The server's settings go with every call, so a server that `--show-stats` starts on
+/// its own starts with them.
+fn sccache_call(sccache: &Path, env: &[(String, std::ffi::OsString)], arg: &str) -> Option<String> {
+    let out = std::process::Command::new(sccache)
+        .arg(arg)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Make sure the project's sccache server runs with the main checkout and every worktree as its
+/// base directories, before a cargo build that holds slot `slot_held`. A server with other base
+/// directories is restarted only when no other build holds a slot; otherwise it is left, and the
+/// note returned says so (it goes in the build's row).
+fn ensure_cache_server(plan: &Plan, slot_held: u32) -> Option<String> {
+    let sccache = plan.sccache.as_deref().filter(|_| plan.effective.sccache)?;
+    let wanted = buildplan::base_dirs(&plan.main_root, &worktree_roots(&plan.main_root));
+    let joined = match std::env::join_paths(&wanted) {
+        Ok(j) => j,
+        Err(e) => return Some(format!("the cache server's base directories: {e}")),
+    };
+    let env = server_env(plan, &joined);
+    let running =
+        sccache_call(sccache, &env, "--show-stats").and_then(|s| buildplan::parse_base_dirs(&s));
+    let others = others_building(&plan.machine, plan.effective.slots, slot_held);
+    match buildplan::needs_restart(running.as_deref(), &wanted, others) {
+        Restart::No => None,
+        Restart::Deferred => Some(format!(
+            "the cache server was not restarted for the {} checkouts now: another build is \
+             running, so a new worktree misses the shared cache until a build finds the slots free",
+            wanted.len()
+        )),
+        Restart::Yes => {
+            let _ = sccache_call(sccache, &env, "--stop-server");
+            sccache_call(sccache, &env, "--start-server")
+                .is_none()
+                .then(|| "the cache server could not be started".to_string())
+        }
+    }
+}
+
+/// The project's compiler cache as `build status` shows it.
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheView {
+    /// sccache is on in the project's settings.
+    pub enabled: bool,
+    /// sccache is on `PATH`.
+    pub found: bool,
+    pub port: u16,
+    pub dir: String,
+    /// The server answered.
+    pub running: bool,
+    /// The base directories the server runs with.
+    pub base_dirs: Vec<String>,
+    /// The checkouts it should run with: the main checkout and every worktree.
+    pub wanted: Vec<String>,
+    pub size: Option<String>,
+    pub max_size: Option<String>,
+}
+
+fn cache_view(plan: &Plan) -> CacheView {
+    let e = &plan.effective;
+    let wanted = buildplan::base_dirs(&plan.main_root, &worktree_roots(&plan.main_root));
+    let stats = plan
+        .sccache
+        .as_deref()
+        .filter(|_| e.sccache)
+        .and_then(|sc| {
+            let joined = std::env::join_paths(&wanted).ok()?;
+            sccache_call(sc, &server_env(plan, &joined), "--show-stats")
+        });
+    let text = stats.as_deref().unwrap_or("");
+    let shown = |l: &str| buildplan::stats_value(text, l).map(String::from);
+    CacheView {
+        enabled: e.sccache,
+        found: plan.sccache.is_some(),
+        port: e.sccache_port,
+        dir: cache_dir(plan).display().to_string(),
+        running: stats.is_some(),
+        base_dirs: buildplan::parse_base_dirs(text)
+            .unwrap_or_default()
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect(),
+        wanted: wanted.iter().map(|d| d.display().to_string()).collect(),
+        size: shown("Cache size"),
+        max_size: shown("Max cache size"),
+    }
+}
+
+/// The compiler cache's lines of `build status`.
+pub fn cache_lines(c: &CacheView) -> Vec<String> {
+    if !c.enabled {
+        return vec!["compiler cache: off in the project's build settings".into()];
+    }
+    if !c.found {
+        return vec!["compiler cache: sccache not found, so builds compile without it".into()];
+    }
+    if !c.running {
+        return vec![format!(
+            "compiler cache: sccache on port {}, not running (the next cargo build starts it); cache in {}",
+            c.port, c.dir
+        )];
+    }
+    let mut lines = vec![format!(
+        "compiler cache: sccache on port {}, {} of {} in {}",
+        c.port,
+        c.size.as_deref().unwrap_or("?"),
+        c.max_size.as_deref().unwrap_or("?"),
+        c.dir
+    )];
+    let same = {
+        let set = |v: &[String]| {
+            v.iter()
+                .map(PathBuf::from)
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        set(&c.base_dirs) == set(&c.wanted)
+    };
+    lines.push(format!(
+        "  base directories ({}){}:",
+        c.base_dirs.len(),
+        if same {
+            String::new()
+        } else {
+            format!(
+                ", out of date: {} checkouts now, restarted when no build runs",
+                c.wanted.len()
+            )
+        }
+    ));
+    lines.extend(c.base_dirs.iter().map(|d| format!("    {d}")));
+    lines
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -647,9 +897,9 @@ fn repo_shape(root: &Path, line_check: Option<Vec<String>>) -> RepoShape {
     }
 }
 
-/// Run `cmd` in `dir`, inheriting stdio. A program named by a relative path with a folder in it
+/// Run `cmd` in `dir` with `env` added, inheriting stdio. A program named by a relative path with a folder in it
 /// (`scripts/test.sh`) is found from `dir`.
-fn spawn_in(dir: &Path, cmd: &[String]) -> std::io::Result<i32> {
+fn spawn_in(dir: &Path, cmd: &[String], env: &Env) -> std::io::Result<i32> {
     let program = if cmd[0].contains('/') && Path::new(&cmd[0]).is_relative() {
         dir.join(&cmd[0]).into_os_string()
     } else {
@@ -657,6 +907,7 @@ fn spawn_in(dir: &Path, cmd: &[String]) -> std::io::Result<i32> {
     };
     let status = std::process::Command::new(program)
         .args(&cmd[1..])
+        .envs(env.iter().map(|(k, v)| (k, v)))
         .current_dir(dir)
         .status()?;
     Ok(exit_code(status))
@@ -697,7 +948,7 @@ pub fn check(
         };
         let dir = root.join(&c.dir);
         let line = format!("{} {}", c.name, c.argv.join(" "));
-        match run_planned(&plan, &req, &|cmd| spawn_in(&dir, cmd)) {
+        match run_planned(&plan, &req, &|cmd, env| spawn_in(&dir, cmd, env)) {
             Ok((code, row)) => results.push((line, code, row.run_ms)),
             Err(e) => {
                 eprintln!("{e}");
@@ -753,6 +1004,8 @@ pub struct Status {
     pub waiting: Vec<WaitingView>,
     /// The waits that apply on this platform, in words.
     pub waits: Vec<String>,
+    /// The project's compiler cache server.
+    pub cache: CacheView,
 }
 
 /// The project's slots, who holds them, who waits, and which waits apply here.
@@ -813,6 +1066,7 @@ fn status_of(plan: &Plan) -> anyhow::Result<Status> {
         slots,
         waiting,
         waits,
+        cache: cache_view(plan),
     })
 }
 
@@ -936,6 +1190,11 @@ mod tests {
             worktree: "wt".into(),
             branch: "b".into(),
             machine_waits: false,
+            project: "p".into(),
+            main_root: dir.to_path_buf(),
+            // No compiler cache unless a test brings its own.
+            sccache: None,
+            mold_found: false,
         }
     }
 
@@ -966,7 +1225,7 @@ mod tests {
         let running = Mutex::new(0usize);
         let most = Mutex::new(0usize);
         let done = Mutex::new(0usize);
-        let exec = |_: &[String]| -> std::io::Result<i32> {
+        let exec = |_: &[String], _: &Env| -> std::io::Result<i32> {
             {
                 let mut r = running.lock().unwrap();
                 *r += 1;
@@ -1022,7 +1281,7 @@ mod tests {
         };
         std::thread::scope(|s| {
             s.spawn(|| {
-                run_planned(&hold, &req(&["hold"]), &|_| {
+                run_planned(&hold, &req(&["hold"]), &|_, _| {
                     while !*release.lock().unwrap() {
                         std::thread::sleep(Duration::from_millis(10));
                     }
@@ -1041,7 +1300,7 @@ mod tests {
             }
             let record = |who: &'static str| {
                 let order = &order;
-                move |_: &[String]| -> std::io::Result<i32> {
+                move |_: &[String], _: &Env| -> std::io::Result<i32> {
                     order.lock().unwrap().push(who.to_string());
                     Ok(0)
                 }
@@ -1076,7 +1335,7 @@ mod tests {
         // One build holds the only slot for 300 ms; the second waits for it.
         let waited = std::thread::scope(|s| {
             let held = s.spawn(|| {
-                run_planned(&plan, &req(&["hold"]), &|_| {
+                run_planned(&plan, &req(&["hold"]), &|_, _| {
                     std::thread::sleep(Duration::from_millis(300));
                     Ok(0)
                 })
@@ -1087,7 +1346,7 @@ mod tests {
                 assert!(t0.elapsed() < Duration::from_secs(10));
                 std::thread::sleep(Duration::from_millis(5));
             }
-            let (_, row) = run_planned(&plan, &req(&["after"]), &|_| Ok(3)).unwrap();
+            let (_, row) = run_planned(&plan, &req(&["after"]), &|_, _| Ok(3)).unwrap();
             held.join().unwrap();
             row
         });
@@ -1110,6 +1369,187 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `git -c … <args>` in `dir`, which must succeed.
+    #[cfg(unix)]
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// FTR-062 R-4: a stub `sccache` logs each call. With no server, the first cargo build starts
+    /// one with the checkouts as base directories; a new worktree stops and restarts it with both
+    /// roots; nothing new leaves it alone; with another slot held a new worktree defers the
+    /// restart, with a note.
+    #[cfg(unix)]
+    #[test]
+    fn the_cache_server_is_restarted_for_new_worktrees_only_when_no_build_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::fs::canonicalize(scratch("sccache")).unwrap();
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git_ok(&main, &["init", "-q"]);
+        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "start"]);
+
+        // The stub keeps the running server's base directories in a file, prints them as 0.17
+        // does, and logs every call with the base directories it was given.
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("sccache");
+        let log = dir.join("sccache.log");
+        let state = dir.join("server");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n\
+                 echo \"$1 $SCCACHE_SERVER_PORT $SCCACHE_BASEDIRS\" >> '{log}'\n\
+                 case \"$1\" in\n\
+                 --show-stats) [ -f '{state}' ] || exit 2\n\
+                   echo \"Base directories   $(sed 's#:#/, #g; s#$#/#' '{state}')\"\n\
+                   echo 'Cache size          1 GiB' ;;\n\
+                 --start-server) printf '%s\\n' \"$SCCACHE_BASEDIRS\" > '{state}' ;;\n\
+                 --stop-server) rm -f '{state}' ;;\n\
+                 esac\n",
+                log = log.display(),
+                state = state.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut plan = plan_in(&dir, 2, Priority::None, None);
+        plan.main_root = main.clone();
+        plan.sccache = find_tool("sccache", bin.as_os_str());
+        assert_eq!(
+            plan.sccache.as_deref(),
+            Some(stub.as_path()),
+            "found on PATH"
+        );
+        let port = plan.effective.sccache_port.to_string();
+        let calls = || -> Vec<String> {
+            std::fs::read_to_string(&log)
+                .unwrap_or_default()
+                .lines()
+                .map(String::from)
+                .collect()
+        };
+        // The base directories a call was given, as paths.
+        let dirs_of = |line: &str| -> Vec<PathBuf> {
+            let v = line.splitn(3, ' ').nth(2).unwrap_or("");
+            std::env::split_paths(v).collect()
+        };
+        let calls_since = |n: usize| calls().split_off(n);
+
+        // No server: the cargo build starts one, and runs with the cache's environment.
+        let seen = Mutex::new(Vec::<(String, String)>::new());
+        let (code, row) = run_planned(&plan, &req(&["cargo", "build"]), &|_, env| {
+            *seen.lock().unwrap() = env.to_vec();
+            Ok(0)
+        })
+        .unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(row.note, "", "{row:?}");
+        let env = seen.lock().unwrap().clone();
+        let has = |k: &str, v: &str| env.iter().any(|(a, b)| a == k && b == v);
+        assert!(has("RUSTC_WRAPPER", "sccache"), "{env:?}");
+        assert!(has("SCCACHE_SERVER_PORT", &port), "{env:?}");
+        assert!(has("CARGO_BUILD_JOBS", &plan.effective.jobs.to_string()));
+        let c = calls();
+        assert_eq!(
+            c.iter()
+                .map(|l| l.split(' ').next().unwrap())
+                .collect::<Vec<_>>(),
+            ["--show-stats", "--stop-server", "--start-server"],
+            "{c:?}"
+        );
+        assert!(c.iter().all(|l| l.split(' ').nth(1) == Some(port.as_str())));
+        assert_eq!(dirs_of(&c[2]), std::slice::from_ref(&main));
+
+        // A command that is not cargo leaves the server alone.
+        let n = calls().len();
+        run_planned(&plan, &req(&["npm", "run", "build"]), &|_, _| Ok(0)).unwrap();
+        assert!(calls_since(n).is_empty());
+
+        // A new worktree: stopped, then started with both roots.
+        let wt1 = dir.join("wt1");
+        git_ok(
+            &main,
+            &["worktree", "add", "-q", "--detach", wt1.to_str().unwrap()],
+        );
+        let n = calls().len();
+        assert_eq!(ensure_cache_server(&plan, 0), None);
+        let c = calls_since(n);
+        assert_eq!(
+            c.iter()
+                .map(|l| l.split(' ').next().unwrap())
+                .collect::<Vec<_>>(),
+            ["--show-stats", "--stop-server", "--start-server"],
+            "{c:?}"
+        );
+        let mut want = vec![main.clone(), wt1.clone()];
+        want.sort();
+        assert_eq!(dirs_of(&c[2]), want);
+
+        // Nothing new: only asked.
+        let n = calls().len();
+        assert_eq!(ensure_cache_server(&plan, 0), None);
+        assert_eq!(calls_since(n).len(), 1, "only --show-stats");
+
+        // Another build holds slot 1: a new worktree does not restart the server.
+        let wt2 = dir.join("wt2");
+        git_ok(
+            &main,
+            &["worktree", "add", "-q", "--detach", wt2.to_str().unwrap()],
+        );
+        std::fs::create_dir_all(plan.machine.join(SLOTS)).unwrap();
+        let other = open_lock(&slot_lock(&plan.machine, 1)).unwrap();
+        other.lock_exclusive().unwrap();
+        let n = calls().len();
+        let note = ensure_cache_server(&plan, 0).expect("a note for the deferred restart");
+        assert!(note.contains("another build is running"), "{note}");
+        let c = calls_since(n);
+        assert!(
+            c.iter().all(|l| l.starts_with("--show-stats")),
+            "no restart while another build runs: {c:?}"
+        );
+        // The cargo build that defers says so in its row.
+        let n = calls().len();
+        let (_, row) = run_planned(&plan, &req(&["cargo", "test"]), &|_, _| Ok(0)).unwrap();
+        assert!(row.note.contains("another build is running"), "{row:?}");
+        assert!(calls_since(n).iter().all(|l| l.starts_with("--show-stats")));
+
+        // Once the other build is done, the next one restarts it with all three.
+        drop(other);
+        let n = calls().len();
+        assert_eq!(ensure_cache_server(&plan, 0), None);
+        let c = calls_since(n);
+        let mut want = vec![main.clone(), wt1, wt2];
+        want.sort();
+        assert_eq!(dirs_of(c.last().unwrap()), want, "{c:?}");
+
+        // status shows the server and its base directories.
+        let st = status_of(&plan).unwrap();
+        assert!(st.cache.running && st.cache.found && st.cache.enabled);
+        assert_eq!(st.cache.port, plan.effective.sccache_port);
+        assert_eq!(st.cache.size.as_deref(), Some("1 GiB"));
+        assert_eq!(
+            st.cache
+                .base_dirs
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>(),
+            want
+        );
+        let lines = cache_lines(&st.cache);
+        assert!(lines[0].contains(&format!("port {port}")), "{lines:?}");
+        assert_eq!(lines.len(), 2 + 3, "{lines:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FTR-062 R-10: taking a free slot, recording the row and giving the slot back adds under
     /// 200 ms to a command (median of five).
     #[test]
@@ -1119,7 +1559,7 @@ mod tests {
         let mut took: Vec<u64> = (0..5)
             .map(|_| {
                 let t0 = Instant::now();
-                run_planned(&plan, &req(&["noop"]), &|_| Ok(0)).unwrap();
+                run_planned(&plan, &req(&["noop"]), &|_, _| Ok(0)).unwrap();
                 millis(t0.elapsed())
             })
             .collect();
