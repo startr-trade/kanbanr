@@ -2392,6 +2392,108 @@ fn again_offer(
     })
 }
 
+/// A test a forward promotion waits for (DEF-043, FTR-057): a not-green test of one of the
+/// release's items, checked at or before a stage the promotion enters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueTest {
+    /// The item's code.
+    pub code: String,
+    /// The requirement's id, `R-n`.
+    pub requirement: String,
+    /// The test's name.
+    pub test: String,
+    /// The index of the entered stage it holds.
+    pub stage: usize,
+    /// What the plan says of it: "<code> <R-n> (<test>) is checked at <stage> and is not green".
+    pub detail: String,
+}
+
+/// The tests a forward promotion of `version` into the stages `entered` waits for (DEF-043): for
+/// each stage entered other than the cut, every not-green test of the release's items checked at
+/// it or before it (after the cut: at a stage after the cut, since the cut's own are accepted
+/// there). A requirement that already has a green test is skipped. This is the one definition of
+/// "this check holds a promotion": the plan's `later_tests_green` and the manual list's `holds`
+/// both read it (FTR-057).
+pub fn tests_due(
+    project: &Project,
+    cadence: &Cadence,
+    version: &str,
+    entered: &[usize],
+    cut_stage: usize,
+) -> Vec<DueTest> {
+    let stages = cadence.stages();
+    let index_of = |at: &str| {
+        cadence
+            .stage_for_check(at)
+            .and_then(|n| stages.iter().position(|s| *s == n))
+    };
+    let mut due = Vec::new();
+    for &s in entered.iter().filter(|&&s| s != cut_stage) {
+        for f in project.features.iter().filter(|f| {
+            f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status)
+        }) {
+            let Some(def) = f.definition.as_ref() else {
+                continue;
+            };
+            for r in &def.requirements {
+                if r.tests.iter().any(|t| t.state == TestState::Green) {
+                    continue;
+                }
+                for t in &r.tests {
+                    let Some(i) = index_of(&t.at) else { continue };
+                    let held = if s < cut_stage {
+                        i <= s
+                    } else {
+                        i > cut_stage && i <= s
+                    };
+                    if !held {
+                        continue;
+                    }
+                    let named = if stages.iter().any(|x| x == t.at.trim())
+                        || matches!(t.at.trim(), "pushed" | "cut")
+                    {
+                        stages[i].clone()
+                    } else {
+                        format!("{}, which is not a stage now: at the cut", t.at.trim())
+                    };
+                    due.push(DueTest {
+                        code: f.code.clone(),
+                        requirement: r.id.clone(),
+                        test: t.name.clone(),
+                        stage: s,
+                        detail: format!(
+                            "{} {} ({}) is checked at {named} and is not green",
+                            f.code, r.id, t.name
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    due
+}
+
+/// The text of the button that moves `version` forward into stage `i` (DEF-034 T3): "Cut v1" at
+/// the cut, "Confirm <stage>: ship v1" at a last stage after it, "Confirm <stage> for v1" between,
+/// and "Promote v1 to <stage>" before the cut.
+pub fn button_text(
+    stages: &[String],
+    cut_stage: usize,
+    last: usize,
+    version: &str,
+    i: usize,
+) -> String {
+    if i == cut_stage {
+        format!("Cut {version}")
+    } else if i > cut_stage && i == last {
+        format!("Confirm {}: ship {version}", stages[i])
+    } else if i > cut_stage {
+        format!("Confirm {} for {version}", stages[i])
+    } else {
+        format!("Promote {version} to {}", stages[i])
+    }
+}
+
 /// `accept` is the untested requirements the person accepts shipping, as `CODE/R-n` (DEF-043).
 #[allow(clippy::too_many_arguments)]
 fn work_out(
@@ -3308,50 +3410,13 @@ fn work_out(
     // the tests of the release's items checked at it or before it (after the cut: at a stage after
     // the cut, since the cut's own are accepted there). The cut is R-3's.
     if direction == Direction::Forward && !empty {
-        let index_of = |at: &str| {
-            cadence
-                .stage_for_check(at)
-                .and_then(|n| stages.iter().position(|s| *s == n))
-        };
+        let due = tests_due(&project, cadence, version, &entered, cut_stage);
         for &s in entered.iter().filter(|&&s| s != cut_stage) {
-            let mut found: Vec<(String, String)> = Vec::new();
-            for f in project.features.iter().filter(|f| {
-                f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status)
-            }) {
-                let Some(def) = f.definition.as_ref() else {
-                    continue;
-                };
-                for r in &def.requirements {
-                    if r.tests.iter().any(|t| t.state == TestState::Green) {
-                        continue;
-                    }
-                    for t in &r.tests {
-                        let Some(i) = index_of(&t.at) else { continue };
-                        let due = if s < cut_stage {
-                            i <= s
-                        } else {
-                            i > cut_stage && i <= s
-                        };
-                        if !due {
-                            continue;
-                        }
-                        let named = if stages.iter().any(|x| x == t.at.trim())
-                            || matches!(t.at.trim(), "pushed" | "cut")
-                        {
-                            stages[i].clone()
-                        } else {
-                            format!("{}, which is not a stage now: at the cut", t.at.trim())
-                        };
-                        found.push((
-                            format!("{}/{}", f.code, r.id),
-                            format!(
-                                "{} {} ({}) is checked at {named} and is not green",
-                                f.code, r.id, t.name
-                            ),
-                        ));
-                    }
-                }
-            }
+            let found: Vec<(String, String)> = due
+                .iter()
+                .filter(|d| d.stage == s)
+                .map(|d| (format!("{}/{}", d.code, d.requirement), d.detail.clone()))
+                .collect();
             if found.is_empty() {
                 continue;
             }
@@ -3509,17 +3574,7 @@ fn work_out(
             missing.push(b.clone());
         }
     }
-    let button_for = |i: usize| {
-        if i == cut_stage {
-            format!("Cut {version}")
-        } else if i > cut_stage && i == last {
-            format!("Confirm {}: ship {version}", stages[i])
-        } else if i > cut_stage {
-            format!("Confirm {} for {version}", stages[i])
-        } else {
-            format!("Promote {version} to {}", stages[i])
-        }
-    };
+    let button_for = |i: usize| button_text(&stages, cut_stage, last, version, i);
     let tag_ready = missing.is_empty();
     let button = match direction {
         _ if awaiting && tag_ready => format!("Ship {version}"),
@@ -9285,6 +9340,66 @@ pub(crate) mod tests {
         green(&store, &code);
         let plan = plan_to(&store, &repo, "main");
         assert!(condition(&plan, LaterTestsGreen).is_none());
+        clean(&dir, &repo);
+    }
+
+    /// FTR-057 R-3: the tests a promotion waits for are one list, read by the plan's
+    /// `later_tests_green` and by the manual list's `holds`. On a release at candidate with a
+    /// manual test checked at main and not green, both name it, for "Promote v1 to main"; once it
+    /// is green, neither does.
+    #[test]
+    fn the_tests_a_promotion_waits_for_are_the_same_for_the_plan_and_the_manual_list() {
+        use crate::releasegates::ReleaseCheck::LaterTestsGreen;
+        let (store, dir, repo) = staged("ftr057-due", THREE);
+        let code = later_item(&store, "main");
+        let mut def = store
+            .load_meta("shop")
+            .unwrap()
+            .features
+            .into_iter()
+            .find(|f| f.code == code)
+            .unwrap()
+            .definition
+            .unwrap();
+        let judged = "manual: the CI summary reads clearly";
+        def.requirements[1].tests[0].kind = "manual".into();
+        def.requirements[1].tests[0].name = judged.into();
+        store
+            .set_feature_definition("shop", &code, Some(def))
+            .unwrap();
+        go(&store, &repo, "candidate");
+        let due_refs = |store: &Store| -> Vec<String> {
+            let project = store.load_meta("shop").unwrap();
+            let cadence = &project.config.cadence;
+            let mut refs: Vec<String> =
+                super::tests_due(&project, cadence, "v1", &[1], cadence.cut_index())
+                    .iter()
+                    .map(|d| format!("{}/{}", d.code, d.requirement))
+                    .collect();
+            refs.sort();
+            refs.dedup();
+            refs
+        };
+        let plan = plan_to(&store, &repo, "main");
+        assert_eq!(plan.button, "Promote v1 to main");
+        let c = condition(&plan, LaterTestsGreen).expect("main waits for it");
+        assert_eq!(c.refs, [format!("{code}/R-2")]);
+        assert_eq!(due_refs(&store), c.refs);
+        let stages: Vec<String> = ["candidate", "main", "production"].map(String::from).into();
+        assert_eq!(super::button_text(&stages, 2, 2, "v1", 1), plan.button);
+        store
+            .set_test_state(
+                "shop",
+                &code,
+                "R-2",
+                judged,
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        let plan = plan_to(&store, &repo, "main");
+        assert!(condition(&plan, LaterTestsGreen).is_none());
+        assert!(due_refs(&store).is_empty());
         clean(&dir, &repo);
     }
 
