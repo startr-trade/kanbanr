@@ -95,16 +95,16 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 | **In Progress** | Starts the item's branch and builds in the current sprint | **Approve**, then **Sign off design-review** |
 | **Review** | Names a test for each requirement | Nothing |
 | **Testing** | Runs the tests against the requirements | Nothing |
-| **Done** (Definition of Done) | Records green tests, updates the docs and merges the branch into the sprint | **Sign off docs-folded**, once every requirement has a green test: a manual check counts once you click **Passed** under **Manual checks** |
+| **Done** (Definition of Done) | Records green tests, updates the docs and merges the branch into the sprint | **Sign off docs-folded**, once every requirement has a green test |
 | **Released** | Nothing: the cut moves it here | Nothing extra: Scrum doesn't ask for a release sign-off |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**A manual check comes before docs-folded.** When only a person can judge a requirement, Claude
-names one manual check for the item. It waits on the Review page under **Manual checks**, with what
-to check. Do the check and click **Passed** or **Failed**. **Sign off docs-folded** is offered only
-after it is Passed, so if you are waiting for the sign-off, look there first.
+**A judgement check never holds an item.** When only a person can judge a requirement, Claude
+writes it as the item's one judgement test. You are asked it at the release's cut, among the
+requirements you accept untested, or when you see the thing in a walkthrough; click **Passed** under
+**Manual checks** on the Review page when you have judged it.
 
 **Claude's overrides come to you.** If Claude moves an item past a gate, it says why and the move
 waits on the Review page with that reason, even on an item you approved. **Ratify** it there; until

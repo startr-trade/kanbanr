@@ -218,16 +218,13 @@ class ProcessTests(unittest.TestCase):
         self.assertTrue("**Sign off docs-folded**" in chores)
         self.assertFalse("skipping Design and Review" in text)
 
-    def every_sprint_guide_says_a_manual_check_comes_before_docs_folded(self) -> None:
-        """R-2: docs-folded waits for a Passed manual check, in a paragraph and in the stage table."""
-        for name, row in (("agile", "| **Review**"), ("scrum", "| **Done**")):
+    def every_sprint_guide_says_a_judgement_check_never_holds_an_item(self) -> None:
+        """DOC-010 R-2 (corrected by FTR-039): every sprint guide says a judgement check never holds an item."""
+        for name in ("agile", "scrum"):
             with self.subTest(guide=name):
-                text = read(GUIDES / f"{name}-with-claude.md")
-                self.assertTrue("**A manual check comes before docs-folded.**" in flat(text))
-                lines = [line for line in text.splitlines() if line.startswith(row)]
-                self.assertEqual(len(lines), 1, f"expected one table line starting {row!r}")
-                self.assertTrue("**Passed**" in lines[0])
-                self.assertTrue("**Manual checks**" in lines[0])
+                text = flat(read(GUIDES / f"{name}-with-claude.md"))
+                self.assertTrue("A judgement check never holds an item." in text)
+                self.assertTrue("at the release's cut" in text)
 
     def every_sprint_guide_says_a_granted_delegation_waits_for_the_mode(self) -> None:
         """R-3: a granted delegation does nothing until the mode is delegated."""

@@ -576,7 +576,7 @@ asked for, so don't ask for it either.
 **Read before you report what waits.** In the same turn, read `kanbanr review --pending --json`
 and, for each item you will name, `kanbanr check <CODE> --json`. Name a sign-off only when the
 queue offers it now. Say a held one is held and what releases it, for example "docs-folded follows
-once R-5's manual check is Passed", never "you can do both now". Never list as waiting an approval,
+once R-5's test is green", never "you can do both now". Never list as waiting an approval,
 sign-off or manual check already recorded: a manual check is waiting only while its test is not
 green.
 
@@ -1167,7 +1167,7 @@ project revision it was observed at. So:
 `kanbanr check FEAT-001` before calling anything done: it reports what the item has not said and
 what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a green whose test was
 renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
-`kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
+`kind: manual`; it is exempt from that sweep, so use it only for what a person judges (below).
 
 **A manual test's result is the person's, recorded on the monitor.** A manual test that is not
 green waits on the Review page, under **Manual checks**, with its requirement and the check to
@@ -1180,7 +1180,15 @@ user whether to file a defect, and file one only when they say so. A manual chec
 item's build stage; never prepare one before.
 
 **At most one manual test per item, and only for a person's judgement** (does this read well, is
-this confusing). A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
+this confusing): the item's one **judgement test**. Name it `manual: <what the person judges>`, for
+example `manual: the person judges whether the Releases page reads clearly to a newcomer`. Anything a
+run can observe (a file, a list, a checksum, an exit code, a push, a tag, a page's text or a button)
+is a unit, integration or walkthrough test, never a manual one. `feature define` refuses a second
+manual test, a manual test without the `manual:` prefix, one whose wording names something a run can
+check (it names the kind to use instead), and one that does not say what the person judges.
+**A judgement test never holds an item**, Completed included: the person is asked it once per
+release, at the cut, among the requirements they accept untested, or when they see the thing in a
+walkthrough. `kanbanr doctor` warns about an item whose manual tests break this rule. A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
 the board, the monitor or the remote: a button the monitor offers, a decision taken with nothing
 typed, a question Claude asked or did not ask, a board claim, a tag on the remote. Name it
 `walkthrough: <what the run shows>`: automated evidence, proved by
@@ -1633,8 +1641,10 @@ phases: it is a real commitment, the default suits most work, and it cannot be c
 once items are in flight.
 
 Under a phased process, grow an item's definition stage by stage.
-- **A named manual test is an open check.** `kanbanr check` lists `manual test not run: R-n: <name>`
-  without blocking. Tell the user, and don't call the item done until someone has run it.
+- **A judgement test is an open check that never blocks.** `kanbanr check` lists
+  `judgement test open: R-n: <name> (asked at the release's cut, or in a walkthrough)`. The item
+  can finish; tell the user it will be asked at the cut, or that it waits under **Manual checks** on
+  the Review page if they want to judge it sooner.
 - **A finished item on the Review page** is there because its approval lapsed or text was added since: ask
   the user to read what changed and approve again, or say why the change doesn't need it.
 - **Guides for each built-in process** are in the book, under Process guides. Point a user there

@@ -42,6 +42,11 @@ All notable changes to kanbanr are documented here. The format follows
 - The monitor's tabs are grouped into areas (Overview, Work, Plan, Evidence, Architecture, Records),
   and on a narrow screen they collapse into one menu, so every page can be reached on a phone
   (FTR-047).
+- **A manual test is a judgement test (FTR-039).** An item has at most one, named `manual: …` and
+  saying what a person judges; `feature define` refuses a second one or one a run could check,
+  naming the kind to use. A judgement test never holds an item back from Completed: it is asked at
+  the release's cut. An approval of a change to tests only is marked so on the Review page and
+  recorded with that scope.
 
 ### Fixed
 
