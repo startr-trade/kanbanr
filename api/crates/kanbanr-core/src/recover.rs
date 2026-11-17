@@ -47,6 +47,9 @@ pub struct Waiting {
     pub prepared: usize,
     /// Proposed baseline revisions (FTR-033).
     pub baseline: usize,
+    /// Per delegation in force, the items whose decisions Claude holds under it (DEF-104): not in
+    /// `items`, which are the person's.
+    pub held: Vec<(String, usize)>,
 }
 
 /// Everything [`render`] needs, gathered by the CLI.
@@ -87,6 +90,19 @@ const READ_MORE: &str = "`kanbanr board` lists every item; `kanbanr ready` what 
 /// The line under "Waiting for the user" when baseline revisions wait (FTR-033).
 pub fn baseline_line(n: usize) -> String {
     format!("{n} baseline revision(s) wait on the Baseline page.")
+}
+
+/// The sentence on what Claude holds under delegations in force (DEF-104); empty when nothing is.
+pub fn held_line(held: &[(String, usize)]) -> String {
+    if held.is_empty() {
+        return String::new();
+    }
+    let total: usize = held.iter().map(|(_, n)| n).sum();
+    let each: Vec<String> = held.iter().map(|(id, n)| format!("{id} ({n})")).collect();
+    format!(
+        "Claude holds {total} decision(s) under {}: take them with `--under`, not the person's.",
+        each.join(", ")
+    )
 }
 
 /// The title of the practice-packs section (FTR-033 R-5).
@@ -185,7 +201,12 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
     ));
 
     let w = &i.waiting;
-    if !w.items.is_empty() || !w.adrs.is_empty() || w.prepared > 0 || w.baseline > 0 {
+    if !w.items.is_empty()
+        || !w.adrs.is_empty()
+        || w.prepared > 0
+        || w.baseline > 0
+        || !w.held.is_empty()
+    {
         let list = |ids: &[String]| -> String {
             if ids.is_empty() {
                 return String::new();
@@ -205,6 +226,10 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
             list(&w.adrs),
             w.prepared
         );
+        if !w.held.is_empty() {
+            body.push(' ');
+            body.push_str(&held_line(&w.held));
+        }
         if w.baseline > 0 {
             body.push('\n');
             body.push_str(&baseline_line(w.baseline));
@@ -292,6 +317,7 @@ mod tests {
                 adrs: vec!["ADR-0009".into()],
                 prepared: 2,
                 baseline: 0,
+                held: Vec::new(),
             },
             sprint: Some(
                 "Sprint SP-004 \"ship\", 2026-11-10 to 2026-11-24: 3/9 items finished.".into(),
@@ -460,5 +486,29 @@ mod tests {
         assert!(out.contains(&format!("### {PACKS_TITLE}\n")), "{out}");
         let tight = out.len() - section(&s.title, &s.body).len() - 1;
         assert!(render(&i, tight).len() <= tight);
+    }
+
+    /// DEF-104 (supports R-4): what Claude holds is one sentence naming each delegation; none
+    /// held, none printed; the brief form keeps it.
+    #[test]
+    fn the_held_line_names_each_delegation() {
+        let mut i = base();
+        let out = render(&i, DEFAULT_BUDGET);
+        assert!(!out.contains("Claude holds"), "{out}");
+        i.waiting.held = vec![("DLG-001".into(), 3), ("DLG-002".into(), 1)];
+        let out = render(&i, DEFAULT_BUDGET);
+        assert!(
+            out.contains(
+                "Claude holds 4 decision(s) under DLG-001 (3), DLG-002 (1): take them with \
+                 `--under`, not the person's."
+            ),
+            "{out}"
+        );
+        assert!(out.len() <= DEFAULT_BUDGET);
+        // Held only: the section is still printed.
+        i.waiting.items.clear();
+        i.waiting.adrs.clear();
+        i.waiting.prepared = 0;
+        assert!(render(&i, DEFAULT_BUDGET).contains("### Waiting for the person"));
     }
 }

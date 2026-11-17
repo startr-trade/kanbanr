@@ -238,6 +238,52 @@ pub struct ReviewEntry {
     /// Affects docs heading, and the rows its `affects_views` names (FTR-006).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views_changed: Vec<String>,
+    /// The verdicts this entry asks that Claude holds under a delegation in force, in the order
+    /// `asked` lists them (DEF-104).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<Held>,
+    /// Nothing in this entry is the person's: every verdict it asks is held and no release is
+    /// asked (DEF-104).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub claudes: bool,
+}
+
+/// A verdict Claude holds under a delegation in force (DEF-104).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Held {
+    /// `approve`, `ratify` or `signoff:<name>`.
+    pub verdict: String,
+    /// The delegation that holds it, `DLG-001`.
+    pub delegation: String,
+    /// When the delegation ends (RFC 3339).
+    pub until: String,
+}
+
+impl ReviewEntry {
+    /// The item verdicts this entry asks, in order: an approval for `missing`, `lapsed` and
+    /// `added`; a ratification for `unratified`; one sign-off per name for `signoff` and
+    /// `spec_changed`. The release question is never a verdict (DEF-104).
+    pub fn asked(&self) -> Vec<crate::decisions::Verdict> {
+        use crate::decisions::{Verdict, VerdictKind};
+        let of = |kind, signoff: &str| Verdict {
+            kind,
+            code: self.code.clone(),
+            signoff: signoff.to_string(),
+        };
+        match self.approval {
+            ApprovalKind::Missing | ApprovalKind::Lapsed | ApprovalKind::Added => {
+                vec![of(VerdictKind::Approve, "")]
+            }
+            ApprovalKind::Unratified => vec![of(VerdictKind::Ratify, "")],
+            ApprovalKind::Signoff | ApprovalKind::SpecChanged => self
+                .signoffs_needed
+                .iter()
+                .map(|n| of(VerdictKind::Signoff, n))
+                .collect(),
+            ApprovalKind::Release => Vec::new(),
+        }
+    }
 }
 
 /// One system-baseline row a design changes, as the design-review entry lists it (FTR-006): what
@@ -397,6 +443,9 @@ struct Inputs {
         crate::systembaseline::Baseline,
         Vec<crate::systembaseline::Pin>,
     )>,
+    /// The project's decisions, read once; unreadable reads as nothing delegated (DEF-104).
+    decisions: crate::decisions::Decisions,
+    now: String,
 }
 
 impl Inputs {
@@ -437,6 +486,8 @@ impl Inputs {
             release_choices,
             catalog,
             baseline,
+            decisions: crate::decisions::load(store, p).unwrap_or_default(),
+            now: crate::now_rfc3339(),
         })
     }
 
@@ -461,6 +512,8 @@ impl Inputs {
             release_choices,
             catalog,
             baseline,
+            decisions,
+            now,
         } = self;
         {
             let definition = f.definition.as_ref()?;
@@ -676,7 +729,7 @@ impl Inputs {
                 }
                 _ => Vec::new(),
             };
-            Some(ReviewEntry {
+            let mut entry = ReviewEntry {
                 system_baseline_rows,
                 views_changed,
                 to_check,
@@ -720,7 +773,25 @@ impl Inputs {
                 changed_at: f.updated_at.clone(),
                 tests_only: matches!(approval, ApprovalKind::Lapsed | ApprovalKind::Added)
                     && definition.tests_only_change(),
-            })
+                held: Vec::new(),
+                claudes: false,
+            };
+            // Which of the verdicts it asks Claude holds under a delegation in force (DEF-104).
+            let asked = entry.asked();
+            entry.held = asked
+                .iter()
+                .filter_map(|v| {
+                    crate::decisions::holder(decisions, v, f, now).map(|g| Held {
+                        verdict: v.name(),
+                        delegation: g.id.clone(),
+                        until: g.until.clone(),
+                    })
+                })
+                .collect();
+            entry.claudes = !entry.held.is_empty()
+                && entry.held.len() == asked.len()
+                && entry.release_choices.is_none();
+            Some(entry)
         }
     }
 }
@@ -1004,6 +1075,137 @@ mod tests {
         assert!(entry(&apart).views_changed.is_empty());
         let wire = serde_json::to_value(entry(&apart)).unwrap();
         assert!(wire.get("system_baseline_rows").is_none(), "{wire}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board in delegated mode with DLG-001 granted for `verdicts` until 2099, and a defined,
+    /// unapproved feature (so it asks an approval).
+    fn delegated_review_board(tag: &str, verdicts: &[&str]) -> (Store, std::path::PathBuf, String) {
+        use crate::decisions::{Decisions, Delegation, Mode, ModeChange, Stamp};
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-review-held-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::config::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let code = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let stamp = |origin: &str| Stamp {
+            by: "Ada".into(),
+            at: "2026-11-01T00:00:00+00:00".into(),
+            origin: origin.into(),
+            ..Default::default()
+        };
+        let d = Decisions {
+            modes: vec![ModeChange {
+                mode: Mode::Delegated,
+                by: "Ada".into(),
+                at: "2026-11-01T00:00:00+00:00".into(),
+                origin: "monitor".into(),
+                reason: String::new(),
+                extra: Default::default(),
+            }],
+            delegations: vec![Delegation {
+                id: "DLG-001".into(),
+                verdicts: verdicts.iter().map(|v| v.to_string()).collect(),
+                until: "2099-01-01T00:00:00+00:00".into(),
+                proposed: stamp("conversation"),
+                granted: Some(stamp("monitor")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        std::fs::write(
+            store.project_dir("demo").join("decisions.yaml"),
+            crate::yaml::to_string(&d).unwrap(),
+        )
+        .unwrap();
+        (store, dir, code)
+    }
+
+    /// DEF-104 (supports R-4): an entry says which of its verdicts a delegation holds, and is
+    /// Claude's only when it holds all of them and no release is asked.
+    #[test]
+    fn an_entry_says_which_of_its_decisions_a_delegation_holds() {
+        let (store, dir, code) = delegated_review_board("held", &["approve"]);
+        let held = |e: &ReviewEntry| -> Vec<(String, String)> {
+            e.held
+                .iter()
+                .map(|h| (h.verdict.clone(), h.delegation.clone()))
+                .collect()
+        };
+        // Approval held: Claude's.
+        let e = entry(&store, "demo", &code, None).unwrap().unwrap();
+        assert_eq!(e.approval, ApprovalKind::Missing);
+        assert_eq!(
+            held(&e),
+            vec![("approve".to_string(), "DLG-001".to_string())]
+        );
+        assert!(e.held[0].until.starts_with("2099"));
+        assert!(e.claudes);
+
+        // Held approval, but a release is asked too: not wholly Claude's.
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.cadence.releases = true;
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::Check(
+                    crate::readiness::Check::InRelease,
+                )],
+                ..Default::default()
+            },
+        );
+        config.gates = gates;
+        store.save_config("demo", &config).unwrap();
+        let e = entry(&store, "demo", &code, None).unwrap().unwrap();
+        assert!(e.release_choices.is_some(), "a release is asked");
+        assert_eq!(held(&e).len(), 1);
+        assert!(!e.claudes);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // Two sign-offs asked, the delegation names one: Claude holds one, not all.
+        let (store, dir, code) = delegated_review_board("two", &["signoff:design-review"]);
+        store.approve_feature("demo", &code, "Ada").unwrap();
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.gates.insert(
+            "Scheduled".into(),
+            crate::config::Gate {
+                signoffs: vec!["design-review".into(), "security".into()],
+                ..Default::default()
+            },
+        );
+        store.save_config("demo", &config).unwrap();
+        let e = entry(&store, "demo", &code, None).unwrap().unwrap();
+        assert_eq!(e.approval, ApprovalKind::Signoff);
+        assert_eq!(e.signoffs_needed.len(), 2, "{:?}", e.signoffs_needed);
+        assert_eq!(
+            held(&e),
+            vec![("signoff:design-review".to_string(), "DLG-001".to_string())]
+        );
+        assert!(!e.claudes);
+        // The queue agrees with the single entry.
+        let q = pending(&store, "demo", None).unwrap();
+        assert_eq!(q[0].held, e.held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

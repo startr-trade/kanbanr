@@ -60,6 +60,8 @@ pub struct GroupCount {
     pub ready: usize,
     /// The rows with an open prepared record.
     pub prepared: usize,
+    /// The rows Claude holds under a delegation in force: listed, not in `count` (DEF-104).
+    pub held: usize,
 }
 
 /// One row of a group: one decision waiting on one thing.
@@ -91,6 +93,13 @@ pub struct ReviewRow {
     pub signoff: String,
     pub requirement: String,
     pub test: String,
+    /// The delegation under which Claude holds this row's decision (DEF-104); empty when the
+    /// decision is the person's. A held row is shown, last, and not counted.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub held_by: String,
+    /// When that delegation ends (RFC 3339).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub held_until: String,
 }
 
 /// One group's rows, in the page's default order.
@@ -205,6 +214,28 @@ fn count_of(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// An RFC 3339 instant as `4 Dec`, in UTC; the text itself when it does not parse.
+pub(crate) fn day_month(at: &str) -> String {
+    use time::format_description::well_known::Rfc3339;
+    match time::OffsetDateTime::parse(at.trim(), &Rfc3339) {
+        Ok(t) => {
+            let t = t.to_offset(time::UtcOffset::UTC);
+            let month = t.month().to_string();
+            format!("{} {}", t.day(), month.get(..3).unwrap_or(&month))
+        }
+        Err(_) => at.to_string(),
+    }
+}
+
+/// The verdict a group key's item rows ask: `approve`, `ratify` or `signoff:<name>`.
+fn verdict_of_key(key: &str) -> Option<String> {
+    match key {
+        APPROVE => Some("approve".to_string()),
+        RATIFY => Some("ratify".to_string()),
+        _ => signoff_of_key(key).map(|n| format!("signoff:{n}")),
+    }
+}
+
 /// The day of an RFC 3339 instant.
 fn day(at: &str) -> &str {
     at.get(..10).unwrap_or(at)
@@ -246,11 +277,23 @@ struct Board {
     mode: Mode,
     meta: crate::Project,
     releases: Vec<crate::releases::Release>,
+    /// Every delegation, whatever its state, and the instant the board was read (DEF-104).
+    all: Vec<crate::decisions::Delegation>,
+    now: String,
 }
 
 impl Board {
     fn load(store: &Store, p: &str, repo: Option<&Path>) -> Result<Board> {
-        let decisions = crate::decisions::view(store, p, repo, None, &crate::now_rfc3339())?;
+        Self::load_at(store, p, repo, &crate::now_rfc3339())
+    }
+
+    fn load_at(store: &Store, p: &str, repo: Option<&Path>, now: &str) -> Result<Board> {
+        let decisions = crate::decisions::view(store, p, repo, None, now)?;
+        let all: Vec<crate::decisions::Delegation> = decisions
+            .delegations
+            .iter()
+            .map(|d| d.delegation.clone())
+            .collect();
         let meta = store.load_meta(p)?;
         let baseline = match crate::systembaseline::load(store, p)? {
             Some(_) => Some(crate::systembaseline::state(store, &meta, repo)?),
@@ -279,6 +322,8 @@ impl Board {
             mode: decisions.mode,
             meta,
             releases: crate::releases::load(store, p)?,
+            all,
+            now: now.to_string(),
         })
     }
 
@@ -440,6 +485,17 @@ impl Board {
             pills.push("finished".into());
         }
         push_record_pills(&mut pills, record);
+        // A decision Claude holds under a delegation is shown, last, and not counted (DEF-104).
+        let held = verdict_of_key(key)
+            .and_then(|v| e.held.iter().find(|h| h.verdict == v))
+            .cloned();
+        if let Some(h) = &held {
+            pills.push(format!(
+                "Claude holds \u{b7} {} until {}",
+                h.delegation,
+                day_month(&h.until)
+            ));
+        }
         let spec_rev = match &e.spec {
             Some(spec) if !signoff.is_empty() && spec.signoff == signoff => e.spec_rev.clone(),
             _ => String::new(),
@@ -465,8 +521,13 @@ impl Board {
                 signoff,
                 requirement: String::new(),
                 test: String::new(),
+                held_by: held
+                    .as_ref()
+                    .map(|h| h.delegation.clone())
+                    .unwrap_or_default(),
+                held_until: held.as_ref().map(|h| h.until.clone()).unwrap_or_default(),
             },
-            counted: true,
+            counted: held.is_none(),
         }
     }
 
@@ -508,6 +569,8 @@ impl Board {
                 signoff: String::new(),
                 requirement: m.requirement.clone(),
                 test: m.test.clone(),
+                held_by: String::new(),
+                held_until: String::new(),
             },
             counted: m.opens_at.is_empty(),
         }
@@ -548,6 +611,8 @@ impl Board {
                 signoff: String::new(),
                 requirement: String::new(),
                 test: String::new(),
+                held_by: String::new(),
+                held_until: String::new(),
             },
             counted: true,
         }
@@ -579,6 +644,8 @@ impl Board {
                 signoff: d.signoff.clone(),
                 requirement: String::new(),
                 test: String::new(),
+                held_by: String::new(),
+                held_until: String::new(),
             },
             counted: true,
         }
@@ -660,6 +727,8 @@ impl Board {
                 signoff: String::new(),
                 requirement: String::new(),
                 test: String::new(),
+                held_by: String::new(),
+                held_until: String::new(),
             },
             counted: true,
         }]
@@ -710,6 +779,8 @@ impl Board {
                         signoff: String::new(),
                         requirement: String::new(),
                         test: String::new(),
+                        held_by: String::new(),
+                        held_until: String::new(),
                     },
                     counted: true,
                 }
@@ -745,6 +816,8 @@ impl Board {
                 signoff: String::new(),
                 requirement: String::new(),
                 test: String::new(),
+                held_by: String::new(),
+                held_until: String::new(),
             },
             counted: true,
         }
@@ -776,6 +849,47 @@ impl Board {
         }
     }
 
+    /// What Claude holds in the queue, and per revoked or ended delegation how many of the queue's
+    /// verdicts it was in scope for that nobody holds now (DEF-104).
+    fn holds(&self) -> Holds {
+        use crate::decisions::DelegationState;
+        let mut out = Holds::default();
+        let gone: Vec<&crate::decisions::Delegation> = self
+            .all
+            .iter()
+            .filter(|g| {
+                matches!(
+                    g.state(&self.now),
+                    DelegationState::Revoked | DelegationState::Ended
+                )
+            })
+            .collect();
+        let mut returned: Vec<(String, usize)> = gone.iter().map(|g| (g.id.clone(), 0)).collect();
+        for e in &self.entries {
+            out.held.extend(e.held.iter().map(|h| HeldDecision {
+                code: e.code.clone(),
+                verdict: h.verdict.clone(),
+                delegation: h.delegation.clone(),
+                until: h.until.clone(),
+            }));
+            let Ok(item) = self.meta.feature(&e.code) else {
+                continue;
+            };
+            for v in e.asked() {
+                if e.held.iter().any(|h| h.verdict == v.name()) {
+                    continue;
+                }
+                for (g, (_, n)) in gone.iter().zip(returned.iter_mut()) {
+                    if g.in_scope(&v, item) {
+                        *n += 1;
+                    }
+                }
+            }
+        }
+        out.returned = returned.into_iter().filter(|(_, n)| *n > 0).collect();
+        out
+    }
+
     /// The planned releases, in file order.
     fn choices(&self) -> Vec<String> {
         self.releases
@@ -805,6 +919,7 @@ impl Board {
                 1
             };
             (
+                !r.held_by.is_empty(),
                 bucket,
                 crate::releases::version_key(&r.release),
                 r.code.clone(),
@@ -839,17 +954,49 @@ fn unknown_group(key: &str) -> CoreError {
 
 // ---- reads -------------------------------------------------------------------------------------
 
-/// Every non-empty decision group of project `p`, counted, in the fixed order.
+/// Every non-empty decision group of project `p`, counted, in the fixed order. A group whose rows
+/// Claude all holds is listed with a count of 0 and its `held` rows (DEF-104).
 pub fn summary(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<GroupCount>> {
-    let board = Board::load(store, p, repo)?;
-    Ok(board
+    summary_with_holds(store, p, repo, &crate::now_rfc3339()).map(|x| x.0)
+}
+
+/// What Claude holds and what returns to the person, read with the summary (DEF-104).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Holds {
+    pub held: Vec<HeldDecision>,
+    /// Per revoked or ended delegation: how many queue verdicts it was in scope for that nobody
+    /// holds now.
+    pub returned: Vec<(String, usize)>,
+}
+
+/// One decision Claude holds under a delegation in force.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldDecision {
+    pub code: String,
+    /// `approve`, `ratify` or `signoff:<name>`.
+    pub verdict: String,
+    pub delegation: String,
+    pub until: String,
+}
+
+/// [`summary`] with what Claude holds and what returned to the person, from one read of the board
+/// (DEF-104).
+pub fn summary_with_holds(
+    store: &Store,
+    p: &str,
+    repo: Option<&Path>,
+    now: &str,
+) -> Result<(Vec<GroupCount>, Holds)> {
+    let board = Board::load_at(store, p, repo, now)?;
+    let groups = board
         .keys()
         .into_iter()
         .filter_map(|key| {
             let rows = board.rows(&key);
             let counted: Vec<&ReviewRow> =
                 rows.iter().filter(|b| b.counted).map(|b| &b.row).collect();
-            if counted.is_empty() {
+            let held = rows.iter().filter(|b| !b.row.held_by.is_empty()).count();
+            if counted.is_empty() && held == 0 {
                 return None;
             }
             let (label, action) = label_and_action(&key);
@@ -857,12 +1004,14 @@ pub fn summary(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<GroupC
                 count: counted.len(),
                 ready: counted.iter().filter(|r| r.blocked.is_empty()).count(),
                 prepared: counted.iter().filter(|r| !r.prepared.is_empty()).count(),
+                held,
                 action: action.to_string(),
                 label,
                 key,
             })
         })
-        .collect())
+        .collect();
+    Ok((groups, board.holds()))
 }
 
 /// One group's rows, in the default order. An unknown key is refused as no such route.
@@ -1371,6 +1520,100 @@ mod tests {
         }
     }
 
+    /// DEF-104 (supports R-4): a row whose decision a delegation holds is shown last, with a pill,
+    /// and is not counted; a group of only held rows is still listed, with a count of 0.
+    #[test]
+    fn a_row_a_delegation_holds_is_shown_last_and_not_counted() {
+        let (store, dir) = board();
+        let a = define(&store, "Alpha", statement("a"));
+        let b = define(&store, "Beta", statement("b"));
+        let delegate = |items: &[&str]| {
+            use crate::decisions::{Decisions, Delegation, Mode, ModeChange, Stamp};
+            let stamp = |origin: &str| Stamp {
+                by: "Ada".into(),
+                at: "2026-11-01T00:00:00+00:00".into(),
+                origin: origin.into(),
+                ..Default::default()
+            };
+            let d = Decisions {
+                modes: vec![ModeChange {
+                    mode: Mode::Delegated,
+                    by: "Ada".into(),
+                    at: "2026-11-01T00:00:00+00:00".into(),
+                    origin: "monitor".into(),
+                    reason: String::new(),
+                    extra: Default::default(),
+                }],
+                delegations: vec![Delegation {
+                    id: "DLG-001".into(),
+                    verdicts: vec!["approve".into()],
+                    items: items.iter().map(|s| s.to_string()).collect(),
+                    until: "2099-12-04T00:00:00+00:00".into(),
+                    proposed: stamp("conversation"),
+                    granted: Some(stamp("monitor")),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            std::fs::write(
+                store.project_dir("demo").join("decisions.yaml"),
+                crate::yaml::to_string(&d).unwrap(),
+            )
+            .unwrap();
+        };
+        // Alpha is Claude's; Beta is the person's, though it sorts after it by code.
+        delegate(&[a.as_str()]);
+        let groups = summary(&store, "demo", None).unwrap();
+        let approve = groups.iter().find(|g| g.key == "approve").unwrap();
+        assert_eq!(
+            (approve.count, approve.held, approve.ready, approve.prepared),
+            (1, 1, 1, 0)
+        );
+        let rows = slice(&store, "demo", "approve", None).unwrap().rows;
+        assert_eq!(
+            rows.iter().map(|r| r.code.as_str()).collect::<Vec<_>>(),
+            vec![b.as_str(), a.as_str()],
+            "the person's row first, Claude's last"
+        );
+        assert_eq!(rows[0].held_by, "");
+        assert_eq!(rows[1].held_by, "DLG-001");
+        assert!(rows[1].held_until.starts_with("2099-12-04"));
+        assert!(
+            rows[1]
+                .pills
+                .contains(&"Claude holds \u{b7} DLG-001 until 4 Dec".to_string()),
+            "{:?}",
+            rows[1].pills
+        );
+        assert!(rows[1].blocked.is_empty(), "the person may still decide it");
+        let (_, holds) = summary_with_holds(&store, "demo", None, NOW).unwrap();
+        assert_eq!(
+            holds.held,
+            vec![HeldDecision {
+                code: a.clone(),
+                verdict: "approve".into(),
+                delegation: "DLG-001".into(),
+                until: "2099-12-04T00:00:00+00:00".into(),
+            }]
+        );
+        // Both held: the group is still listed, with nothing counted.
+        delegate(&[a.as_str(), b.as_str()]);
+        let groups = summary(&store, "demo", None).unwrap();
+        let approve = groups.iter().find(|g| g.key == "approve").unwrap();
+        assert_eq!(
+            (approve.count, approve.held, approve.ready),
+            (0, 2, 0),
+            "{groups:?}"
+        );
+        assert_eq!(
+            slice(&store, "demo", "approve", None).unwrap().rows.len(),
+            2
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const NOW: &str = "2026-11-17T10:00:00+00:00";
+
     fn entry(code: &str, approval: ApprovalKind, signoffs: &[&str]) -> ReviewEntry {
         ReviewEntry {
             code: code.into(),
@@ -1399,6 +1642,8 @@ mod tests {
             tests_only: false,
             system_baseline_rows: Vec::new(),
             views_changed: Vec::new(),
+            held: Vec::new(),
+            claudes: false,
         }
     }
 

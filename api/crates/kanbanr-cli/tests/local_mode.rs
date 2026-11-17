@@ -15146,6 +15146,74 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-104 R-4: the session summary counts only the person's decisions: items whose every decision
+/// a delegation in force holds are named as Claude's, under their delegation, not listed to approve.
+/// The person grants from the terminal; the board is the test's own (L-41).
+#[test]
+fn session_start_counts_only_the_persons_decisions() {
+    let (base, work) = recover_scratch("def104-held");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let text = |o: &Output| String::from_utf8_lossy(&o.stdout).to_string();
+    let mut ops = vec![serde_json::json!({"op": "milestone.add", "ref": "m", "name": "M"})];
+    for n in 0..3 {
+        ops.push(serde_json::json!({
+            "op": "feature.add",
+            "ref": format!("f{n}"),
+            "title": format!("Item {n}"),
+            "milestone": "m",
+            "definition": {"statement": "It matters"},
+        }));
+    }
+    let bundle = base.join("bundle.json");
+    std::fs::write(
+        &bundle,
+        serde_json::to_string(&serde_json::json!({ "operations": ops })).unwrap(),
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["batch", "--file", bundle.to_str().unwrap()],
+    ));
+    let before = text(&ok(run_in(&base, &work, &["recover"])));
+    assert!(
+        before.contains("3 item(s) and 0 proposed decision(s)"),
+        "{before}"
+    );
+    assert!(!before.contains("Claude holds"), "{before}");
+
+    // Claude proposes approving FEAT-001 and FEAT-002; the person grants it and sets delegated mode.
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "approve",
+            "--item",
+            "FEAT-001",
+            "--item",
+            "FEAT-002",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let after = text(&ok(run_in(&base, &work, &["recover"])));
+    assert!(
+        after.contains("1 item(s) and 0 proposed decision(s)"),
+        "only FEAT-003 is the person's:\n{after}"
+    );
+    assert!(
+        after.contains("Claude holds 2 decision(s) under DLG-001 (2)"),
+        "{after}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-093 R-3: a fresh project's summary keeps the 0.7.0 form: its header, `### Board` then
 /// `### Recent activity`, the closing paragraph, and no brief-form sections.
 #[test]
