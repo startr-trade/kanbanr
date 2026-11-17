@@ -988,6 +988,20 @@ pub fn views_changed(catalog: &Catalog, docs: &[String], named: &[String]) -> Ve
     out.into_iter().collect()
 }
 
+/// The rows a design changes (FTR-006): [`views_changed`] over the docs the definition declares in
+/// `affects_docs`, the board docs linked under the spec's Affects docs heading, and the rows
+/// `affects_views` names. Pure.
+pub fn views_changed_of(
+    catalog: &Catalog,
+    project: &str,
+    spec: &str,
+    def: &crate::models::FeatureDefinition,
+) -> Vec<String> {
+    let mut docs = def.affects_docs.clone();
+    docs.extend(crate::docsbuilt::linked_board_docs(spec, project));
+    views_changed(catalog, &docs, &def.affects_views)
+}
+
 /// What a `kanbanr:` generator derives for `project`, as JSON: the value the system baseline
 /// (FTR-006) hashes through [`crate::hash::canonical_json`] to pin a generated row. Each is the
 /// read the view already serves: the charter, the Zachman matrix, the ADR index, the trace of
@@ -2085,6 +2099,33 @@ mod tests {
         );
         assert!(views_changed(&repo, &strings(&["docs/system/context.md"]), &[]).is_empty());
         assert!(views_changed(&c, &[], &[]).is_empty());
+    }
+
+    /// FTR-006 R-8: a doc under a folder row, a doc named in `affects_docs`, a doc linked under
+    /// Affects docs, and a named generated row each give their row once.
+    #[test]
+    fn views_changed_are_derived_from_docs_and_named_rows() {
+        let c = starter();
+        let spec = "## Design\n\nx\n\n### Affects docs\n\n- [components](/p/demo/docs/file/architecture/components/store.md)\n- [context again](/p/demo/docs/file/architecture/context.md)\n- [elsewhere](/p/other/docs/file/architecture/security.md)\n";
+        let def = crate::models::FeatureDefinition {
+            affects_docs: strings(&["architecture/context.md"]),
+            affects_views: strings(&["decisions"]),
+            ..Default::default()
+        };
+        let got = views_changed_of(&c, "demo", spec, &def);
+        assert_eq!(got, strings(&["component-docs", "context", "decisions"]));
+        // Nothing declared, linked or named: nothing changes.
+        let none = crate::models::FeatureDefinition::default();
+        assert!(views_changed_of(&c, "demo", "## Design\n\nno links\n", &none).is_empty());
+        // A generated row is changed only by being named.
+        let only_named = crate::models::FeatureDefinition {
+            affects_views: strings(&["decisions", "decisions"]),
+            ..Default::default()
+        };
+        assert_eq!(
+            views_changed_of(&c, "demo", "", &only_named),
+            strings(&["decisions"])
+        );
     }
 
     /// R-11: the skill's setup interview and the living-docs guide name the facts questions and

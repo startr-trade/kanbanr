@@ -299,6 +299,10 @@ pub(crate) fn definition_sections(
         let docs: Vec<String> = def.affects_docs.iter().map(|d| format!("`{d}`")).collect();
         out.push_str(&format!("- **Affects docs:** {}\n", docs.join(", ")));
     }
+    if !def.affects_views.is_empty() {
+        let views: Vec<String> = def.affects_views.iter().map(|v| format!("`{v}`")).collect();
+        out.push_str(&format!("- **Affects views:** {}\n", views.join(", ")));
+    }
     if !def.affects_no_docs.trim().is_empty() {
         out.push_str(&format!(
             "- **Changes no docs:** {}\n",
@@ -695,6 +699,24 @@ mod tests {
             md.contains("**changed since sign-off**: the spec changed"),
             "{md}"
         );
+    }
+
+    /// FTR-006: `feature show` prints the catalog rows a design names in `affects_views`.
+    #[test]
+    fn feature_show_prints_the_views_a_design_names() {
+        let mut f = item("FEAT-001", None);
+        f.definition = Some(crate::models::FeatureDefinition {
+            statement: "s".into(),
+            affects_views: vec!["context".into(), "code-structure".into()],
+            ..Default::default()
+        });
+        let md = super::to_markdown(&f, None, None);
+        assert!(
+            md.contains("- **Affects views:** `context`, `code-structure`\n"),
+            "{md}"
+        );
+        f.definition.as_mut().unwrap().affects_views.clear();
+        assert!(!super::to_markdown(&f, None, None).contains("Affects views"));
     }
 
     /// DEF-075 R-1: `feature show` prints why an item changes no docs, and nothing when unset.

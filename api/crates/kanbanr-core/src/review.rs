@@ -230,6 +230,30 @@ pub struct ReviewEntry {
     /// `added` entries, so a grouped approval of tests-only edits can be told apart.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tests_only: bool,
+    /// The system-baseline rows this design changes, when `design-review` is among
+    /// `signoffs_needed` and the project has a system baseline (FTR-006).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub system_baseline_rows: Vec<SystemBaselineRow>,
+    /// The catalog rows the design changes: its `affects_docs` and the docs linked under its
+    /// Affects docs heading, and the rows its `affects_views` names (FTR-006).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views_changed: Vec<String>,
+}
+
+/// One system-baseline row a design changes, as the design-review entry lists it (FTR-006): what
+/// the latest acceptance pinned for the row and what its source reads now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SystemBaselineRow {
+    pub row: String,
+    pub source: String,
+    /// The pin of the latest acceptance; empty when none was given or the row was not in it.
+    pub pinned: String,
+    /// The source's hash now; empty when it cannot be pinned or is missing.
+    pub now: String,
+    /// The doc page of a written source on the board; `None` for the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
 }
 
 /// One override Claude made, as the Review page shows it (DEF-043).
@@ -366,6 +390,13 @@ struct Inputs {
     ctx: crate::readiness::Context,
     gates: std::collections::BTreeMap<String, crate::config::Gate>,
     release_choices: Vec<String>,
+    /// The project's catalog, when it has one (FTR-006).
+    catalog: Option<crate::catalog::Catalog>,
+    /// The system baseline and the pins now, read once; `None` without a baseline file.
+    baseline: Option<(
+        crate::systembaseline::Baseline,
+        Vec<crate::systembaseline::Pin>,
+    )>,
 }
 
 impl Inputs {
@@ -385,12 +416,27 @@ impl Inputs {
             Vec::new()
         };
         let gates = project.config.effective_gates();
+        let catalog = crate::catalog::load(store, p).ok().flatten();
+        let baseline = if catalog.is_some() {
+            crate::systembaseline::load(store, p)
+                .ok()
+                .flatten()
+                .and_then(|b| {
+                    crate::systembaseline::pins_now(store, &project, repo)
+                        .ok()
+                        .map(|now| (b, now))
+                })
+        } else {
+            None
+        };
         Ok(Inputs {
             project,
             charter,
             ctx,
             gates,
             release_choices,
+            catalog,
+            baseline,
         })
     }
 
@@ -413,6 +459,8 @@ impl Inputs {
             ctx,
             gates,
             release_choices,
+            catalog,
+            baseline,
         } = self;
         {
             let definition = f.definition.as_ref()?;
@@ -585,7 +633,52 @@ impl Inputs {
             } else {
                 (None, Vec::new(), None)
             };
+            let views_changed = catalog.as_ref().map_or_else(Vec::new, |c| {
+                crate::catalog::views_changed_of(c, p, &f.specification, definition)
+            });
+            let system_baseline_rows = match (catalog, baseline) {
+                (Some(c), Some((b, now)))
+                    if signoffs_needed
+                        .iter()
+                        .any(|s| s == crate::method::DESIGN_REVIEW) =>
+                {
+                    let latest = b.latest();
+                    views_changed
+                        .iter()
+                        .filter(|v| b.rows.contains(v))
+                        .map(|v| {
+                            let now_pin = now.iter().find(|n| &n.row == v);
+                            let written = c.row(v).filter(|r| {
+                                r.source.kind == crate::catalog::SourceKind::Written
+                                    && !r
+                                        .source
+                                        .path
+                                        .trim()
+                                        .starts_with(crate::catalog::REPO_PREFIX)
+                            });
+                            SystemBaselineRow {
+                                row: v.clone(),
+                                source: now_pin.map(|n| n.source.clone()).unwrap_or_default(),
+                                pinned: latest
+                                    .and_then(|a| a.pins.iter().find(|n| &n.row == v))
+                                    .map(|n| n.rev.clone())
+                                    .unwrap_or_default(),
+                                now: now_pin.map(|n| n.rev.clone()).unwrap_or_default(),
+                                href: written.map(|r| {
+                                    format!(
+                                        "/p/{p}/docs/file/{}",
+                                        crate::refs::doc_key(&r.source.path)
+                                    )
+                                }),
+                            }
+                        })
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             Some(ReviewEntry {
+                system_baseline_rows,
+                views_changed,
                 to_check,
                 settled,
                 drift_skipped,
@@ -796,6 +889,122 @@ mod tests {
         let report =
             crate::readiness::check_board(&store, "demo", Some(&code), Some(&repo)).unwrap();
         assert!(report.items[0].texts_to_settle.is_empty());
+    }
+
+    /// FTR-006 R-9: an item at the design role naming `architecture/context.md` gets the baseline
+    /// row with its pinned and current hashes; an item changing no baseline row gets none, and its
+    /// `views_changed` is empty.
+    #[test]
+    fn the_design_review_entry_names_the_system_baseline_rows_the_item_changes() {
+        use crate::catalog::{Catalog, Level, Row, Source, SourceKind};
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-review-baseline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::config::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let row = |id: &str| Row {
+            id: id.into(),
+            title: id.into(),
+            answers: vec!["what".into()],
+            for_: vec!["architect".into()],
+            level: Level::System,
+            source: Source {
+                kind: SourceKind::Written,
+                path: format!("architecture/{id}.md"),
+                ..Source::default()
+            },
+            ..Row::default()
+        };
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![row("context"), row("security")],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        for id in ["context", "security"] {
+            store
+                .write_doc(
+                    "demo",
+                    &format!("architecture/{id}.md"),
+                    &format!("# {id}\n\n{}\n", "The system as it stands. ".repeat(4)),
+                )
+                .unwrap();
+        }
+        crate::systembaseline::init(&store, "demo").unwrap();
+        crate::systembaseline::accept(&store, "demo", "Ada", "monitor", "", "", None).unwrap();
+        let project = store.load_meta("demo").unwrap();
+        let pins = crate::systembaseline::pins_now(&store, &project, None).unwrap();
+        let pinned = pins
+            .iter()
+            .find(|p| p.row == "context")
+            .unwrap()
+            .rev
+            .clone();
+        // The design role asks design-review of the next stage.
+        let gate = crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        };
+        store
+            .set_gates("demo", [("Completed".to_string(), gate)].into())
+            .unwrap();
+        let item = |title: &str, docs: &[&str]| {
+            let code = store
+                .add_feature("demo", title, "spec", "M", None)
+                .unwrap()
+                .code;
+            let def = FeatureDefinition {
+                statement: "s".into(),
+                affects_docs: docs.iter().map(|d| d.to_string()).collect(),
+                ..Default::default()
+            };
+            store
+                .set_feature_definition("demo", &code, Some(def))
+                .unwrap();
+            store.approve_feature("demo", &code, "Ada").unwrap();
+            store.move_feature("demo", &code, "Scheduled").unwrap();
+            code
+        };
+        let touches = item("Touches", &["architecture/context.md"]);
+        let apart = item("Apart", &["design/other.md"]);
+        // The doc changes after the acceptance.
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                &format!("# context, revised\n\n{}\n", "It moved. ".repeat(6)),
+            )
+            .unwrap();
+        let queue = pending(&store, "demo", None).unwrap();
+        let entry = |code: &str| queue.iter().find(|e| e.code == code).unwrap();
+        assert_eq!(entry(&touches).signoffs_needed, ["design-review"]);
+        let rows = &entry(&touches).system_baseline_rows;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].row, "context");
+        assert_eq!(rows[0].source, "architecture/context.md");
+        assert_eq!(rows[0].pinned, pinned);
+        assert!(!rows[0].now.is_empty() && rows[0].now != pinned, "{rows:?}");
+        assert_eq!(
+            rows[0].href.as_deref(),
+            Some("/p/demo/docs/file/architecture/context.md")
+        );
+        assert_eq!(entry(&touches).views_changed, ["context"]);
+        assert!(entry(&apart).system_baseline_rows.is_empty());
+        assert!(entry(&apart).views_changed.is_empty());
+        let wire = serde_json::to_value(entry(&apart)).unwrap();
+        assert!(wire.get("system_baseline_rows").is_none(), "{wire}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
