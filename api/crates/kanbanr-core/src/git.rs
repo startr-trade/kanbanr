@@ -2990,13 +2990,8 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(dir);
     }
-}
 
-/// DEF-102 T2: the commit that waits, reports and can be undone.
-#[cfg(test)]
-mod commit_write_tests {
-    use super::*;
-    use std::path::PathBuf;
+    // DEF-102 T2: the commit that waits, reports and can be undone.
     use std::time::{Duration, Instant};
 
     fn board(name: &str) -> PathBuf {
