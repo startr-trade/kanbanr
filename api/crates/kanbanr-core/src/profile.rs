@@ -254,6 +254,11 @@ pub struct Records {
     /// How an nfr is measured.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measure: String,
+    /// For a non-goal: the option of the same area it rules out. When that option is chosen too,
+    /// the non-goal gives way to it (FTR-033 P4 Q1); without it the words of the other chosen
+    /// options are matched against the text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub excludes: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
@@ -533,6 +538,20 @@ impl ProfileFile {
                     if r.text.trim().is_empty() {
                         out.push(problem(format!(
                             "area '{a}': option '{o}' records an empty text: write the entry"
+                        )));
+                    }
+                    let excl = r.excludes.trim();
+                    if !excl.is_empty() && r.kind != Kind::NonGoal {
+                        out.push(problem(format!(
+                            "area '{a}': option '{o}': `excludes` is for a non_goal, not a {}",
+                            r.kind.as_str()
+                        )));
+                    } else if !excl.is_empty()
+                        && (excl == o.as_str() || !area.options.iter().any(|x| x.id == excl))
+                    {
+                        out.push(problem(format!(
+                            "area '{a}': option '{o}': `excludes` names '{excl}', which is not \
+                             another option of the area"
                         )));
                     }
                     if !r.iso25010.is_empty() && r.kind != Kind::Nfr {

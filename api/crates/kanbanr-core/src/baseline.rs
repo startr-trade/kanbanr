@@ -458,14 +458,7 @@ pub fn add_pack(
             .filter(|e| e.pack == name)
             .collect();
         // With releases off no stage holds a gate (as on acceptance).
-        for (stage, gate, from) in promised_gates(&mine)
-            .into_iter()
-            .filter(|_| project.config.cadence.releases)
-        {
-            cadence
-                .add_stage_gate(&stage, &gate, &from)
-                .map_err(CoreError::Unsupported)?;
-        }
+        apply_stage_gates(&mut cadence, &mine)?;
         if cadence != project.config.cadence {
             project.config.cadence = cadence;
             store.save_config(p, &project.config)?;
@@ -580,6 +573,40 @@ fn promised_gates(entries: &[&Entry]) -> Vec<(String, String, String)> {
     out
 }
 
+/// Write the stage gates `entries` promise into `cadence` (FTR-033 P4 Q3): the one place they are
+/// applied, by an acceptance, by following a removed pack again and by turning releases on. With
+/// releases off nothing is written and each gate comes back as a warning saying when it applies
+/// (P3 Q2); with releases on, a stage the project does not have refuses, naming the stages it has.
+pub fn apply_stage_gates(
+    cadence: &mut crate::config::Cadence,
+    entries: &[&Entry],
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for (stage, gate, from) in promised_gates(entries) {
+        if !cadence.releases {
+            warnings.push(format!(
+                "{from} requires the `{gate}` gate at release stage {stage}; this project has \
+                 releases off, so it applies once releases are on: stage {stage}"
+            ));
+            continue;
+        }
+        cadence
+            .add_stage_gate(&stage, &gate, &from)
+            .map_err(CoreError::Unsupported)?;
+    }
+    Ok(warnings)
+}
+
+/// The entries in force of the packs the project still follows: the ones whose stage gates the
+/// release stages hold.
+pub fn followed_in_force(b: &Baseline) -> Vec<&Entry> {
+    let removed = removed_packs(b);
+    in_force(b)
+        .into_iter()
+        .filter(|e| !removed.contains(e.pack.as_str()))
+        .collect()
+}
+
 /// What Claude proposes: the answers, and the item whose design asked (empty at setup).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -612,8 +639,8 @@ fn highest(ids: impl Iterator<Item = String>, prefix: &str) -> u32 {
 /// answers, a value missing or out of place (`profile::value_problems`), and an item not on the
 /// board. A `when` that does not hold is a warning on the view. Each chosen option makes one entry
 /// per `records` row, except a non-goal row that another option chosen in the same area is the
-/// thing it excludes (left out, with a warning naming that choice); `replaces` names the in-force
-/// entries of every area answered.
+/// thing it excludes (its `excludes`, else its words; left out, with a warning naming that
+/// choice); `replaces` names the in-force entries of every area answered.
 pub fn propose(
     store: &Store,
     p: &str,
@@ -750,9 +777,19 @@ pub fn propose(
                 // A non-goal gives way to another option chosen in the same area that is the
                 // thing it excludes (containers' "No Kubernetes" with kubernetes also chosen):
                 // the row is left out and the view says which choice it gave way to (FTR-033 P3
-                // Q1). The other option is known by its words: its mentions and its label.
-                if r.kind == Kind::NonGoal
-                    && let Some((other, word)) = a.options.iter().find_map(|o| {
+                // Q1). The other option is the one its `excludes` names (P4 Q1); a row without
+                // `excludes` knows it by its words: its mentions and its label.
+                let excludes = r.excludes.trim();
+                let gave_way = if r.kind != Kind::NonGoal {
+                    None
+                } else if !excludes.is_empty() {
+                    a.options
+                        .iter()
+                        .find(|o| o.option != opt.id && o.option == excludes)
+                        .and_then(|o| area.option(&o.option))
+                        .map(|other| (other, format!("it excludes '{excludes}'")))
+                } else {
+                    a.options.iter().find_map(|o| {
                         if o.option == opt.id {
                             return None;
                         }
@@ -762,12 +799,13 @@ pub fn propose(
                         profile::tokens_in(&words, &r.text)
                             .into_iter()
                             .next()
-                            .map(|w| (other, w))
+                            .map(|w| (other, format!("it says '{w}'")))
                     })
-                {
+                };
+                if let Some((other, because)) = gave_way {
                     warnings.push(format!(
                         "area '{}': the non-goal '{}' of '{}' is left out: it gave way to '{}', \
-                         also chosen (it says '{word}')",
+                         also chosen ({because})",
                         area.id,
                         template(&r.text, &opt.label, &c.value, &project_name),
                         opt.label,
@@ -878,21 +916,10 @@ pub fn accept(
         .filter(|e| revision.adds.contains(&e.id))
         .collect();
     // With releases off there are no stages to hold a gate: the entry is recorded, no stage gate
-    // is added, and the view says when it applies (FTR-033 P3 Q2). With releases on, a stage the
-    // project does not have refuses the acceptance, naming the stages it has.
-    let mut warnings: Vec<String> = Vec::new();
-    for (stage, gate, from) in promised_gates(&added) {
-        if !cadence.releases {
-            warnings.push(format!(
-                "{from} requires the `{gate}` gate at release stage {stage}; this project has \
-                 releases off, so it applies once releases are on: stage {stage}"
-            ));
-            continue;
-        }
-        cadence
-            .add_stage_gate(&stage, &gate, &from)
-            .map_err(CoreError::Unsupported)?;
-    }
+    // is added, and the view says when it applies (FTR-033 P3 Q2); turning releases on writes it
+    // then (P4 Q3). With releases on, a stage the project does not have refuses the acceptance,
+    // naming the stages it has.
+    let warnings = apply_stage_gates(&mut cadence, &added)?;
     let cadence_changed = cadence != project.config.cadence;
     if cadence_changed {
         cadence
@@ -1551,6 +1578,11 @@ pub struct RevisionView {
     /// not hold, a non-goal that gave way to another choice, a stage gate waiting for releases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Accepted, but the board's history cannot be read, so whether the acceptance came through
+    /// kanbanr cannot be checked: why, naming the repository (FTR-033 P4 Q4, as DEF-080's
+    /// `grant_unverifiable`). The rest of the view still reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_unverifiable: Option<String>,
 }
 
 /// The Baseline page's whole read.
@@ -1611,6 +1643,7 @@ fn revision_view(
         stage_gates,
         depends_on,
         warnings: Vec::new(),
+        acceptance_unverifiable: None,
     }
 }
 
@@ -1670,19 +1703,29 @@ pub fn view(store: &Store, p: &str, _review_url: Option<&str>) -> Result<Baselin
     let files = every_pack(store, p, &b);
     let removed = removed_packs(&b);
     let accepted = accepted_ids(&b);
+    // A history that cannot be read marks the revision, never the whole view (P4 Q4): its
+    // entries are not called "not accepted through kanbanr", and the page says why.
     let mut through: BTreeMap<&str, bool> = BTreeMap::new();
+    let mut unverifiable: BTreeMap<&str, String> = BTreeMap::new();
     for r in b
         .revisions
         .iter()
         .filter(|r| accepted.contains(r.id.as_str()))
     {
-        let ok = accepted_through_kanbanr(store, p, &r.id).map_err(|e| {
-            CoreError::Unsupported(format!(
-                "cannot tell whether {} was accepted through kanbanr: {e}",
-                r.id
-            ))
-        })?;
-        through.insert(r.id.as_str(), ok);
+        match accepted_through_kanbanr(store, p, &r.id) {
+            Ok(ok) => {
+                through.insert(r.id.as_str(), ok);
+            }
+            Err(e) => {
+                unverifiable.insert(
+                    r.id.as_str(),
+                    format!(
+                        "cannot tell whether {} was accepted through kanbanr: {e}",
+                        r.id
+                    ),
+                );
+            }
+        }
     }
     let force: BTreeSet<&str> = in_force(&b).into_iter().map(|e| e.id.as_str()).collect();
     let entry_view = |e: &Entry| EntryView {
@@ -1756,7 +1799,10 @@ pub fn view(store: &Store, p: &str, _review_url: Option<&str>) -> Result<Baselin
     let revisions = b
         .revisions
         .iter()
-        .map(|r| revision_view(&b, &r.id, &named_by, &in_docs))
+        .map(|r| RevisionView {
+            acceptance_unverifiable: unverifiable.get(r.id.as_str()).cloned(),
+            ..revision_view(&b, &r.id, &named_by, &in_docs)
+        })
         .collect();
     let charter_constraints = crate::charter::load(store, p)
         .map(|c| c.constraints)
@@ -2422,6 +2468,191 @@ areas:
                 && w.contains("runs-where"),
             "{w}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 P4 Q1 (R-3): a non-goal row's `excludes` names the option it gives way to; the
+    /// words of the other chosen options are read only when it names none. `excludes` belongs to
+    /// a non-goal and names another option of its area, or the pack has a problem.
+    #[test]
+    fn a_non_goal_gives_way_to_the_option_its_excludes_names_else_to_its_words() {
+        const RUNS: &str = r#"
+profile:
+  name: runs
+  description: Where it runs, for the tests
+  version: 1
+areas:
+  - id: runs-where
+    title: Where it runs
+    asks: setup
+    select: many
+    touches: [deploy]
+    question: Where does the product run?
+    options:
+      - id: containers
+        label: Containers on a host
+        recommended: true
+        why: One host
+        fits_when: Small
+        costs: One host
+        mentions: [Docker, Compose]
+        records:
+          - {kind: constraint, text: Containers on a host run the product}
+          - {kind: non_goal, text: "No orchestrator: Compose on one host", excludes: kubernetes}
+      - id: kubernetes
+        label: Kubernetes
+        why: A cluster
+        fits_when: Many services
+        costs: A cluster to run
+        mentions: [Kubernetes, k8s]
+        records:
+          - {kind: constraint, text: Kubernetes runs the product}
+      - id: host
+        label: A host or VM
+        why: No containers
+        fits_when: One binary
+        costs: Hand-run
+        mentions: [systemd]
+        records:
+          - {kind: constraint, text: The product runs directly on a host or VM}
+          - {kind: non_goal, text: "No Kubernetes and no Docker on the host", excludes: containers}
+"#;
+        let (store, dir, _) = board(false);
+        follow(&store, RUNS);
+        // The text names no word of Kubernetes, but `excludes` does: it gives way.
+        let v = propose_answers(
+            &store,
+            "",
+            vec![answer("runs-where", &["containers", "kubernetes"])],
+        );
+        assert!(
+            !v.entries
+                .iter()
+                .any(|e| e.kind == Kind::NonGoal && e.option == "containers"),
+            "{:?}",
+            v.entries
+        );
+        assert_eq!(v.warnings.len(), 1, "{:?}", v.warnings);
+        assert!(
+            v.warnings[0].contains("gave way to 'Kubernetes'")
+                && v.warnings[0].contains("it excludes 'kubernetes'"),
+            "{}",
+            v.warnings[0]
+        );
+        withdraw(&store, "demo", &v.revision.id, "try again", person()).unwrap();
+        // The text says Kubernetes, but `excludes` names containers, which is not chosen: kept.
+        let v = propose_answers(
+            &store,
+            "",
+            vec![answer("runs-where", &["host", "kubernetes"])],
+        );
+        assert!(
+            v.entries
+                .iter()
+                .any(|e| e.kind == Kind::NonGoal && e.option == "host"),
+            "{:?}",
+            v.entries
+        );
+        assert!(v.warnings.is_empty(), "{:?}", v.warnings);
+        let _ = std::fs::remove_dir_all(dir);
+
+        // `excludes` on a constraint, or naming no other option of the area: a problem each.
+        let bad = RUNS
+            .replace(
+                "{kind: constraint, text: Kubernetes runs the product}",
+                "{kind: constraint, text: Kubernetes runs the product, excludes: host}",
+            )
+            .replace("excludes: containers}", "excludes: lambda}");
+        let problems: Vec<String> = ProfileFile::from_yaml(&bad)
+            .unwrap()
+            .problems()
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("`excludes` is for a non_goal, not a constraint")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("`excludes` names 'lambda'")),
+            "{problems:?}"
+        );
+    }
+
+    /// FTR-033 P4 Q3 (R-3): a gate accepted while releases were off lands when releases are
+    /// turned on, by the function acceptance uses; a removed pack's gate does not.
+    #[test]
+    fn turning_releases_on_writes_the_stage_gates_an_accepted_revision_waited_for() {
+        let (store, dir, _) = board(false);
+        follow(&store, STORE_PACK);
+        follow(&store, SCAN_PACK);
+        let v = propose_answers(
+            &store,
+            "",
+            vec![
+                answer("database", &["postgresql"]),
+                answer("scanning", &["sast"]),
+            ],
+        );
+        let accepted = accept_it(&store, &v);
+        assert_eq!(accepted.warnings.len(), 2, "{:?}", accepted.warnings);
+        assert!(main_gates(&store).is_empty());
+        remove_pack(&store, "demo", "scan", stamp()).unwrap();
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        store.set_cadence("demo", None, c).unwrap();
+        assert_eq!(
+            main_gates(&store),
+            vec![("migrations-check".to_string(), "B-001".to_string())]
+        );
+        // Turning releases off and on again adds nothing twice.
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = false;
+        store.set_cadence("demo", None, c).unwrap();
+        let mut c = store.load_meta("demo").unwrap().config.cadence;
+        c.releases = true;
+        store.set_cadence("demo", None, c).unwrap();
+        assert_eq!(main_gates(&store).len(), 1, "{:?}", main_gates(&store));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 P4 Q4 (R-3): when the board's history cannot be read, the view still reads; the
+    /// accepted revision says why its acceptance cannot be checked, and its entries are not
+    /// called "not accepted through kanbanr".
+    #[test]
+    fn a_view_whose_history_cannot_be_read_marks_the_revision_and_still_reads() {
+        let (store, dir, _) = board(false);
+        follow(&store, STORE_PACK);
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        accept_it(&store, &v);
+        if dir.join(".git").exists() {
+            std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        }
+        let seen = view(&store, "demo", None).expect("the view reads");
+        let json = serde_json::to_value(&seen).unwrap();
+        let why = json["revisions"][0]["acceptance_unverifiable"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            why.contains("cannot tell whether REV-001 was accepted through kanbanr"),
+            "{json}"
+        );
+        let area = json["areas"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "database")
+            .unwrap()
+            .clone();
+        assert!(!area["entries"].as_array().unwrap().is_empty(), "{area}");
+        for e in area["entries"].as_array().unwrap() {
+            assert_eq!(e["not_accepted_through_kanbanr"], false, "{e}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

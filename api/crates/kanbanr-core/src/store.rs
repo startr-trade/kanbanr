@@ -3834,6 +3834,15 @@ impl Store {
         }
         crate::config::Cadence::validate_stages(&cadence.release_stages)
             .map_err(CoreError::Unsupported)?;
+        // FTR-033 P4 Q3: turning releases on writes the stage gates the accepted baseline promised
+        // while they were off, by the function acceptance uses, so the waiting gates land now.
+        if cadence.releases && !previous.releases {
+            let b = crate::baseline::load(self, id)?;
+            crate::baseline::apply_stage_gates(
+                &mut cadence,
+                &crate::baseline::followed_in_force(&b),
+            )?;
+        }
         // FEAT-212: the gates must fit the stages, so a stage with a gate is not renamed away.
         cadence
             .validate_release_gates()
