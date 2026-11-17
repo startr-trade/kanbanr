@@ -128,6 +128,16 @@ Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
 give, Claude says so at once and asks you to withdraw it on the item's page.
 
+## Planning from the pages
+
+You can plan an item into a sprint or release from the Plan or Releases page instead of asking
+(FTR-049). The page records your decision and shows it pending. At session start and at each turn
+Claude reads the pending ones, checks each (frozen scope, closed sprints, finished items,
+dependencies, capacity, dates), and either carries it out with `kanbanr sprint plan … --decision
+PD-n` (or `sprint unplan`, `release plan`) or declines it with a reason and the nearest valid
+move. Claude never records a planning decision itself. If you ask in the conversation, it plans
+directly, as before.
+
 ## Where decisions are taken, and delegating them
 
 Each project chooses where its decisions are taken. In **monitor** mode, the default, every

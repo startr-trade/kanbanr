@@ -635,6 +635,27 @@ The **delegated decisions to review** (`kanbanr decisions show --json`, `to_revi
 alongside the queue: say how many wait to be kept or undone, under which delegation. When the user
 changes the mode, relay the `waiting` list it answers with once: what waits, and where now.
 
+### Planning decisions: the person's, carried out by you
+
+The person plans items into a sprint or release from the Plan and Releases pages. The page records
+the decision as theirs (`planning/PD-n.yaml`) and shows it pending; nothing is planned until you
+carry it out. At session start and at each turn, read `kanbanr planning list --state pending`
+(`kanbanr board` prints a line when some wait). For each one:
+
+1. `kanbanr planning check PD-n` prints the problems (a frozen release, a closed sprint, a
+   finished item), the warnings you judge (a dependency planned later, capacity, a due date) and
+   the nearest valid move.
+2. If it holds, carry it out with the plan command that names it: `kanbanr sprint plan SP-n CODE
+   --decision PD-n`, `kanbanr sprint unplan CODE --decision PD-n` or `kanbanr release plan vX.Y.Z
+   CODE --decision PD-n`. The plan change and the outcome land in one commit; a command that does
+   not match the decision's action, target and items is refused.
+3. If it does not, `kanbanr planning decline PD-n --reason "…" --nearest into-release:vX.Y.Z`.
+   The reason and the nearest move show on the page.
+
+Never record a planning decision yourself; it is the person's. Core refuses it to you. When the
+person asks you in the conversation to plan something, plan it directly with the same commands and
+no `--decision`.
+
 ### Designing a process with the user
 
 Plan mode is for this, and for setup, only: never for a routine move or a new item, and **never

@@ -353,6 +353,18 @@ mixes verdicts, or one from Claude in any mode, is refused. The route exists onl
 path: `kanbanr` dispatch refuses it with "a group decision is taken through the write path, which
 records each verdict as the person".
 
+The person's planning decisions (FTR-049) have four routes. `GET /api/projects/{project}/planning`
+and `GET …/planning/{id}/check` are public and listed above. `POST /api/write/projects/{project}/planning`,
+body `{action, target, items, by, note?}` with `action` one of `into-sprint`, `into-release` or
+`out-of-sprint`, records one decision as `planning/PD-n.yaml`; it is a verdict route, so the daemon
+stamps `monitor`, ignores an `origin` in the body, and refuses it to Claude in every mode. It
+validates the items and the target and judges nothing: no plan changes. `POST …/planning/{id}/decline`,
+body `{by, reason, nearest?}`, records Claude's decline; it is not a verdict, and an empty reason or
+a decision that is not pending is refused. The sprint plan, sprint unplan and release plan routes
+take an optional `decision: "PD-n"` in their body: the plan and the decision's outcome are one
+commit, and a decision that is not pending, or whose action, target and items differ, is refused
+with nothing written.
+
 The Releases page reads its releases through three public routes (FTR-041), so it never reads the
 whole board: `GET /api/projects/{project}/releases/summary` counts the releases in each tab
 (`current`, `planned`, `past`) and names the tab the page opens on (`open`: `current` when a release
