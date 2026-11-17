@@ -2228,3 +2228,116 @@ export interface PickView {
   available: boolean;
   why: string;
 }
+
+/** The Charter page's derived read (FTR-076): `GET /projects/{p}/charter/progress`. */
+export interface CharterProgress {
+  project: string;
+  board_rev?: string;
+  /** When the answer was read, RFC 3339. */
+  generated_at: string;
+  releases_on: boolean;
+  goals: GoalProgress[];
+  route?: RouteStop[];
+  marks?: GoalMark[];
+  series?: GoalSeries[];
+  lessons: LessonGrowth;
+  wins?: Win[];
+  finished?: Finished[];
+}
+
+/** The Overview's own goal counts, and the ids of the lessons that name the goal. */
+export interface GoalProgress extends GoalFacts {
+  lessons?: string[];
+}
+
+/** One release on the way travelled. */
+export interface RouteStop {
+  version: string;
+  name?: string;
+  state: "shipped" | "next";
+  shipped_at?: string;
+  /** The target date as the person set it; absent when none was set. */
+  target?: string;
+  patch_of?: string;
+  items: number;
+}
+
+/** Items serving `goal` in `release`; only non-zero cells are sent. */
+export interface GoalMark {
+  goal: string;
+  release: string;
+  items: number;
+}
+
+export interface GoalSeries {
+  goal: string;
+  points: SeriesPoint[];
+}
+
+/** A goal's proof as of one shipped release, read from the evidence recorded today. */
+export interface SeriesPoint {
+  release: string;
+  items: number;
+  req_proven: number;
+  req_total: number;
+}
+
+export interface LessonGrowth {
+  in_force: number;
+  total: number;
+  retired: number;
+  themes?: Theme[];
+  cycles?: Cycle[];
+  rows?: LessonRow[];
+}
+
+/** A group of lessons sharing a tag; `lessons` are lesson ids. */
+export interface Theme {
+  key: string;
+  label: string;
+  lessons: string[];
+}
+
+/** Lessons recorded in one release cycle. */
+export interface Cycle {
+  key: string;
+  label: string;
+  recorded: number;
+  cumulative: number;
+}
+
+export interface LessonRow {
+  id: string;
+  lesson: string;
+  kind: "practice" | "pitfall" | "decision";
+  status: "candidate" | "active" | "retired";
+  at: string;
+  confidence_now: number;
+  in_force: boolean;
+  from_item?: string;
+  from_retro?: string;
+  /** sprint | milestone | absent */
+  retro_kind?: string;
+  evidence?: string;
+  tags?: string[];
+  goals?: string[];
+  affirmed: number;
+  contradicted: number;
+  cited_by?: string[];
+}
+
+/** A recently finished item that serves a goal. */
+export interface Win {
+  code: string;
+  title: string;
+  at: string;
+  goals: string[];
+  release?: string;
+}
+
+/** A finished item that serves a goal, for "since you last looked". */
+export interface Finished {
+  code: string;
+  at: string;
+  goals: string[];
+}

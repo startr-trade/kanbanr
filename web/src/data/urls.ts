@@ -27,6 +27,8 @@ export const urls = {
   activity: (p: string, q: { ref?: string; ongoing?: boolean; limit?: number }) =>
     apiUrl(`${project(p)}/activity${query([["limit", q.limit], ["ongoing", q.ongoing], ["ref", q.ref]])}`),
   charter: (p: string) => apiUrl(`${project(p)}/charter`),
+  /** The Charter page's derived read: goal progress, the way travelled, lessons by theme (FTR-076). */
+  charterProgress: (p: string) => apiUrl(`${project(p)}/charter/progress`),
   sprints: (p: string) => apiUrl(`${project(p)}/sprints`),
   sprint: (p: string, s: string) => apiUrl(`${project(p)}/sprints/${enc(s)}`),
   gitModel: (p: string) => apiUrl(`${project(p)}/git/model`),
@@ -127,6 +129,8 @@ export const TAGS = {
   readiness: ["items", "config", "gates", "prepared"],
   activity: ["activity"],
   charter: ["charter"],
+  /** The Charter page's progress read (FTR-076): charter, items, releases, lessons, sprints, milestones. */
+  charterProgress: ["charter", "items", "releases", "lessons", "sprints", "milestones"],
   sprints: ["sprints", "items"],
   docTree: ["docs"],
   /** One doc: the watcher names each changed doc by its path under docs/. */
