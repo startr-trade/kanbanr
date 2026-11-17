@@ -515,8 +515,11 @@ mod tests {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output();
         let (tx, _rx) = tokio::sync::broadcast::channel(4);
+        let _ = store;
+        let boards = Arc::new(kanbanr_core::boards::Boards::single(dir.clone()));
         let st = AppState {
-            store: Arc::new(store),
+            store: Arc::clone(&boards.first().store),
+            boards,
             data_dir: dir.clone(),
             tx,
             allow_writes: false,

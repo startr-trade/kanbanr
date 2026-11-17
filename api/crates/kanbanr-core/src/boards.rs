@@ -103,6 +103,39 @@ pub struct BoardInfo {
     pub shadowed: Vec<String>,
 }
 
+/// Why a board's history cannot be read, as `/api/boards` says it: a text that names no server
+/// path, so a public site shows no host layout (coordinator, 17 Nov 2026). libgit2's own messages
+/// can quote the folder, so the board's folder and the repository's are taken out of them.
+fn history_unreadable(err: &crate::git::HistoryError, dir: &Path) -> String {
+    use crate::git::HistoryReason;
+    let path_free = |m: &str| {
+        let mut m = m.to_string();
+        let mut paths = vec![err.repo.clone(), dir.to_path_buf()];
+        paths.extend(std::fs::canonicalize(dir).ok());
+        // The longest first, so a path that holds another is taken out whole.
+        paths.sort_by_key(|p| std::cmp::Reverse(p.as_os_str().len()));
+        for p in paths {
+            let shown = p.display().to_string();
+            if !shown.is_empty() {
+                m = m.replace(&shown, "<board>");
+            }
+        }
+        m
+    };
+    match &err.reason {
+        HistoryReason::NotARepository => "it is not a git repository".to_string(),
+        HistoryReason::OwnedByAnotherUser => {
+            "the board's repository is owned by another user, so its history cannot be read"
+                .to_string()
+        }
+        HistoryReason::Incomplete(m) => format!(
+            "its history is incomplete (a shallow or partial clone?): {}",
+            path_free(m)
+        ),
+        HistoryReason::Other(m) => path_free(m),
+    }
+}
+
 /// The board's name: the last component of the path as written, when it is a folder name.
 fn name_of(path: &Path) -> Option<String> {
     match path.components().next_back()? {
@@ -221,7 +254,7 @@ impl Boards {
                 }),
                 history_unreadable: crate::git::open_history(&board.dir)
                     .err()
-                    .map(|e| e.reason_text()),
+                    .map(|e| history_unreadable(&e, &board.dir)),
                 shadowed,
             });
         }
@@ -414,5 +447,45 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains(&root.display().to_string()), "{json}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// R-8, beside the one above: a board git refuses as owned by another user says so, and the
+    /// text names no server path (coordinator, 17 Nov 2026: `/api/boards` shows none). git's
+    /// owner check needs a second account to trigger, so the error the open gives is built here.
+    #[test]
+    fn a_board_owned_by_another_user_says_so_without_its_path() {
+        let dir = PathBuf::from("/srv/boards/kanbanr");
+        let err = crate::git::HistoryError {
+            repo: dir.clone(),
+            reason: crate::git::HistoryReason::OwnedByAnotherUser,
+        };
+        let text = history_unreadable(&err, &dir);
+        assert_eq!(
+            text,
+            "the board's repository is owned by another user, so its history cannot be read"
+        );
+        assert!(!text.contains("/srv"), "{text}");
+        for reason in [
+            crate::git::HistoryReason::Incomplete(format!(
+                "object not found in {}/.git",
+                dir.display()
+            )),
+            crate::git::HistoryReason::Other(format!(
+                "could not open '{}/.git/HEAD'",
+                dir.display()
+            )),
+        ] {
+            let err = crate::git::HistoryError {
+                repo: dir.clone(),
+                reason,
+            };
+            let text = history_unreadable(&err, &dir);
+            assert!(!text.contains("/srv"), "{text}");
+        }
+        let err = crate::git::HistoryError {
+            repo: dir.clone(),
+            reason: crate::git::HistoryReason::NotARepository,
+        };
+        assert_eq!(history_unreadable(&err, &dir), "it is not a git repository");
     }
 }

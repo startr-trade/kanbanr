@@ -29,6 +29,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kanbanr_core::Store;
+use kanbanr_core::boards::Boards;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -50,8 +51,13 @@ fn immutable_on_success(res: &Response) -> Option<axum::http::HeaderValue> {
 
 #[derive(Clone)]
 pub struct AppState {
+    /// The boards this daemon shows, in order (FTR-040): a data folder served the usual way is a
+    /// list of one. Every read of a project goes to the board that holds it (`memo::store_for`).
+    pub boards: Arc<Boards>,
+    /// The first board's store: the one writes and `/sync` act on, which only exist with a single
+    /// data folder (FTR-040).
     pub store: Arc<Store>,
-    /// The data directory (also a git repo); used for the activity changelog.
+    /// The first board's folder (also a git repo); writes and `/sync` act on it.
     pub data_dir: PathBuf,
     /// Broadcast of changed project ids ("*" = structural/projects-list change).
     pub tx: broadcast::Sender<String>,
@@ -99,26 +105,82 @@ pub async fn run_with(
     code_repo: Option<(String, PathBuf)>,
     remote_writes: bool,
 ) -> anyhow::Result<()> {
-    // Settings are read once, here, and checked where read (factor 3); every refusal comes before
-    // the monitor binds, watches or writes anything.
+    let checked = check_settings(&bind, allow_writes, remote_writes)?;
+    std::fs::create_dir_all(data_dir.join("projects"))?;
+    serve(
+        Boards::single(data_dir),
+        bind,
+        ui_dir,
+        allow_writes,
+        code_repo,
+        remote_writes,
+        checked,
+        false,
+    )
+    .await
+}
+
+/// Run one read-only daemon over the boards at `paths`, in order (FTR-040, `kanbanr serve --board
+/// …`): their projects served together, each read from its own board. A list one server cannot
+/// show is refused before anything binds, and nothing is written to any board.
+pub async fn run_boards(
+    paths: Vec<PathBuf>,
+    bind: String,
+    ui_dir: Option<String>,
+) -> anyhow::Result<()> {
+    let boards = Boards::open(&paths)?;
+    let checked = check_settings(&bind, false, false)?;
+    serve(boards, bind, ui_dir, false, None, false, checked, true).await
+}
+
+/// The settings read from the environment and checked before anything starts.
+struct Checked {
+    /// Writes on a reachable address were accepted (flag or environment).
+    accepted: bool,
+    origins: Vec<String>,
+}
+
+/// Settings are read once, here, and checked where read (factor 3); every refusal comes before
+/// the monitor binds, watches or writes anything.
+fn check_settings(bind: &str, allow_writes: bool, remote_writes: bool) -> anyhow::Result<Checked> {
     let from_env =
         origin::accepted_from_env(std::env::var("KANBANR_ALLOW_REMOTE_WRITES").ok().as_deref())
             .map_err(anyhow::Error::msg)?;
     let accepted = remote_writes || from_env;
     if let Some(text) =
-        origin::bind_refusal(&bind, allow_writes, accepted).map_err(anyhow::Error::msg)?
+        origin::bind_refusal(bind, allow_writes, accepted).map_err(anyhow::Error::msg)?
     {
         anyhow::bail!(text);
     }
     let origins =
         origin::parse_origins(&std::env::var("KANBANR_ALLOWED_ORIGINS").unwrap_or_default())
             .map_err(anyhow::Error::msg)?;
-    std::fs::create_dir_all(data_dir.join("projects"))?;
-    let store = Arc::new(Store::new(data_dir.clone()));
+    Ok(Checked { accepted, origins })
+}
+
+/// The daemon over `boards`: the body `run_with` had before FTR-040. `listed` is true when the
+/// boards came from `--board` (`run_boards`), which answers `/api/meta` for the list and names the
+/// boards in the start line; a single data folder answers as it always did.
+#[allow(clippy::too_many_arguments)]
+async fn serve(
+    boards: Boards,
+    bind: String,
+    ui_dir: Option<String>,
+    allow_writes: bool,
+    code_repo: Option<(String, PathBuf)>,
+    remote_writes: bool,
+    checked: Checked,
+    listed: bool,
+) -> anyhow::Result<()> {
+    let Checked { accepted, origins } = checked;
+    let boards = Arc::new(boards);
+    let data_dir = boards.first().dir.clone();
+    let store = Arc::clone(&boards.first().store);
     let (tx, _rx) = broadcast::channel::<String>(256);
     let (slices, _slices_rx) = broadcast::channel::<watcher::Slices>(256);
     let meta_repo: Option<PathBuf> = code_repo.as_ref().map(|(_, p)| p.clone());
     let state = AppState {
+        boards: Arc::clone(&boards),
         store,
         data_dir: data_dir.clone(),
         tx: tx.clone(),
@@ -131,7 +193,8 @@ pub async fn run_with(
         background: Arc::new(OnceLock::new()),
     };
     // Drift in the background, for the project whose code repository the daemon was started in
-    // (FTR-045). Without one, nothing runs and the route answers `unavailable`.
+    // (FTR-045). Without one, nothing runs and the route answers `unavailable`. A list of boards
+    // has no code repository (FTR-040), so it gives no (project, repo) pair.
     let repos: Vec<(String, PathBuf)> = state.code_repo.iter().cloned().collect();
     let _ = state.background.set(background::Background::start(
         state.clone(),
@@ -139,20 +202,25 @@ pub async fn run_with(
         repos,
     ));
 
-    // Watch the data folder and push SSE "changed" and "slices" events as the CLI edits files; each
-    // change bumps the project's generation, so the memo misses at once (DEF-081).
-    let _watcher = watcher::spawn(
-        data_dir.join("projects"),
-        tx.clone(),
-        slices,
-        Arc::clone(&state.gens),
-    )?;
+    // Watch each board's folder and push SSE "changed" and "slices" events as the CLI edits files;
+    // each change bumps the project's generation, so the memo misses at once (DEF-081). One
+    // watcher per board, all on one channel: project ids are unique across boards (FTR-040).
+    let mut _watchers = Vec::with_capacity(boards.all().len());
+    for board in boards.all() {
+        _watchers.push(watcher::spawn(
+            board.dir.join("projects"),
+            tx.clone(),
+            slices.clone(),
+            Arc::clone(&state.gens),
+        )?);
+    }
 
     let mut api = Router::new()
         .route("/portfolio", get(routes::portfolio))
         .route("/portfolio/rollups", get(routes::portfolio_rollups))
         .route("/portfolio/board", get(routes::portfolio_board))
         .route("/projects", get(routes::list_projects))
+        .route("/boards", get(routes::list_boards))
         .route("/projects/:project", get(routes::get_project))
         .route(
             "/projects/:project/features/:code/export",
@@ -219,6 +287,7 @@ pub async fn run_with(
     let token = guard.token().to_string();
 
     let meta_dir = data_dir.clone();
+    let meta_boards = Arc::clone(&boards);
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         // What this daemon can do (FEAT-067). The monitor asks before offering an action: a button
@@ -227,6 +296,10 @@ pub async fn run_with(
         .route(
             "/api/meta",
             get(move || async move {
+                // A list of boards (FTR-040) answers for the list: no writes and no identity.
+                if listed {
+                    return axum::Json(kanbanr_core::server::Meta::for_boards(&meta_boards));
+                }
                 // `identity` is who an approval recorded here would be attributed to (FEAT-077).
                 // The CLI defaults `--by` to this same identity; the monitor was instead recording
                 // the string "reviewed in the monitor", which names the place rather than the
@@ -360,8 +433,8 @@ pub async fn run_with(
         origin::check,
     ));
 
-    // Keep the watcher alive for the lifetime of the server.
-    let _keep = _watcher;
+    // Keep the watchers alive for the lifetime of the server.
+    let _keep = _watchers;
     if allow_writes && accepted && !origin::bind_is_loopback(&bind).map_err(anyhow::Error::msg)? {
         let how = if remote_writes {
             "--allow-remote-writes"
@@ -383,9 +456,21 @@ pub async fn run_with(
     } else {
         String::new()
     };
+    let serving = if listed {
+        let each: Vec<String> = boards
+            .all()
+            .iter()
+            .map(|b| {
+                let n = b.store.list_projects().map(|p| p.len()).unwrap_or(0);
+                format!("{} [{n} projects]", b.name)
+            })
+            .collect();
+        format!("read-only; boards: {}", each.join(", "))
+    } else {
+        format!("data: {}", data_dir.display())
+    };
     eprintln!(
-        "kanbanr view daemon on http://{bound}  (data: {})\nanswering for: {}{accepted_from}",
-        data_dir.display(),
+        "kanbanr view daemon on http://{bound}  ({serving})\nanswering for: {}{accepted_from}",
         guard.hosts().join(", ")
     );
     axum::serve(listener, app).await?;

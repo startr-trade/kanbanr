@@ -246,13 +246,16 @@ pub fn stamp_at(
 }
 
 /// The stamp for a canonical key now: the project's generation (the root generation for a route
-/// with no project), the board HEAD of `store_for(st, project)`, and for the reads
-/// `reads_code_repo` names the code repository's HEAD and the time bucket; the UTC day.
+/// with no project), the board HEAD of `store_for(st, project)` (`global_head` for a route with no
+/// project), and for the reads `reads_code_repo` names the code repository's HEAD and the time
+/// bucket; the UTC day.
 pub fn stamp_for(st: &AppState, key: &str) -> Stamp {
     let project = crate::routes::project_id(key);
     let generation = st.gens.of(project.as_deref());
-    let store = store_for(st, project.as_deref().unwrap_or(""));
-    let board_head = kanbanr_core::git::head_commit(store.data_dir()).unwrap_or_default();
+    let board_head = match project.as_deref() {
+        Some(p) => kanbanr_core::git::head_commit(store_for(st, p).data_dir()).unwrap_or_default(),
+        None => global_head(st, key),
+    };
     let code_head = crate::routes::reads_code_repo(key).then(|| {
         crate::routes::repo_for(st, key)
             .and_then(kanbanr_core::git::head_commit)
@@ -273,11 +276,34 @@ pub fn stamp_for(st: &AppState, key: &str) -> Stamp {
     )
 }
 
-/// The store holding a project's board. Today every project is on the one board; FTR-040 makes it
-/// per board (X11).
+/// The store holding a project's board: the first board, in order, that holds it (FTR-040, X11).
+/// A project no board holds gets the first board's, whose reads then answer as they do for an
+/// unknown project (404).
 pub(crate) fn store_for<'a>(st: &'a AppState, project: &str) -> &'a Store {
-    let _ = project;
-    &st.store
+    st.boards
+        .for_project(project)
+        .map(|b| b.store.as_ref())
+        .unwrap_or(st.boards.first().store.as_ref())
+}
+
+/// The board HEAD a read with no project is stamped with (FTR-040): the HEAD of the board its
+/// `board=` parameter names, else every board's, joined, since the project list and the board list
+/// answer from all of them. With one board this is that board's HEAD, as before.
+fn global_head(st: &AppState, key: &str) -> String {
+    let head = |s: &Store| kanbanr_core::git::head_commit(s.data_dir()).unwrap_or_default();
+    match crate::routes::split_board(key)
+        .0
+        .and_then(|name| st.boards.by_name(&name))
+    {
+        Some(board) => head(&board.store),
+        None => st
+            .boards
+            .all()
+            .iter()
+            .map(|b| head(&b.store))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
 }
 
 /// The event streams, which are never memoized.
@@ -521,8 +547,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kanbanr-memo-{}", u64::from_le_bytes(bytes)));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let (tx, _rx) = tokio::sync::broadcast::channel(4);
+        let boards = Arc::new(kanbanr_core::boards::Boards::single(dir.clone()));
         let st = AppState {
-            store: Arc::new(Store::new(dir.clone())),
+            store: Arc::clone(&boards.first().store),
+            boards,
             data_dir: dir.clone(),
             tx,
             allow_writes: false,

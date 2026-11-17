@@ -68,45 +68,141 @@ pub async fn read_passthrough(
     let repo = reads_code_repo(dpath)
         .then(|| repo_for(&st, dpath))
         .flatten();
+    // A project's read goes to the board that holds it; any other read to the board `?board=`
+    // names, else the first (FTR-040).
+    let (store, global_path) = match project_id(dpath) {
+        Some(p) => (crate::memo::store_for(&st, &p), None),
+        None => match global_store(&st, dpath) {
+            Ok((store, path)) => (store, Some(path)),
+            Err(name) => return no_board(&name),
+        },
+    };
+    let dpath = global_path.as_deref().unwrap_or(dpath);
     // Labelled with what the route renders (FEAT-177): a diagram or a document is not JSON.
-    match dispatch::dispatch_in(&st.store, "GET", dpath, None, repo) {
+    match dispatch::dispatch_in(store, "GET", dpath, None, repo) {
         Ok(body) => ([("content-type", dispatch::read_media_type(dpath))], body).into_response(),
         Err(e) => core_err(e).into_response(),
     }
 }
 
-pub async fn list_projects(State(st): State<AppState>) -> impl IntoResponse {
-    json_body(dispatch::dispatch(&st.store, "GET", "/projects", None))
+/// `GET /api/projects`: every board's projects, board by board in order, each naming its board
+/// (FTR-040). A project an earlier board already listed is skipped: it is served from there.
+pub async fn list_projects(State(st): State<AppState>) -> axum::response::Response {
+    let mut all: Vec<dispatch::ProjectSummary> = Vec::new();
+    for board in st.boards.all() {
+        let summaries = match dispatch::list_summaries_for(&board.store, Some(&board.name)) {
+            Ok(s) => s,
+            Err(e) => return core_err(e).into_response(),
+        };
+        for summary in summaries {
+            if let Some(first) = all.iter().find(|p| p.id == summary.id) {
+                let first = first.board.clone().unwrap_or_default();
+                kanbanr_core::git::warn_once(
+                    &format!("boards-shadowed:{}:{}", board.name, summary.id),
+                    &format!(
+                        "project '{}' is also on board '{}'; serving it from '{first}'",
+                        summary.id, board.name
+                    ),
+                );
+                continue;
+            }
+            all.push(summary);
+        }
+    }
+    Json(all).into_response()
+}
+
+/// `GET /api/boards`: the boards this server shows, in order (FTR-040). Names no server path.
+pub async fn list_boards(State(st): State<AppState>) -> impl IntoResponse {
+    Json(st.boards.info())
+}
+
+/// A `board=<name>` query parameter taken out of a dispatch path: the name, and the path without
+/// it (FTR-040). Parameters are split on `&` and the key matched whole (L-23).
+pub(crate) fn split_board(dispatch_path: &str) -> (Option<String>, String) {
+    let Some((path, query)) = dispatch_path.split_once('?') else {
+        return (None, dispatch_path.to_string());
+    };
+    let mut board = None;
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| {
+            let (key, value) = kv.split_once('=').unwrap_or((kv, ""));
+            if key == "board" {
+                board = Some(value.to_string());
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    let rest = if kept.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    };
+    (board, rest)
+}
+
+/// The store a read with no project answers from, and its path without `board=`: the board the
+/// parameter names, else the first (FTR-040 R-11). An unknown name is the error, answered by
+/// [`no_board`].
+fn global_store<'a>(
+    st: &'a AppState,
+    dispatch_path: &str,
+) -> Result<(&'a kanbanr_core::Store, String), String> {
+    let (name, rest) = split_board(dispatch_path);
+    match name {
+        None => Ok((st.boards.first().store.as_ref(), rest)),
+        Some(name) => match st.boards.by_name(&name) {
+            Some(board) => Ok((board.store.as_ref(), rest)),
+            None => Err(name),
+        },
+    }
+}
+
+/// `404 no board named '<name>'` (FTR-040 R-11).
+fn no_board(name: &str) -> axum::response::Response {
+    (StatusCode::NOT_FOUND, format!("no board named '{name}'")).into_response()
+}
+
+/// A global read through core's dispatch, on the board its `?board=` names (FTR-040).
+fn global_read(st: &AppState, uri: &axum::http::Uri, route: &str) -> axum::response::Response {
+    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or(route);
+    let dpath = pq.strip_prefix("/api").unwrap_or(pq);
+    match global_store(st, dpath) {
+        Ok((store, _)) => json_body(dispatch::dispatch(store, "GET", route, None)),
+        Err(name) => no_board(&name),
+    }
 }
 
 /// Portfolio index (workspace + programs). (FEAT-030)
-pub async fn portfolio(State(st): State<AppState>) -> impl IntoResponse {
-    json_body(dispatch::dispatch(&st.store, "GET", "/portfolio", None))
+pub async fn portfolio(
+    State(st): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+) -> axum::response::Response {
+    global_read(&st, &uri, "/portfolio")
 }
 
 /// Cross-project task-based rollups. (FEAT-030)
-pub async fn portfolio_rollups(State(st): State<AppState>) -> impl IntoResponse {
-    json_body(dispatch::dispatch(
-        &st.store,
-        "GET",
-        "/portfolio/rollups",
-        None,
-    ))
+pub async fn portfolio_rollups(
+    State(st): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+) -> axum::response::Response {
+    global_read(&st, &uri, "/portfolio/rollups")
 }
 
 /// Cross-project board (normalized lanes). (FEAT-030)
-pub async fn portfolio_board(State(st): State<AppState>) -> impl IntoResponse {
-    json_body(dispatch::dispatch(
-        &st.store,
-        "GET",
-        "/portfolio/board",
-        None,
-    ))
+pub async fn portfolio_board(
+    State(st): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+) -> axum::response::Response {
+    global_read(&st, &uri, "/portfolio/board")
 }
 
 pub async fn get_project(State(st): State<AppState>, Path(p): Path<String>) -> impl IntoResponse {
     json_body(dispatch::dispatch(
-        &st.store,
+        crate::memo::store_for(&st, &p),
         "GET",
         &format!("/projects/{p}"),
         None,
@@ -125,7 +221,7 @@ pub async fn export_feature(
 }
 
 pub async fn list_docs(State(st): State<AppState>, Path(p): Path<String>) -> impl IntoResponse {
-    match st.store.doc_tree(&p) {
+    match crate::memo::store_for(&st, &p).doc_tree(&p) {
         Ok(tree) => Json(tree).into_response(),
         Err(e) => core_err(e).into_response(),
     }
@@ -141,7 +237,7 @@ pub async fn get_doc(
     Path(p): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> impl IntoResponse {
-    match st.store.read_doc(&p, &q.path) {
+    match crate::memo::store_for(&st, &p).read_doc(&p, &q.path) {
         Ok(content) => {
             ([("content-type", "text/markdown; charset=utf-8")], content).into_response()
         }
@@ -155,7 +251,7 @@ pub async fn get_doc_raw(
     Path(p): Path<String>,
     Query(q): Query<DocQuery>,
 ) -> impl IntoResponse {
-    match st.store.read_doc_bytes(&p, &q.path) {
+    match crate::memo::store_for(&st, &p).read_doc_bytes(&p, &q.path) {
         Ok(bytes) => (
             [("content-type", kanbanr_core::docs::content_type(&q.path))],
             bytes,
@@ -178,7 +274,7 @@ pub async fn drift_latest(
     Path(p): Path<String>,
     Query(q): Query<LatestQuery>,
 ) -> axum::response::Response {
-    if let Err(e) = st.store.load_meta(&p) {
+    if let Err(e) = crate::memo::store_for(&st, &p).load_meta(&p) {
         return core_err(e).into_response();
     }
     match st.background.get() {
@@ -216,7 +312,9 @@ pub async fn project_activity(
         limit: q.limit,
     };
     Json(kanbanr_core::activity::read_filtered(
-        &st.store, &p, &filter,
+        crate::memo::store_for(&st, &p),
+        &p,
+        &filter,
     ))
 }
 
