@@ -492,10 +492,12 @@ pub fn tag_commit(root: &Path, tag: &str) -> Option<String> {
     .filter(|c| !c.is_empty())
 }
 
-/// The newest merge commit on `line` whose message references `code` through a `kanbanr:` token
-/// ([`crate::scm::parse_refs`]), among the last 2,000 merges (FTR-004). A code in prose without
-/// the marker, or a reference to another item, is not a match. None when `line` names no commit.
-pub fn merge_commit_for(root: &Path, line: &str, code: &str) -> Result<Option<String>> {
+/// The newest merge commit on `line` whose message references one of `codes` through a `kanbanr:`
+/// token ([`crate::scm::parse_refs`]), among the last 2,000 merges (FTR-004). `codes` are an item's
+/// current code and its earlier codes (FTR-056), so a merge made under an old code is found. A code
+/// in prose without the marker, or a reference to another item, is not a match. None when `line`
+/// names no commit.
+pub fn merge_commit_for(root: &Path, line: &str, codes: &[&str]) -> Result<Option<String>> {
     if rev_parse(root, line).is_err() {
         return Ok(None);
     }
@@ -520,7 +522,7 @@ pub fn merge_commit_for(root: &Path, line: &str, code: &str) -> Result<Option<St
         }
         if crate::scm::parse_refs(body)
             .iter()
-            .any(|r| r.code() == code)
+            .any(|r| codes.contains(&r.code()))
         {
             return Ok(Some(sha.to_string()));
         }
@@ -1750,20 +1752,45 @@ pub(crate) mod tests {
         );
         assert_ne!(older, wanted);
         assert_eq!(
-            merge_commit_for(&repo, "main", "FTR-001").unwrap(),
+            merge_commit_for(&repo, "main", &["FTR-001"]).unwrap(),
             Some(wanted.clone())
         );
         assert!(
-            merge_commit_for(&repo, "main", "FTR-0010")
+            merge_commit_for(&repo, "main", &["FTR-0010"])
                 .unwrap()
                 .is_some()
         );
-        assert_eq!(merge_commit_for(&repo, "main", "FTR-003").unwrap(), None);
-        assert_eq!(merge_commit_for(&repo, "nope", "FTR-001").unwrap(), None);
+        assert_eq!(merge_commit_for(&repo, "main", &["FTR-003"]).unwrap(), None);
+        assert_eq!(merge_commit_for(&repo, "nope", &["FTR-001"]).unwrap(), None);
         // tag_commit peels an annotated tag and answers None for a missing one.
         create_tag(&repo, "v1", &wanted, "v1").unwrap();
         assert_eq!(tag_commit(&repo, "v1"), Some(wanted));
         assert_eq!(tag_commit(&repo, "v2"), None);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-056 T11: a merge made under an item's earlier code is found for its current code.
+    #[test]
+    fn merge_commit_for_finds_a_merge_under_an_earlier_code() {
+        let repo = scratch_repo("merge-for-earlier-code");
+        assert!(repo.starts_with(std::env::temp_dir()));
+        create_branch_from(&repo, "feat/FTR-001-a", "main").unwrap();
+        git(&repo, &["checkout", "-q", "feat/FTR-001-a"]).unwrap();
+        commit_file(&repo, "a", "x\n", "work");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let (_, merge) = merge_no_ff(
+            &repo,
+            "main",
+            "feat/FTR-001-a",
+            "Merge feat/FTR-001-a into main\n\nRefs: kanbanr:FTR-001",
+        )
+        .unwrap();
+        // The item was renamed FTR-001 -> FTR-002: its codes are the current one, then the alias.
+        assert_eq!(
+            merge_commit_for(&repo, "main", &["FTR-002", "FTR-001"]).unwrap(),
+            Some(merge.clone())
+        );
+        assert_eq!(merge_commit_for(&repo, "main", &["FTR-003"]).unwrap(), None);
         let _ = std::fs::remove_dir_all(&repo);
     }
 
