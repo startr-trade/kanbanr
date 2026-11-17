@@ -290,7 +290,10 @@ retrospective and report, the issue mirror's settings, the CLAUDE.md block, the 
 (`/api/processes`), the project-wide export (`/api/projects/{project}/export`), `/git/model`,
 `/git/doctor`, `/git/tidy` (GET lists the merged branches that can go; POST deletes them locally; DEF-051), `/config/method`, the guard rails (`/api/projects/{project}/guards`) and the agent
 scopes (`/api/projects/{project}/scopes`, `/scopes/{id}`, `/scopes/{id}/brief` in Markdown, and
-`/scopes/drift`, which reads the code repository; FEAT-214). Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
+`/scopes/drift`, which reads the code repository; FEAT-214), and the optional katalogr link (FTR-016):
+`/api/projects/{project}/docs/views?path=` (what a doc's `katalogr-query` blocks show, asked of
+katalogr at the current position; it writes nothing) and `/api/projects/{project}/katalogr` (whether
+katalogr answers, and the position a block would be asked at). Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
 project export, which are text.
 
 ## Writes happen in the CLI (`dispatch`)

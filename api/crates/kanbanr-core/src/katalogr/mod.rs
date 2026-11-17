@@ -131,7 +131,6 @@ mod tests {
     /// the stability page lists it under "Not covered". Passes once FTR-016 T9 edits that page.
     #[cfg(feature = "schema")]
     #[test]
-    #[ignore = "passes once FTR-016 T9 edits docs/guide/project/stability.md; T9 removes this ignore"]
     fn the_link_is_outside_the_stability_promise() {
         for route in crate::openapi::public_routes() {
             assert!(

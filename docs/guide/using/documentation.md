@@ -72,3 +72,47 @@ Docs are more than text — the viewer renders **diagrams** and **embedded image
 - **Any other diagram tool** — PlantUML, Graphviz/DOT, D2, Excalidraw, draw.io — works too: export
   it to **PNG/SVG** and embed it as an image asset (as above). Mermaid blocks also render natively on
   GitHub, so the same docs look right in your repo.
+
+### Query blocks (katalogr)
+
+A doc can ask katalogr, the code index, for a view of the
+code. katalogr is optional: nothing in kanbanr needs it, and every page works without it
+(FTR-016, ADR-0014). The ask is a fenced block whose info string is `katalogr-query`; its body is one
+line, an operation and its arguments:
+
+````markdown
+```katalogr-query
+structure --level file --max-nodes 40
+```
+````
+
+- **Operations.** `structure`, `contracts`, `cycles` (no argument), `callers`, `flow`, `impact`,
+  `lineage`, `process` (one symbol) and `path` (from, to). A flag is `--name value` or
+  `--name=value`, given once; a word with spaces is wrapped in double quotes.
+- **What the monitor does.** The doc page asks `katalogr api` at the project's current position (the
+  commit and whether the checkout is clean) and draws the answer as a diagram, with the position, whether
+  it is exact, and the view's ID under it, and the one-line source below that. At most 20 blocks per
+  doc are asked.
+- **When katalogr is not there.** The block keeps its source and one plain sentence says why:
+  "katalogr is not running at `<address>` — the block shows its source", "the katalogr at … is too old: it
+  has no `views` capability", "no katalogr context holds `<position>`", or "this block is not a query:
+  `<reason>`". Where katalogr is is environment, never board config: `KANBANR_KATALOGR_URL` (default
+  `http://127.0.0.1:7878`), or `kanbanr serve --katalogr-url`. `kanbanr katalogr status` says whether
+  it answers and at which position a block would be asked.
+- **Checked when written.** `doc add`, `PUT …/docs/content` and a batch `doc.write` print each bad
+  block as `query block: docs/<path>, line N: <reason>` and still write; `kanbanr doctor` lists the
+  same under "Query blocks".
+- **Release snapshots.** When `katalogr` is installed, the cut that tags a release runs
+  `katalogr view snapshot` and stores the result under `docs/releases/<V>/views`, in the same board
+  commit as the tag's record, and the release notes gain a "System views" section. The Releases page and the
+  `promote` output name the repos the snapshot mentions: check them before you push a board that is
+  public. With no katalogr, or a failed snapshot, the release ships and says why it has no views.
+
+**The contract with katalogr.** The two tools share a few files, kept byte for byte under
+`fixtures/contract/` at the repository root: `position-v1.json` (the position text), `views-v1.json`
+(the view answer and the catalogue of operations), `query-block-v1.md` (the block grammar above) and,
+read rather than copied, the three view names and link template of katalogr's `web-links-v1.json`. The
+board's alias format, version 1, is part of it too: an item's own file carries `aliases:` directly after
+`code`, so katalogr resolves a `kanbanr:<CODE>` reference under an item's earlier codes. kanbanr checks
+a capability by name, never a version number. The link is outside the 1.0 promise until it has been used
+([Stability](../project/stability.md)).

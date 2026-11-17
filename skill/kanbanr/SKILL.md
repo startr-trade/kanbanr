@@ -1571,6 +1571,25 @@ doc goes **before** creating any file:
 - **Index every decision.** When an ADR is accepted, add a link to it in the architecture index
   (or whichever view the project's `adr` coverage rule names) in the same session.
 
+## System views from katalogr (optional)
+
+A doc can hold a `katalogr-query` block, and the monitor draws it when katalogr is installed. It is
+optional: never install, start or require katalogr for a project, and never put its address in the
+board's config (it is `KANBANR_KATALOGR_URL` or `kanbanr serve --katalogr-url`).
+
+- **Write a block** as a fenced code block whose info string is `katalogr-query`, with exactly one
+  line: an operation (`structure`, `contracts`, `cycles`, `callers`, `flow`, `impact`, `lineage`,
+  `process` or `path`), its arguments (none, one symbol, or from and to for `path`), then flags as
+  `--name value`; a word with spaces in double quotes; a flag once.
+- **The monitor** asks `katalogr api` at the project's current position and draws the answer; when
+  katalogr is absent, too old, or holds no context for the position, the block shows its source and one
+  sentence says why. `kanbanr katalogr status` tells you which.
+- **A warning** after `doc add` reads `query block: docs/<path>, line N: <reason>`. The write already
+  succeeded: read the reason, and never edit a block only to make the warning go away.
+- **The cut** that tags a release saves a snapshot into `docs/releases/<V>/views` only when `katalogr` is
+  installed; otherwise it ships and says why there are no views. Read its "repos named" line to the person
+  before they push a board that is public.
+
 ## Recover & resume (start of every session)
 
 Before doing project work in a new or resumed session, **recover the state from kanbanr first**:
