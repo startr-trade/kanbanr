@@ -13,7 +13,7 @@
 //
 // Usage: npm run check:plan-flow
 import { readFileSync } from "node:fs";
-import { dateChips, forecastRows, hoursText, statsLine, waitText } from "../src/planFlow.ts";
+import { dateChips, forecastRows, hoursText, statsLine, taskTextParts, waitText } from "../src/planFlow.ts";
 import { TAGS, urls } from "../src/data/urls.ts";
 import { closeRender, render } from "./lib/render.mjs";
 
@@ -210,6 +210,59 @@ await check(
       if (date.test(rest)) problems.push(`a date outside the person's chips: "${rest.match(date)[0]}"`);
       for (const c of chips) if (!/\(set by the person\)$/.test(c)) problems.push(`a chip not labelled as the person's: "${c}"`);
     }
+  },
+);
+
+await check(
+  "web::check_plan_flow_renders_task_text_markdown",
+  "taskTextParts turns `code` and in-app or http(s) links into parts, keeps other targets and unbalanced input as text, and the panel renders a link and a code element with no raw markdown.",
+  async (expect, problems) => {
+    expect("a link", taskTextParts("see [FTR-037](/p/kanbanr/feature/FTR-037) now"), [
+      { kind: "text", text: "see " },
+      { kind: "link", text: "FTR-037", href: "/p/kanbanr/feature/FTR-037" },
+      { kind: "text", text: " now" },
+    ]);
+    expect("code", taskTextParts("edit `x.rs` here"), [
+      { kind: "text", text: "edit " },
+      { kind: "code", text: "x.rs" },
+      { kind: "text", text: " here" },
+    ]);
+    expect("an external link", taskTextParts("[a](https://e.com/x)"), [{ kind: "link", text: "a", href: "https://e.com/x" }]);
+    if (taskTextParts("[x](javascript:alert(1))").some((p) => p.kind === "link" || p.href)) problems.push("a javascript: target became a link");
+    if (!taskTextParts("[x](javascript:alert(1))").some((p) => p.kind === "text" && p.text === "x")) problems.push("a javascript: target lost its label");
+    expect("unbalanced brackets", taskTextParts("a [b](c and `d"), [{ kind: "text", text: "a [b](c and `d" }]);
+    expect("plain text", taskTextParts("just words"), [{ kind: "text", text: "just words" }]);
+    expect("empty", taskTextParts(""), []);
+
+    const plan = { ...PLAN, ready: [{ id: "FTR-1/TL-001/T2", text: "Fix `x.rs` per [FTR-037](/p/kanbanr/feature/FTR-037)", estimate_h: 1, critical: false, chain_h: 1 }] };
+    const { document } = await render("src/pages/plan/FlowPanel.tsx", "FlowPanelBody", { project: "kanbanr", plan }, { url: "/p/kanbanr/plan" });
+    const root = document.querySelector(".plan-flow");
+    const a = root.querySelector('.plan-flow-ready a[href$="/p/kanbanr/feature/FTR-037"]');
+    if (!a) problems.push("no link to FTR-037 in the ready list");
+    else expect("the link's text", text(a), "FTR-037");
+    const codes = [...root.querySelectorAll(".plan-flow-ready code")].map(text);
+    if (!codes.includes("x.rs")) problems.push(`no code "x.rs": ${JSON.stringify(codes)}`);
+    if (text(root).includes("](")) problems.push("raw markdown (\"](\") is still in the panel");
+  },
+);
+
+await check(
+  "web::check_plan_flow_folds_long_id_lists",
+  "a note of more than 5 ids is a closed details with a per-note summary; a short note stays one line.",
+  async (expect, problems) => {
+    const ids = Array.from({ length: 455 }, (_, i) => `FTR-9/TL-001/T${i + 1}`);
+    const plan = { ...PLAN, unestimated: ids, untasked_items: ["FTR-6", "FTR-7", "FTR-8"] };
+    const { document } = await render("src/pages/plan/FlowPanel.tsx", "FlowPanelBody", { project: "kanbanr", plan }, { url: "/p/kanbanr/plan" });
+    const root = document.querySelector(".plan-flow");
+    const d = root.querySelectorAll(".plan-flow-notes details");
+    expect("one folded note", d.length, 1);
+    if (d[0]) {
+      if (d[0].hasAttribute("open")) problems.push("the folded note is open by default");
+      if (!text(d[0].querySelector("summary")).startsWith("455 tasks have no estimate")) problems.push(`summary is "${text(d[0].querySelector("summary"))}"`);
+      expect("the ids are inside", text(d[0].querySelector(".plan-flow-ids")).split(", ").length, 455);
+    }
+    const lines = [...root.querySelectorAll(".plan-flow-notes > li")].filter((li) => !li.querySelector("details")).map(text);
+    if (!lines.some((l) => l === "3 items have no tasks: FTR-6, FTR-7, FTR-8")) problems.push(`no plain untasked line: ${JSON.stringify(lines)}`);
   },
 );
 
