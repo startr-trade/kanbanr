@@ -130,6 +130,7 @@ try {
     // The open ids in the hash.
     eq(problems, 'parseOpen("#DEF-066")', [...parseOpen("#DEF-066")], ["DEF-066"]);
     eq(problems, 'parseOpen("#open=a,b")', [...parseOpen("#open=a,b")], ["a", "b"]);
+    eq(problems, 'parseOpen("#DEF-066,FTR-041") splits a plain hash on commas', [...parseOpen("#DEF-066,FTR-041")], ["DEF-066", "FTR-041"]);
     eq(problems, 'parseOpen("#open=v0.8.0,v0.7.0")', [...parseOpen("#open=v0.8.0,v0.7.0")], ["v0.8.0", "v0.7.0"]);
     eq(problems, 'parseOpen("")', [...parseOpen("")], []);
     eq(problems, 'parseOpen("#")', [...parseOpen("#")], []);
