@@ -15,6 +15,7 @@ pub mod adr;
 pub mod agentscope;
 mod architecture;
 pub mod atomic;
+pub mod attention;
 pub mod baseline;
 pub mod batch;
 pub mod boardreadme;
