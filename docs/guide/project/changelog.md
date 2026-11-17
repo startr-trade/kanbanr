@@ -33,6 +33,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- `kanbanr release notes --changelog` keeps one `## [N]` section: a body's own heading is dropped,
+  and copies already in the changelog are removed and counted (DEF-088).
 - A walkthrough's results name the commit of the build it ran, and a dirty or unknown build is
   refused unless `--rev` names one; the Review page shows each result's check id (DEF-089).
 - A delegation whose grant cannot be checked, because the board's git history cannot be read (for
