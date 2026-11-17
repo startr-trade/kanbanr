@@ -1219,15 +1219,16 @@ fn cli_capture_report_and_defect_escape() {
     // While the test exists in the project, the recorded green stands.
     std::fs::create_dir_all(work.join("src")).unwrap();
     let source = work.join("src").join("cart.rs");
-    std::fs::write(&source, "fn cart_retains_for_seven_days() {}\n").unwrap();
+    // Named `cart::retains_for_seven_days`: defined in its module's file, found by its kind and
+    // never as a substring of another name (MNT-001).
+    std::fs::write(&source, "fn retains_for_seven_days() {}\n").unwrap();
     let tracked = run(&["tests"]);
-    assert!(tracked.contains("found"), "{tracked}");
-    assert!(!tracked.contains("NOT IN THE REPO"), "{tracked}");
+    assert!(tracked.contains("Vanished (0)\n"), "{tracked}");
 
     // Delete the test and the evidence goes with it: a green nobody can re-run is not evidence.
     std::fs::remove_file(&source).unwrap();
     let gone = run(&["tests"]);
-    assert!(gone.contains("NOT IN THE REPO"), "{gone}");
+    assert!(gone.contains("Vanished (1)\n"), "{gone}");
     assert!(gone.contains("`kanbanr tests --write`"), "{gone}");
     let rewritten = run(&["tests", "--write"]);
     assert!(
@@ -18279,4 +18280,164 @@ fn build_bench_records_before_and_after_rows_for_each_scenario() {
     let o = bench(&["bench", "--scenario", "hot"]);
     assert!(!o.status.success());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Commit everything in a JsonFixture's work folder, so `git grep` sees it (MNT-001).
+fn mnt001_commit_all(fx: &JsonFixture) {
+    for args in [
+        &["add", "-A"][..],
+        &["commit", "-q", "-m", "[no-ref] tests"][..],
+    ] {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&fx.work)
+            .env("HOME", &fx.home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}: {o:?}");
+    }
+}
+
+/// Define FEAT-001 (or another item) of a JsonFixture with one requirement naming these tests,
+/// each `(name, kind)` (MNT-001).
+fn mnt001_define(fx: &JsonFixture, code: &str, tests: &[(&str, &str)]) {
+    let mut yaml = String::from(
+        "statement: Keep a cart\nrequirements:\n  - kind: functional\n    \
+         text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it.\"\n    tests:\n",
+    );
+    for (name, kind) in tests {
+        yaml.push_str(&format!(
+            "      - name: '{name}'\n        kind: {kind}\n        state: planned\n"
+        ));
+    }
+    let def = fx.home.join(format!("{code}-def.yaml"));
+    std::fs::write(&def, yaml).unwrap();
+    fx.run(&["feature", "define", code, "--file", def.to_str().unwrap()]);
+}
+
+/// MNT-001 R-1: `kanbanr tests` locates each tracked test by its kind in the project's git
+/// repository — a Rust unit test in its module's file, an integration test in `tests/`, a Python
+/// test by its file and name, a monitor check by the name its script prints, a test file by its
+/// path — and reports a name defined nowhere as not found.
+#[test]
+fn tests_locates_rust_python_web_and_file_names_in_the_project() {
+    let fx = JsonFixture::new("mnt001-locate");
+    let w = &fx.work;
+    for (path, text) in [
+        ("src/lib.rs", "mod tests {\n    fn a() {}\n}\n"),
+        ("tests/local_mode.rs", "fn b() {}\n"),
+        (
+            "scripts/tests/test_x.py",
+            "class C:\n    def test_d(self):\n        pass\n",
+        ),
+        ("web/scripts/check-y.mjs", "console.log('web::y ok');\n"),
+        ("src/z.test.ts", "it('z', () => {});\n"),
+    ] {
+        let file = w.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    mnt001_commit_all(&fx);
+    let names = [
+        "lib::tests::a",
+        "local_mode::b",
+        "test_x.C.test_d",
+        "web::y",
+        "src/z.test.ts",
+        "gone::tests::missing",
+    ];
+    let tests: Vec<(&str, &str)> = names.iter().map(|n| (*n, "unit")).collect();
+    mnt001_define(&fx, "FEAT-001", &tests);
+
+    let v = fx.json(&["--json", "tests"]);
+    let rows = v["rows"].as_array().unwrap_or_else(|| panic!("{v}"));
+    let found = |name: &str| {
+        rows.iter()
+            .find(|r| r["test"] == name)
+            .unwrap_or_else(|| panic!("{name} not listed: {v}"))["found"]
+            .as_bool()
+    };
+    for name in &names[..5] {
+        assert_eq!(found(name), Some(true), "{name}: {v}");
+    }
+    assert_eq!(found("gone::tests::missing"), Some(false), "{v}");
+    // Each found test sits where its name says, so none is "defined elsewhere".
+    assert!(
+        rows.iter()
+            .all(|r| r["elsewhere"].as_array().is_none_or(|e| e.is_empty())),
+        "{v}"
+    );
+    // Planned, so never run; only the missing one is unwritten.
+    let never: Vec<_> = v["never_run"].as_array().unwrap().iter().collect();
+    assert_eq!(never.len(), 6, "{v}");
+    assert_eq!(
+        never.iter().filter(|n| n["written"] == false).count(),
+        1,
+        "{v}"
+    );
+    let text = fx.run(&["tests"]);
+    assert!(text.contains("Never run (6: 5 written)"), "{text}");
+    assert!(
+        text.contains("FEAT-001 R-1 gone::tests::missing — not written"),
+        "{text}"
+    );
+}
+
+/// MNT-001 R-5: `kanbanr tests` counts the open manual checks per item and per release, and the
+/// open walkthrough tests apart.
+#[test]
+fn tests_reports_open_manual_checks_per_release() {
+    let fx = JsonFixture::new("mnt001-manual");
+    fx.run(&["config", "cadence", "--releases", "on"]);
+    fx.run(&["release", "add", "v1.0.0"]);
+    fx.run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart sharing",
+        "--milestone",
+        "MS-001",
+    ]);
+    mnt001_define(
+        &fx,
+        "FEAT-001",
+        &[
+            ("manual: the cart reads clearly", "manual"),
+            (
+                "walkthrough: a returning shopper sees the cart",
+                "walkthrough",
+            ),
+        ],
+    );
+    mnt001_define(
+        &fx,
+        "FEAT-002",
+        &[("manual: sharing reads clearly", "manual")],
+    );
+    fx.run(&["release", "plan", "v1.0.0", "FEAT-001"]);
+
+    let v = fx.json(&["--json", "tests"]);
+    let m = &v["manual"];
+    assert_eq!(
+        (m["total"].as_u64(), m["open"].as_u64()),
+        (Some(2), Some(2)),
+        "{v}"
+    );
+    assert_eq!(m["per_release"]["v1.0.0"], 1, "{v}");
+    assert_eq!(m["per_item"]["FEAT-001"], 1, "{v}");
+    assert_eq!(m["per_item"]["FEAT-002"], 1, "{v}");
+    assert_eq!(m["walkthrough_open"], 1, "{v}");
+
+    let text = fx.run(&["tests"]);
+    assert!(text.contains("Manual checks open (2 of 2)"), "{text}");
+    assert!(text.contains("  per release: v1.0.0 1\n"), "{text}");
+    assert!(
+        text.contains("  per item: FEAT-001 1, FEAT-002 1\n"),
+        "{text}"
+    );
+    assert!(text.contains("  walkthrough tests open: 1\n"), "{text}");
 }

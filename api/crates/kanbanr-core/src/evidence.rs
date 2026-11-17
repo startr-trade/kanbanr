@@ -10,7 +10,9 @@ use crate::models::{Source, TestState};
 use crate::store::Project;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 /// A test's result in one run: whether it passed and, when the runner printed one, how long it
 /// took in whole milliseconds (FTR-058).
@@ -1111,7 +1113,14 @@ impl Reconciliation {
         let written = self.never_run.iter().filter(|n| n.written).count();
         let _ = writeln!(s, "Never run ({}: {written} written)", self.never_run.len());
         for n in &self.never_run {
-            let w = if n.written { "written" } else { "not written" };
+            // A literal name is never looked for in the code: only a captured run speaks for it.
+            let w = if matches!(classify(&n.test, ""), TestKind::Literal { .. }) {
+                "no captured run has reported this name yet"
+            } else if n.written {
+                "written"
+            } else {
+                "not written"
+            };
             let _ = writeln!(s, "  {} {} {} — {w}", n.code, n.requirement, n.test);
         }
 
@@ -1551,6 +1560,407 @@ pub fn plan_stale_tests(project: &Project, repo_search: &dyn Fn(&str) -> bool) -
         rows,
         ops: plan.ops,
     }
+}
+
+/// How many names one `git grep` is given at once.
+const GREP_CHUNK: usize = 150;
+
+/// The file a test of this kind is written in, by extension: a Rust test in a `.rs` file, a
+/// Python test in a `.py` file. Other kinds name no extension.
+fn kind_extension(kind: &TestKind) -> Option<&'static str> {
+    match kind {
+        TestKind::Rust { .. } => Some(".rs"),
+        TestKind::Python { .. } => Some(".py"),
+        _ => None,
+    }
+}
+
+/// The name a definition is looked for by: the last segment of a Rust or Python name.
+fn definition_name(kind: &TestKind) -> Option<&str> {
+    match kind {
+        TestKind::Rust { name, .. } | TestKind::Python { name, .. } if is_word(name) => {
+            Some(name.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// The name a definition line defines, read from the text of a match of the definition pattern:
+/// the word after the first `fn`, `def` or `function` token, when the line starts with optional
+/// `pub(…)`, `async` or `export` modifiers. `None` for any other line (a comment, a call).
+fn defined_name(line: &str) -> Option<&str> {
+    let mut rest = line.trim_start();
+    loop {
+        let i = rest.find(|c: char| c.is_whitespace())?;
+        let (token, after) = (&rest[..i], rest[i..].trim_start());
+        let modifier = token == "async"
+            || token == "export"
+            || token == "pub"
+            || (token.starts_with("pub(") && token.ends_with(')'));
+        if token == "fn" || token == "def" || token == "function" {
+            let end = after
+                .find(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+                .unwrap_or(after.len());
+            return (end > 0).then(|| &after[..end]);
+        }
+        if !modifier {
+            return None;
+        }
+        rest = after;
+    }
+}
+
+/// Does `line` carry `name` as a whole name: not followed by another word character?
+fn names_exactly(line: &str, name: &str) -> bool {
+    line.match_indices(name).any(|(i, _)| {
+        !line[i + name.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric())
+    })
+}
+
+/// Is `path` under `web/scripts/`, by whole components?
+fn in_web_scripts(path: &str) -> bool {
+    is_expected_path(path, "web/scripts/")
+}
+
+/// A cached answer's key: the kind (as it prints) and the revision, `None` for the working tree.
+type LocateKey = (String, Option<String>);
+
+/// A [`Locator`] over the project's code repository (MNT-001): definitions are found with `git
+/// grep` at HEAD's working tree or at a recorded revision, a test's name by its kind, never by
+/// substring (L-23); revision facts come from `cat-file`, `merge-base` and `rev-list`. Every
+/// answer is cached, by kind and revision and by revision. Outside a git repository the bounded
+/// walk `kanbanr tests` always used answers for the working tree, and no revision is known. The
+/// board's own folder is never searched: it names every test in its definitions.
+pub struct GitLocator {
+    root: PathBuf,
+    board: PathBuf,
+    /// Whether `root` is in a git repository; when not, the walk answers.
+    git: bool,
+    cache: RefCell<HashMap<LocateKey, Vec<Location>>>,
+    revs: RefCell<HashMap<String, RevFacts>>,
+}
+
+impl GitLocator {
+    /// A locator over the repository `root` is in (or the folder itself, when it is in none),
+    /// never searching `board`.
+    pub fn new(root: &Path, board: &Path) -> Self {
+        let git = crate::coderepo::repo_root_in(root).is_some();
+        GitLocator {
+            root: root.to_path_buf(),
+            board: board.to_path_buf(),
+            git,
+            cache: RefCell::new(HashMap::new()),
+            revs: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn key(kind: &TestKind, rev: Option<&str>) -> LocateKey {
+        (format!("{kind:?}"), rev.map(str::to_string))
+    }
+
+    /// The board's folder relative to `root`, when it sits inside it, compared resolved.
+    fn board_inside(&self) -> Option<String> {
+        let root = self.root.canonicalize().ok()?;
+        let board = self.board.canonicalize().ok()?;
+        let rel = board.strip_prefix(&root).ok()?;
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        (!parts.is_empty()).then(|| parts.join("/"))
+    }
+
+    /// `git grep -n -z` over `patterns` at `rev`, each hit as (path, line, text). A failure (no
+    /// match, a revision the repository does not have) is no hit.
+    fn grep(
+        &self,
+        flags: &[&str],
+        patterns: &[String],
+        rev: Option<&str>,
+        pathspecs: &[String],
+    ) -> Vec<(String, u32, String)> {
+        let mut args: Vec<String> = vec![
+            "grep".into(),
+            "-n".into(),
+            "-z".into(),
+            "-I".into(),
+            "--no-color".into(),
+        ];
+        args.extend(flags.iter().map(|f| f.to_string()));
+        for p in patterns {
+            args.push("-e".into());
+            args.push(p.clone());
+        }
+        if let Some(rev) = rev {
+            args.push(rev.to_string());
+        }
+        args.push("--".into());
+        args.extend(pathspecs.iter().cloned());
+        if let Some(board) = self.board_inside() {
+            args.push(format!(":(exclude){board}"));
+        }
+        let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+        let Ok(out) = crate::coderepo::git_raw(&self.root, &argv) else {
+            return Vec::new();
+        };
+        let prefix = rev.map(|r| format!("{r}:"));
+        let mut hits = Vec::new();
+        for record in out.split(|b| *b == b'\n') {
+            let mut fields = record.splitn(3, |b| *b == 0);
+            let (Some(path), Some(line), Some(text)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            let path = String::from_utf8_lossy(path);
+            let path = match &prefix {
+                Some(p) => path.strip_prefix(p.as_str()).unwrap_or(&path).to_string(),
+                None => path.into_owned(),
+            };
+            let Ok(line) = String::from_utf8_lossy(line).parse::<u32>() else {
+                continue;
+            };
+            hits.push((path, line, String::from_utf8_lossy(text).into_owned()));
+        }
+        hits
+    }
+
+    /// Every file of the working tree, for the walk outside git: as `walk_for` did, at most eight
+    /// folders deep, skipping hidden entries, `target`, `node_modules`, `dist` and the board.
+    fn walk(&self, dir: &Path, depth: usize, out: &mut Vec<(String, String)>) {
+        if depth > 8 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let board = self.board.canonicalize().ok();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || matches!(&*name, "target" | "node_modules" | "dist") {
+                continue;
+            }
+            if board.is_some() && path.canonicalize().ok() == board {
+                continue;
+            }
+            if path.is_dir() {
+                self.walk(&path, depth + 1, out);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                let rel = path
+                    .strip_prefix(&self.root)
+                    .map(|r| {
+                        r.components()
+                            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join("/")
+                    })
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                out.push((rel, text));
+            }
+        }
+    }
+
+    /// Answer every kind at `rev` and keep the answers.
+    fn answer(&self, kinds: &[TestKind], rev: Option<&str>) {
+        let pending: Vec<&TestKind> = kinds
+            .iter()
+            .filter(|k| !self.cache.borrow().contains_key(&Self::key(k, rev)))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        let mut defs: Vec<String> = Vec::new();
+        let mut webs: Vec<String> = Vec::new();
+        for k in &pending {
+            if let Some(n) = definition_name(k)
+                && !defs.iter().any(|d| d == n)
+            {
+                defs.push(n.to_string());
+            }
+            if let TestKind::Web { name } = k
+                && !webs.contains(name)
+            {
+                webs.push(name.clone());
+            }
+        }
+
+        // name → where it is defined; web name → where it is printed.
+        let mut defined: HashMap<String, Vec<Location>> = HashMap::new();
+        let mut printed: HashMap<String, Vec<Location>> = HashMap::new();
+        let note = |map: &mut HashMap<String, Vec<Location>>, name: &str, path: &str, line: u32| {
+            map.entry(name.to_string()).or_default().push(Location {
+                path: path.to_string(),
+                line,
+            });
+        };
+        if self.git {
+            for chunk in defs.chunks(GREP_CHUNK) {
+                let patterns: Vec<String> = chunk
+                    .iter()
+                    .map(|n| {
+                        format!(
+                            "^[[:space:]]*((pub(\\([^)]*\\))?|async|export)[[:space:]]+)*\
+                             (fn|def|function)[[:space:]]+{n}([^A-Za-z0-9_]|$)"
+                        )
+                    })
+                    .collect();
+                for (path, line, text) in self.grep(&["-o", "-E"], &patterns, rev, &[]) {
+                    if let Some(n) = defined_name(&text)
+                        && chunk.iter().any(|c| c == n)
+                    {
+                        note(&mut defined, n, &path, line);
+                    }
+                }
+            }
+            for chunk in webs.chunks(GREP_CHUNK) {
+                for (path, line, text) in
+                    self.grep(&["-F"], chunk, rev, &["web/scripts/".to_string()])
+                {
+                    for n in chunk.iter().filter(|n| names_exactly(&text, n)) {
+                        note(&mut printed, n, &path, line);
+                    }
+                }
+            }
+        } else if rev.is_none() && (!defs.is_empty() || !webs.is_empty()) {
+            let mut files = Vec::new();
+            self.walk(&self.root, 0, &mut files);
+            for (path, text) in &files {
+                for (i, l) in text.lines().enumerate() {
+                    let line = (i + 1) as u32;
+                    if let Some(n) = defined_name(l)
+                        && defs.iter().any(|d| d == n)
+                    {
+                        note(&mut defined, n, path, line);
+                    }
+                    if in_web_scripts(path) {
+                        for n in webs.iter().filter(|n| names_exactly(l, n)) {
+                            note(&mut printed, n, path, line);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut cache = self.cache.borrow_mut();
+        for k in pending {
+            let at: Vec<Location> = match k {
+                TestKind::Rust { .. } | TestKind::Python { .. } => {
+                    let ext = kind_extension(k).unwrap_or_default();
+                    definition_name(k)
+                        .and_then(|n| defined.get(n))
+                        .map(|ls| {
+                            ls.iter()
+                                .filter(|l| l.path.ends_with(ext))
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                TestKind::Web { name } => printed.get(name).cloned().unwrap_or_default(),
+                TestKind::File { path } => {
+                    let there = match rev {
+                        Some(rev) if self.git => crate::coderepo::git(
+                            &self.root,
+                            &["cat-file", "-e", &format!("{rev}:{path}")],
+                        )
+                        .is_ok(),
+                        Some(_) => false,
+                        None => self.root.join(path).is_file(),
+                    };
+                    if there {
+                        vec![Location {
+                            path: path.clone(),
+                            line: 1,
+                        }]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                // Never looked for in the code: only a captured run speaks for it.
+                TestKind::Literal { .. } | TestKind::Manual | TestKind::Walkthrough => Vec::new(),
+            };
+            cache.insert(Self::key(k, rev), at);
+        }
+    }
+}
+
+impl Locator for GitLocator {
+    fn find(&self, kind: &TestKind, rev: Option<&str>) -> Vec<Location> {
+        let key = Self::key(kind, rev);
+        if let Some(at) = self.cache.borrow().get(&key) {
+            return at.clone();
+        }
+        self.answer(std::slice::from_ref(kind), rev);
+        self.cache.borrow().get(&key).cloned().unwrap_or_default()
+    }
+
+    fn revision(&self, rev: &str) -> RevFacts {
+        if let Some(f) = self.revs.borrow().get(rev) {
+            return *f;
+        }
+        let facts = if !self.git {
+            RevFacts::default()
+        } else {
+            let git = |args: &[&str]| crate::coderepo::git(&self.root, args);
+            let known = git(&["cat-file", "-e", &format!("{rev}^{{commit}}")]).is_ok();
+            if known {
+                RevFacts {
+                    known,
+                    on_head_line: git(&["merge-base", "--is-ancestor", rev, "HEAD"]).is_ok(),
+                    behind: git(&["rev-list", "--count", &format!("{rev}..HEAD")])
+                        .ok()
+                        .and_then(|n| n.trim().parse().ok()),
+                }
+            } else {
+                RevFacts::default()
+            }
+        };
+        self.revs.borrow_mut().insert(rev.to_string(), facts);
+        facts
+    }
+
+    fn head(&self) -> String {
+        if !self.git {
+            return format!(
+                "the working tree; revisions not checked: {} is not a git repository",
+                self.root.display()
+            );
+        }
+        crate::coderepo::git(&self.root, &["rev-parse", "HEAD"])
+            .map(|h| h.chars().take(12).collect())
+            .unwrap_or_default()
+    }
+
+    fn prime(&self, kinds: &[TestKind], rev: Option<&str>) {
+        self.answer(kinds, rev);
+    }
+}
+
+/// Reconcile a project's evidence with its code repository at `repo` (MNT-001): the project, its
+/// releases and its charter's adoption, over a [`GitLocator`] that never searches the board.
+pub fn reconcile(
+    store: &crate::store::Store,
+    id: &str,
+    repo: &Path,
+) -> crate::error::Result<Reconciliation> {
+    let project = store.load_meta(id)?;
+    let releases = crate::releases::load(store, id)?;
+    let adopted = crate::charter::load(store, id)
+        .ok()
+        .map(|c| c.adopted_at)
+        .filter(|a| !a.trim().is_empty());
+    let locator = GitLocator::new(repo, store.data_dir());
+    Ok(plan_reconciliation(
+        &project,
+        &releases,
+        adopted.as_deref(),
+        &locator,
+    ))
 }
 
 /// One imported item's provenance, and whether its file source is still there.
