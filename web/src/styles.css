@@ -825,3 +825,21 @@ summary:focus-visible,
 .plan-items { width: 100%; border-collapse: collapse; font-size: var(--fs-2); }
 .plan-items th { text-align: left; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); }
 .plan-items td { border-bottom: 1px solid var(--border); padding: var(--sp-1) var(--sp-2); vertical-align: top; }
+
+/* The project Overview (FTR-048): tokens only. Now is three columns, one under 720 px. */
+.overview-page { display: flex; flex-direction: column; gap: var(--sp-4); }
+.overview-asof { margin: 0; }
+.overview-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: var(--sp-3); margin: 0; padding: 0; list-style: none; }
+.overview-more { font: inherit; text-align: left; cursor: pointer; }
+.overview-now { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-4); }
+.overview-col { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+.overview-col h3, .overview-page h3 { margin: var(--sp-2) 0 var(--sp-1); font-size: var(--fs-2); color: var(--text-muted); }
+.overview-release { display: flex; flex-direction: column; gap: var(--sp-2); }
+.overview-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--sp-3); }
+.overview-ask-tile { display: flex; flex-direction: column; gap: var(--sp-1); }
+.overview-ask { margin: 0; font-size: var(--fs-1); font-style: italic; }
+.overview-recent { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+.overview-list { margin: 0; padding-left: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-1); }
+@media (max-width: 720px) {
+  .overview-now, .overview-recent { grid-template-columns: 1fr; }
+}

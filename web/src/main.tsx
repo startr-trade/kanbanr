@@ -5,6 +5,7 @@ import "./styles.css";
 import App from "./App";
 import HomePage from "./pages/HomePage";
 import PortfolioPage from "./pages/PortfolioPage";
+import OverviewPage from "./pages/OverviewPage";
 import BoardPage from "./pages/BoardPage";
 import StatusPage from "./pages/StatusPage";
 import FeaturePage from "./pages/FeaturePage";
@@ -32,7 +33,9 @@ const routes: RouteObject[] = [
       { path: "portfolio", element: <PortfolioPage /> },
       // The UI kit's gallery (FTR-046): in every build, linked from nowhere.
       { path: "ui", element: <UiGalleryPage /> },
-      { path: "p/:project", element: <BoardPage /> },
+      // The project opens on its Overview; the Board moved to /board (FTR-048).
+      { path: "p/:project", element: <OverviewPage /> },
+      { path: "p/:project/board", element: <BoardPage /> },
       { path: "p/:project/state/:state", element: <StatusPage /> },
       { path: "p/:project/feature/:code", element: <FeaturePage /> },
       { path: "p/:project/milestones", element: <MilestonesPage /> },

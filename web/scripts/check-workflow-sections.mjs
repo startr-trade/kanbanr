@@ -49,7 +49,7 @@ expect(cadence !== null, "cadence: a project with sprints and releases has a Cad
 expect(cadence?.sprints?.rows[0]?.value === "14 days", `cadence: sprint length reads ${cadence?.sprints?.rows[0]?.value}`);
 expect(cadence?.sprints?.active?.code === "SP-002", "cadence: the running sprint is shown");
 expect(cadence?.sprints?.active?.dates === "2026-10-19 to 2026-11-01", "cadence: the running sprint's dates are shown");
-expect(cadence?.sprints?.active?.to === "/p/shop", "cadence: the running sprint links to the board, which opens on it");
+expect(cadence?.sprints?.active?.to === "/p/shop/board", "cadence: the running sprint links to the board, which opens on it");
 expect(
   JSON.stringify(cadence?.releases?.stages) ===
     JSON.stringify([

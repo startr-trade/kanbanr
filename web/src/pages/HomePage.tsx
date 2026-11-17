@@ -1,7 +1,8 @@
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
+import { homeTarget } from "../homeTarget";
 
 export default function HomePage() {
   const tick = useLiveTick(api.allEvents());
@@ -10,6 +11,9 @@ export default function HomePage() {
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   const projects = data ?? [];
+  // One project: open its Overview rather than a list of one (FTR-048 R-12).
+  const only = homeTarget(projects);
+  if (only) return <Navigate replace to={only} />;
 
   return (
     <div className="home">
@@ -31,7 +35,7 @@ export default function HomePage() {
                 {p.name || p.id}
               </Link>
               {p.description && <p className="tile-desc">{p.description}</p>}
-              <Link to={base} className="tile-primary">
+              <Link to={`${base}/board`} className="tile-primary">
                 Open dashboard →
               </Link>
               <div className="tile-states">

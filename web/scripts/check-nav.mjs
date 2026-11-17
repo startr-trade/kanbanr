@@ -93,8 +93,9 @@ const entries = NAV.flatMap((a) => a.entries.map((e) => ({ area: a.key, ...e, at
 {
   const problems = [];
   const cases = [
-    ["/p/x", { area: "work", entry: "board" }],
-    ["/p/x/", { area: "work", entry: "board" }],
+    ["/p/x", { area: "overview", entry: "overview" }],
+    ["/p/x/", { area: "overview", entry: "overview" }],
+    ["/p/x/board", { area: "work", entry: "board" }],
     ["/p/x/feature/F-1", { area: "work", entry: "board" }],
     ["/p/x/state/Planned", { area: "work", entry: "board" }],
     ["/p/x/review", { area: "work", entry: "review" }],
