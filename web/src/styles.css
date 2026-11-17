@@ -40,7 +40,58 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .crumbs { color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .crumbs .sep { color: var(--border); }
 .crumb-project { color: var(--text); font-weight: 600; }
-.tabs { margin-left: 18px; display: flex; gap: 4px; }
+/* ---- the project navigation (FTR-047) ----
+   One row above 720 px: the global views, the project, then the areas. An area with several pages
+   is a disclosure button opening a small list under it; one with a single page is a plain link. The
+   panel headings, the here label and the ≡ button belong to the narrow layout only. */
+.nav { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--sp-4); min-width: 0; }
+.nav-areas { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--sp-1); }
+.global-nav { display: flex; gap: var(--sp-1); }
+.nav-heading, .nav-here, .nav-toggle { display: none; }
+.nav-areas .crumbs { margin: 0 var(--sp-3) 0 var(--sp-2); }
+.nav-item { position: relative; }
+.nav-area {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.nav-area:hover { color: var(--text); text-decoration: none; }
+.nav-area.current { color: var(--text); border-bottom-color: var(--accent); }
+.nav-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  min-width: 11rem;
+  margin: var(--sp-1) 0 0;
+  padding: var(--sp-1);
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+}
+.nav-link { display: block; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-1); color: var(--text); white-space: nowrap; }
+.nav-link:hover { background: var(--panel-2); text-decoration: none; }
+.nav-link[aria-current="page"] { font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.nav-toggle {
+  border: 1px solid var(--border-strong);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: var(--r-2);
+  width: 34px;
+  height: 30px;
+  font-size: var(--fs-4);
+  line-height: 1;
+  cursor: pointer;
+}
+
 .tab {
   padding: 6px 12px;
   border-radius: 8px;
@@ -477,12 +528,39 @@ input:focus-visible,
     gap: 8px 12px;
     padding: 8px 12px;
   }
-  .tabs { margin-left: 0; order: 3; width: 100%; overflow-x: auto; }
+  /* The navigation folds behind one ≡ button (FTR-047): the bar keeps the brand, the page you are
+     on, the button, the badge and the theme toggle; the areas open below as a full-width panel,
+     each a heading with all its pages, and the global views at its foot. */
+  .nav { display: contents; }
+  .nav-here { display: inline; color: var(--muted); font-size: var(--fs-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .nav-toggle { display: inline-block; margin-left: auto; flex: none; }
+  .nav-areas { display: none; }
+  .nav.open .nav-areas, .nav.no-project .nav-areas {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    order: 10;
+    flex-basis: 100%;
+    gap: var(--sp-2);
+    padding: var(--sp-2) 0;
+  }
+  .nav.no-project .nav-areas { flex-direction: row; flex-basis: auto; padding: 0; }
+  .nav.no-project .global-nav .nav-heading { display: none; }
+  .nav.open .nav-areas { border-top: 1px solid var(--border); }
+  .nav.open .global-nav { order: 2; flex-direction: column; }
+  .nav.open .nav-heading { display: block; margin: var(--sp-2) 0 0; font-size: var(--fs-1); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .nav-areas .crumbs { margin: 0; font-size: var(--fs-2); }
+  .nav-item { position: static; }
+  .nav-item > button.nav-area { display: none; }
+  .nav-menu, .nav-menu[hidden] { display: block; position: static; margin: 0; padding: 0; border: 0; background: none; min-width: 0; }
+  .nav-single .nav-area { padding: var(--sp-2) var(--sp-3); color: var(--text); font-weight: 600; border-bottom: 0; }
+  .nav-single .nav-area.current { box-shadow: inset 2px 0 0 var(--accent); }
   .crumbs { font-size: var(--fs-1); }
   /* On a phone the spacer would push the toggle to its own row; keep it inline. */
   .topbar .spacer { display: none; }
   .topbar .build { display: none; }
-  .theme-toggle { margin-left: auto; }
+  .theme-toggle { flex: none; }
+  .nav.no-project ~ .theme-toggle { margin-left: auto; }
 
   .content { padding: 14px; }
   .page-head { flex-wrap: wrap; }
