@@ -64,13 +64,16 @@ expect("the again button asks its own question", a.again?.ask === "Promote v0.3.
 expect("the primary question is unchanged by the again offer", a.ask === "Promote v0.3.0 to main?", a.ask);
 
 // The page renders each direct-path button through AskFirst; confirmations keep their own path.
-const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
+// The page keeps the promotion and its outcome; the buttons are in releases/ReleaseActions.tsx (FTR-041).
+const page = ["../src/pages/ReleasesPage.tsx", "../src/pages/releases/ReleaseActions.tsx"]
+  .map((p) => readFileSync(new URL(p, import.meta.url), "utf8"))
+  .join("\n");
 const asks = page.match(/<AskFirst\b/g) ?? [];
 expect("the primary and the again button go through AskFirst", asks.length === 2, asks.length);
-expect("the primary asks the plan's question", /ask=\{action\.ask\b/.test(page), "ReleasesPage.tsx");
-expect("the again button asks its own question", /ask=\{action\.again\.ask\}/.test(page), "ReleasesPage.tsx");
-expect("a confirmation after the tag keeps its note form", page.includes("setAsking(true)"), "ReleasesPage.tsx");
-expect("the outcome chip names release undo", page.includes("kanbanr release undo ${r.version} --reason"), "ReleasesPage.tsx");
+expect("the primary asks the plan's question", /ask=\{action\.ask\b/.test(page), "ReleasesPage.tsx + releases/ReleaseActions.tsx");
+expect("the again button asks its own question", /ask=\{action\.again\.ask\}/.test(page), "ReleasesPage.tsx + releases/ReleaseActions.tsx");
+expect("a confirmation after the tag keeps its note form", page.includes("setAsking(true)"), "ReleasesPage.tsx + releases/ReleaseActions.tsx");
+expect("the outcome chip names release undo", page.includes("kanbanr release undo ${r.version} --reason"), "ReleasesPage.tsx + releases/ReleaseActions.tsx");
 
 // AskFirst itself, rendered and pressed.
 const dom = new JSDOM("<!doctype html><div id=root></div>", { url: "http://localhost/" });
