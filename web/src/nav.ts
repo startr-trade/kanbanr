@@ -37,6 +37,8 @@ export const NAV: NavArea[] = [
       { key: "board", label: "Board", path: (p) => base(p), match: ["/feature/", "/state/"] },
       // Review is Work's second entry, after Board (R-7).
       { key: "review", label: "Review", path: (p) => `${base(p)}/review` },
+      // The Items list, filtered from the URL; right after Review, which stays second (FTR-048).
+      { key: "items", label: "Items", path: (p) => `${base(p)}/items` },
       { key: "milestones", label: "Milestones", path: (p) => `${base(p)}/milestones`, match: ["/milestone/"] },
     ],
   },
