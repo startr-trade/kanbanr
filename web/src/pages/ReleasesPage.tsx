@@ -1,29 +1,154 @@
 import { useCallback, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, viaOrigin } from "../api";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { api, type Meta } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
-import { ErrorBox, Loading, LiveDot } from "../components/bits";
-import type { Release } from "../types";
-import { unshownFor } from "../prepared";
-import { ReleaseButton } from "./releases/ReleaseActions";
-import { ReleaseNotesSection } from "./releases/ReleaseNotesSection";
-import { PreparedNotRequired } from "./releases/ReleaseBody";
+import { LiveDot } from "../components/bits";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
+import { Empty, ErrorState, LoadingState, Tabs, useOpenRows, useUrlState, writeOpen } from "../ui";
+import { TAB_OF, defaultTab, initiallyOpen, releaseTabs, type ReleaseTab } from "../releaseTabs";
+import type { ProjectConfig, Release, ReleasesSummary, Scope } from "../types";
+import { ReleaseRow } from "./releases/ReleaseRow";
+import type { ReleaseCtx } from "./releases/ReleaseBody";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
 
 /**
- * Releases (FEAT-120, FEAT-123): each release's planned scope, how much of it is finished, its
- * target, and — once cut — its notes. Only for projects that use releases; the tab is not offered
- * elsewhere.
+ * Releases (FEAT-120, FEAT-123, FTR-041): three tabs, Current, Planned and Released, each listing
+ * its releases newest first, one accordion each. A header carries the release's chips, its stage
+ * stepper and its next step; the body, read only when opened, is a full-width table of its items
+ * with the tag, CI and notes below. Only for projects that use releases.
+ *
+ * It loads only what is shown (R-6): the summary gives the tabs and their counts, the selected tab
+ * reads its own slice, and an open release reads its table. The tab is `?tab=`, the open releases
+ * the hash (`#v0.8.0,v0.7.1`), and the filter `?q=`.
  */
 export default function ReleasesPage() {
   const { project = "" } = useParams();
+  const summary = useQuery<ReleasesSummary>(project, urls.releasesSummary(project), ["releases", "items"]);
+  const config = useQuery<ProjectConfig>(project, urls.config(project), TAGS.config);
+  const meta = useQuery<Meta>(null, urls.meta(), TAGS.meta, () => api.getMeta());
+  const error = summary.error ?? config.error;
+  if (!summary.data || !config.data) {
+    return (
+      <div className="releases-page">
+        <div className="page-head">
+          <h1>Releases</h1>
+          <LiveDot />
+        </div>
+        {error ? <ErrorState error={error} retry={() => (summary.reload(), config.reload())} /> : <LoadingState />}
+      </div>
+    );
+  }
+  const cadence = config.data.cadence;
+  if (!cadence?.releases) {
+    return (
+      <div className="releases-page">
+        <h1>Releases</h1>
+        <p className="muted">
+          This project does not use releases. Switch them on with{" "}
+          <code>kanbanr config cadence --releases on</code>.
+        </p>
+      </div>
+    );
+  }
+  // Recorded as the board's commit identity, as `kanbanr release promote` records it.
+  const who = api.approver(meta.data ?? null);
+  return (
+    <ReleasesBody
+      project={project}
+      summary={summary.data}
+      stages={cadence.release_stages?.length ? cadence.release_stages : DEFAULT_STAGES}
+      gates={cadence.commit_gates ?? []}
+      notesPath={cadence.release_prepare?.notes ?? ""}
+      // A read-only copy of the monitor (FEAT-178) never offers a promotion, whatever the daemon says.
+      writable={!isReadOnly() && meta.data?.writes === true && who != null}
+      who={who}
+    />
+  );
+}
+
+/** What a tab's list needs from the page. */
+interface PageProps {
+  project: string;
+  stages: string[];
+  gates: string[];
+  notesPath: string;
+  writable: boolean;
+  who: string | null;
+}
+
+/**
+ * The page once its summary is read: the heading, the filter box and the three tabs, only the
+ * selected one drawn. Exported so the checks render it without a daemon.
+ */
+export function ReleasesBody(p: PageProps & { summary: ReleasesSummary }): JSX.Element {
+  const [state, setState] = useUrlState({ q: "" });
+  const { summary, ...page } = p;
+  const none = summary.current + summary.planned + summary.past === 0;
+  return (
+    <div className="releases-page">
+      <div className="page-head">
+        <h1>Releases</h1>
+        <LiveDot />
+      </div>
+      {none ? (
+        <p className="muted">
+          No releases yet — <code>kanbanr release add v0.1.0 --target YYYY-MM-DD</code>.
+        </p>
+      ) : (
+        <>
+          <p className="releases-filter">
+            <label>
+              Filter{" "}
+              <input
+                type="search"
+                value={state.q}
+                placeholder="version, name or item"
+                aria-label="Filter releases and their items"
+                onChange={(e) => setState({ q: e.currentTarget.value })}
+              />
+            </label>
+          </p>
+          <Tabs tabs={releaseTabs(summary)} param="tab" defaultKey={defaultTab(summary, null)} label="Releases">
+            {(key) => <ReleaseList {...page} scope={TAB_OF[key as ReleaseTab]} />}
+          </Tabs>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One tab: its own slice, read when the tab is selected. */
+function ReleaseList(p: PageProps & { scope: Scope }): JSX.Element {
+  const { project, scope } = p;
+  const slice = useQuery<Release[]>(project, urls.releases(project, scope), ["releases", "items", "gates"]);
+  if (!slice.data) {
+    return slice.error ? <ErrorState error={slice.error} retry={slice.reload} /> : <LoadingState />;
+  }
+  return <ReleaseListBody {...p} slice={slice.data} />;
+}
+
+const EMPTY: Record<Scope, string> = {
+  current: "No release is at a stage.",
+  planned: "No release is planned.",
+  past: "Nothing has shipped yet.",
+};
+
+/** Whether a release's version or name holds the filter text, case ignored. */
+const named = (r: Release, q: string) => `${r.version} ${r.name ?? ""}`.toLowerCase().includes(q.trim().toLowerCase());
+
+/**
+ * A tab's releases drawn, newest first as the slice comes: one `ReleaseRow` each. The first is open
+ * unless the hash names others in this tab (R-2). The filter hides a closed release whose version
+ * or name does not match and filters the open releases' tables (R-10). Exported so the checks render
+ * it without a daemon.
+ */
+export function ReleaseListBody(p: PageProps & { scope: Scope; slice: Release[] }): JSX.Element {
+  const { project, scope, slice, stages } = p;
   const tick = useLiveTick(api.projectEvents(project));
-  const board = useAsync(() => api.getProject(project), [project, tick]);
-  const releases = useAsync(() => api.getReleases(project), [project, tick]);
-  const meta = useAsync(() => api.getMeta(), []);
   // What Claude prepared for these decisions (FTR-034): CI results and confirmations after the tag.
   const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
   // Promote (FEAT-185): which release is being promoted, and what came of it.
@@ -37,32 +162,25 @@ export default function ReleasesPage() {
       setShown((s) => (s[version]?.join(",") === ids.join(",") ? s : { ...s, [version]: ids })),
     [],
   );
-
-  if ((board.loading && !board.data) || (releases.loading && !releases.data)) return <Loading />;
-  if (board.error) return <ErrorBox error={board.error} />;
-  if (releases.error) return <ErrorBox error={releases.error} />;
-  if (!board.data) return null;
-
-  const config = board.data.config;
-  if (!config.cadence?.releases) {
-    return (
-      <div className="releases-page">
-        <h1>Releases</h1>
-        <p className="muted">
-          This project does not use releases. Switch them on with{" "}
-          <code>kanbanr config cadence --releases on</code>.
-        </p>
-      </div>
+  const [{ q }] = useUrlState({ q: "" });
+  const [hashOpen] = useOpenRows();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Until a row is toggled, the first release is open unless the hash names others here; after,
+  // exactly the hash's.
+  const [touched, setTouched] = useState(false);
+  const open = touched ? hashOpen : initiallyOpen(slice, hashOpen);
+  const toggle = (version: string, isOpen: boolean) => {
+    const next = new Set(open);
+    if (isOpen) next.add(version);
+    else next.delete(version);
+    setTouched(true);
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: writeOpen(location.hash, next) },
+      { replace: true, preventScrollReset: true },
     );
-  }
-  const list = releases.data ?? [];
-  const base = `/p/${encodeURIComponent(project)}`;
-  const stages = config.cadence.release_stages?.length ? config.cadence.release_stages : DEFAULT_STAGES;
-  const last = stages[stages.length - 1];
-  // Recorded as the board's commit identity, as `kanbanr release promote` records it.
-  const who = api.approver(meta.data ?? null);
-  // A read-only copy of the monitor (FEAT-178) never offers a promotion, whatever the daemon says.
-  const writable = !isReadOnly() && meta.data?.writes === true && who != null;
+  };
+
   // The stage after the one it is at; the first, before it has one. None once it is at the last.
   const nextStage = (r: Release) => {
     // A superseded release never ships: its tag stays, and the patch carries on (FTR-026).
@@ -76,10 +194,10 @@ export default function ReleasesPage() {
   // The same core promotion as the CLI, through the daemon's promote route (FEAT-183), carrying
   // the release tip the plan showed (FEAT-212).
   const promote = async (r: Release, to: string, expect: string, note = "", acceptUntested?: string[]) => {
-    if (!who) return;
+    if (!p.who) return;
     setBusy(r.version);
     try {
-      const done = (await api.promoteRelease(project, r.version, who, to, expect, note, acceptUntested)) as {
+      const done = (await api.promoteRelease(project, r.version, p.who, to, expect, note, acceptUntested)) as {
         next?: string;
       };
       // A stage taken by mistake is stepped back from the CLI, by the person (DEF-034): the page
@@ -98,14 +216,15 @@ export default function ReleasesPage() {
   };
 
   // Offered only for a release that holds nothing and has not started (FTR-022): the same rule the
-  // daemon applies, so the button never offers what would be refused.
+  // daemon applies, so the button never offers what would be refused. A patch of a planned release
+  // would be listed in this tab too.
   const removable = (r: Release) =>
     r.state === "planned" &&
     !r.stage &&
     !r.branch &&
     !r.notes_doc &&
     (r.items ?? []).length === 0 &&
-    !list.some((o) => o.parent === r.version);
+    !slice.some((o) => o.parent === r.version);
   const remove = async (r: Release) => {
     if (!window.confirm(`Remove release ${r.version}? It holds nothing.`)) return;
     setBusy(r.version);
@@ -119,123 +238,42 @@ export default function ReleasesPage() {
     }
   };
 
+  if (slice.length === 0) return <Empty title={EMPTY[scope]} />;
+  const ctx: ReleaseCtx = {
+    project,
+    stages,
+    gates: p.gates,
+    notesPath: p.notesPath,
+    writable: p.writable,
+    who: p.who,
+    busy,
+    outcome,
+    onPromote: promote,
+    removable,
+    onRemove: remove,
+    prepared: prepared.data ?? [],
+    shown,
+    onShown,
+    tick,
+    q,
+  };
+  const shownRows = slice.filter((r) => open.has(r.version) || named(r, q));
   return (
-    <div className="releases-page">
-      <div className="page-head">
-        <h1>Releases</h1>
-        <LiveDot />
-      </div>
-      {list.length === 0 ? (
-        <p className="muted">
-          No releases yet — <code>kanbanr release add v0.1.0 --target YYYY-MM-DD</code>.
-        </p>
+    <div className={`release-list release-${scope}`}>
+      {shownRows.length === 0 ? (
+        <Empty title={`No release here matches "${q}".`} />
       ) : (
-        <div className="tiles">
-          {list.map((r) => {
-            const holds = new Set(r.items ?? []);
-            const planned = board.data!.features.filter((f) => holds.has(f.code));
-            // Counted by the daemon, by the same rule as the sprint's (FEAT-138): this page used
-            // to keep its own copy, which counted only the end status.
-            const finished = r.finished ?? 0;
-            const pct = planned.length ? Math.round((finished / planned.length) * 100) : 0;
-            const next = nextStage(r);
-            return (
-              <div className="tile" key={r.version}>
-                <div className="tile-title">
-                  {r.version} {r.name ? `· ${r.name}` : ""}{" "}
-                  <span className={`chip ${r.state === "shipped" ? "done" : ""}`}>{r.state}</span>{" "}
-                  <span
-                    className={`chip ${r.stage === last ? "done" : ""}`}
-                    title={
-                      (r.stages ?? []).length > 0
-                        ? (r.stages ?? [])
-                            .map((c) => `${c.stage} · ${c.by} · ${c.at.slice(0, 10)}${viaOrigin(c.origin)}${c.reason ? ` — ${c.reason}` : ""}`)
-                            .join("\n")
-                        : "not yet promoted"
-                    }
-                  >
-                    {r.stage ? `stage ${r.stage}` : "not yet a candidate"}
-                  </span>
-                </div>
-                <div className="tile-states">
-                  {r.target ? <span className="chip">target {r.target}</span> : null}
-                  {r.tagged_at && r.state !== "shipped" && !r.superseded_by ? (
-                    <span className="chip warn">tagged, not released yet</span>
-                  ) : null}
-                  {r.superseded_by ? (
-                    <span className="chip warn">Superseded by {r.superseded_by}</span>
-                  ) : null}
-                  {r.shipped_at ? <span className="chip">shipped {r.shipped_at.slice(0, 10)}</span> : null}
-                  <span className="chip tasks">
-                    {finished}/{planned.length} finished ({pct}%)
-                  </span>
-                  {(r.carried ?? []).length > 0 ? (
-                    <span className="chip warn" title={(r.carried ?? []).map((c) => `${c.code} → ${c.to}`).join(", ")}>
-                      {(r.carried ?? []).length} carried over
-                    </span>
-                  ) : null}
-                </div>
-                <ul className="dep-list">
-                  {planned.map((f) => (
-                    <li key={f.code}>
-                      <Link to={`${base}/feature/${encodeURIComponent(f.code)}`}>{f.code}</Link> {f.title}{" "}
-                      <span className="muted small">({f.status})</span>
-                    </li>
-                  ))}
-                </ul>
-                {writable && removable(r) ? (
-                  <p>
-                    <button className="btn" onClick={() => remove(r)} disabled={busy === r.version}>
-                      Remove
-                    </button>
-                    {outcome[r.version] ? <span className="muted small"> {outcome[r.version]}</span> : null}
-                  </p>
-                ) : null}
-                {next ? (
-                  <ReleaseButton
-                    project={project}
-                    release={r}
-                    tick={tick}
-                    writable={writable}
-                    gates={config.cadence?.commit_gates ?? []}
-                    who={who}
-                    busy={busy}
-                    onPromote={promote}
-                    outcome={outcome[r.version]}
-                    prepared={prepared.data ?? []}
-                    onShown={onShown}
-                  />
-                ) : null}
-                {/* Until the button has said what its forms show, nothing is listed twice. */}
-                {next && shown[r.version] === undefined ? null : (
-                  <PreparedNotRequired
-                    project={project}
-                    views={unshownFor(prepared.data, r.version, new Set(next ? shown[r.version] : []))}
-                    writable={writable}
-                    who={who}
-                  />
-                )}
-                {r.branch && config.cadence?.release_prepare?.notes ? (
-                  <ReleaseNotesSection
-                    project={project}
-                    release={r}
-                    notesPath={config.cadence.release_prepare.notes}
-                    tick={tick}
-                    writable={writable}
-                    who={who}
-                  />
-                ) : null}
-                {r.notes_doc ? (
-                  <p className="small">
-                    <Link to={`${base}/docs/file/${r.notes_doc.split("/").map(encodeURIComponent).join("/")}`}>
-                      Release notes
-                    </Link>
-                  </p>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
+        shownRows.map((r) => (
+          <ReleaseRow
+            key={r.version}
+            ctx={ctx}
+            release={r}
+            scope={scope}
+            next={nextStage(r)}
+            open={open.has(r.version)}
+            onToggle={(v) => toggle(r.version, v)}
+          />
+        ))
       )}
     </div>
   );

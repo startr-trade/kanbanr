@@ -68,20 +68,20 @@ expect("unshownFor on nothing", unshownFor(undefined, "v0.7.0", new Set()), []);
 
 // The page: the section is inside each release's entry, below its button and above its notes.
 const page = read("../src/pages/ReleasesPage.tsx");
-// The entry is rendered in ReleasesPage.tsx; PreparedNotRequired lives in releases/ReleaseBody.tsx (FTR-041 T4).
+// Each release's entry is its accordion body, ReleaseBody, beside PreparedNotRequired in
+// releases/ReleaseBody.tsx (FTR-041 T4, T5).
 const body = read("../src/pages/releases/ReleaseBody.tsx");
 if (!body.includes(">Prepared, not required<")) {
   problems.push('releases/ReleaseBody.tsx: no section titled exactly "Prepared, not required"');
 }
-const tile = page.slice(page.indexOf("{list.map((r) => {"));
+const tile = body.slice(body.indexOf("export function ReleaseBody("), body.indexOf("export function PreparedNotRequired("));
 const button = tile.indexOf("<ReleaseButton");
 const panel = tile.indexOf("<PreparedNotRequired");
 const notes = tile.indexOf("<ReleaseNotesSection");
 if (button < 0 || panel < 0 || notes < 0 || !(button < panel && panel < notes)) {
-  problems.push("ReleasesPage.tsx: PreparedNotRequired is not rendered in the release's entry between its button and its notes");
+  problems.push("releases/ReleaseBody.tsx: PreparedNotRequired is not rendered in the release's body between its button and its notes");
 }
-const head = page.slice(0, page.indexOf("{list.map((r) => {"));
-if (head.includes(">Prepared, not required<") || head.includes("<PreparedNotRequired")) {
+if (page.includes(">Prepared, not required<") || page.includes("<PreparedNotRequired")) {
   problems.push("ReleasesPage.tsx: the section is rendered at the page top, not inside a release's entry");
 }
 const section = body.slice(body.indexOf("function PreparedNotRequired("));
@@ -97,8 +97,8 @@ if (!body.includes("function PreparedNotRequired(")) {
     problems.push("releases/ReleaseBody.tsx: a gate result's label is not `Record {gate} {passed|failed} on {sha7}`");
   }
 }
-if (!/unshownFor\(/.test(tile)) problems.push("ReleasesPage.tsx: the release entry does not filter with unshownFor");
-if (!/onShown/.test(tile)) problems.push("ReleasesPage.tsx: the forms do not report the records they show (onShown)");
+if (!/unshownFor\(/.test(tile)) problems.push("releases/ReleaseBody.tsx: the release's body does not filter with unshownFor");
+if (!/onShown/.test(tile)) problems.push("releases/ReleaseBody.tsx: the forms do not report the records they show (onShown)");
 
 // The types: the two derived fields the server sends.
 const types = read("../src/types.ts");
