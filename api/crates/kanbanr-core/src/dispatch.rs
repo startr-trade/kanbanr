@@ -1811,6 +1811,25 @@ fn dispatch_routes(
             }
             ser(&all)
         }
+        // Each test's last duration from the kept runs (FTR-058): an item's tracked tests with
+        // `?code=`, read newest first and bounded; every test's without.
+        ("GET", ["projects", p, "timings"]) => {
+            only_params(query, &["code"])?;
+            let code = query_param(query, "code").filter(|c| !c.is_empty());
+            ser(&crate::timings::last_view(store, p, code.as_deref())?)
+        }
+        // The slowest tests and those that slowed most since the last shipped release (FTR-058),
+        // over the runs since it. `?top=` (default 10, at most 100).
+        ("GET", ["projects", p, "timings", "report"]) => {
+            only_params(query, &["top"])?;
+            let top = match query_param(query, "top") {
+                Some(n) => n.parse::<usize>().map_err(|_| {
+                    CoreError::Unsupported(format!("top must be a number, not '{n}'"))
+                })?,
+                None => 10,
+            };
+            ser(&crate::timings::report_read(store, p, top)?)
+        }
         // `{name, commit, passed, by, url?, note?, source?}`: keep a gate result as a new file
         // (FTR-002). The time is the server's; `source` is `person` unless `local`.
         ("POST", ["projects", p, "gate-results"]) => {
