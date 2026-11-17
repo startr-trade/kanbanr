@@ -202,14 +202,14 @@ fn on_critical_path(store: &Store, project: &str, task: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn cpus() -> u32 {
+pub(crate) fn cpus() -> u32 {
     std::thread::available_parallelism()
         .map(|n| u32::try_from(n.get()).unwrap_or(u32::MAX))
         .unwrap_or(1)
 }
 
 /// The repository's common git directory, absolute.
-fn git_common_dir(repo: &Path) -> Option<PathBuf> {
+pub(crate) fn git_common_dir(repo: &Path) -> Option<PathBuf> {
     let out = coderepo::git(
         repo,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
