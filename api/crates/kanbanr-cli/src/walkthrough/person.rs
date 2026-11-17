@@ -52,6 +52,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/projects/{p}/baseline/revisions/{id}/accept"),
     ("POST", "/projects/{p}/baseline/revisions/{id}/withdraw"),
     ("POST", "/projects/{p}/review/decide"),
+    ("POST", "/projects/{p}/planning"),
 ];
 
 /// What a decision did: the route, the answer, and whether anything was typed (never, here: the
