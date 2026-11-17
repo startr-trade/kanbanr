@@ -138,11 +138,11 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       c.check === "stage_passed" ||
       (c.check === "gate_passed" && plan.release_tip);
     for (const c of plan.conditions.filter((c) => !c.holds && wanted(c))) {
-      missing.push({ text: `${c.check}: ${c.detail}`, fix: c.fix ?? "" });
+      missing.push({ text: `${c.check}${c.implied ? " (implied)" : ""}: ${c.detail}`, fix: c.fix ?? "" });
     }
   } else {
     for (const c of plan.conditions.filter((c) => !c.holds)) {
-      missing.push({ text: `${c.check}: ${c.detail}`, fix: c.fix ?? "" });
+      missing.push({ text: `${c.check}${c.implied ? " (implied)" : ""}: ${c.detail}`, fix: c.fix ?? "" });
     }
     for (const s of plan.steps.filter((s) => s.blocked)) {
       missing.push({ text: s.blocked ?? "", fix: "" });

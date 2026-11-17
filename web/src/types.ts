@@ -862,6 +862,8 @@ export interface PlanCondition {
   /** The requirements it names, as CODE/R-n (DEF-043): for untested_accepted, exactly what the
    * person accepts shipping unverified. */
   refs?: string[];
+  /** kanbanr asks it of this stage beyond the stage's own requires (DEF-077): shown "(implied)". */
+  implied?: boolean;
 }
 
 /** One step a promotion takes (FEAT-212). */

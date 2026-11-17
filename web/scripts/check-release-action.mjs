@@ -345,9 +345,33 @@ const expectWhy = (name, cond, got) => {
   expectWhy("the page: the old title is gone", !page.includes("not ready: see what is missing"), {});
 }
 
-if (problems.length || why.length) {
+// DEF-077 R-5 (web::check_release_action_marks_an_implied_check): a missing condition kanbanr
+// implies reads "(implied)" after its check; one without the flag reads as before.
+const implied = [];
+{
+  const unmerged = {
+    check: "items_merged",
+    stage: "main",
+    holds: false,
+    detail: "DEF-067 is at In Progress",
+    fix: 'DEF-067 is at In Progress: integrate it into release/v0.3.0 with `kanbanr feature move DEF-067 "Completed"` from the project folder',
+  };
+  const plan = (c) => ({ ...base, ready: false, conditions: [...base.conditions, c], missing: [c.fix] });
+  a = releaseAction(plan({ ...unmerged, implied: true }), true);
+  if (!a.missing.some((m) => m.text === "items_merged (implied): DEF-067 is at In Progress"))
+    implied.push(`implied: ${JSON.stringify(a.missing)}`);
+  a = releaseAction({ ...plan({ ...unmerged, implied: true }), repo: false }, true);
+  if (!a.missing.some((m) => m.text === "items_merged (implied): DEF-067 is at In Progress"))
+    implied.push(`implied, no repo: ${JSON.stringify(a.missing)}`);
+  a = releaseAction(plan(unmerged), true);
+  if (!a.missing.some((m) => m.text === "items_merged: DEF-067 is at In Progress"))
+    implied.push(`not implied: ${JSON.stringify(a.missing)}`);
+}
+
+if (problems.length || why.length || implied.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
   for (const p of why) console.error(`web::release_disabled_button_says_why — ${p}`);
+  for (const p of implied) console.error(`web::check_release_action_marks_an_implied_check — ${p}`);
   process.exit(1);
 }
 console.log(
@@ -355,4 +379,7 @@ console.log(
 );
 console.log(
   "web::release_disabled_button_says_why — a disabled release button says why beside it and in its title; an enabled one says nothing of the kind.",
+);
+console.log(
+  "web::check_release_action_marks_an_implied_check — a missing condition kanbanr implies reads \"(implied)\" after its check; one the stage declares reads as before.",
 );
