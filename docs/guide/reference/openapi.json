@@ -3018,24 +3018,17 @@
         "type": "object"
       },
       "IndexAdr": {
+        "description": "An ADR as the link index needs it: its id and the doc it lives in. Its title and status are on\nthe ADR's own page, and nothing reads them from the index (DEF-081 T7).",
         "properties": {
           "id": {
             "type": "string"
           },
           "path": {
             "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "title": {
-            "type": "string"
           }
         },
         "required": [
           "id",
-          "title",
-          "status",
           "path"
         ],
         "type": "object"
@@ -3109,18 +3102,14 @@
         "type": "object"
       },
       "IndexGoal": {
+        "description": "A charter goal as the link index needs it: its id. The statement is on the charter page.",
         "properties": {
           "id": {
-            "type": "string"
-          },
-          "title": {
-            "description": "The goal's statement.",
             "type": "string"
           }
         },
         "required": [
-          "id",
-          "title"
+          "id"
         ],
         "type": "object"
       },
@@ -3131,6 +3120,10 @@
             "type": "string"
           },
           "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "When it was created, to the whole second (RFC 3339): the board's newest-first order. Nothing\nin the monitor reads `updated_at` from here, so it is not sent (DEF-081 T7).",
             "type": "string"
           },
           "depends_on": {
@@ -3194,9 +3187,6 @@
             "format": "uint",
             "minimum": 0,
             "type": "integer"
-          },
-          "updated_at": {
-            "type": "string"
           }
         },
         "required": [
@@ -3206,7 +3196,7 @@
           "milestone",
           "done",
           "total",
-          "updated_at"
+          "created_at"
         ],
         "type": "object"
       },
@@ -3220,6 +3210,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "description": {
+            "description": "What the milestone is for, as the milestone pages show it.",
+            "type": "string"
           },
           "name": {
             "type": "string"

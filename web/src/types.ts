@@ -532,7 +532,9 @@ export function listsNewestFirst(lists: TodoList[]): TodoList[] {
  * order is stable across edits; ties break on last-update then code. (Switch the first comparison
  * to `updated_at` if you'd rather surface most-recently-active items first.)
  */
-export function featuresNewestFirst(features: Feature[]): Feature[] {
+export function featuresNewestFirst<T extends { code: string; created_at?: string; updated_at?: string }>(
+  features: T[],
+): T[] {
   return [...features].sort(
     (a, b) =>
       (b.created_at ?? "").localeCompare(a.created_at ?? "") ||
@@ -994,8 +996,8 @@ export interface DocFolder {
 }
 
 /** The states displayed for a project (falls back to all statuses). */
-export function displayedStates(config: ProjectConfig): string[] {
-  return config.displayed_states.length ? config.displayed_states : config.statuses;
+export function displayedStates(config: { displayed_states?: string[]; statuses?: string[] }): string[] {
+  return config.displayed_states?.length ? config.displayed_states : (config.statuses ?? []);
 }
 
 // ---- portfolio / program hierarchy (FEAT-030) ----------------------------------------------
@@ -1353,12 +1355,14 @@ export interface IndexItem {
   requirements?: string[];
   done: number;
   total: number;
-  updated_at: string;
+  /** When it was created, to the whole second: the board's newest-first order. */
+  created_at: string;
 }
 
 export interface IndexMilestone {
   code: string;
   name: string;
+  description?: string;
   depends_on?: string[];
 }
 
@@ -1380,14 +1384,11 @@ export interface IndexRelease {
 
 export interface IndexAdr {
   id: string;
-  title: string;
-  status: string;
   path: string;
 }
 
 export interface IndexGoal {
   id: string;
-  title: string;
 }
 
 /** `GET /projects/{p}/index`: what the shell, the link index and the item lists read. */

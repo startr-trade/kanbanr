@@ -1,10 +1,12 @@
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { conditionText } from "../types";
-import type { Gate, GitModelView, ProcessStatus } from "../types";
+import type { Gate, GitModelView, ProcessStatus, ProjectConfig } from "../types";
 import { cadenceSection, doctorWarning, gitModelRows, guardRows, pathSections } from "../workflowSections";
 import type { CadenceSection, GuardRow, PathSection, Row, Tone } from "../workflowSections";
 
@@ -17,14 +19,16 @@ import type { CadenceSection, GuardRow, PathSection, Row, Tone } from "../workfl
  */
 export default function WorkflowPage() {
   const { project = "" } = useParams();
+  // The reads below without a slice of their own re-read on every change, as before.
   const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  // The configuration alone, never the whole board (DEF-081).
+  const { data: config, error, loading } = useQuery<ProjectConfig>(project, urls.config(project), TAGS.config);
   const diagram = useAsync(() => api.getWorkflowDiagram(project), [project, tick]);
   const process = useAsync(() => api.getProcess(project), [project, tick]);
   // What each stage actually asks (FEAT-199): the raw config misses role-addressed gates.
   const effective = useAsync(() => api.getGates(project), [project, tick]);
-  const usesSprints = data?.config.cadence?.sprints === true;
-  const usesReleases = data?.config.cadence?.releases === true;
+  const usesSprints = config?.cadence?.sprints === true;
+  const usesReleases = config?.cadence?.releases === true;
   const sprints = useAsync(
     () => (usesSprints ? api.getSprints(project) : Promise.resolve([])),
     [project, tick, usesSprints],
@@ -52,11 +56,10 @@ export default function WorkflowPage() {
   );
   const guards = useAsync(() => api.getGuards(project), [project, tick]);
 
-  if (loading && !data) return <Loading />;
+  if (loading && !config) return <Loading />;
   if (error) return <ErrorBox error={error} />;
-  if (!data) return null;
+  if (!config) return null;
 
-  const config = data.config;
   const gates = effective.data ?? {};
   const staged = config.statuses.filter((s) => gates[s]);
 

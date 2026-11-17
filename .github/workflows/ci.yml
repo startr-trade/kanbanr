@@ -334,6 +334,10 @@ jobs:
       # the slices it names, and loading is never drawn as empty (DEF-081).
       - name: The monitor's data cache shares reads and re-reads only changed slices
         run: npm run check:data-cache
+      # The shell, the link index and the pages read the compact index and their own slices, never
+      # the whole 4 MB board (DEF-081).
+      - name: The monitor's pages never fetch the whole board
+        run: npm run check:whole-board
       # The UI kit uses tokens only, on the type scale and severity palette the person chose
       # (FTR-046).
       - name: The UI kit is built on the chosen design tokens

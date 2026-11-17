@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
 import { byAgentText } from "../agentScopes";
-import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { displayedStates, featuresNewestFirst } from "../types";
-import type { Feature, SprintReport } from "../types";
+import type { Activity, CompactIndex, IndexItem, Readiness, SprintReport } from "../types";
 import { ALL, UNSCHEDULED, inSprintFilter } from "../sprintFilter";
 import { ErrorBox, FeatureCard, Loading, LiveDot } from "../components/bits";
 import Burndown from "../components/Burndown";
@@ -22,24 +22,22 @@ function initialPageSize(): PageSize {
 
 export default function BoardPage() {
   const { project = "" } = useParams();
-  const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
-  const readiness = useAsync(() => api.getReadiness(project), [project, tick]);
+  // The compact index has every card, the config and the sprints; never the whole board (DEF-081).
+  const { data, error, loading } = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
+  const readiness = useQuery<Readiness>(project, urls.readiness(project), TAGS.readiness);
   // Sprints only where the project uses them (FEAT-119, FEAT-123); everywhere else the board is as
   // it always was.
-  const usesSprints = data?.config.cadence?.sprints === true;
-  const sprints = useAsync(
-    () => (usesSprints ? api.getSprints(project) : Promise.resolve([])),
-    [project, tick, usesSprints],
-  );
-  const active = (sprints.data ?? []).find((s) => s.state === "active");
+  const usesSprints = data?.config.cadence.sprints === true;
+  const sprints = usesSprints ? (data?.sprints ?? []) : [];
+  const active = sprints.find((s) => s.state === "active");
   const [chosen, setChosen] = useState<string | null>(null);
   const sprintCode = chosen ?? active?.code ?? ALL;
   // A real sprint has a report; All items and Unscheduled (FTR-032) don't.
   const isSprint = sprintCode !== ALL && sprintCode !== UNSCHEDULED;
-  const sprint = useAsync(
-    () => (usesSprints && isSprint ? api.getSprint(project, sprintCode) : Promise.resolve(null)),
-    [project, tick, usesSprints, sprintCode],
+  const sprint = useQuery<SprintReport>(
+    project,
+    usesSprints && isSprint ? urls.sprint(project, sprintCode) : null,
+    TAGS.sprints,
   );
   const [q, setQ] = useState("");
   const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
@@ -58,16 +56,17 @@ export default function BoardPage() {
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
+  const items = data.items;
   const states = displayedStates(data.config);
   // Non-displayed statuses (includes no-op) — still reachable via status-page links.
-  const otherStates = data.config.statuses.filter((s) => !states.includes(s));
+  const otherStates = (data.config.statuses ?? []).filter((s) => !states.includes(s));
   const isNoOp = (s: string) => data.config.no_op_states?.includes(s);
-  const countIn = (s: string) => data.features.filter((f) => f.status === s).length;
+  const countIn = (s: string) => items.filter((f) => f.status === s).length;
 
   // Filter/search across code, title, kind, priority, labels.
   const needle = q.trim().toLowerCase();
-  const inSprint = (f: Feature) => inSprintFilter(f, usesSprints, sprintCode);
-  const matches = (f: Feature) =>
+  const inSprint = (f: IndexItem) => inSprintFilter(f, usesSprints, sprintCode);
+  const matches = (f: IndexItem) =>
     inSprint(f) &&
     (!needle ||
     [f.code, f.title, f.kind ?? "", f.priority ?? "", ...(f.labels ?? [])]
@@ -80,7 +79,7 @@ export default function BoardPage() {
   return (
     <div className="board-page">
       <div className="page-head">
-        <h1>{data.config.name || data.id}</h1>
+        <h1>{data.config.name || data.project}</h1>
         <LiveDot />
         <span className="spacer" />
         {usesSprints && (
@@ -89,7 +88,7 @@ export default function BoardPage() {
             <select value={sprintCode} onChange={(e) => setChosen(e.target.value)}>
               <option value={ALL}>All items</option>
               <option value={UNSCHEDULED}>Unscheduled</option>
-              {(sprints.data ?? []).map((s) => (
+              {sprints.map((s) => (
                 <option key={s.code} value={s.code}>
                   {s.code}
                   {s.state === "active" ? " (active)" : s.state === "closed" ? " (closed)" : ""}
@@ -124,7 +123,7 @@ export default function BoardPage() {
       <div className="board">
         {states.map((state) => {
           // Reverse-chronological within the column, then paginate with the shared page size.
-          const all = featuresNewestFirst(data.features.filter((f) => f.status === state && matches(f)));
+          const all = featuresNewestFirst(items.filter((f) => f.status === state && matches(f)));
           const total = all.length;
           const size = pageSize === "all" ? Math.max(total, 1) : pageSize;
           const pageCount = Math.max(1, Math.ceil(total / size));
@@ -141,7 +140,7 @@ export default function BoardPage() {
                     key={f.code}
                     project={project}
                     feature={f}
-                    siblings={data.features}
+                    siblings={items}
                     gaps={readiness.data?.[f.code]?.gaps}
                     next={readiness.data?.[f.code]?.next}
                   />
@@ -192,14 +191,14 @@ export default function BoardPage() {
         </div>
       )}
 
-      <ActivityPanel project={project} tick={tick} />
+      <ActivityPanel project={project} />
     </div>
   );
 }
 
-/** Recent activity (from the project's changelog), refreshed on each live tick. */
-function ActivityPanel({ project, tick }: { project: string; tick: number }) {
-  const { data } = useAsync(() => api.getActivity(project), [project, tick]);
+/** Recent activity (from the project's changelog), re-read when the activity changes. */
+function ActivityPanel({ project }: { project: string }) {
+  const { data } = useQuery<Activity[]>(project, urls.activity(project, {}), TAGS.activity);
   if (!data || data.length === 0) return null;
   const when = (iso: string) => {
     const d = new Date(iso);

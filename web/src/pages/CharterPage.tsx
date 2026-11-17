@@ -1,10 +1,12 @@
 import { useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { useScrollToHash } from "../useBoardIndex";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
-import type { Charter, Lesson } from "../types";
+import type { Charter, CompactIndex, Lesson } from "../types";
 
 /**
  * The project's charter (FEAT-046): why it exists, what it commits to, for whom, and what it
@@ -16,9 +18,11 @@ import type { Charter, Lesson } from "../types";
  */
 export default function CharterPage() {
   const { project = "" } = useParams();
+  const charter = useQuery<Charter>(project, urls.charter(project), TAGS.charter);
+  // The goal counts come from the compact index's items, never the whole board (DEF-081).
+  const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
+  // Lessons have no slice of their own yet: re-read on every change, as before.
   const tick = useLiveTick(api.projectEvents(project));
-  const charter = useAsync(() => api.getCharter(project), [project, tick]);
-  const board = useAsync(() => api.getProject(project), [project, tick]);
   const lessons = useAsync(() => api.getLessons(project), [project, tick]);
   useScrollToHash(!!charter.data);
 
@@ -30,7 +34,7 @@ export default function CharterPage() {
   // How many items serve each goal. Until items carry definitions this is zero everywhere, which
   // reads correctly: nothing links yet.
   const served = (goalId: string) =>
-    (board.data?.features ?? []).filter((f) => (f.definition?.goals ?? []).includes(goalId)).length;
+    (index.data?.items ?? []).filter((f) => (f.goals ?? []).includes(goalId)).length;
 
   const empty =
     !c.purpose?.trim() && !(c.goals ?? []).length && !(c.non_goals ?? []).length && !(c.stakeholders ?? []).length;

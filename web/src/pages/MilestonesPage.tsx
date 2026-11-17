@@ -1,13 +1,14 @@
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
+import type { CompactIndex } from "../types";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import { newestFirst } from "../milestoneOrder";
 
 export default function MilestonesPage() {
   const { project = "" } = useParams();
-  const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  // Milestones and their item rows from the compact index, never the whole board (DEF-081).
+  const { data, error, loading } = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -22,15 +23,15 @@ export default function MilestonesPage() {
       {data.milestones.length === 0 && <p className="muted">No milestones.</p>}
       <div className="ms-list">
         {newestFirst(data.milestones).map((m) => {
-          const features = data.features.filter((f) => f.milestone === m.code);
+          const features = data.items.filter((f) => f.milestone === m.code);
           return (
             <section className="ms-card" key={m.code}>
               <div className="ms-head">
                 <Link to={`/p/${encodeURIComponent(project)}/milestone/${encodeURIComponent(m.code)}`}>
                   <b>{m.code}</b> {m.name}
                 </Link>
-                {m.depends_on.length > 0 && (
-                  <span className="muted small">depends on {m.depends_on.join(", ")}</span>
+                {(m.depends_on ?? []).length > 0 && (
+                  <span className="muted small">depends on {(m.depends_on ?? []).join(", ")}</span>
                 )}
               </div>
               {m.description && <p className="muted small">{m.description}</p>}
