@@ -1,0 +1,68 @@
+# The e2e's git remote (FTR-030): BusyBox httpd serving the bare repositories
+# that e2e-kind.sh pushes to on the host, mounted into the kind node at
+# /e2e-remote. Git's dumb HTTP protocol needs only static files; each bare
+# repository's post-update hook runs `git update-server-info`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-remote
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: board-remote
+  namespace: e2e-remote
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: board-remote
+  template:
+    metadata:
+      labels:
+        app: board-remote
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+      containers:
+        - name: httpd
+          # busybox 1.37.0, multi-arch index digest read 17 Nov 2026.
+          image: docker.io/library/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+          command: ["httpd", "-f", "-p", "8080", "-h", "/srv"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: remote
+              mountPath: /srv
+              readOnly: true
+      volumes:
+        - name: remote
+          hostPath:
+            path: /e2e-remote
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: board-remote
+  namespace: e2e-remote
+spec:
+  selector:
+    app: board-remote
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
