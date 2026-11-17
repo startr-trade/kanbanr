@@ -113,6 +113,9 @@ steps:
   `confirm_prepared`, `grant_delegation`, `set_mode`, `record_manual`; an item is `newest`, a code
   `{title_contains: …}` or `{title_matches: …}` (a case-insensitive pattern). Every `decide` names the **`offer`** the guide promises (`page` and
   `button`), checked first. **`press`** clicks the button on the rendered page instead.
+  `press` may be a list: the presses are made in turn on one page (the first names the page), for
+  a button that asks first and then its confirmation or Cancel; a press the page does not offer
+  stops the list.
 - **`expect`** holds a `board` claim (`project: exists`, `release: {version, stage}`,
   `item: {title_contains}` or `{title_matches}`, `item: {item, status}`, `config: {release_prepare: configured}`,
   `sprint: active`), a `truth` claim (`tag`, `ci`, `merged`, `doctor: clean`), a `page` claim
