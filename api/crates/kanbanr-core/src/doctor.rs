@@ -150,6 +150,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_coverage(store, project, &mut report);
         scan_catalog(store, project, &mut report);
         scan_diagrams(store, project, &mut report);
+        scan_query_blocks(store, project, &mut report);
         scan_method_choice(project, &mut report);
         scan_repository(store, project, &mut report);
         // A task ref whose task is gone (FTR-060).
@@ -218,6 +219,7 @@ pub fn run_project_in(store: &Store, id: &str, repo: Option<&std::path::Path>) -
     scan_catalog(store, &project, &mut report);
     scan_affects_views(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
+    scan_query_blocks(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_codes(&project, &mut report);
     scan_repository(store, &project, &mut report);
@@ -1384,6 +1386,28 @@ fn scan_diagrams(store: &Store, project: &Project, report: &mut Report) {
     }
 }
 
+/// Every `katalogr-query` block in a markdown doc that does not parse (FTR-016): a warning naming
+/// the doc, the block's line and the reason. A block that parses says nothing, and nothing here
+/// needs katalogr to be installed.
+fn scan_query_blocks(store: &Store, project: &Project, report: &mut Report) {
+    for path in store.list_docs(&project.id).unwrap_or_default() {
+        if !crate::diagrams::is_markdown_path(&path) {
+            continue;
+        }
+        let Ok(text) = store.read_doc(&project.id, &path) else {
+            continue;
+        };
+        for p in crate::katalogr::query::problems(&format!("docs/{path}"), &text) {
+            report.issues.push(Issue {
+                severity: Severity::Warning,
+                project: project.id.clone(),
+                code: None,
+                message: format!("{}, query block, line {}: {}", p.file, p.line, p.reason),
+            });
+        }
+    }
+}
+
 /// Codes a hand edit broke (FEAT-217): no item can be coded until they are fixed, so each problem
 /// is an error.
 fn scan_codes(project: &Project, report: &mut Report) {
@@ -2511,6 +2535,37 @@ mod tests {
                         .starts_with("docs/architecture/flow.md, diagram #1, line 5:")
                     && i.message.ends_with("(end_as_id)")
             }));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-016 R-2: doctor lists a query block that does not parse, with its doc, line and
+    /// reason; a good block is not listed.
+    #[test]
+    fn doctor_lists_bad_query_blocks() {
+        let (store, dir) = fixture();
+        store
+            .write_doc(
+                "demo",
+                "arch/views.md",
+                "# V\n\n```katalogr-query\nstructure\n```\n\n```katalogr-query\nnonsense\n```\n",
+            )
+            .unwrap();
+        for report in [run(&store).unwrap(), run_project(&store, "demo").unwrap()] {
+            let found: Vec<&Issue> = report
+                .issues
+                .iter()
+                .filter(|i| i.message.contains("query block"))
+                .collect();
+            assert_eq!(found.len(), 1, "{found:#?}");
+            assert_eq!(found[0].severity, Severity::Warning);
+            assert!(
+                found[0]
+                    .message
+                    .starts_with("docs/arch/views.md, query block, line 7:"),
+                "{}",
+                found[0].message
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }

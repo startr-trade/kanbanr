@@ -448,6 +448,41 @@ summary:focus-visible,
   --pele-accent: var(--accent);
   --pele-error: var(--warn);
 }
+/* A doc's katalogr query block (FTR-016): one figure, the diagram, its position line and its
+ * source under it; or the source with one plain sentence. Tokens only, light and dark. */
+.markdown .katalogr-view {
+  margin: var(--sp-4) 0;
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border-radius: var(--r-2);
+}
+.katalogr-drawing {
+  display: flex; justify-content: center;
+  overflow-x: auto;
+  --pele-bg: var(--surface-2);
+  --pele-fg: var(--text);
+  --pele-muted: var(--text-muted);
+  --pele-line: var(--text-muted);
+  --pele-surface: var(--surface);
+  --pele-surface-alt: var(--bg);
+  --pele-border: var(--border);
+  --pele-accent: var(--accent);
+  --pele-error: var(--warn);
+}
+.katalogr-drawing svg { max-width: 100%; height: auto; }
+.katalogr-view .katalogr-position {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-1);
+  color: var(--text-muted);
+}
+.katalogr-view .katalogr-warning { color: var(--warn); }
+.katalogr-view .katalogr-source { margin-top: var(--sp-1); font-size: var(--fs-1); color: var(--text-subtle); }
+.katalogr-view .katalogr-source code { color: inherit; }
+.markdown .katalogr-said {
+  margin: var(--sp-1) 0 var(--sp-4);
+  font-size: var(--fs-1);
+  color: var(--text-muted);
+}
 /* A diagram that does not draw (FEAT-200): its source, and the error with its line under it. */
 .markdown .diagram-failed { margin: 14px 0; }
 .markdown pre.diagram-source { margin: 0; border-color: var(--warn); }

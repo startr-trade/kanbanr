@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useQuery } from "../data/useQuery";
@@ -50,6 +51,8 @@ export default function DocPage() {
   const { data, error, loading } = useQuery<string>(project, urls.doc(project, path), TAGS.doc(path), () =>
     api.getDoc(project, path),
   );
+  // Asked once per doc and project: a new function each render would ask katalogr again every time.
+  const resolveViews = useCallback(() => api.getDocViews(project, path), [project, path]);
   const ownH1 = data !== null && startsWithH1(data);
   // The doc tree is read only for a doc that brings no h1 of its own.
   const tree = useQuery<DocFolder>(project, data !== null && !ownH1 ? urls.docTree(project) : null, TAGS.docTree);
@@ -86,6 +89,7 @@ export default function DocPage() {
         <Markdown
           source={data ?? ""}
           headingOffset={ownH1 ? 0 : 1}
+          resolveViews={resolveViews}
           resolveImage={(src) => api.docRawUrl(project, parentPath ? `${parentPath}/${src}` : src)}
         />
       </article>

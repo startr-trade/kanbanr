@@ -69,7 +69,8 @@
     "check:position": "node scripts/check-position.mjs",
     "check:boards": "node scripts/check-boards.mjs",
     "check:test-durations": "node scripts/check-test-durations.mjs",
-    "check:aliases": "node scripts/check-aliases.mjs"
+    "check:aliases": "node scripts/check-aliases.mjs",
+    "check:katalogr": "node scripts/check-katalogr.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

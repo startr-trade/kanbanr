@@ -322,6 +322,10 @@ jobs:
       # the check to make, and recorded there as passed or failed (DEF-040).
       - name: The Review page lists manual checks waiting for you
         run: npm run check:manual-tests
+      # A doc's katalogr query blocks are drawn from katalogr's answer, or keep their source with one
+      # plain sentence when katalogr is absent; nothing here needs katalogr (FTR-016).
+      - name: A doc's query blocks are drawn from katalogr or show their source
+        run: npm run check:katalogr
       # Manual checks are grouped under their item, the release being shipped first, with the checks
       # that hold its next promotion marked (FTR-057).
       - name: Manual checks are grouped by item

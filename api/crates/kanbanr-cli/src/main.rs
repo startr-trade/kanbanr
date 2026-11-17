@@ -6332,6 +6332,32 @@ fn print_diagram_warnings(cli: &Cli, resp: &str) {
     }
 }
 
+/// A doc write's bad `katalogr-query` blocks (FTR-016), one per line on stderr after the diagram
+/// warnings, at the top of the response and on each result of a batch. Silent with `--json`.
+fn print_query_block_warnings(cli: &Cli, resp: &str) {
+    if cli.json {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    let results = v["results"].as_array().into_iter().flatten();
+    for holder in std::iter::once(&v).chain(results) {
+        for p in holder["query_block_warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            eprintln!(
+                "  query block: {}, line {}: {}",
+                p["file"].as_str().unwrap_or_default(),
+                p["line"],
+                p["reason"].as_str().unwrap_or_default()
+            );
+        }
+    }
+}
+
 fn print_gate_warnings(cli: &Cli, resp: &str) {
     if cli.json {
         return; // the warnings are in the JSON already
@@ -10579,6 +10605,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 client.write(Method::Post, &path, Some(body))?
             };
             print_diagram_warnings(cli, &resp);
+            print_query_block_warnings(cli, &resp);
             print_coverage_warnings(cli, &resp);
             if cli.json {
                 println!("{}", pretty(&resp));
@@ -12755,6 +12782,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ),
             );
             print_diagram_warnings(cli, &resp);
+            print_query_block_warnings(cli, &resp);
             Ok(())
         }
         FeatureCmd::List {
@@ -12936,6 +12964,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             )?;
             print_write(cli, &resp, format!("updated {}", field(&resp, "code")));
             print_diagram_warnings(cli, &resp);
+            print_query_block_warnings(cli, &resp);
             Ok(())
         }
     }
@@ -16668,6 +16697,7 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
                 )?;
                 print_write(cli, &resp, format!("wrote doc {}", field(&resp, "path")));
                 print_diagram_warnings(cli, &resp);
+                print_query_block_warnings(cli, &resp);
                 return Ok(());
             }
             let resp = client.write(
@@ -16677,6 +16707,7 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
             )?;
             print_write(cli, &resp, format!("wrote doc {}", field(&resp, "path")));
             print_diagram_warnings(cli, &resp);
+            print_query_block_warnings(cli, &resp);
             Ok(())
         }
         DocCmd::List => {
