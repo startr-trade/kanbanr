@@ -12141,6 +12141,10 @@ fn undo_release(
     if cli.json {
         return Ok(());
     }
+    // An adopted branch is kept (DEF-071).
+    if let Some(kept) = v["branch_kept"].as_str().filter(|k| !k.is_empty()) {
+        println!("{kept}");
+    }
     if let Some(branch) = v["branch_deleted"].as_str().filter(|b| !b.is_empty()) {
         let subjects: Vec<&str> = v["commits_removed"]
             .as_array()
@@ -12205,6 +12209,21 @@ fn promote_release(
     };
     if let Some(b) = v["branch_created"].as_str() {
         said.push_str(&format!("; created {b}"));
+    }
+    // An existing branch already at the base line's tip is recorded, not made (DEF-071).
+    if let Some(b) = v["branch_adopted"].as_str().filter(|b| !b.is_empty()) {
+        let line = v["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["does"].as_str())
+            .find_map(|d| {
+                d.strip_prefix(&format!("adopts {b}: it is at "))?
+                    .split_once("'s tip")
+            })
+            .map(|(line, _)| line.to_string())
+            .unwrap_or_else(|| "the base line".to_string());
+        said.push_str(&format!("; adopted {b} (it was already at {line}'s tip)"));
     }
     let main_moved = v["main_branch"].as_str();
     match (v["tagged"].as_str(), main_moved) {

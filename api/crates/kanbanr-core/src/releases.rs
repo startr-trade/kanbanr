@@ -80,6 +80,10 @@ pub struct Release {
     /// The code branch, set when promoted to the first stage (`release/<V>`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub branch: String,
+    /// The branch was adopted, not made: it existed already at the tip of the line kanbanr would
+    /// have made it from (DEF-071). `release undo` keeps an adopted branch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub branch_adopted: bool,
     /// The cut release this patches (FEAT-184); empty for an ordinary release.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub parent: String,
@@ -1255,6 +1259,10 @@ pub struct Promoted {
     /// The release branch made on entering the first stage.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub branch_created: String,
+    /// The existing release branch recorded instead of made, because it was already at the tip
+    /// of the line kanbanr would make it from (DEF-071).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub branch_adopted: String,
     /// The tag made at the cut.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub tagged: String,
@@ -1578,6 +1586,9 @@ struct Worked {
     /// Where the branch step makes the branch from, and the line to make first (git model).
     base: String,
     make_line: Option<(String, String)>,
+    /// The branch step records an existing branch already at the base line's tip instead of
+    /// making it (DEF-071).
+    adopt: bool,
     main: String,
     prep: Option<PrepWork>,
     /// Refusals of the steps, in the order the cut always checked them.
@@ -2145,6 +2156,8 @@ fn work_out(
     let mut steps: Vec<PlanStep> = Vec::new();
     let mut base = String::new();
     let mut make_line = None;
+    // The branch step adopts an existing branch at the base line's tip (DEF-071).
+    let mut adopt = false;
     let mut prep = None;
     let mut release_tip = String::new();
     let mut origin = None;
@@ -2237,8 +2250,44 @@ fn work_out(
                 release_tip = coderepo::rev_parse(repo, &branch).unwrap_or_default();
             }
             let mut branch_made_here = false;
-            // 1. The branch.
+            // 1. The branch: made, adopted (DEF-071), or already the release's.
             if has(ReleaseAction::Branch) {
+                // Where the branch comes from, worked out first: the make path makes it from
+                // there, and an existing branch is judged against it (DEF-071). With the git
+                // model on, from the line its topology says (FEAT-189); else from the integration
+                // branch or the default branch, as before.
+                let from_line: std::result::Result<String, String> = if cadence.git_model {
+                    crate::gitmodel::load(store, id, repo)
+                        .map(|(model, facts)| {
+                            let sprints = crate::sprints::load(store, id).unwrap_or_default();
+                            let base = crate::gitmodel::release_base(&model, &sprints, &facts);
+                            // A line not made yet is made from main, as `start` makes it
+                            // (FEAT-190).
+                            if !facts.branches.contains_key(&base) && base != model.main {
+                                make_line = Some((base.clone(), model.main.clone()));
+                            }
+                            base
+                        })
+                        .map_err(|e| e.to_string())
+                } else {
+                    Ok(cadence
+                        .integration_branch
+                        .clone()
+                        .unwrap_or_else(|| coderepo::default_branch(repo)))
+                };
+                let mut made_from = String::new();
+                let mut at = String::new();
+                if let Ok(b) = &from_line {
+                    base = b.clone();
+                    made_from = match &make_line {
+                        Some((line, from)) => format!("{line} (made from {from} first)"),
+                        None => base.clone(),
+                    };
+                    at = match &make_line {
+                        Some((_, from)) => from.clone(),
+                        None => base.clone(),
+                    };
+                }
                 let recorded = release.branch == branch && branch_exists;
                 if recorded {
                     steps.push(step(
@@ -2248,76 +2297,81 @@ fn work_out(
                         None,
                     ));
                 } else if branch_exists {
-                    let why = format!(
-                        "{branch} already exists in {} — nothing was changed",
-                        repo.display()
-                    );
-                    blocks.push(why.clone());
-                    steps.push(step(
-                        ReleaseAction::Branch,
-                        format!("makes {branch}"),
-                        false,
-                        Some(why),
-                    ));
-                } else {
-                    // With the git model on, from the line its topology says (FEAT-189); else from
-                    // the integration branch or the default branch, as before.
-                    let from_line: std::result::Result<String, String> = if cadence.git_model {
-                        crate::gitmodel::load(store, id, repo)
-                            .map(|(model, facts)| {
-                                let sprints = crate::sprints::load(store, id).unwrap_or_default();
-                                let base = crate::gitmodel::release_base(&model, &sprints, &facts);
-                                // A line not made yet is made from main, as `start` makes it
-                                // (FEAT-190).
-                                if !facts.branches.contains_key(&base) && base != model.main {
-                                    make_line = Some((base.clone(), model.main.clone()));
-                                }
-                                base
-                            })
-                            .map_err(|e| e.to_string())
-                    } else {
-                        Ok(cadence
-                            .integration_branch
-                            .clone()
-                            .unwrap_or_else(|| coderepo::default_branch(repo)))
-                    };
-                    match from_line {
-                        Ok(b) => {
-                            base = b;
-                            let made_from = match &make_line {
-                                Some((line, from)) => {
-                                    format!("{line} (made from {from} first)")
-                                }
-                                None => base.clone(),
-                            };
-                            let at = match &make_line {
-                                Some((_, from)) => from.clone(),
-                                None => base.clone(),
-                            };
-                            match coderepo::rev_parse(repo, &at) {
-                                Ok(sha) => {
-                                    branch_made_here = true;
-                                    steps.push(step(
-                                        ReleaseAction::Branch,
-                                        format!("makes {branch} from {made_from}"),
-                                        false,
-                                        None,
-                                    ));
-                                    // The tip the later steps see is where the branch will start.
-                                    release_tip = sha;
-                                }
-                                Err(e) => {
-                                    let why = e.to_string();
-                                    blocks.push(why.clone());
-                                    steps.push(step(
-                                        ReleaseAction::Branch,
-                                        format!("makes {branch} from {made_from}"),
-                                        false,
-                                        Some(why),
-                                    ));
-                                }
-                            }
+                    // An existing branch the release does not name: adopted when it is exactly
+                    // where kanbanr would make it, else refused with how it differs (DEF-071).
+                    let judged: std::result::Result<String, String> = from_line
+                        .clone()
+                        .and_then(|_| coderepo::rev_parse(repo, &at).map_err(|e| e.to_string()));
+                    match judged {
+                        Ok(base_tip) if base_tip == release_tip => {
+                            adopt = true;
+                            steps.push(step(
+                                ReleaseAction::Branch,
+                                format!(
+                                    "adopts {branch}: it is at {at}'s tip {}",
+                                    short(&base_tip)
+                                ),
+                                false,
+                                None,
+                            ));
                         }
+                        Ok(_) => {
+                            let ahead = coderepo::commits_between(repo, &at, &branch)
+                                .map(|c| c.len())
+                                .unwrap_or_default();
+                            let behind = coderepo::commits_between(repo, &branch, &at)
+                                .map(|c| c.len())
+                                .unwrap_or_default();
+                            let why = format!(
+                                "{branch} already exists in {} and is not {at}'s tip: {ahead} \
+                                 commit(s) ahead, {behind} behind. Delete it if it is a leftover \
+                                 (`git branch -D {branch}`), or move it to {at} if it is what you \
+                                 mean to release; nothing was changed",
+                                repo.display()
+                            );
+                            blocks.push(why.clone());
+                            steps.push(step(
+                                ReleaseAction::Branch,
+                                format!("makes {branch}"),
+                                false,
+                                Some(why),
+                            ));
+                        }
+                        Err(why) => {
+                            blocks.push(why.clone());
+                            steps.push(step(
+                                ReleaseAction::Branch,
+                                format!("makes {branch}"),
+                                false,
+                                Some(why),
+                            ));
+                        }
+                    }
+                } else {
+                    match from_line {
+                        Ok(_) => match coderepo::rev_parse(repo, &at) {
+                            Ok(sha) => {
+                                branch_made_here = true;
+                                steps.push(step(
+                                    ReleaseAction::Branch,
+                                    format!("makes {branch} from {made_from}"),
+                                    false,
+                                    None,
+                                ));
+                                // The tip the later steps see is where the branch will start.
+                                release_tip = sha;
+                            }
+                            Err(e) => {
+                                let why = e.to_string();
+                                blocks.push(why.clone());
+                                steps.push(step(
+                                    ReleaseAction::Branch,
+                                    format!("makes {branch} from {made_from}"),
+                                    false,
+                                    Some(why),
+                                ));
+                            }
+                        },
                         Err(why) => {
                             blocks.push(why.clone());
                             steps.push(step(
@@ -3107,6 +3161,7 @@ fn work_out(
         branch,
         base,
         make_line,
+        adopt,
         main,
         prep,
         blocks,
@@ -3835,6 +3890,7 @@ pub fn promote_with(
         from: w.plan.from.clone(),
         to: w.stage.clone(),
         branch_created: String::new(),
+        branch_adopted: String::new(),
         tagged: String::new(),
         main_branch: String::new(),
         preview: Vec::new(),
@@ -3866,6 +3922,14 @@ pub fn promote_with(
             return Err(needs_repo(version, &w.stage));
         };
         let r: Result<()> = match step.action {
+            ReleaseAction::Branch if w.adopt => {
+                // Adopted: the branch is already where kanbanr would make it, so nothing is
+                // made and nothing is undone; only the board records it (DEF-071).
+                releases[index].branch = w.branch.clone();
+                releases[index].branch_adopted = true;
+                done.branch_adopted = w.branch.clone();
+                Ok(())
+            }
             ReleaseAction::Branch => (|| {
                 if let Some((line, from)) = &w.make_line {
                     coderepo::create_branch_from(repo, line, from)?;
@@ -4067,6 +4131,10 @@ pub struct Undone {
     pub branch_deleted: String,
     /// The commits the deleted branch held beyond main, every one kanbanr's.
     pub commits_removed: Vec<CommitLine>,
+    /// Why the release branch was kept when the undo took back the change that recorded it: it
+    /// was adopted, not made by kanbanr (DEF-071). Else empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub branch_kept: String,
 }
 
 /// Step a release's newest stage change back (DEF-034), while nothing has been pushed or tagged.
@@ -4171,6 +4239,7 @@ pub fn undo_stage(
     }
     // 4. The code repository: no tag, and a branch to delete only when it may go.
     let mut delete: Option<(String, String, Vec<CommitLine>)> = None;
+    let mut branch_kept = String::new();
     match repo {
         Some(repo) => {
             if coderepo::tag_exists(repo, version) {
@@ -4182,7 +4251,15 @@ pub fn undo_stage(
                 .main_branch
                 .clone()
                 .unwrap_or_else(|| coderepo::default_branch(repo));
-            if let Some(branch) = branch_to_delete(&release, prev.as_ref(), repo, version, &main)? {
+            if release.branch_adopted && makes_branch(&release, prev.as_ref()) {
+                // An adopted branch is kept: kanbanr did not make it (DEF-071, X18).
+                branch_kept = format!(
+                    "kept {}: it was adopted, not made by kanbanr",
+                    release.branch
+                );
+            } else if let Some(branch) =
+                branch_to_delete(&release, prev.as_ref(), repo, version, &main)?
+            {
                 let tip = coderepo::rev_parse(repo, &branch)?;
                 let commits = coderepo::commits_between(repo, &main, &branch)?
                     .into_iter()
@@ -4219,8 +4296,9 @@ pub fn undo_stage(
         let r = &mut releases[index];
         r.stage = now_at.clone();
         r.stages.push(change.clone());
-        if delete.is_some() {
+        if delete.is_some() || !branch_kept.is_empty() {
             r.branch.clear();
+            r.branch_adopted = false;
         }
     }
     if let Err(e) = save(store, id, &releases) {
@@ -4239,6 +4317,7 @@ pub fn undo_stage(
         now_at,
         branch_deleted,
         commits_removed,
+        branch_kept,
     })
 }
 
@@ -4263,7 +4342,6 @@ fn branch_to_delete(
     if !makes_branch(release, prev) || !coderepo::branch_exists(repo, branch) {
         return Ok(None);
     }
-    // DEF-071: an adopted branch is kept.
     if let Some(path) = coderepo::worktree_of(repo, branch) {
         return Err(CoreError::Unsupported(format!(
             "`{branch}` is checked out in {}: switch that worktree off it first",
@@ -9327,6 +9405,37 @@ pub(crate) mod tests {
         assert_eq!(r.branch, "release/v1");
         let entered = super::entered_stages(&r, &stage_names(&store));
         assert_eq!(entered.into_iter().collect::<Vec<_>>(), ["candidate"]);
+
+        // DEF-071 (X18): a branch kanbanr did not make, adopted at main's tip, is kept.
+        super::add(&store, "shop", "v2", "", "").unwrap();
+        plan_done(&store, "v2");
+        coderepo::create_branch_from(&repo, "release/v2", "main").unwrap();
+        let sha = coderepo::rev_parse(&repo, "release/v2").unwrap();
+        let adopted = super::promote(
+            &store,
+            "shop",
+            "v2",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(adopted.branch_adopted, "release/v2");
+        let done = super::undo_stage(
+            &store,
+            "shop",
+            "v2",
+            "Ada",
+            "promoted by mistake",
+            "terminal",
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(done.branch_deleted, "");
+        assert!(done.branch_kept.contains("it was adopted"), "{done:?}");
+        assert_eq!(coderepo::rev_parse(&repo, "release/v2").unwrap(), sha);
+        assert_eq!(done.release.branch, "");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -9487,5 +9596,211 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
         let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    // ---- DEF-071: an existing release branch ----
+
+    fn branch_step(plan: &super::ReleasePlan) -> &super::PlanStep {
+        plan.steps
+            .iter()
+            .find(|s| s.action == super::ReleaseAction::Branch)
+            .unwrap_or_else(|| panic!("no branch step: {plan:#?}"))
+    }
+
+    /// DEF-071 R-1: a hand-made release branch one commit ahead of main blocks the branch step,
+    /// and that reason reaches the plan's `missing` list, so the plan is not ready.
+    #[test]
+    fn a_blocked_branch_step_reaches_the_plans_missing_list() {
+        let (store, dir, repo) = board_and_repo("def071-blocked");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        configure(&store, UNDO);
+        coderepo::create_branch_from(&repo, "release/v1", "main").unwrap();
+        on_release(&repo, "release/v1", "extra", "extra\n");
+        let plan = plan_to(&store, &repo, "candidate");
+        let why = branch_step(&plan)
+            .blocked
+            .clone()
+            .unwrap_or_else(|| panic!("the branch step is blocked: {plan:#?}"));
+        assert!(why.contains("release/v1 already exists"), "{why}");
+        assert!(plan.missing.contains(&why), "{:#?}", plan.missing);
+        assert!(!plan.ready);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-071 R-2: a branch made by hand at main's tip is adopted, not blocked: the plan says so
+    /// and is ready; the promotion records the branch as adopted, makes nothing and leaves its sha
+    /// where it was; a failed board save leaves the branch untouched.
+    #[test]
+    fn an_existing_branch_at_the_base_lines_tip_is_adopted_not_blocked() {
+        let (store, dir, repo) = board_and_repo("def071-adopt");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        configure(&store, UNDO);
+        coderepo::create_branch_from(&repo, "release/v1", "main").unwrap();
+        let sha = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        let plan = plan_to(&store, &repo, "candidate");
+        let step = branch_step(&plan);
+        assert_eq!(
+            step.does,
+            format!("adopts release/v1: it is at main's tip {}", &sha[..7])
+        );
+        assert!(step.blocked.is_none() && !step.noop, "{step:#?}");
+        assert!(plan.ready, "{:#?}", plan.missing);
+        assert_eq!(plan.release_tip, sha);
+
+        // A failed board save: nothing was made, so nothing is undone, and the branch stays.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let before = super::load(&store, "shop").unwrap();
+            let project = store.project_dir("shop");
+            let mode = std::fs::metadata(&project).unwrap().permissions().mode();
+            std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let failed = super::promote(
+                &store,
+                "shop",
+                "v1",
+                Some("candidate"),
+                "Ada",
+                "",
+                Some(&repo),
+            );
+            std::fs::set_permissions(&project, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(failed.is_err(), "{failed:?}");
+            assert_eq!(coderepo::rev_parse(&repo, "release/v1").unwrap(), sha);
+            assert_eq!(super::load(&store, "shop").unwrap(), before);
+        }
+
+        let done = super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(done.branch_adopted, "release/v1");
+        assert_eq!(done.branch_created, "");
+        assert_eq!(coderepo::rev_parse(&repo, "release/v1").unwrap(), sha);
+        let r = release_v1(&store);
+        assert_eq!(r.branch, "release/v1");
+        assert!(r.branch_adopted);
+        assert_eq!(r.stage, "candidate");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-071 R-3: an existing branch one commit ahead of main, or one behind, is refused with
+    /// the ahead and behind counts and both ways on; nothing changes in git or on the board.
+    #[test]
+    fn an_existing_branch_that_differs_from_the_base_is_refused_with_how_it_differs() {
+        let (store, dir, repo) = board_and_repo("def071-differs");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        configure(&store, UNDO);
+        let refused = |ahead: usize, behind: usize| {
+            let plan = plan_to(&store, &repo, "candidate");
+            let why = branch_step(&plan)
+                .blocked
+                .clone()
+                .unwrap_or_else(|| panic!("blocked: {plan:#?}"));
+            let counts = format!(
+                "release/v1 already exists in {} and is not main's tip: {ahead} commit(s) ahead, \
+                 {behind} behind",
+                repo.display()
+            );
+            assert!(why.contains(&counts), "{why}");
+            assert!(why.contains("`git branch -D release/v1`"), "{why}");
+            assert!(why.contains("move it to main"), "{why}");
+            assert!(why.ends_with("nothing was changed"), "{why}");
+            assert!(plan.missing.contains(&why) && !plan.ready);
+            let before = super::load(&store, "shop").unwrap();
+            let sha = coderepo::rev_parse(&repo, "release/v1").unwrap();
+            let main = coderepo::rev_parse(&repo, "main").unwrap();
+            let err = super::promote(
+                &store,
+                "shop",
+                "v1",
+                Some("candidate"),
+                "Ada",
+                "",
+                Some(&repo),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("is not main's tip"), "{err}");
+            assert_eq!(super::load(&store, "shop").unwrap(), before);
+            assert_eq!(coderepo::rev_parse(&repo, "release/v1").unwrap(), sha);
+            assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), main);
+        };
+
+        // One ahead: a commit main lacks.
+        coderepo::create_branch_from(&repo, "release/v1", "main").unwrap();
+        on_release(&repo, "release/v1", "extra", "extra\n");
+        refused(1, 0);
+
+        // One behind: main moved on after the branch was made.
+        coderepo::git(&repo, &["branch", "-f", "release/v1", "main"]).unwrap();
+        commit_file(&repo, "later", "later\n", "later on main");
+        refused(0, 1);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-071 R-4: undoing the promotion that adopted a hand-made branch keeps the branch where
+    /// it was, clears it from the release and says why; a branch kanbanr made is still deleted.
+    #[test]
+    fn undo_keeps_an_adopted_release_branch() {
+        let (store, dir, repo) = board_and_repo("def071-undo");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        configure(&store, UNDO);
+        coderepo::create_branch_from(&repo, "release/v1", "main").unwrap();
+        let sha = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        let promote =
+            |to: &str| super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo));
+        assert_eq!(promote("candidate").unwrap().branch_adopted, "release/v1");
+        assert!(release_v1(&store).branch_adopted);
+
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.undone.undoes, "candidate");
+        assert_eq!(done.now_at, "");
+        assert_eq!(done.branch_deleted, "");
+        assert!(done.commits_removed.is_empty());
+        assert_eq!(
+            done.branch_kept,
+            "kept release/v1: it was adopted, not made by kanbanr"
+        );
+        assert_eq!(coderepo::rev_parse(&repo, "release/v1").unwrap(), sha);
+        let r = release_v1(&store);
+        assert_eq!((r.stage.as_str(), r.branch.as_str()), ("", ""));
+        assert!(!r.branch_adopted);
+        assert_eq!(
+            r.stages.len(),
+            2,
+            "the stage change is recorded: {:?}",
+            r.stages
+        );
+
+        // A branch kanbanr made is still deleted (DEF-034).
+        coderepo::git(&repo, &["branch", "-D", "release/v1"]).unwrap();
+        let made = promote("candidate").unwrap();
+        assert_eq!(made.branch_created, "release/v1");
+        assert_eq!(made.branch_adopted, "");
+        assert!(!release_v1(&store).branch_adopted);
+        let done = undo(&store, Some(&repo)).unwrap();
+        assert_eq!(done.branch_deleted, "release/v1");
+        assert_eq!(done.branch_kept, "");
+        assert!(!coderepo::branch_exists(&repo, "release/v1"));
+        clean(&dir, &repo);
     }
 }
