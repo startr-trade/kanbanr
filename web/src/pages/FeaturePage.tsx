@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api, viaOrigin, type Meta } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useQuery } from "../data/useQuery";
+import { useAsync } from "../live";
+import { dependencyPath, externalBoard } from "../boards";
 import { TAGS, urls } from "../data/urls";
 import { useScrollToHash } from "../useBoardIndex";
 import Markdown from "../components/Markdown";
@@ -29,6 +31,8 @@ export default function FeaturePage() {
     TAGS.feature(code),
   );
   const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
+  // The boards a server shows, to mark a dependency held on another board (FTR-040 R-5).
+  const boards = useAsync(() => api.getBoards(), []).data ?? [];
   useScrollToHash(!!feature);
   const usesReleases = index.data?.config.cadence.releases === true;
   const releases = useQuery<Release[]>(project, usesReleases ? urls.releases(project) : null, TAGS.releases);
@@ -81,6 +85,15 @@ export default function FeaturePage() {
           <span className="muted small">Blocked by:</span>
           {(feature.depends_on ?? []).map((dep) => {
             const known = (index.data?.items ?? []).some((f) => f.code === dep);
+            const other = externalBoard(dep, project, boards);
+            if (other !== null) {
+              return (
+                <span key={dep}>
+                  <Link className="chip blocked" to={dependencyPath(dep)}>{dep}</Link>
+                  <span className="muted small"> (board {other}, not resolved here)</span>
+                </span>
+              );
+            }
             return known ? (
               <Link
                 key={dep}

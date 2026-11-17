@@ -436,6 +436,10 @@ jobs:
       # page header as a select (FTR-004).
       - name: Docs are read at the position you pick
         run: npm run check:position
+      # One server shows several boards: Home groups projects by board, and a dependency on another
+      # board's project is marked external (FTR-040).
+      - name: Several boards are grouped and cross-board dependencies are external
+        run: npm run check:boards
       # The item page says why an item changes no doc, as a plain line under Affects docs (DEF-075).
       - name: The item page shows why an item changes no docs
         run: npm run check:feature-no-docs

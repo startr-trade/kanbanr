@@ -1056,6 +1056,19 @@ export interface ProjectSummary {
   counts: Record<string, number>;
   total_features: number;
   has_docs: boolean;
+  /** The board this project is read from; present when the server runs over boards (FTR-040). */
+  board?: string;
+}
+
+/** One board a read-only server shows, as `GET /api/boards` lists it (FTR-040). */
+export interface BoardInfo {
+  name: string;
+  projects: string[];
+  head?: string;
+  head_at?: string;
+  writer?: { version: string; commit: string; at: string; dirty: boolean };
+  history_unreadable?: string;
+  shadowed?: string[];
 }
 
 export interface DocFile {
