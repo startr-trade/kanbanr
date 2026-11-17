@@ -386,7 +386,8 @@ Overview leads with what needs you, then what is happening, then how much the bo
   that takes it. Only your own decisions count toward the total; health is Claude's to fix, so
   its line says "Ask Claude to fix the 22 doctor errors." instead of linking.
 - **Now**: the running sprint with its days left, each release in flight with the steps done,
-  current and next, and the open milestones.
+  current and next, and the open milestones, each named with its code and done/total above
+  its bar.
 - **What the board holds**: items by kind (untyped counted apart), requirements, tests by state
   and kind, requirement coverage, flow (completed, cycle time, rework, defects) and records. Every
   count links to the list it counts; the flow numbers that have no list are tiles that say
@@ -768,8 +769,8 @@ rest closed. The row's header has two lines:
 
 The opened row's body starts with a full-width table of the release's items: ID (linked to the
 item), title, kind, status, sprint, tests green out of named, its approval, design-review and
-docs-folded sign-offs as pills, and where a carried item went. Titles get the width and do not
-wrap. Every column sorts, the table has its own filter, and **Export CSV** saves it. Below the
+docs-folded sign-offs as pills, and where a carried item went. Codes and status stay on one line; a
+title takes two lines at most, then is clamped, the full title on hover. Every column sorts, the table has its own filter, and **Export CSV** saves it. Below the
 table come **Remove** for a planned release that can still be removed, the rest of the release's
 button (what is missing with its fix, the cut preview, **Check again**, and the tag's panel once it
 is tagged), **Prepared, not required**, the **Release notes** section, collapsed until opened, and
@@ -912,8 +913,9 @@ working and for how many seconds, and a read repeated after a change keeps the l
   group only; opening another group starts a new selection, so one confirmation is always one
   decision. A row that cannot be decided yet says why, and who provides what is missing ("Claude
   settles 2 texts first: ask Claude to check them"), and cannot be ticked. In the Approve and
-  Ratify groups a row can be ticked once its diagrams have been checked and parse. Rows Claude
-  prepared arrive ticked; untick any you do not want.
+  Ratify groups a row can be ticked once its diagrams have been checked and parse. Nothing
+  arrives ticked: tick the rows to decide, or press **Select these N** beside a batch Claude
+  prepared; **Select all** shows how many of the shown rows are selected.
 - **Filter and sort.** The header's filter box searches the group by code or title, and its sort
   orders the rows by release, last change, sprint or code. The header stays in view as the rows
   scroll.
@@ -995,7 +997,8 @@ retire a check, it prepares the retirement (`kanbanr prepare test <CODE> <R-n> "
 When Claude already has the evidence for a decision, it prepares the record instead of asking you
 to fill in a form (FTR-034): a sign-off's note and the doc it covered, the reason for a
 ratification, what was checked before a stage after the tag, or a CI result with its run's link.
-On the Review page the record's row sits in the group of the decision it prepares, ticked, with
+On the Review page the record's row sits in the group of the decision it prepares, not ticked (its batch has a
+**Select these N** button), with
 the record in its evidence; on the Releases page it sits beside the decision's one button. It is
 shown filled in, headed "Prepared
 by Claude on 12 Nov 2026 from CI run 4512, release tip 9f078bd", with each source as a link: a

@@ -42,6 +42,15 @@ function useNarrow(): boolean {
   return narrow;
 }
 
+/** A title cell: at most two lines, then clamped, the full title on hover (UX-18, 18 Nov 2026). */
+function ClampedTitle({ text }: { text: string }) {
+  return (
+    <span className="ui-clamp" title={text}>
+      {text}
+    </span>
+  );
+}
+
 /** A checkbox whose `indeterminate` follows the prop (it has no HTML attribute). */
 function TriCheckbox(p: { checked: boolean; indeterminate: boolean; disabled: boolean; label: string; onChange(v: boolean): void }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -241,8 +250,8 @@ export function DataTable<R>(p: {
                     </td>
                   )}
                   {columns.map((c, i) => (
-                    <td key={c.key} className={c.align === "end" ? "ui-end" : undefined}>
-                      {c.render ? c.render(r) : (c.value(r) ?? "")}
+                    <td key={c.key} data-col={c.key} className={c.align === "end" ? "ui-end" : undefined}>
+                      {c.render ? c.render(r) : c.key === "title" ? <ClampedTitle text={String(c.value(r) ?? "")} /> : (c.value(r) ?? "")}
                       {i === 0 && folded.length > 0 && (
                         <details className="ui-table-detail">
                           <summary>More</summary>
