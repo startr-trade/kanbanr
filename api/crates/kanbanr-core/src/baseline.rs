@@ -777,17 +777,18 @@ pub fn propose(
                 // A non-goal gives way to another option chosen in the same area that is the
                 // thing it excludes (containers' "No Kubernetes" with kubernetes also chosen):
                 // the row is left out and the view says which choice it gave way to (FTR-033 P3
-                // Q1). The other option is the one its `excludes` names (P4 Q1); a row without
+                // Q1). The other option is one its `excludes` names (P4 Q1, P12 Q1/Q2); a row without
                 // `excludes` knows it by its words: its mentions and its label.
-                let excludes = r.excludes.trim();
                 let gave_way = if r.kind != Kind::NonGoal {
                     None
-                } else if !excludes.is_empty() {
+                } else if !r.excludes.is_empty() {
                     a.options
                         .iter()
-                        .find(|o| o.option != opt.id && o.option == excludes)
+                        .find(|o| {
+                            o.option != opt.id && r.excludes.iter().any(|e| e.trim() == o.option)
+                        })
                         .and_then(|o| area.option(&o.option))
-                        .map(|other| (other, format!("it excludes '{excludes}'")))
+                        .map(|other| (other, format!("it excludes '{}'", other.id)))
                 } else {
                     a.options.iter().find_map(|o| {
                         if o.option == opt.id {

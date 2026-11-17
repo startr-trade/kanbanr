@@ -54,6 +54,24 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle (`--note TEXT` is kept with a manual test's result, which a person records on the Review page's Manual checks and Claude is refused); list tracked tests and check each still exists |
 | `kanbanr defect <CODE> …` | what a defect cost and where it came from |
 
+**The engineering baseline: practice packs**
+
+| Command | What it does |
+|---|---|
+| `kanbanr profile list` | every practice pack this board can apply: the board's (`profiles/`), your personal ones (`~/.kanbanr/profiles`, or `KANBANR_PROFILES_DIR`) and the ten built-in ones, with versions and the projects that follow each. Needs no board |
+| `kanbanr profile show <NAME>` | a pack's file, found by name: the board's, then yours, then the built-in one |
+| `kanbanr profile check <FILE\|-\|NAME>` | check a pack without applying it: its problems, then its warnings, or `checks clean: N areas (M at setup), K options`. Changes nothing; exits non-zero on a problem |
+| `kanbanr profile save <NAME> [--from-file F\|-] [--personal] [--description …]` | save a pack to the board (one commit) or to your personal library: from a file, or by default this project's applied copy of the pack. It must check clean; the version goes up only when the content changed |
+| `kanbanr profile add <NAME>` / `kanbanr profile remove <NAME>` | follow a pack in this project, or stop following it; removing keeps every answer and entry, and adding it again brings them back. Prints what changed and `answers kept: N` |
+| `kanbanr profile ask [--at setup\|first_need] [--item CODE] [--answers F] [--explain AREA]` | what to ask now, as JSON: the open areas of the packs the project follows (setup: `core` when none is chosen yet), the detected option first, else the recommended one, in dialogs of at most four, and the packs the facts suggest. `--item` reads that item's Design and implies `first_need`; `--answers` counts a scratch answers file as given; `--explain` prints each option's `why`, `fits_when` and `costs` with the facts and files that bear on it. Changes nothing |
+| `kanbanr profile status [--if-changed]` | the packs this project follows and whether their libraries have moved on: new areas to answer, recommendations changed |
+| `kanbanr profile diff [<NAME>]` | what differs between the project's applied copy of a pack, or of every pack it follows, and its library's current copy |
+| `kanbanr profile update [<NAME>] [--dry-run]` | adopt the library's current copy of a pack, or of every pack followed, only on request; every answer is kept. `--dry-run` says what it would change and changes nothing |
+| `kanbanr baseline show` | the baseline: the packs, each area as answered, proposed, open, decide-later or not applicable with its entries and ADRs, every revision, and the charter's constraints |
+| `kanbanr baseline propose --answers F\|- [--item CODE] [--note …]` | propose answers as a revision (answers file: `item`, `note`, `answers: [{area, options: [..]}, {area, later: true}, {area, not_applicable: <reason>}]`; `option: <id>` reads as one option). Prints each entry it makes, each stage gate acceptance adds, and where it waits. Inert until accepted |
+| `kanbanr baseline accept <REV-n> [--rev HASH]` | accept a proposed revision as it stands now (or as `--rev` pins it): its constraints get their ADRs, the release stages it names require their gates. The person's own, on the Baseline page or in their terminal: refused inside a Claude session |
+| `kanbanr baseline withdraw <REV-n> --reason "…"` | withdraw a proposed revision; the record stays |
+
 **Sprints and releases** (projects with cadence switched on)
 
 | Command | What it does |

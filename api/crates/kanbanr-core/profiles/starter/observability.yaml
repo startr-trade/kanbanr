@@ -31,7 +31,7 @@ areas:
         fits_when: "A prototype, or a tool that never runs unattended"
         costs: No record when something goes wrong
         records:
-          - {kind: non_goal, text: "No observability yet; revisit at the first incident or the first assessor"}
+          - {kind: non_goal, text: "No observability yet; revisit at the first incident or the first assessor", excludes: [general, audit]}
 
   - id: general-observability
     title: General observability

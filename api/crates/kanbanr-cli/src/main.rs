@@ -127,6 +127,15 @@ enum Command {
     /// the project exists.
     #[command(subcommand)]
     Process(ProcessCmd),
+    /// Practice packs (FTR-033): the stack and engineering questions a project answers once, at
+    /// setup or at the first design that needs each. List, show, check and save packs in the
+    /// three libraries; add, remove and update the packs a project follows; ask what is open.
+    #[command(subcommand)]
+    Profile(ProfileCmd),
+    /// The project's engineering baseline (FTR-033): the answers its packs recorded, as proposed
+    /// revisions the person accepts on the Baseline page.
+    #[command(subcommand)]
+    Baseline(BaselineCmd),
     /// Walkthroughs that run themselves (FTR-037): a guide's runbook driven through a headless
     /// Claude Code session on a scratch project, every decision taken on the scratch board by a
     /// scripted person, everything captured, and the run's checks prepared on this board as one batch.
@@ -897,6 +906,106 @@ enum ProcessCmd {
         /// A process file (as `config workflow --export` writes), `-` to read one from stdin, or a
         /// process's name.
         source: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCmd {
+    /// Every practice pack this board can apply: its own library (`profiles/`), your personal one
+    /// (`~/.kanbanr/profiles`), and the built-in ones, with versions and the projects following
+    /// each.
+    List,
+    /// A pack's file, found by name: the board's first, then yours, then the built-in one.
+    Show { name: String },
+    /// Check a pack without applying it: its problems, then its warnings, or "checks clean".
+    /// Takes a file, `-` to read one from stdin, or a pack's name. Changes nothing; exits non-zero
+    /// when there is a problem.
+    Check { source: String },
+    /// Save a pack by name, to the board (the default) or to your personal library with
+    /// `--personal`: from a file, or by default this project's applied copy of the pack. It must
+    /// check clean; the version goes up only when the content changed.
+    Save {
+        name: String,
+        /// A pack file to save, or `-` to read it from stdin.
+        #[arg(long)]
+        from_file: Option<String>,
+        /// Keep it in your personal library instead of on the board.
+        #[arg(long)]
+        personal: bool,
+        /// What the pack is for, in a sentence.
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// Follow a pack in this project: the board's, yours or the built-in one by that name.
+    Add { name: String },
+    /// Stop following a pack. Its answers and entries stay, and come back if it is added again.
+    Remove { name: String },
+    /// What to ask now, as JSON: the open areas of the packs this project follows, with the
+    /// detected option first, else the recommended one, in dialogs of at most four. Changes
+    /// nothing.
+    Ask {
+        /// `setup` (the default without an item) or `first_need`.
+        #[arg(long)]
+        at: Option<String>,
+        /// The item whose Design is read for what it touches; implies `first_need`.
+        #[arg(long)]
+        item: Option<String>,
+        /// An answers file (or `-`) whose answers count as given, so the next dialog is asked.
+        #[arg(long)]
+        answers: Option<String>,
+        /// Explain an area instead: each option's `why`, `fits_when` and `costs`, with the facts
+        /// and files that bear on it.
+        #[arg(long)]
+        explain: Option<String>,
+    },
+    /// The packs this project follows and whether their libraries have moved on.
+    Status {
+        /// Print only what needs attention, and nothing when all is current — for the session hook.
+        #[arg(long)]
+        if_changed: bool,
+    },
+    /// What differs between this project's applied copy of a pack and its library's current one:
+    /// the pack named, or every pack it follows.
+    Diff { name: Option<String> },
+    /// Adopt the library's current copy of a pack (or of every pack the project follows). Only
+    /// when asked; every answer is kept.
+    Update {
+        name: Option<String>,
+        /// Say what it would change, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BaselineCmd {
+    /// The baseline: the packs, each area with its status and entries, and every revision.
+    Show,
+    /// Propose answers as a revision. It is inert until the person accepts it on the Baseline page.
+    Propose {
+        /// The answers file (YAML: `item`, `note`, `answers: [{area, options: [..]}, {area,
+        /// later: true}, {area, not_applicable: <reason>}]`), or `-` to read it from stdin.
+        #[arg(long)]
+        answers: String,
+        /// The item whose design asked (overrides the file's `item`).
+        #[arg(long)]
+        item: Option<String>,
+        /// A note kept with the revision (overrides the file's `note`).
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Accept a proposed revision: the person's own, on the Baseline page or in their terminal.
+    Accept {
+        id: String,
+        /// The revision's content hash as you saw it (default: as it stands now).
+        #[arg(long)]
+        rev: Option<String>,
+    },
+    /// Withdraw a proposed revision, with the reason. The record stays.
+    Withdraw {
+        id: String,
+        #[arg(long)]
+        reason: String,
     },
 }
 
@@ -2378,6 +2487,27 @@ fn command_access(cmd: &Command) -> Access {
             ProcessCmd::Update => {
                 Outside("`kanbanr process update` changes the project's workflow")
             }
+        },
+        Command::Profile(cmd) => match cmd {
+            ProfileCmd::List
+            | ProfileCmd::Show { .. }
+            | ProfileCmd::Check { .. }
+            | ProfileCmd::Ask { .. }
+            | ProfileCmd::Status { .. }
+            | ProfileCmd::Diff { .. }
+            | ProfileCmd::Update { dry_run: true, .. } => Read,
+            ProfileCmd::Save { .. } => {
+                Outside("`kanbanr profile save` writes outside the board's write path")
+            }
+            ProfileCmd::Add { .. } | ProfileCmd::Remove { .. } | ProfileCmd::Update { .. } => {
+                Outside("`kanbanr profile add|remove|update` changes the packs the project follows")
+            }
+        },
+        Command::Baseline(cmd) => match cmd {
+            BaselineCmd::Show => Read,
+            BaselineCmd::Propose { .. }
+            | BaselineCmd::Accept { .. }
+            | BaselineCmd::Withdraw { .. } => Core,
         },
         Command::Identity { .. } => Outside("`kanbanr identity` changes kanbanr itself"),
         Command::Walkthrough(cmd) => match cmd {
@@ -7430,6 +7560,753 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
     }
 }
 
+// ---- practice packs and the engineering baseline (FTR-033) -----------------------------------
+
+/// The personal pack library's folder (`KANBANR_PROFILES_DIR`, else `~/.kanbanr/profiles`).
+fn personal_profiles() -> Option<std::path::PathBuf> {
+    kanbanr_core::profile::personal_dir(project::home_dir().as_deref())
+}
+
+/// A pack by name: the board's, then the personal one, then the built-in one (FTR-033).
+fn resolve_pack(
+    cli: &Cli,
+    name: &str,
+) -> anyhow::Result<(
+    kanbanr_core::profile::ProfileFile,
+    kanbanr_core::config::Library,
+)> {
+    let board = board_here(cli);
+    Ok(kanbanr_core::profile::resolve(
+        board.as_ref().map(Backend::store),
+        name,
+        personal_profiles().as_deref(),
+    )?)
+}
+
+/// The current copy of a pack in the library a project took it from: `None` when it is gone.
+fn pack_library_copy(
+    client: &Backend,
+    source: &kanbanr_core::profile::ProfileSource,
+) -> anyhow::Result<Option<kanbanr_core::profile::ProfileFile>> {
+    use kanbanr_core::config::Library;
+    Ok(match source.library {
+        Library::Board => client.store().board_profile(&source.name)?,
+        Library::Personal => match personal_profiles() {
+            Some(dir) => kanbanr_core::profile::get(&dir, &source.name)?,
+            None => None,
+        },
+        Library::Builtin => kanbanr_core::profile::builtin(&source.name),
+    })
+}
+
+/// Who a pack or baseline write is by: the data folder's identity, else Claude (core stamps a
+/// session's write as Claude's whatever it says).
+fn pack_author(cli: &Cli) -> String {
+    verdict_author(cli, None).unwrap_or_else(|_| "Claude".into())
+}
+
+/// Where the person accepts a revision: the Baseline page.
+fn baseline_page(p: &str, id: Option<&str>) -> String {
+    let base = format!("{}/p/{}/baseline", monitor_url(), urlencode_segment(p));
+    match id {
+        Some(id) => format!("{base}#{id}"),
+        None => base,
+    }
+}
+
+/// An answers file (or `-`): `item`, `note` and `answers`, read as a proposal (`option: <id>` is
+/// a one-element `options`).
+fn read_answers(src: &str) -> anyhow::Result<kanbanr_core::baseline::Proposal> {
+    let text = read_process_text(src)?;
+    kanbanr_core::yaml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("{src} is not an answers file: {e}"))
+}
+
+/// `kanbanr profile list` (FTR-033).
+fn run_profile_list(cli: &Cli) -> anyhow::Result<()> {
+    let board = board_here(cli);
+    let rows = kanbanr_core::profile::list(
+        board.as_ref().map(Backend::store),
+        personal_profiles().as_deref(),
+    )?;
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for r in &rows {
+        let library = match r.library.as_str() {
+            "builtin" => "built-in",
+            other => other,
+        };
+        let version = match r.version {
+            Some(0) | None => String::new(),
+            Some(v) => format!("v{v}"),
+        };
+        let mut note = String::new();
+        if !r.used_by.is_empty() {
+            note = format!("  (followed by {})", r.used_by.join(", "));
+        }
+        if r.shadowed_by_board == Some(true) {
+            note.push_str("  (the board's copy is used)");
+        }
+        if r.not_here == Some(true) {
+            note.push_str("  (someone's personal pack, not in your library)");
+        }
+        let about = r.description.as_deref().unwrap_or("");
+        println!(
+            "{:<14} {:<9} {:<4} {}{}",
+            r.name, library, version, about, note
+        );
+    }
+    Ok(())
+}
+
+/// `kanbanr profile show <name>` (FTR-033).
+fn run_profile_show(cli: &Cli, name: &str) -> anyhow::Result<()> {
+    let (file, library) = resolve_pack(cli, name)?;
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "name": name, "library": library, "version": file.version(),
+                "rev": file.content_rev(), "file": file,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("# {name} v{} ({})\n", file.version(), library.as_str());
+    println!("```yaml\n{}```", file.to_yaml()?);
+    Ok(())
+}
+
+/// `kanbanr profile check <file|-|name>` (FTR-033): the board's validator, run alone.
+fn run_profile_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
+    use kanbanr_core::profile::{Asks, ProfileFile};
+    let (label, file): (String, ProfileFile) =
+        if source == "-" || std::path::Path::new(source).is_file() {
+            let text = read_process_text(source)?;
+            let label = if source == "-" { "the draft" } else { source };
+            let file = ProfileFile::from_yaml(&text)
+                .map_err(|e| anyhow::anyhow!("{label} is not a pack file: {e}"))?;
+            (label.to_string(), file)
+        } else {
+            (source.to_string(), resolve_pack(cli, source)?.0)
+        };
+    let board = board_here(cli);
+    let problems: Vec<String> = file
+        .problems_in(
+            board.as_ref().map(Backend::store),
+            personal_profiles().as_deref(),
+        )
+        .iter()
+        .map(|e| e.to_string())
+        .collect();
+    let warnings = file.warnings();
+    let areas = file.areas.len();
+    let at_setup = file.areas.iter().filter(|a| a.asks == Asks::Setup).count();
+    let options: usize = file.areas.iter().map(|a| a.options.len()).sum();
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "source": label, "ok": problems.is_empty(), "problems": problems,
+                "warnings": warnings, "areas": areas, "at_setup": at_setup, "options": options,
+            }))?
+        );
+    } else if problems.is_empty() {
+        println!("{label}: checks clean: {areas} areas ({at_setup} at setup), {options} options");
+        for w in &warnings {
+            println!("warning: {w}");
+        }
+    } else {
+        eprintln!("{label}: {} problem(s)", problems.len());
+        for problem in &problems {
+            eprintln!("  - {problem}");
+        }
+        for w in &warnings {
+            eprintln!("warning: {w}");
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{label} would be refused; nothing was changed"
+        ))
+    }
+}
+
+/// `kanbanr profile save <name>` (FTR-033): from a file, or this project's applied copy.
+fn run_profile_save(
+    cli: &Cli,
+    name: &str,
+    from_file: Option<&str>,
+    personal: bool,
+    description: Option<String>,
+) -> anyhow::Result<()> {
+    use kanbanr_core::profile::ProfileFile;
+    let board = board_here(cli);
+    let file: ProfileFile = match from_file {
+        Some(src) => ProfileFile::from_yaml(&read_process_text(src)?)
+            .map_err(|e| anyhow::anyhow!("{src} is not a pack file: {e}"))?,
+        None => {
+            let client = board.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("no board here to take a project's pack from; pass --from-file")
+            })?;
+            let p = require_project(cli)?;
+            kanbanr_core::baseline::applied_pack(client.store(), &p, name)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{p} has no applied copy of pack '{name}' to save; pass --from-file"
+                )
+            })?
+        }
+    };
+    let (saved, before, place) = if personal {
+        let dir = personal_profiles()
+            .ok_or_else(|| anyhow::anyhow!("no home folder to keep a personal pack in"))?;
+        let before = kanbanr_core::profile::get(&dir, name)?;
+        let saved = kanbanr_core::profile::save(&dir, name, file, description)?;
+        (
+            saved,
+            before,
+            format!("your personal library ({})", dir.display()),
+        )
+    } else {
+        let client = board.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no kanbanr board here to save '{name}' to; save it to your personal library \
+                 with --personal, or run this where the board is"
+            )
+        })?;
+        let before = client.store().board_profile(name).ok().flatten();
+        let resp = client.write(
+            Method::Put,
+            &format!("/profiles/{}", urlencode_segment(name)),
+            Some(json!({ "file": file, "description": description })),
+        )?;
+        let saved: ProfileFile = serde_json::from_str(&resp)?;
+        (saved, before, "the board".to_string())
+    };
+    let unchanged = before.as_ref() == Some(&saved);
+    if cli.json {
+        println!(
+            "{}",
+            json!({ "name": name, "version": saved.version(), "rev": saved.content_rev(),
+                    "personal": personal, "changed": !unchanged })
+        );
+        return Ok(());
+    }
+    if unchanged {
+        println!(
+            "{name} v{} is already saved to {place}, unchanged",
+            saved.version()
+        );
+    } else {
+        println!("saved pack {name} v{} to {place}", saved.version());
+        println!(
+            "A project that follows it sees the change in `kanbanr profile status`; it adopts it \
+             only with `kanbanr profile update {name}`."
+        );
+    }
+    Ok(())
+}
+
+/// The packs `profile diff` and `profile update` act on: the one named, or every one followed.
+fn packs_named(
+    p: &str,
+    b: &kanbanr_core::baseline::Baseline,
+    name: Option<&str>,
+) -> anyhow::Result<Vec<kanbanr_core::profile::ProfileSource>> {
+    let followed: Vec<_> = b
+        .packs
+        .iter()
+        .filter(|r| r.removed.is_none())
+        .map(|r| r.source.clone())
+        .collect();
+    match name {
+        None => Ok(followed),
+        Some(n) => match followed.into_iter().find(|s| s.name == n) {
+            Some(s) => Ok(vec![s]),
+            None => anyhow::bail!(
+                "{p} does not follow pack '{n}': `kanbanr profile status` lists the packs it \
+                 follows, `kanbanr profile add {n}` follows it"
+            ),
+        },
+    }
+}
+
+/// `kanbanr profile add|remove|ask|status|diff|update` (FTR-033): these read a project.
+fn run_profile(cli: &Cli, client: &Backend, cmd: &ProfileCmd) -> anyhow::Result<()> {
+    use kanbanr_core::baseline;
+    use kanbanr_core::config::Library;
+    use kanbanr_core::profile::{self, Asks};
+    let p = require_project(cli)?;
+    let store = client.store();
+    match cmd {
+        ProfileCmd::Add { name } => {
+            let (file, library) = resolve_pack(cli, name)?;
+            let mut body = json!({ "name": name, "by": pack_author(cli) });
+            // The daemon cannot see a personal library: the pack travels whole (as a process).
+            if library == Library::Personal {
+                body["file"] = serde_json::to_value(&file)?;
+            }
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/baseline/packs"),
+                Some(body),
+            )?;
+            print_pack_change(cli, &p, &resp, false)
+        }
+        ProfileCmd::Remove { name } => {
+            let resp = client.write(
+                Method::Delete,
+                &format!("/projects/{p}/baseline/packs/{}", urlencode_segment(name)),
+                Some(json!({ "by": pack_author(cli) })),
+            )?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            println!(
+                "{p} no longer follows pack {name}: its entries stay and come back if it is added \
+                 again (answers kept: {})",
+                v["answers_kept"].as_u64().unwrap_or(0)
+            );
+            Ok(())
+        }
+        ProfileCmd::Ask {
+            at,
+            item,
+            answers,
+            explain,
+        } => {
+            let b = baseline::load(store, &p)?;
+            let mut packs = baseline::followed_packs(store, &p, &b)?;
+            let at = match at.as_deref() {
+                None if item.is_some() => Asks::FirstNeed,
+                None | Some("setup") => Asks::Setup,
+                Some("first_need" | "first-need") => Asks::FirstNeed,
+                Some(other) => {
+                    anyhow::bail!("--at takes `setup` or `first_need`, not '{other}'")
+                }
+            };
+            // Setup follows the built-in core without a question when no pack is chosen yet.
+            if packs.is_empty() && at == Asks::Setup {
+                let (file, library) = resolve_pack(cli, "core")?;
+                packs.push((file.source("core", library), file));
+            }
+            let facts = kanbanr_core::facts::load(store, &p)?;
+            let root = code_repo().or_else(|| std::env::current_dir().ok());
+            if let Some(area) = explain {
+                let explained = profile::explain(&packs, area, facts.as_ref(), root.as_deref())?;
+                println!("{}", serde_json::to_string_pretty(&explained)?);
+                return Ok(());
+            }
+            let given = match answers {
+                Some(src) => read_answers(src)?.answers,
+                None => Vec::new(),
+            };
+            let design = match item {
+                Some(code) => {
+                    Some(baseline::design_text(&store.feature_spec(&p, code)?).to_string())
+                }
+                None => None,
+            };
+            let asked = profile::ask(
+                &packs,
+                &b,
+                &given,
+                at,
+                root.as_deref(),
+                facts.as_ref(),
+                design.as_deref(),
+                item.as_deref().unwrap_or(""),
+            );
+            println!("{}", serde_json::to_string_pretty(&asked)?);
+            Ok(())
+        }
+        ProfileCmd::Status { if_changed } => {
+            let status = baseline::profile_status(store, &p, personal_profiles().as_deref())?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+                return Ok(());
+            }
+            if status.packs.is_empty() && !*if_changed {
+                println!(
+                    "{p} follows no practice pack (`kanbanr profile list` shows them, \
+                     `kanbanr profile add <pack>` follows one)"
+                );
+            }
+            for s in &status.packs {
+                if !*if_changed {
+                    let state = if s.removed {
+                        ", removed"
+                    } else if s.drift.as_ref().is_some_and(|d| d.is_current()) {
+                        ", current"
+                    } else {
+                        ""
+                    };
+                    println!(
+                        "{p} follows {} v{} ({}){state}",
+                        s.name,
+                        s.version,
+                        s.library.as_str()
+                    );
+                }
+                for m in &s.messages {
+                    println!("{m}");
+                }
+            }
+            Ok(())
+        }
+        ProfileCmd::Diff { name } => {
+            let b = baseline::load(store, &p)?;
+            let mut rows = Vec::new();
+            for source in packs_named(&p, &b, name.as_deref())? {
+                let applied = baseline::applied_pack(store, &p, &source.name)?;
+                let current = pack_library_copy(client, &source)?;
+                let changes = match (&applied, &current) {
+                    (Some(a), Some(c)) => profile::diff(a, c),
+                    _ => Vec::new(),
+                };
+                rows.push(json!({
+                    "pack": source.name, "library": source.library,
+                    "applied": source.version,
+                    "current": current.as_ref().map(|c| c.version()),
+                    "gone": current.is_none(), "changes": changes,
+                }));
+            }
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "project": p, "packs": rows }))?
+                );
+                return Ok(());
+            }
+            if rows.is_empty() {
+                println!("{p} follows no practice pack");
+            }
+            for r in &rows {
+                let n = r["pack"].as_str().unwrap_or("");
+                let changes = r["changes"].as_array().cloned().unwrap_or_default();
+                if r["gone"] == true {
+                    println!(
+                        "{n} is no longer in the {} library: save it again with `kanbanr \
+                         profile save {n}`",
+                        r["library"].as_str().unwrap_or("")
+                    );
+                } else if changes.is_empty() {
+                    println!(
+                        "{n}: the applied copy is the same as its library's v{}",
+                        r["current"]
+                    );
+                } else {
+                    println!("{n} v{} → v{}:", r["applied"], r["current"]);
+                    for c in &changes {
+                        println!("  {}", c.as_str().unwrap_or(""));
+                    }
+                }
+            }
+            Ok(())
+        }
+        ProfileCmd::Update { name, dry_run } => {
+            let b = baseline::load(store, &p)?;
+            let targets = packs_named(&p, &b, name.as_deref())?;
+            if targets.is_empty() {
+                println!("{p} follows no practice pack: nothing to update");
+                return Ok(());
+            }
+            for source in targets {
+                let current = pack_library_copy(client, &source)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "pack '{}' is no longer in the {} library: save it again with \
+                         `kanbanr profile save {}`",
+                        source.name,
+                        source.library.as_str(),
+                        source.name
+                    )
+                })?;
+                if current.content_rev() == source.rev {
+                    if !cli.json {
+                        println!("{p} already follows {} as saved", source.name);
+                    }
+                    continue;
+                }
+                let mut body = json!({ "name": source.name, "by": pack_author(cli) });
+                if source.library == Library::Personal {
+                    body["file"] = serde_json::to_value(&current)?;
+                }
+                let path = format!("/projects/{p}/baseline/packs");
+                let resp = if *dry_run {
+                    body["dry_run"] = json!(true);
+                    client.preview(Method::Post, &path, Some(body))?
+                } else {
+                    client.write(Method::Post, &path, Some(body))?
+                };
+                print_pack_change(cli, &p, &resp, *dry_run)?;
+            }
+            Ok(())
+        }
+        ProfileCmd::List
+        | ProfileCmd::Show { .. }
+        | ProfileCmd::Check { .. }
+        | ProfileCmd::Save { .. } => unreachable!("handled before the board is opened"),
+    }
+}
+
+/// What adding or updating a pack did: the diff it applied and the answers kept.
+fn print_pack_change(cli: &Cli, p: &str, resp: &str, dry_run: bool) -> anyhow::Result<()> {
+    if cli.json {
+        println!("{}", pretty(resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(resp)?;
+    let pack = &v["pack"];
+    let name = pack["name"].as_str().unwrap_or("");
+    let version = pack["version"].as_u64().unwrap_or(0);
+    let library = pack["library"].as_str().unwrap_or("");
+    let verb = match (v["updated"].as_bool() == Some(true), dry_run) {
+        (true, false) => "now follows",
+        (false, false) => "follows",
+        (true, true) => "would update to",
+        (false, true) => "would follow",
+    };
+    println!("{p} {verb} {name} v{version} ({library})");
+    for line in v["diff"].as_array().into_iter().flatten() {
+        println!("  {}", line.as_str().unwrap_or(""));
+    }
+    println!("answers kept: {}", v["answers_kept"].as_u64().unwrap_or(0));
+    if dry_run {
+        println!("(dry run: nothing changed)");
+    }
+    Ok(())
+}
+
+/// `kanbanr baseline show|propose|accept|withdraw` (FTR-033).
+fn run_baseline(cli: &Cli, client: &Backend, cmd: &BaselineCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let base = format!("/projects/{p}/baseline");
+    match cmd {
+        BaselineCmd::Show => {
+            let resp = client.get(&base)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            print!("{}", baseline_text(&p, &serde_json::from_str(&resp)?));
+            Ok(())
+        }
+        BaselineCmd::Propose {
+            answers,
+            item,
+            note,
+        } => {
+            let mut proposal = read_answers(answers)?;
+            if let Some(item) = item {
+                proposal.item = item.clone();
+            }
+            if let Some(note) = note {
+                proposal.note = note.clone();
+            }
+            let mut body = serde_json::to_value(&proposal)?;
+            body["by"] = json!(pack_author(cli));
+            let resp = client.write(Method::Post, &format!("{base}/revisions"), Some(body))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let id = v["id"].as_str().unwrap_or("");
+            for e in v["entries"].as_array().into_iter().flatten() {
+                let kind = e["kind"].as_str().unwrap_or("");
+                let adr = if kind == "constraint" {
+                    " (ADR on acceptance)"
+                } else {
+                    ""
+                };
+                println!(
+                    "{} {kind}: {}{adr}",
+                    e["id"].as_str().unwrap_or(""),
+                    e["text"].as_str().unwrap_or("")
+                );
+            }
+            for g in v["stage_gates"].as_array().into_iter().flatten() {
+                println!(
+                    "on acceptance, stage {} requires a passed `{}` result",
+                    g[0].as_str().unwrap_or(""),
+                    g[1].as_str().unwrap_or("")
+                );
+            }
+            for w in v["warnings"].as_array().into_iter().flatten() {
+                println!("warning: {}", w.as_str().unwrap_or(""));
+            }
+            println!(
+                "{id} waits on the Baseline page: {}",
+                baseline_page(&p, Some(id))
+            );
+            Ok(())
+        }
+        BaselineCmd::Accept { id, rev } => {
+            // Accepted as it stands now, unless the rev seen is given: the one the view shows.
+            let rev = match rev {
+                Some(r) => r.clone(),
+                None => {
+                    let view: Value = serde_json::from_str(&client.get(&base)?)?;
+                    view["revisions"]
+                        .as_array()
+                        .and_then(|a| a.iter().find(|r| r["id"] == id.as_str()))
+                        .and_then(|r| r["rev"].as_str().map(String::from))
+                        .ok_or_else(|| anyhow::anyhow!("there is no baseline revision {id}"))?
+                }
+            };
+            let who = verdict_author(cli, None)?;
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/revisions/{}/accept", urlencode_segment(id)),
+                Some(json!({ "rev": rev, "by": who })),
+            )?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let entries = v["entries"].as_array().cloned().unwrap_or_default();
+            println!("{id} accepted by {who}: {} entries in force", entries.len());
+            for e in &entries {
+                if let Some(adr) = e["adr"].as_str().filter(|a| !a.is_empty()) {
+                    println!("  {} recorded as {adr}", e["id"].as_str().unwrap_or(""));
+                }
+            }
+            for g in v["stage_gates"].as_array().into_iter().flatten() {
+                println!(
+                    "  stage {} now requires a passed `{}` result",
+                    g[0].as_str().unwrap_or(""),
+                    g[1].as_str().unwrap_or("")
+                );
+            }
+            for w in v["warnings"].as_array().into_iter().flatten() {
+                println!("warning: {}", w.as_str().unwrap_or(""));
+            }
+            Ok(())
+        }
+        BaselineCmd::Withdraw { id, reason } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/revisions/{}/withdraw", urlencode_segment(id)),
+                Some(json!({ "reason": reason, "by": pack_author(cli) })),
+            )?;
+            print_write(cli, &resp, format!("{id} withdrawn: {reason}"));
+            Ok(())
+        }
+    }
+}
+
+/// `kanbanr baseline show` as text: the packs, the areas by status with their entries, the
+/// revisions, and the charter's constraints.
+fn baseline_text(p: &str, v: &Value) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let list = |key: &str| v[key].as_array().cloned().unwrap_or_default();
+    let s = |x: &Value| x.as_str().unwrap_or("").to_string();
+    let packs = list("packs");
+    if packs.is_empty() {
+        let _ = writeln!(
+            out,
+            "{p} follows no practice pack (`kanbanr profile add <pack>`, or ask setup's areas \
+             with `kanbanr profile ask --json`)"
+        );
+    } else {
+        let _ = writeln!(out, "Packs:");
+    }
+    for pk in &packs {
+        let removed = if pk["removed"].is_object() {
+            ", removed"
+        } else {
+            ""
+        };
+        let _ = writeln!(
+            out,
+            "  {} v{} ({}){removed}",
+            s(&pk["name"]),
+            pk["version"].as_u64().unwrap_or(0),
+            s(&pk["library"])
+        );
+        for m in pk["messages"].as_array().into_iter().flatten() {
+            let _ = writeln!(out, "    {}", s(m));
+        }
+    }
+    let areas = list("areas");
+    if !areas.is_empty() {
+        let _ = writeln!(out, "Areas:");
+    }
+    for a in &areas {
+        let status = s(&a["status"]);
+        let chosen: Vec<String> = a["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|o| match o.as_str() {
+                Some(id) => id.to_string(),
+                None => s(&o["option"]),
+            })
+            .collect();
+        let mut line = format!("  {} ({}): {status}", s(&a["id"]), s(&a["pack"]));
+        if !chosen.is_empty() {
+            let _ = write!(line, ": {}", chosen.join(", "));
+        }
+        if !s(&a["reason"]).is_empty() {
+            let _ = write!(line, " — {}", s(&a["reason"]));
+        }
+        let _ = writeln!(out, "{line}");
+        for e in a["entries"].as_array().into_iter().flatten() {
+            let mut line = format!("    {} {}: {}", s(&e["id"]), s(&e["kind"]), s(&e["text"]));
+            if !s(&e["adr"]).is_empty() {
+                let _ = write!(line, " ({})", s(&e["adr"]));
+            }
+            if e["in_force"] != true {
+                line.push_str(" [not in force]");
+            }
+            if e["pack_removed"] == true {
+                line.push_str(" [pack removed]");
+            }
+            if e["not_accepted_through_kanbanr"] == true {
+                line.push_str(" [not accepted through kanbanr]");
+            }
+            let _ = writeln!(out, "{line}");
+        }
+    }
+    let revisions = list("revisions");
+    if !revisions.is_empty() {
+        let _ = writeln!(out, "Revisions:");
+    }
+    for r in &revisions {
+        let id = s(&r["id"]);
+        let item = if s(&r["item"]).is_empty() {
+            "setup".to_string()
+        } else {
+            s(&r["item"])
+        };
+        let n = r["entries"].as_array().map_or(0, Vec::len);
+        let _ = writeln!(out, "  {id} {} ({item}): {n} entries", s(&r["state"]));
+        if s(&r["state"]) == "proposed" {
+            let _ = writeln!(
+                out,
+                "    the person accepts it on the Baseline page: {}",
+                baseline_page(p, Some(&id))
+            );
+        }
+    }
+    let charter = list("charter_constraints");
+    if !charter.is_empty() {
+        let _ = writeln!(out, "Also in the charter:");
+        for c in &charter {
+            let _ = writeln!(out, "  {}", s(c));
+        }
+    }
+    out
+}
+
 /// `kanbanr build …` (FTR-062).
 fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
     let store = kanbanr_core::Store::new(project::resolve_data_dir(cli.data_dir.as_deref()));
@@ -7649,6 +8526,24 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             return run_process_check(cli, source);
         }
         Command::Process(ProcessCmd::List) => return run_process_list(cli),
+        // Packs are listed, shown, checked and saved before any board exists (FTR-033).
+        Command::Profile(ProfileCmd::List) => return run_profile_list(cli),
+        Command::Profile(ProfileCmd::Show { name }) => return run_profile_show(cli, name),
+        Command::Profile(ProfileCmd::Check { source }) => return run_profile_check(cli, source),
+        Command::Profile(ProfileCmd::Save {
+            name,
+            from_file,
+            personal,
+            description,
+        }) => {
+            return run_profile_save(
+                cli,
+                name,
+                from_file.as_deref(),
+                *personal,
+                description.clone(),
+            );
+        }
         Command::Process(ProcessCmd::Show { name }) => return run_process_show(cli, name),
         // Setup asks before any board exists (FTR-028 R-5).
         Command::Decisions(DecisionsCmd::Defaults {
@@ -7796,6 +8691,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Process(cmd) => run_process_drift(cli, &client, cmd),
+        Command::Profile(cmd) => run_profile(cli, &client, cmd),
+        Command::Baseline(cmd) => run_baseline(cli, &client, cmd),
         Command::Activity => run_activity(cli, &client),
         Command::Events(cmd) => run_events(cli, &client, cmd),
         Command::Remote(cmd) => run_remote(cli, &client, cmd),

@@ -254,14 +254,36 @@ pub struct Records {
     /// How an nfr is measured.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measure: String,
-    /// For a non-goal: the option of the same area it rules out. When that option is chosen too,
-    /// the non-goal gives way to it (FTR-033 P4 Q1); without it the words of the other chosen
-    /// options are matched against the text.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub excludes: String,
+    /// For a non-goal: the options of the same area it rules out, written as one option id or a
+    /// list of them. When one of them is chosen too, the non-goal gives way to it (FTR-033 P4
+    /// Q1, P12 Q1/Q2); without any the words of the other chosen options are matched against the
+    /// text.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "one_or_many"
+    )]
+    pub excludes: Vec<String>,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
+}
+
+/// Read a YAML string as a one-element list, and a list as itself (`excludes`).
+fn one_or_many<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(s) if s.trim().is_empty() => Vec::new(),
+        OneOrMany::One(s) => vec![s],
+        OneOrMany::Many(v) => v,
+    })
 }
 
 /// What an option adds to the work.
@@ -540,19 +562,20 @@ impl ProfileFile {
                             "area '{a}': option '{o}' records an empty text: write the entry"
                         )));
                     }
-                    let excl = r.excludes.trim();
-                    if !excl.is_empty() && r.kind != Kind::NonGoal {
+                    if !r.excludes.is_empty() && r.kind != Kind::NonGoal {
                         out.push(problem(format!(
                             "area '{a}': option '{o}': `excludes` is for a non_goal, not a {}",
                             r.kind.as_str()
                         )));
-                    } else if !excl.is_empty()
-                        && (excl == o.as_str() || !area.options.iter().any(|x| x.id == excl))
-                    {
-                        out.push(problem(format!(
-                            "area '{a}': option '{o}': `excludes` names '{excl}', which is not \
-                             another option of the area"
-                        )));
+                    } else {
+                        for excl in r.excludes.iter().map(|e| e.trim()) {
+                            if excl == o.as_str() || !area.options.iter().any(|x| x.id == excl) {
+                                out.push(problem(format!(
+                                    "area '{a}': option '{o}': `excludes` names '{excl}', which \
+                                     is not another option of the area"
+                                )));
+                            }
+                        }
                     }
                     if !r.iso25010.is_empty() && r.kind != Kind::Nfr {
                         out.push(problem(format!(
@@ -2749,5 +2772,154 @@ areas:
         assert!(again.packs.iter().all(|p| p.removed.is_none()));
         assert!(!baseline::touched(&again, design).is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Coordinator decision on P12 Q1/Q2 (R-1): a non-goal's `excludes` names one option or a
+    /// list of them (a YAML string or list; a list in the model). The user's machine's "No server
+    /// to operate" gives way to a host, containers or Kubernetes chosen with it, and each `many`
+    /// area's "none" option excludes every other option of its area, so picking it with another
+    /// records the conflict through the excludes path.
+    #[test]
+    fn a_non_goal_can_exclude_several_options() {
+        const PACK: &str = r#"
+profile:
+  name: runs
+  description: Where it runs, for the tests
+  version: 1
+areas:
+  - id: runs-where
+    title: Where it runs
+    asks: setup
+    select: many
+    touches: [deploy]
+    question: Where does the product run?
+    options:
+      - id: host
+        label: A host
+        why: One machine
+        fits_when: Small
+        costs: Hand-run
+        records:
+          - {kind: constraint, text: The product runs on a host}
+      - id: cluster
+        label: A cluster
+        why: Many machines
+        fits_when: Many services
+        costs: A cluster to run
+        records:
+          - {kind: constraint, text: A cluster runs the product}
+      - id: laptop
+        label: The user's laptop
+        why: Local
+        fits_when: Tools
+        costs: Every OS
+        records:
+          - {kind: constraint, text: The product runs on the user's laptop}
+          - {kind: non_goal, text: Nothing to operate, excludes: [host, cluster]}
+      - id: phone
+        label: A phone
+        why: Mobile
+        fits_when: Apps
+        costs: Stores
+        records:
+          - {kind: non_goal, text: No desktop build, excludes: laptop}
+"#;
+        // Both forms read; the one-option form is a one-element list.
+        let file = pack(PACK);
+        let area = file.area("runs-where").unwrap();
+        let excl = |o: &str| {
+            serde_json::to_value(&area.option(o).unwrap().records.last().unwrap().excludes).unwrap()
+        };
+        assert_eq!(excl("laptop"), serde_json::json!(["host", "cluster"]));
+        assert_eq!(excl("phone"), serde_json::json!(["laptop"]));
+        assert!(file.problems().is_empty(), "{:?}", file.problems());
+        // A list naming an option the area does not have is a problem, naming it.
+        let bad = pack(&PACK.replace("excludes: [host, cluster]", "excludes: [host, lambda]"));
+        let problems: Vec<String> = bad.problems().iter().map(|e| e.to_string()).collect();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("`excludes` names 'lambda'")),
+            "{problems:?}"
+        );
+
+        // Proposed with any one of the options it names, the non-goal gives way to it.
+        use crate::baseline::tests::{answer, board, follow, propose_answers};
+        use crate::baseline::withdraw;
+        let (store, dir, _) = board(false);
+        follow(&store, PACK);
+        for other in ["host", "cluster"] {
+            let v = propose_answers(&store, "", vec![answer("runs-where", &["laptop", other])]);
+            assert!(
+                !v.entries.iter().any(|e| e.kind == Kind::NonGoal),
+                "{other}: {:?}",
+                v.entries
+            );
+            assert_eq!(v.warnings.len(), 1, "{other}: {:?}", v.warnings);
+            assert!(
+                v.warnings[0].contains(&format!("it excludes '{other}'")),
+                "{}",
+                v.warnings[0]
+            );
+            withdraw(
+                &store,
+                "demo",
+                &v.revision.id,
+                "again",
+                crate::baseline::tests::stamp(),
+            )
+            .unwrap();
+        }
+        // Alone, the non-goal is recorded.
+        let v = propose_answers(&store, "", vec![answer("runs-where", &["laptop"])]);
+        assert!(
+            v.entries.iter().any(|e| e.kind == Kind::NonGoal),
+            "{:?}",
+            v.entries
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        // The built-in packs: "No server to operate" excludes host, containers and Kubernetes.
+        let core = builtin("core").unwrap();
+        let rw = core.area("runs-where").unwrap();
+        let ng = rw
+            .option("user-machine")
+            .unwrap()
+            .records
+            .iter()
+            .find(|r| r.kind == Kind::NonGoal)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&ng.excludes).unwrap(),
+            serde_json::json!(["host", "containers", "kubernetes"])
+        );
+        // Each many-select "none" option excludes every other option of its area.
+        for (pack_name, area_id, none) in [
+            ("core", "practice-baseline", "none"),
+            ("observability", "observability-needs", "none-yet"),
+            ("data", "database", "none"),
+        ] {
+            let file = builtin(pack_name).unwrap();
+            let area = file.area(area_id).unwrap();
+            assert_eq!(area.select, Select::Many, "{area_id}");
+            let ng = area
+                .option(none)
+                .unwrap()
+                .records
+                .iter()
+                .find(|r| r.kind == Kind::NonGoal)
+                .unwrap_or_else(|| panic!("{area_id}: '{none}' records no non-goal"));
+            let others: Vec<&str> = area
+                .options
+                .iter()
+                .filter(|o| o.id != none)
+                .map(|o| o.id.as_str())
+                .collect();
+            assert_eq!(
+                serde_json::to_value(&ng.excludes).unwrap(),
+                serde_json::json!(others),
+                "{area_id}"
+            );
+        }
     }
 }
