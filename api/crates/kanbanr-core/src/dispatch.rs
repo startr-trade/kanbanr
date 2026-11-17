@@ -2956,6 +2956,74 @@ fn dispatch_routes(
             ser(&crate::charter::save(store, p, &charter)?)
         }
 
+        // ---- the project's facts and its content catalog (FTR-005) ----
+        ("GET", ["projects", p, "facts"]) => {
+            store.load_meta(p)?; // the project must exist; no facts record reads as `{}`
+            match crate::facts::load(store, p)? {
+                Some(facts) => ser(&facts),
+                None => ser(&json!({})),
+            }
+        }
+        ("PUT", ["projects", p, "facts"]) => {
+            store.load_meta(p)?;
+            let facts: crate::facts::Facts = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid facts record: {e}")))?;
+            ser(&crate::facts::save(store, p, &facts)?)
+        }
+        ("GET", ["projects", p, "catalog"]) => {
+            let project = store.load(p)?;
+            ser(&crate::catalog::status(store, &project, repo)?)
+        }
+        ("PUT", ["projects", p, "catalog"]) => {
+            store.load_meta(p)?;
+            let mut catalog = match (str_field(b, "text"), b.get("rows")) {
+                (Some(text), _) => crate::catalog::parse(&text)?,
+                (None, Some(rows)) => crate::catalog::Catalog {
+                    schema: crate::catalog::SCHEMA,
+                    rows: serde_json::from_value(rows.clone()).map_err(|e| {
+                        CoreError::Unsupported(format!("invalid catalog rows: {e}"))
+                    })?,
+                    ..Default::default()
+                },
+                (None, None) => {
+                    return Err(CoreError::Unsupported(
+                        "give the catalog: `text` (YAML) or `rows`".into(),
+                    ));
+                }
+            };
+            // A bare list of rows names no starter version: keep the one the catalog began from.
+            if catalog.starter == 0 {
+                catalog.starter = crate::catalog::load(store, p)
+                    .ok()
+                    .flatten()
+                    .map(|c| c.starter)
+                    .unwrap_or_default();
+            }
+            crate::catalog::save(store, p, &catalog)?;
+            ser(&crate::catalog::status(store, &store.load(p)?, repo)?)
+        }
+        ("POST", ["projects", p, "catalog", "init"]) => {
+            store.load_meta(p)?;
+            crate::catalog::init(store, p, bool_field(b, "force").unwrap_or(false))?;
+            ser(&crate::catalog::status(store, &store.load(p)?, repo)?)
+        }
+        ("POST", ["projects", p, "catalog", "add"]) => {
+            store.load_meta(p)?;
+            let id = str_field(b, "id")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| CoreError::Unsupported("give the starter row's `id`".into()))?;
+            crate::catalog::add_row(store, p, id.trim())?;
+            ser(&crate::catalog::status(store, &store.load(p)?, repo)?)
+        }
+        ("POST", ["projects", p, "catalog", "rows", id]) => {
+            store.load_meta(p)?;
+            let applies = bool_field(b, "applies")
+                .ok_or_else(|| CoreError::Unsupported("give `applies`: true or false".into()))?;
+            let why = str_field(b, "why").unwrap_or_default();
+            crate::catalog::set_row(store, p, &percent_decode(id), applies, &why)?;
+            ser(&crate::catalog::status(store, &store.load(p)?, repo)?)
+        }
+
         // ---- issue mirror (FEAT-043) ----
         ("GET", ["projects", p, "mirror"]) => ser(&crate::mirror::load_config(store, p)?),
         ("PUT", ["projects", p, "mirror"]) => {
@@ -3205,6 +3273,24 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),
         ["projects", _p, "charter"] => "update project charter".into(),
+        ["projects", _p, "facts"] => "facts: set".into(),
+        ["projects", _p, "catalog"] => "catalog: set".into(),
+        ["projects", _p, "catalog", "init"] => "catalog: init".into(),
+        ["projects", _p, "catalog", "add"] => format!(
+            "catalog: add {}",
+            body.and_then(|b| str_field(b, "id"))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        ),
+        ["projects", _p, "catalog", "rows", id] => format!(
+            "catalog: row {} {}",
+            percent_decode(id),
+            if body.and_then(|b| bool_field(b, "applies")) == Some(true) {
+                "on"
+            } else {
+                "off"
+            }
+        ),
         ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
         ["projects", _p, "features", c, "defect"] => format!("record defect details for {c}"),
         ["projects", _p, "lessons"] => "record a lesson".into(),

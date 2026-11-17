@@ -430,6 +430,7 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "items"]
             | ["projects", _, "attention"]
             | ["projects", _, "overview"]
+            | ["projects", _, "catalog"]
             | ["projects", _, "review", "decide"]
             | ["projects", _, "review", "summary"]
             | ["projects", _, "review", "groups", ..]

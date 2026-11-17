@@ -137,6 +137,18 @@ enum Command {
     /// revisions the person accepts on the Baseline page.
     #[command(subcommand)]
     Baseline(BaselineCmd),
+    /// The project's facts (FTR-005): its languages, runtimes, where it runs, its parts and its
+    /// data. With no subcommand, prints the record.
+    Facts {
+        #[command(subcommand)]
+        cmd: Option<FactsCmd>,
+    },
+    /// The content catalog (FTR-005): what the project documents, by question and perspective,
+    /// each row with its source and drift protection. With no subcommand, prints its status.
+    Catalog {
+        #[command(subcommand)]
+        cmd: Option<CatalogCmd>,
+    },
     /// Walkthroughs that run themselves (FTR-037): a guide's runbook driven through a headless
     /// Claude Code session on a scratch project, every decision taken on the scratch board by a
     /// scripted person, everything captured, and the run's checks prepared on this board as one batch.
@@ -2140,6 +2152,71 @@ enum CharterCmd {
 }
 
 #[derive(Subcommand)]
+enum FactsCmd {
+    /// Print the project's facts record (the default; JSON with --json).
+    Show,
+    /// Replace the whole facts record: each key a comma list of `kanbanr facts vocabulary` words
+    /// or `other:<text>`, or the record from a YAML file. Refused, naming each problem, when a
+    /// value is unknown or every list is empty.
+    Set {
+        /// The languages it is written in, e.g. rust,typescript.
+        #[arg(long)]
+        languages: Option<String>,
+        /// The runtimes it runs on, e.g. native,browser.
+        #[arg(long)]
+        runtimes: Option<String>,
+        /// Where the built thing runs, e.g. developer-machine,server.
+        #[arg(long)]
+        production: Option<String>,
+        /// Its parts, e.g. cli,api,web-ui.
+        #[arg(long)]
+        parts: Option<String>,
+        /// The data it keeps, e.g. files,sql.
+        #[arg(long)]
+        data: Option<String>,
+        /// Take the record from this YAML (or JSON) file instead of the flags.
+        #[arg(
+            long,
+            conflicts_with_all = ["languages", "runtimes", "production", "parts", "data"]
+        )]
+        from_file: Option<String>,
+    },
+    /// The five questions and the words that answer them.
+    Vocabulary,
+}
+
+#[derive(Subcommand)]
+enum CatalogCmd {
+    /// Print the catalog's status (the default): the gaps first, then each row by level with
+    /// whether it applies, its source's state and its protections. JSON with --json.
+    Show,
+    /// Write the starter catalog. Refused when the project has one, unless --force.
+    Init {
+        /// Replace the project's catalog with the starter.
+        #[arg(long)]
+        force: bool,
+        /// Print the starter catalog and write nothing.
+        #[arg(long)]
+        print: bool,
+    },
+    /// Replace the catalog from a YAML file (a mapping with `rows`, or a bare list of rows).
+    Set {
+        #[arg(long)]
+        from_file: String,
+    },
+    /// Copy one row of the starter catalog into the project's catalog.
+    Add { id: String },
+    /// Switch a row off, with the reason it does not apply.
+    Off {
+        id: String,
+        #[arg(long)]
+        why: String,
+    },
+    /// Switch a row back on: its `when` clause decides again.
+    On { id: String },
+}
+
+#[derive(Subcommand)]
 enum HooksCmd {
     /// Add the hooks to this project (skipped if already there or provided by the kanbanr plugin).
     Install {
@@ -2538,6 +2615,14 @@ fn command_access(cmd: &Command) -> Access {
             ProfileCmd::Add { .. } | ProfileCmd::Remove { .. } | ProfileCmd::Update { .. } => {
                 Outside("`kanbanr profile add|remove|update` changes the packs the project follows")
             }
+        },
+        Command::Facts { cmd } => match cmd {
+            None | Some(FactsCmd::Show) | Some(FactsCmd::Vocabulary) => Read,
+            Some(FactsCmd::Set { .. }) => Core,
+        },
+        Command::Catalog { cmd } => match cmd {
+            None | Some(CatalogCmd::Show) | Some(CatalogCmd::Init { print: true, .. }) => Read,
+            Some(_) => Core,
         },
         Command::Baseline(cmd) => match cmd {
             BaselineCmd::Show => Read,
@@ -6217,6 +6302,252 @@ fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<
     Ok(())
 }
 
+/// `kanbanr facts …` (FTR-005): the project's facts record. Parsing and printing only; core
+/// validates and writes.
+fn run_facts(cli: &Cli, client: &Backend, cmd: Option<&FactsCmd>) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let path = format!("/projects/{p}/facts");
+    match cmd.unwrap_or(&FactsCmd::Show) {
+        FactsCmd::Show => {
+            let resp = client.get(&path)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            if v.as_object().is_none_or(|o| o.is_empty()) {
+                println!(
+                    "no project facts — `kanbanr facts set --languages … --runtimes … \
+                     --production … --parts … --data …`"
+                );
+                return Ok(());
+            }
+            print_facts(&v);
+        }
+        FactsCmd::Set {
+            languages,
+            runtimes,
+            production,
+            parts,
+            data,
+            from_file,
+        } => {
+            let body = match from_file {
+                Some(file) => {
+                    let raw = std::fs::read_to_string(file)?;
+                    // YAML is a superset of JSON, so one parser accepts either form.
+                    let facts: kanbanr_core::facts::Facts = kanbanr_core::config::from_yaml(&raw)
+                        .map_err(|e| {
+                        anyhow::anyhow!("invalid facts record (YAML or JSON expected): {e}")
+                    })?;
+                    serde_json::to_value(facts)?
+                }
+                None => {
+                    let list = |s: &Option<String>| -> Vec<String> {
+                        s.as_deref()
+                            .unwrap_or("")
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|x| !x.is_empty())
+                            .map(String::from)
+                            .collect()
+                    };
+                    json!({
+                        "languages": list(languages),
+                        "runtimes": list(runtimes),
+                        "production": list(production),
+                        "parts": list(parts),
+                        "data": list(data),
+                    })
+                }
+            };
+            let resp = client.write(Method::Put, &path, Some(body))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                println!("facts saved for '{p}'");
+                print_facts(&serde_json::from_str(&resp)?);
+            }
+        }
+        FactsCmd::Vocabulary => {
+            if cli.json {
+                let v: Vec<Value> = kanbanr_core::facts::VOCABULARY
+                    .iter()
+                    .map(|q| json!({ "key": q.key, "values": q.values, "means": q.means }))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&v)?);
+                return Ok(());
+            }
+            for q in &kanbanr_core::facts::VOCABULARY {
+                println!("{:<11} {}", q.key, q.means);
+                println!("            {}, or other:<text>", q.values.join(", "));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_facts(v: &Value) {
+    for q in &kanbanr_core::facts::VOCABULARY {
+        let values: Vec<&str> = v[q.key]
+            .as_array()
+            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        let shown = if values.is_empty() {
+            "—".to_string()
+        } else {
+            values.join(", ")
+        };
+        println!("{:<11} {shown}", q.key);
+    }
+    if let Some(at) = v["set_at"].as_str().filter(|s| !s.is_empty()) {
+        println!("{:<11} {at}", "set at");
+    }
+}
+
+/// `kanbanr catalog …` (FTR-005): what the project documents, by question and perspective.
+/// Parsing and printing only; the catalog file is sent as text and core parses it.
+fn run_catalog(cli: &Cli, client: &Backend, cmd: Option<&CatalogCmd>) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let base = format!("/projects/{p}/catalog");
+    let repo = code_repo();
+    let resp = match cmd.unwrap_or(&CatalogCmd::Show) {
+        CatalogCmd::Show => client.get_in(&base, repo.as_deref())?,
+        CatalogCmd::Init { print: true, .. } => {
+            print!("{}", kanbanr_core::catalog::STARTER);
+            return Ok(());
+        }
+        CatalogCmd::Init { force, .. } => client.write_in(
+            Method::Post,
+            &format!("{base}/init"),
+            Some(json!({ "force": force })),
+            repo.as_deref(),
+        )?,
+        CatalogCmd::Set { from_file } => client.write_in(
+            Method::Put,
+            &base,
+            Some(json!({ "text": std::fs::read_to_string(from_file)? })),
+            repo.as_deref(),
+        )?,
+        CatalogCmd::Add { id } => client.write_in(
+            Method::Post,
+            &format!("{base}/add"),
+            Some(json!({ "id": id })),
+            repo.as_deref(),
+        )?,
+        CatalogCmd::Off { id, why } => client.write_in(
+            Method::Post,
+            &format!("{base}/rows/{}", urlencode_segment(id)),
+            Some(json!({ "applies": false, "why": why })),
+            repo.as_deref(),
+        )?,
+        CatalogCmd::On { id } => client.write_in(
+            Method::Post,
+            &format!("{base}/rows/{}", urlencode_segment(id)),
+            Some(json!({ "applies": true })),
+            repo.as_deref(),
+        )?,
+    };
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(&resp)?;
+    match cmd {
+        Some(CatalogCmd::Init { .. }) => {
+            println!("catalog written for '{p}' (starter {})", v["starter"])
+        }
+        Some(CatalogCmd::Set { .. }) => println!("catalog saved for '{p}'"),
+        Some(CatalogCmd::Add { id }) => println!("catalog row {id} added"),
+        Some(CatalogCmd::Off { id, .. }) => println!("catalog row {id} switched off"),
+        Some(CatalogCmd::On { id }) => println!("catalog row {id} switched back on"),
+        _ => {}
+    }
+    print_catalog(&v);
+    Ok(())
+}
+
+fn strs(v: &Value) -> Vec<&str> {
+    v.as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+        .unwrap_or_default()
+}
+
+fn print_catalog(v: &Value) {
+    for problem in strs(&v["problems"]) {
+        println!("problem: {problem}");
+    }
+    let rows = v["rows"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        if strs(&v["problems"]).is_empty() {
+            println!("no catalog — `kanbanr catalog init` writes the starter");
+        }
+        return;
+    }
+    if v["facts_rev"].as_str().is_none_or(str::is_empty) {
+        println!("no project facts — `kanbanr facts set …`");
+    }
+    for gap in v["gaps"].as_array().into_iter().flatten() {
+        println!(
+            "gap: {} × {} — no row answers it",
+            gap["question"].as_str().unwrap_or(""),
+            gap["perspective"].as_str().unwrap_or("")
+        );
+    }
+    for level in ["system", "component", "item"] {
+        for row in rows.iter().filter(|r| r["level"] == level) {
+            let source = &row["source"];
+            let kind = source["kind"].as_str().unwrap_or("");
+            let target = ["path", "generator", "test"]
+                .iter()
+                .find_map(|k| source[*k].as_str().filter(|s| !s.is_empty()))
+                .unwrap_or("");
+            let state = match &row["state"] {
+                Value::String(s) => s.replace('_', " "),
+                Value::Object(o) => match o.get("folder") {
+                    Some(f) => format!("folder ({} docs)", f["docs"]),
+                    None => String::new(),
+                },
+                _ => String::new(),
+            };
+            let applies = &row["applies"];
+            let off = if applies["applies"] == true {
+                String::new()
+            } else {
+                let why = applies["why"].as_str().unwrap_or("");
+                let word = if applies["by"] == "override" {
+                    "off"
+                } else {
+                    "n/a"
+                };
+                format!("  {word} ({why})")
+            };
+            let protections: Vec<String> = row["protections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|pr| {
+                    let mark = if pr["in_force"] == true { "✓" } else { "✗" };
+                    format!("{} {mark}", pr["name"].as_str().unwrap_or(""))
+                })
+                .collect();
+            println!(
+                "{:<16} {:<9} {:<12} {:<18} {:<8} {} {}  {}  {}{}",
+                row["id"].as_str().unwrap_or(""),
+                level,
+                strs(&row["answers"]).join(","),
+                strs(&row["for"]).join(","),
+                row["notation"].as_str().unwrap_or(""),
+                kind,
+                target,
+                state,
+                protections.join(" "),
+                off
+            );
+        }
+    }
+}
+
 /// `kanbanr mirror …` (FEAT-043).
 fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
@@ -6409,6 +6740,8 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string()),
         "suggested_description": project::suggested_description(&project::project_root(&cwd, home)),
+        // FTR-005 R-3: the facts record the folder's manifests suggest, for setup's facts question.
+        "suggested_facts": project::suggested_facts(&project::project_root(&cwd, home)),
         "suggested_data_dir": suggested.as_deref().map(show),
         "suggested_inside_git_repo": suggested
             .as_deref()
@@ -8816,6 +9149,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Process(cmd) => run_process_drift(cli, &client, cmd),
         Command::Profile(cmd) => run_profile(cli, &client, cmd),
         Command::Baseline(cmd) => run_baseline(cli, &client, cmd),
+        Command::Facts { cmd } => run_facts(cli, &client, cmd.as_ref()),
+        Command::Catalog { cmd } => run_catalog(cli, &client, cmd.as_ref()),
         Command::Activity => run_activity(cli, &client),
         Command::Events(cmd) => run_events(cli, &client, cmd),
         Command::Remote(cmd) => run_remote(cli, &client, cmd),
