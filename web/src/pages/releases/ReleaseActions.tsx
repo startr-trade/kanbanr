@@ -12,6 +12,13 @@ import { openFor } from "../../prepared";
 /**
  * A release's one button (FEAT-212): named for its next step, with what the step will do beside it,
  * the cut's preview inline, and — until the plan is ready — what is missing and how to fix it.
+ *
+ * `variant` (FTR-041) splits it between a release's accordion header and body: `header` shows the
+ * buttons, why a disabled one is disabled, the first thing the step does and the ask-first and
+ * confirmation states; `body` shows everything else (the tag panel, warnings, what the step does,
+ * the cut preview, the untested acceptance, Needs, Record result, Check again). Without one it
+ * shows both, as before. The acceptance ticked in the body enables the header's cut button, so a
+ * page that renders the two apart passes `accepted` and `onAccepted` to both.
  */
 export function ReleaseButton({
   project,
@@ -25,6 +32,9 @@ export function ReleaseButton({
   who,
   prepared,
   onShown,
+  variant,
+  accepted: acceptedProp,
+  onAccepted,
 }: {
   project: string;
   release: Release;
@@ -37,7 +47,12 @@ export function ReleaseButton({
   outcome?: string;
   prepared: PreparedView[];
   onShown: (version: string, ids: string[]) => void;
+  variant?: "header" | "body";
+  accepted?: boolean;
+  onAccepted?: (accepted: boolean) => void;
 }) {
+  const head = variant !== "body";
+  const full = variant !== "header";
   // A confirmation after the tag asks what the user checked before it goes (FTR-026).
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
@@ -50,7 +65,10 @@ export function ReleaseButton({
   useEffect(() => setHideOutcome(false), [outcome]);
   const [preparedSaid, setPreparedSaid] = useState<string | null>(null);
   // The person's acceptance of what the cut ships untested (DEF-043), for the list the plan showed.
-  const [accepted, setAccepted] = useState(false);
+  // Held by the page when it renders the header and the body apart (FTR-041).
+  const [acceptedHere, setAcceptedHere] = useState(false);
+  const accepted = acceptedProp ?? acceptedHere;
+  const setAccepted = (v: boolean) => (onAccepted ? onAccepted(v) : setAcceptedHere(v));
   const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
   // Which prepared records this button's forms show (DEF-095), told to the page once the plan is
   // read, so the page lists the others under "Prepared, not required". None when the plan fails.
@@ -66,6 +84,7 @@ export function ReleaseButton({
   // Why the button is disabled, beside it and as its title (DEF-071); none once the acceptance is ticked.
   const why = enabled ? "" : action.disabledWhy;
   if (action.note) {
+    if (!head) return null;
     return (
       <p className="muted small">
         <Inline text={action.note} />
@@ -108,8 +127,8 @@ export function ReleaseButton({
     recheck();
   };
   return (
-    <div className="release-action">
-      {plan.data.tag ? (
+    <div className={`release-action${variant ? ` release-action-${variant}` : ""}`}>
+      {full && plan.data.tag ? (
         <TagPanel
           project={project}
           release={release}
@@ -122,7 +141,7 @@ export function ReleaseButton({
           prepared={prepared}
         />
       ) : null}
-      {plan.data.warnings?.length ? (
+      {full && plan.data.warnings?.length ? (
         <ul className="dep-list small">
           {plan.data.warnings.map((w) => (
             <li key={w}>
@@ -131,7 +150,7 @@ export function ReleaseButton({
           ))}
         </ul>
       ) : null}
-      {action.returned ? (
+      {full && action.returned ? (
         <div className="small release-returned">
           <p>
             <span className="chip warn">sent back</span> to <strong>{release.stage ?? "its first stage"}</strong>:{" "}
@@ -146,7 +165,7 @@ export function ReleaseButton({
           </ol>
         </div>
       ) : null}
-      {preparedPromotion && action.button ? (
+      {head && preparedPromotion && action.button ? (
         <PreparedPanel
           project={project}
           view={preparedPromotion}
@@ -157,11 +176,12 @@ export function ReleaseButton({
           onReject={(reason) => rejectPromotion(preparedPromotion, reason)}
         />
       ) : null}
-      {preparedSaid ? (
+      {head && preparedSaid ? (
         <p className="small">
           <span className="chip">{preparedSaid}</span>
         </p>
       ) : null}
+      {head ? (
       <div className="review-actions">
         {preparedPromotion && action.button ? null : action.button && action.confirm ? (
           <button
@@ -196,9 +216,15 @@ export function ReleaseButton({
           </span>
         ) : null}
       </div>
-      {action.again ? (
+      ) : null}
+      {variant === "header" && action.does[0] ? (
+        <p className="small release-does">
+          <Inline text={action.does[0]} />
+        </p>
+      ) : null}
+      {action.again && (head || action.again.missing.length) ? (
         <div className="small release-again">
-          {writable ? (
+          {head && writable ? (
             <AskFirst
               key={`again|${askKey}`}
               label={action.again.label}
@@ -208,7 +234,7 @@ export function ReleaseButton({
               disabledWhy={action.again.disabledWhy}
             />
           ) : null}
-          {writable && action.again.disabledWhy ? (
+          {head && writable && action.again.disabledWhy ? (
             <>
               {" "}
               <span className="small release-why" role="note">
@@ -216,19 +242,19 @@ export function ReleaseButton({
               </span>
             </>
           ) : null}
-          {action.again.does[0] ? (
+          {head && action.again.does[0] ? (
             <>
               {" "}
               <Inline text={action.again.does[0]} />
             </>
           ) : null}
-          {writable ? null : (
+          {!head || writable ? null : (
             <>
               {" "}
               <code>{action.again.command}</code>
             </>
           )}
-          {action.again.missing.length ? (
+          {full && action.again.missing.length ? (
             <>
               <p>
                 <strong>Needs:</strong>
@@ -244,7 +270,7 @@ export function ReleaseButton({
           ) : null}
         </div>
       ) : null}
-      {asking && action.confirm ? (
+      {head && asking && action.confirm ? (
         <div className="small">
           <p>
             <label>
@@ -275,7 +301,7 @@ export function ReleaseButton({
           </p>
         </div>
       ) : null}
-      {action.does.length ? (
+      {full && action.does.length ? (
         <ul className="dep-list small">
           {action.does.map((d) => (
             <li key={d}>
@@ -284,8 +310,8 @@ export function ReleaseButton({
           ))}
         </ul>
       ) : null}
-      {action.preview ? <CutPreviewList preview={action.preview} /> : null}
-      {action.accept ? (
+      {full && action.preview ? <CutPreviewList preview={action.preview} /> : null}
+      {full && action.accept ? (
         <div className="small release-untested">
           <p>
             <strong>Not verified:</strong> <Inline text={action.acceptDetail ?? ""} />
@@ -312,7 +338,7 @@ export function ReleaseButton({
           ) : null}
         </div>
       ) : null}
-      {action.missing.length ? (
+      {full && action.missing.length ? (
         <div className="small">
           <p>
             <strong>Needs:</strong>
