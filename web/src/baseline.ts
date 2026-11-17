@@ -7,13 +7,13 @@ import type { BaselineArea, BaselineChosen, BaselineEntry, BaselineRevision, Bas
  * A chosen option as words: its id, and its value in brackets when it carries one. The daemon
  * writes an option with no value as the bare id, so either form is read.
  */
-export function chosenId(c: BaselineChosen | string): string {
+export function chosenId(c: BaselineChosen): string {
   if (typeof c === "string") return c;
   return c.value ? `${c.option} (${c.value})` : c.option;
 }
 
 /** What an area's answer says, as words: "postgresql", "decide later", "not applicable (why)". */
-export function answerText(a: { options?: (BaselineChosen | string)[]; later?: boolean; not_applicable?: string }): string {
+export function answerText(a: { options?: BaselineChosen[]; later?: boolean; not_applicable?: string }): string {
   if (a.later) return "decide later";
   if (a.not_applicable != null) return a.not_applicable ? `not applicable (${a.not_applicable})` : "not applicable";
   return (a.options ?? []).map(chosenId).join(", ");

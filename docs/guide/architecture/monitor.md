@@ -12,12 +12,14 @@ flowchart TD
   MsOne["/p/:project/milestone/:code  Milestone (depends-on + feature tiles)"]
   Sched["/p/:project/schedule  Schedule (derived: milestones per status)"]
   Docs["/p/:project/docs  Documentation tree"]
+  Base["/p/:project/baseline  Baseline (packs, revisions to accept, areas, history)"]
 
   Home --> Board --> Status --> Feature
   Board --> Feature
   Board --> Ms --> MsOne --> Feature
   Board --> Sched --> MsOne
   Home --> Docs
+  Board --> Base
 ```
 
 ## The meta route

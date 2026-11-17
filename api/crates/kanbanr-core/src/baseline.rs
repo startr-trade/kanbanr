@@ -101,7 +101,6 @@ pub enum AreaState {
 /// [postgresql]` reads as before; a value is written `{option: component-library, value: MUI}`.
 /// In a `many` area every chosen option carries its own value (coordinator, 17 Nov 2026).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Chosen {
     pub option: String,
     pub value: String,
@@ -149,6 +148,31 @@ impl<'de> Deserialize<'de> for Chosen {
                 value: String::new(),
             },
             ChosenForm::Full { option, value } => Chosen { option, value },
+        })
+    }
+}
+
+/// The published schema says what the wire carries: the bare option id, or `{option, value}` when
+/// the option carries a value. A derived schema would claim the object form always.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Chosen {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Chosen".into()
+    }
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "One chosen option: the bare option id when it carries no value, else the option with its value.",
+            "oneOf": [
+                { "type": "string" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "option": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["option"]
+                }
+            ]
         })
     }
 }

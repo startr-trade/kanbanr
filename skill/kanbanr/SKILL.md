@@ -107,6 +107,23 @@ project"** (or anything equivalent):
    - Suggest a standing `G-0: the system stays operable and maintainable` for maintenance work,
      so chores link to something honest.
 
+   **e. Engineering baseline**: the stack and engineering questions the project answers once
+   (FTR-033).
+   - In the project folder run `kanbanr profile ask --json`. It lists the setup areas the folder
+     does not answer, with a detected answer first and the recommended one otherwise, in dialogs
+     of at most four, and the packs the facts suggest. Ask each dialog with AskUserQuestion: each
+     option's `why` is its description, the recommended option's reason comes first, and
+     **Decide later** and **Explain the options** (`kanbanr profile ask --explain <area>`) are
+     always offered. A `multi: true` area is a multi-select.
+   - Write the answers to a scratch answers file and rerun `kanbanr profile ask --answers <file>`
+     until it lists nothing. **Never answer an area yourself**: a detected answer is still
+     confirmed.
+   - The plan shows **Packs** (`core`, plus each suggested pack as a yes/no) and the **Draft
+     baseline**: one table of area, answer, kind and where it is recorded. Its commands add the
+     packs and propose the draft (`kanbanr profile add <pack>` for each,
+     `kanbanr baseline propose --answers <file>`). The person accepts it on the Baseline page after
+     setup; say so.
+
    **Process, cadence and the rest**
    - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
      chosen in **a**; it needs no board otherwise) lists the processes the team saved on the board
@@ -198,6 +215,8 @@ project"** (or anything equivalent):
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
    kanbanr charter set --file <scratch>/charter.yaml
+   kanbanr profile add <pack>                      # each pack to follow: core, then each the user said yes to
+   kanbanr baseline propose --answers <scratch>/answers.yaml   # the draft baseline; the user accepts it on the Baseline page
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n.claude/worktrees/\n' >> .gitignore
@@ -716,24 +735,36 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   A design subagent works under a design scope, in its own worktree: it reads, and writes nothing
   (see "Sub-agents: what each may do").
 
-- **Ask whether the product has a user interface** the first time the technology or stack is chosen
-  (for TOGAF, in the technology phase; elsewhere, when the first item is designed). Ask it as a
-  question with the options a screen a person uses, a service, library or command-line tool only,
-  and not decided yet; recommend nothing the user has not said. Record the answer in the design. When
-  there are screens, ask for them as items of their own; when there are none, write "no user
-  interface" in the design so that is a recorded decision. Write the first item as what a person
+- **The engineering baseline at design.** Before offering a design for review, `kanbanr check
+  <CODE>` names the baseline areas the design touches that are not answered. Ask them in the
+  design dialog with `kanbanr profile ask --item <CODE> --json` (at most four a dialog, the
+  detected or else the recommended option first with its reason, each option's `why` as its
+  description, 'Explain the options' (`profile ask --explain <area>`) and 'Decide later' always
+  offered), then `kanbanr baseline propose --answers <file> --item <CODE>`; the person accepts the
+  revision on the Baseline page alongside design-review. An answered area is never asked again:
+  read it from `kanbanr baseline show`. The Design names each entry it touches under
+  `### Baseline` as `- B-003: <test name or reason>`; `check` flags a design that names another
+  option of an answered area until the reason is written or a revision proposed. Whether the
+  product has screens is the baseline's `project-kind` area; write the first item as what a person
   does ("a shopper opens their basket and finds it kept"), not as a capability.
-- **Ask how a screen should look before designing it.** The first time a screen is designed (and
-  again for a screen unlike the ones before), ask, as one question with previews: the styling
-  approach the stack allows (hand-written CSS, a utility-class framework, a component library for
-  the UI framework in use, or the project's own design system); and the visual direction (the feel,
-  colours or brand, and a site it should resemble). Recommend what fits the charter's constraints,
-  and say why. Record the answer in the item's Design. If the person has already described the
-  look (a feel, colours, "plain"), still ask the styling approach, and the other way round. Record
-  as the person's decision only what they said. Anything you chose is your recommendation until
-  they agree, and the Design says so. Never decide the look yourself: "plain" is
-  an answer the user gives, not a default. (FTR-033 changes this: the answer goes into the
-  project's baseline, and later screens read it from there.)
+- **Ask how a screen should look before designing it.** The styling approach is the baseline's
+  `ui-style` area, asked as above the first time a screen is designed and read from the baseline
+  after that. The visual direction (the feel, colours or brand, and a site it should resemble) is
+  asked for each screen unlike the ones before, and recorded in the item's Design. If the person
+  has already described the look (a feel, colours, "plain"), still ask the styling approach when
+  the baseline has no answer, and the other way round. Record as the person's decision only what
+  they said. Anything you chose is your recommendation until they agree, and the Design says so.
+  Never decide the look yourself: "plain" is an answer the user gives, not a default.
+- **Changing a baseline answer** ("move from SQLite to PostgreSQL"): propose a revision with the
+  new option, show what depends on the old one (`depends_on` in `kanbanr baseline show --json`),
+  and file the items the change needs, each naming the revision. Nothing changes until the person
+  accepts it on the Baseline page; never record an acceptance (`kanbanr baseline accept` is the
+  person's, and is refused in a Claude session).
+- **Packs** are added, removed and updated only on request (`kanbanr profile add|remove|update`).
+  A team's own pack is edited in conversation: draft it, `kanbanr profile check -` it, then
+  `kanbanr profile save <name> --from-file <file> [--personal]`. **When a session opens with a
+  packs notice** (a followed pack moved on in its library), mention it once and ask Update / Not
+  now, showing `kanbanr profile diff`; never run `kanbanr profile update` unasked.
 
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
@@ -1647,6 +1678,17 @@ kanbanr process save <name> [--personal]          # to the board (default) or ~/
 kanbanr process status                            # which saved process this project uses, and whether it moved on
 kanbanr process diff [<name>]                     # how this project's workflow differs from its saved process (or <name>)
 kanbanr process update                            # take the saved version — only when the user says so
+kanbanr profile list | show <name>                # practice packs in every library; one pack's file
+kanbanr profile check <file|-|name>               # check a pack without applying it
+kanbanr profile save <name> [--from-file F] [--personal]   # to the board (default) or ~/.kanbanr/profiles
+kanbanr profile add|remove <name>                 # follow a pack, or stop; answers are kept — only when the user says so
+kanbanr profile ask [--at setup|first_need] [--item CODE] [--answers F] [--explain AREA]   # what to ask now, as JSON
+kanbanr profile status | diff [<name>]            # whether the followed packs moved on, and how
+kanbanr profile update [<name>] [--dry-run]       # adopt the library's copy — only when the user says so
+kanbanr baseline show [--json]                    # the baseline: packs, areas, entries, revisions, depends_on
+kanbanr baseline propose --answers F|- [--item CODE] [--note …]   # yours: inert until the user accepts it
+kanbanr baseline accept REV-n                     # the user's, on the Baseline page; refused when Claude runs it
+kanbanr baseline withdraw REV-n --reason "…"      # withdraw a proposed revision
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with
 gates**. The phase IS the status; there is no second field. Offer one only if the user asks for

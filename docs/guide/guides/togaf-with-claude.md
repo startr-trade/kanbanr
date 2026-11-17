@@ -116,11 +116,13 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 
 > Take the saved basket to Business Arch.
 
-**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
-when the first item is designed), Claude asks whether the product has screens a person uses, or is
-a service, library or command-line tool. If it has screens, they become items of their own,
-designed and approved like the rest. If it has none, that goes into the design, so a missing screen
-is a decision and not an oversight. If it has screens, Claude also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
+**Whether it has a user interface comes from the baseline.** At setup, the
+[engineering baseline](../using/baseline.md) asks what the project is: screens a person uses, a
+service, a library or a command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, the baseline records that, so a missing screen
+is a decision and not an oversight. Before the first screen is designed, Claude asks the
+baseline's UI style question, and the feel you want for that screen; the style goes into the
+baseline, which you accept on the Baseline page, and later screens read it from there.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|

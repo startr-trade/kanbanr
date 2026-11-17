@@ -58,6 +58,15 @@ The plan quotes that output under *Branching*, lists which stage holds each role
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
 applies it. What each role then asks for is in [The method by stage role](the-method.md#the-method-by-stage-role).
 
+The interview also asks the **engineering baseline**: the stack and engineering questions a
+project answers once (what the project is, its language, where it runs, infrastructure as code,
+delivery, the practice baseline). Claude reads what the folder already shows and asks only what it
+cannot tell, a few questions at a time with the recommended or detected option first; **Decide
+later** and **Explain the options** are always there. The plan shows the practice packs to follow
+and the draft baseline, and after setup you accept it on the **Baseline** page. Questions that only
+matter later, such as the database or the UI style, are asked at the first design that needs them
+([The engineering baseline](baseline.md)).
+
 Start with agile unless your team already has a process of its own. Not sure which process to pick? [Choosing a guide](../guides/index.md) lists every process and its
 guides, and [Processes](processes.md) compares them and their gates.
 

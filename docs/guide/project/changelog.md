@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- A practice profile asks the stack and engineering questions once, at setup or at the first
+  design that needs each; the answers form the project's engineering baseline, accepted by the
+  person on the Baseline page, named by every design that touches an entry, and kept in step with
+  its packs (FTR-033).
 - `kanbanr prepare signoff`, `promotion`, `gate` and `ratify` take `--batch`, so the person
   confirms several prepared decisions in one action (FTR-055).
 - The monitor computes docs drift in the background after each board or code change and serves the

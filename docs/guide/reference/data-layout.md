@@ -8,6 +8,7 @@ sibling cannot be.
 
 ```
 <repo>.kanbanr/                         # a git repository (every write is a commit); no accounts/secrets
+├── profiles/<name>.yaml                # the board's practice packs (FTR-033), beside processes/
 └── projects/
     └── <project>/
         ├── config.yaml                 # statuses, default_state, transitions, displayed/no-op/terminal states, branch_pattern
@@ -24,6 +25,8 @@ sibling cannot be.
         │   └── <time>-<CODE>-<R-n>.yaml
         ├── pins/<CODE>/<rev>.md        # a spec as a design sign-off saw it, written once (FTR-023)
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
+        ├── baseline.yaml               # the engineering baseline: packs followed, areas, entries, revisions (FTR-033)
+        ├── packs/<name>.yaml           # the applied copy of each practice pack the project follows (FTR-033)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)
         ├── scopes.yaml                 # agent scopes, oldest first, never trimmed (FEAT-214)
