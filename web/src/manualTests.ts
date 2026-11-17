@@ -36,6 +36,61 @@ export function manualCommand(row: ManualWaiting, passed: boolean): string {
   return `kanbanr test ${row.code} ${row.requirement} ${quote(row.test)} ${passed ? "green" : "red"}`;
 }
 
+/** One item's manual checks on the Review page (FTR-057): its heading, its rows and their counts. */
+export interface ItemGroup {
+  code: string;
+  title: string;
+  status: string;
+  release: string;
+  rows: ManualRow[];
+  /** The rows with an open prepared record. */
+  prepared: number;
+  /** The rows that hold the item's release's next promotion. */
+  holds: number;
+}
+
+/** The manual checks in the order the Review page shows them (FTR-057). */
+export interface ManualSections {
+  /** One section per release being shipped, in the order the server gives (newest first). */
+  holding: { version: string; items: ItemGroup[] }[];
+  /** Every other item with a due check. */
+  other: ItemGroup[];
+  /** Checks whose item has not reached its build stage (DEF-076). */
+  notDue: ManualRow[];
+}
+
+/**
+ * The due checks grouped by item, keeping the server's row order within an item; the items of
+ * each holding release under it, in `holding`'s order; within a section, items with a check that
+ * holds a promotion first, then the server's order; every other item in `other`. A check that is
+ * not due yet (`opens_at`, DEF-076) goes to `notDue`.
+ */
+export function manualGroups(rows: ManualRow[], holding: string[]): ManualSections {
+  const notDue: ManualRow[] = [];
+  const items: ItemGroup[] = [];
+  const byCode = new Map<string, ItemGroup>();
+  for (const r of rows) {
+    if (r.row.opens_at) {
+      notDue.push(r);
+      continue;
+    }
+    let g = byCode.get(r.row.code);
+    if (!g) {
+      g = { code: r.row.code, title: r.row.title, status: r.row.status, release: r.row.release ?? "", rows: [], prepared: 0, holds: 0 };
+      byCode.set(r.row.code, g);
+      items.push(g);
+    }
+    g.rows.push(r);
+    if (r.prepared) g.prepared += 1;
+    if (r.row.holds) g.holds += 1;
+  }
+  // Array.prototype.sort is stable, so equal items keep the server's order.
+  const holdsFirst = (list: ItemGroup[]) => list.sort((a, b) => Number(b.holds > 0) - Number(a.holds > 0));
+  const sections = holding.map((version) => ({ version, items: holdsFirst(items.filter((g) => g.release !== "" && g.release === version)) }));
+  const other = holdsFirst(items.filter((g) => !holding.includes(g.release) || g.release === ""));
+  return { holding: sections, other, notDue };
+}
+
 /** "failed by Ada on 12 Nov 2026", or "" when nothing was recorded. */
 export function lastResultLine(last: ManualResult | null | undefined): string {
   if (!last) return "";

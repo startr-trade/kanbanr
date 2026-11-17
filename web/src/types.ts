@@ -388,6 +388,8 @@ export interface GroupSlice {
   rows: ReviewRow[];
   /** The planned releases, in file order: for `which-release` only. */
   choices: string[];
+  /** The releases whose items the manual group lists first, newest first (FTR-057): for `manual` only. */
+  holding?: string[];
 }
 
 /** One row's full evidence, read when the row is opened (FTR-038, `GET /review/groups/{key}/rows/{row}`). */
@@ -846,6 +848,10 @@ export interface ManualWaiting {
   last: ManualResult | null;
   /** The build stage the check opens at (DEF-076); absent or empty when the check is due. */
   opens_at?: string;
+  /** The item's release (FTR-057); absent when it has none. */
+  release?: string;
+  /** The button this check holds, e.g. "Promote v0.8.0 to main" (FTR-057); absent when none. */
+  holds?: string;
 }
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */

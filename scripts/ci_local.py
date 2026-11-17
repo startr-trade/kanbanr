@@ -100,6 +100,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A disabled Approve or Ratify button says what is missing and who provides it": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
+            "Manual checks are grouped by item": LOCAL,
             "The Review page offers one click for a batch": LOCAL,
             "The Review page shows a result's check id": LOCAL,
             "A prepared answer shows its outcome once": LOCAL,
