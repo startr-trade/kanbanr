@@ -58,28 +58,29 @@ for (const verb of ["Approve", "Ratify"]) {
 // The page: the sentence is text in a <p>, in the same review-actions block as the button whose
 // `disabled` names the blocker, not only a tooltip.
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
-const page = read("../src/pages/ReviewPage.tsx");
+// Since FTR-038 the item's Approve and Ratify are in its row's evidence, EntryEvidence.
+const page = read("../src/pages/review/EntryEvidence.tsx");
 const blocks = page.split('<div className="review-actions">').slice(1);
 const actions = blocks.find((b) => /disabled=\{busy \|\| blocker != null\}/.test(b));
 if (!actions) {
-  problems.push("ReviewPage.tsx: no review-actions block holds the button whose disabled names blocker");
+  problems.push("EntryEvidence.tsx: no review-actions block holds the button whose disabled names blocker");
 } else {
   const at = actions.indexOf("disabled={busy || blocker != null}");
   const end = actions.indexOf("</div>");
   const sentence = actions.indexOf("blockedSentence(");
   if (sentence < 0 || (end >= 0 && sentence > end)) {
-    problems.push("ReviewPage.tsx: blockedSentence( is not rendered in the button's review-actions block");
+    problems.push("EntryEvidence.tsx: blockedSentence( is not rendered in the button's review-actions block");
   } else {
     const before = actions.slice(0, sentence);
     const open = before.lastIndexOf("<p");
     if (open < 0 || open < at || before.slice(open).includes("</p>")) {
-      problems.push("ReviewPage.tsx: blockedSentence( is not rendered inside a <p> element after the button");
+      problems.push("EntryEvidence.tsx: blockedSentence( is not rendered inside a <p> element after the button");
     }
   }
-  if (!/title=\{blocker \?\? undefined\}/.test(actions)) problems.push("ReviewPage.tsx: the button's title no longer names the blocker");
+  if (!/title=\{blocker \?\? undefined\}/.test(actions)) problems.push("EntryEvidence.tsx: the button's title no longer names the blocker");
 }
-if (!/import \{[^}]*\bblockedSentence\b[^}]*\} from "\.\.\/diagramCheck"/.test(page)) {
-  problems.push("ReviewPage.tsx: blockedSentence is not imported from ../diagramCheck");
+if (!/import \{[^}]*\bblockedSentence\b[^}]*\} from "\.\.\/\.\.\/diagramCheck"/.test(page)) {
+  problems.push("EntryEvidence.tsx: blockedSentence is not imported from ../../diagramCheck");
 }
 
 if (problems.length) {

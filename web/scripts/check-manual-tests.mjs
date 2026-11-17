@@ -78,26 +78,28 @@ expect(
 expect("no last result, no line", lastResultLine(null), "");
 
 // The page: the section, the requirement's text, the check, and no input until "Add a note".
+// Since FTR-038 the checks are the Review page's manual group: each row's body is ManualEvidence
+// (src/pages/review/ManualEvidence.tsx), fed by the row's own evidence
+// (GET /review/groups/manual/rows/{row}); the page records the result.
 const page = readFileSync(new URL("../src/pages/ReviewPage.tsx", import.meta.url), "utf8");
-const has = (name, re) => {
-  if (!re.test(page)) problems.push(`ReviewPage.tsx: ${name}`);
+const manualSrc = readFileSync(new URL("../src/pages/review/ManualEvidence.tsx", import.meta.url), "utf8");
+const has = (name, re, src = manualSrc, file = "ManualEvidence.tsx") => {
+  if (!re.test(src)) problems.push(`${file}: ${name}`);
 };
-// Since FTR-038 the checks are the Review page's manual group: each row's body is ManualCheck,
-// fed by the row's own evidence (GET /review/groups/manual/rows/{row}).
-has("does not render a manual row's evidence through ManualCheck", /if \(e\.manual\) \{[\s\S]*?<ManualCheck\b/);
+has("does not render a manual row's evidence through ManualEvidence", /if \(e\.manual\) \{[\s\S]*?<ManualEvidence\b/, page, "ReviewPage.tsx");
 has("does not show the requirement's text", /row\.requirement_text/);
 has("does not show the check (the test's name)", /\{row\.test\}/);
 has("has no Passed button", />\s*Passed\s*</);
 has("has no Failed button", />\s*Failed\s*</);
 has("has no Add a note link", />\s*Add a note\s*</);
-has("does not record through recordManual", /api\.recordManual\(/);
+has("does not record through recordManual", /api\.recordManual\(/, page, "ReviewPage.tsx");
 // The page is empty only when no group, the manual group included, holds anything.
-has("does not call the empty page empty while checks wait", /groups\.every\(\(g\) => g\.count === 0\)/);
+has("does not call the empty page empty while checks wait", /groups\.every\(\(g\) => g\.count === 0\)/, page, "ReviewPage.tsx");
 // The note's input is only rendered once the person asks for it.
-const manualPart = page.slice(page.indexOf("function ManualCheck("), page.indexOf("/** One proposed decision"));
+const manualPart = manualSrc.slice(manualSrc.indexOf("function ManualEvidence("));
 const inputs = manualPart.split("<input").length - 1;
 const gated = /\{noting \? \(\s*<p className="small">\s*<label>[\s\S]*?<input/.test(manualPart);
-if (inputs !== 1 || !gated) problems.push("ReviewPage.tsx: the manual check renders an input before Add a note is chosen");
+if (inputs !== 1 || !gated) problems.push("ManualEvidence.tsx: the manual check renders an input before Add a note is chosen");
 
 // DEF-076 R-3: no result is offered before the item's build stage.
 const notDue = [];
@@ -114,14 +116,14 @@ expectNotDue(
 );
 expectNotDue("a due check has no line", notDueLine(a), "");
 expectNotDue("an empty opens_at is due", notDueLine({ ...a, opens_at: "" }), "");
-// ManualCheck: the not-due branch comes before every way to record a result, so none renders.
+// ManualEvidence: the not-due branch comes before every way to record a result, so none renders.
 const branch = manualPart.indexOf(") : notDue ? (");
 const firstAfter = (re) => {
   const m = manualPart.slice(Math.max(branch, 0)).search(re);
   return m < 0 ? -1 : m + branch;
 };
-if (!/const notDue = notDueLine\(row\);/.test(manualPart)) notDue.push("ManualCheck does not read notDueLine(row)");
-if (branch < 0) notDue.push("ManualCheck has no branch for a check that is not due");
+if (!/const notDue = notDueLine\(row\);/.test(manualPart)) notDue.push("ManualEvidence does not read notDueLine(row)");
+if (branch < 0) notDue.push("ManualEvidence has no branch for a check that is not due");
 else {
   const before = manualPart.slice(0, branch);
   for (const [name, re] of [
@@ -130,11 +132,11 @@ else {
     ["Failed", />\s*Failed\s*</],
     ["the terminal command", /manualCommand\(/],
   ]) {
-    if (re.test(before)) notDue.push(`ManualCheck renders ${name} before the not-due branch`);
-    if (firstAfter(re) < 0) notDue.push(`ManualCheck: ${name} is not behind the not-due branch`);
+    if (re.test(before)) notDue.push(`ManualEvidence renders ${name} before the not-due branch`);
+    if (firstAfter(re) < 0) notDue.push(`ManualEvidence: ${name} is not behind the not-due branch`);
   }
   if (!/^\) : notDue \? \(\s*<p className="small muted">\{notDue\}<\/p>\s*\) :/.test(manualPart.slice(branch))) {
-    notDue.push("ManualCheck's not-due branch renders more than its sentence");
+    notDue.push("ManualEvidence's not-due branch renders more than its sentence");
   }
 }
 // In the manual group (FTR-038) a check that is not due is a row core blocks with DEF-076's

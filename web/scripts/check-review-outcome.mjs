@@ -9,7 +9,7 @@
 // web::check_prepared_panel_sends_one_request_per_click_until_it_returns (R-2): a press while a
 // call is in flight is dropped, never queued, so a second click sends no second request.
 //
-// The rendered case (a ManualCheck with a rejected outcome has no Reject button) joins R-1 once
+// The rendered case (a ManualEvidence with a rejected outcome has no Reject button) joins R-1 once
 // scripts/render.mjs exists; until then the page's source is read.
 //
 // Usage: npm run check:review-outcome
@@ -103,35 +103,39 @@ function checkOutcome() {
   );
   expect(problems, "an error's line is the error alone", outcomeLine({ ok: false, text: "409 Conflict: already answered" }), "409 Conflict: already answered");
 
-  const page = read("../src/pages/ReviewPage.tsx");
-  const part = (from, to) => {
+  // Since FTR-038 the page records and keeps each outcome; each row's evidence, its own component
+  // under src/pages/review/, shows it where its form was.
+  const files = ["../src/pages/ReviewPage.tsx", "../src/pages/review/EntryEvidence.tsx", "../src/pages/review/ManualEvidence.tsx", "../src/pages/review/AdrEvidence.tsx"];
+  const page = files.map(read).join("\n");
+  // One top-level function: from its declaration to the first closing brace at the line start.
+  const part = (from, to = "\n}\n") => {
     const a = page.indexOf(from);
     const b = page.indexOf(to, a);
     if (a < 0 || b < 0) {
-      problems.push(`ReviewPage.tsx: no ${from.trim()} section`);
+      problems.push(`the Review page: no ${from.trim()} section`);
       return "";
     }
     return page.slice(a, b);
   };
   const parts = {
-    ManualCheck: part("function ManualCheck(", "/** One proposed decision"),
-    DecisionBrief: part("function DecisionBrief(", "function problemHref("),
-    Brief: part("function Brief(", "function partText("),
+    ManualEvidence: part("function ManualEvidence("),
+    AdrEvidence: part("function AdrEvidence("),
+    EntryEvidence: part("function EntryEvidence("),
   };
-  const finishedBy = { ManualCheck: "finished", DecisionBrief: "decided", Brief: "approved" };
+  const finishedBy = { ManualEvidence: "finished", AdrEvidence: "decided", EntryEvidence: "approved" };
   for (const [name, src] of Object.entries(parts)) {
     if (!new RegExp(`const ${finishedBy[name]} = outcome != null;`).test(src)) {
-      problems.push(`ReviewPage.tsx: ${name} does not decide finished as outcome != null`);
+      problems.push(`the Review page: ${name} does not decide finished as outcome != null`);
     }
     if (/startsWith\(/.test(src) || /(?<![.\w])outcome === "/.test(src) || /\(outcome \?\? ""\)/.test(src)) {
-      problems.push(`ReviewPage.tsx: ${name} still decides finished by the outcome's words`);
+      problems.push(`the Review page: ${name} still decides finished by the outcome's words`);
     }
     if (!/<OutcomeChip outcome=\{outcome\} onRetry=\{onRetry\} \/>/.test(src)) {
-      problems.push(`ReviewPage.tsx: ${name} does not show the outcome where the form was`);
+      problems.push(`the Review page: ${name} does not show the outcome where the form was`);
     }
   }
   if (!/outcome\?: Outcome;[\s\S]*outcome\?: Outcome;[\s\S]*outcome\?: Outcome;/.test(page)) {
-    problems.push("ReviewPage.tsx: the outcome is not an Outcome in ManualCheck, DecisionBrief and Brief");
+    problems.push("the Review page: the outcome is not an Outcome in ManualEvidence, AdrEvidence and EntryEvidence");
   }
   if (!/useState<Record<string, Outcome>>\(\{\}\)/.test(page)) problems.push("ReviewPage.tsx: done is not a Record<string, Outcome>");
 

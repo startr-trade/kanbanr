@@ -61,7 +61,7 @@ if (!/Reject all \$\{n\}/.test(bar)) problems.push("ReviewPage.tsx: BatchBar off
 if (/<(input|textarea|select)\b/.test(bar)) problems.push("ReviewPage.tsx: BatchBar asks the person to type");
 if (!/api\.confirmPreparedBatch\(project, batch\.name, who\)/.test(review)) problems.push("ReviewPage.tsx: Confirm all does not post the batch confirm route as the monitor's identity");
 if (!/api\.rejectPreparedBatch\(project, batch\.name, who\)/.test(review)) problems.push("ReviewPage.tsx: Reject all does not post the batch reject route");
-if (!/<ManualCheck\b/.test(review)) problems.push("ReviewPage.tsx: the single buttons (a manual check's own row) are gone");
+if (!/<ManualEvidence\b/.test(review)) problems.push("ReviewPage.tsx: the single buttons (a manual check's own row) are gone");
 
 const apiTs = read("../src/api.ts");
 if (!/\/prepared\/batch\/\$\{encodeURIComponent\(batch\)\}\/confirm`/.test(apiTs)) problems.push("api.ts: no batch confirm route");

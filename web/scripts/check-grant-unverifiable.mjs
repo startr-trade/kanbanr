@@ -12,7 +12,8 @@ import { readFileSync } from "node:fs";
 
 const NAME = "web::check_review_page_says_a_grant_cannot_be_checked_and_why";
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
-const page = read("../src/pages/ReviewPage.tsx");
+// Since FTR-038 the granted delegations are in Decisions here, its own component.
+const page = read("../src/pages/review/DecisionsHere.tsx");
 const types = read("../src/types.ts");
 const problems = [];
 
@@ -22,23 +23,23 @@ if (!/\bgrant_unverifiable\?:\s*string\b/.test(types)) {
 // The branch that renders it: from `{g.grant_unverifiable ? (` to its `) : null}`.
 const branch = page.match(/\{g\.grant_unverifiable \? \(([\s\S]*?)\) : null\}/);
 if (!branch) {
-  problems.push("ReviewPage.tsx does not render g.grant_unverifiable");
+  problems.push("DecisionsHere.tsx does not render g.grant_unverifiable");
 } else {
   const body = branch[1];
-  if (!body.includes("can't be checked")) problems.push("ReviewPage.tsx: the line does not say \"can't be checked\"");
-  if (!/\{g\.grant_unverifiable\}/.test(body)) problems.push("ReviewPage.tsx: the line does not show the reason");
+  if (!body.includes("can't be checked")) problems.push("DecisionsHere.tsx: the line does not say \"can't be checked\"");
+  if (!/\{g\.grant_unverifiable\}/.test(body)) problems.push("DecisionsHere.tsx: the line does not show the reason");
   if (!body.includes("nothing is taken under it until it can")) {
-    problems.push("ReviewPage.tsx: the line does not say nothing is taken under it until it can");
+    problems.push("DecisionsHere.tsx: the line does not say nothing is taken under it until it can");
   }
   if (body.includes("not granted through kanbanr")) {
-    problems.push("ReviewPage.tsx: the line also says \"not granted through kanbanr\"");
+    problems.push("DecisionsHere.tsx: the line also says \"not granted through kanbanr\"");
   }
 }
 // The "not granted" branch is still gated on its own field alone, which the API leaves false for
 // an unverifiable grant.
 const notGranted = page.match(/\{([^{}]*)\? \(\s*<>\s*\{" "\}\s*· <strong>not granted through kanbanr<\/strong>/);
 if (!notGranted || notGranted[1].trim() !== "g.not_granted_through_kanbanr") {
-  problems.push("ReviewPage.tsx: \"not granted through kanbanr\" is not shown on not_granted_through_kanbanr alone");
+  problems.push("DecisionsHere.tsx: \"not granted through kanbanr\" is not shown on not_granted_through_kanbanr alone");
 }
 
 if (problems.length) {
