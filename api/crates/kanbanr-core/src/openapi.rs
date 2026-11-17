@@ -384,8 +384,10 @@ pub fn public_routes() -> Vec<RouteDoc> {
         },
         RouteDoc {
             path: "/api/projects/{project}/timings",
-            summary: "Each test's last duration from the kept runs (FTR-058): with code, the \
-                      item's tracked tests only, by requirement and test name",
+            summary: "Each test's last duration from the kept runs since the newest shipped \
+                      release, or the newest 50 with none (FTR-058): with code, the item's tracked \
+                      tests only, by requirement and test name; a test not timed in them is not \
+                      listed",
             params: &[
                 PROJECT,
                 Param {
@@ -401,7 +403,8 @@ pub fn public_routes() -> Vec<RouteDoc> {
         RouteDoc {
             path: "/api/projects/{project}/timings/report",
             summary: "The slowest tests by last duration, and those whose time grew most since \
-                      the newest shipped release, derived from the kept runs since it",
+                      the newest shipped release, derived from the kept runs since it (the newest \
+                      50 with none)",
             params: &[
                 PROJECT,
                 Param {

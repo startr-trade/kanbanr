@@ -9337,7 +9337,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "Each test's last duration from the kept runs (FTR-058): with code, the item's tracked tests only, by requirement and test name"
+        "summary": "Each test's last duration from the kept runs since the newest shipped release, or the newest 50 with none (FTR-058): with code, the item's tracked tests only, by requirement and test name; a test not timed in them is not listed"
       }
     },
     "/api/projects/{project}/timings/report": {
@@ -9388,7 +9388,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "The slowest tests by last duration, and those whose time grew most since the newest shipped release, derived from the kept runs since it"
+        "summary": "The slowest tests by last duration, and those whose time grew most since the newest shipped release, derived from the kept runs since it (the newest 50 with none)"
       }
     },
     "/api/projects/{project}/views/docs": {
