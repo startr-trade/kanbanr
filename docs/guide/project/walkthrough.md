@@ -117,7 +117,10 @@ steps:
   `item: {title_contains}` or `{title_matches}`, `item: {item, status}`, `config: {release_prepare: configured}`,
   `sprint: active`), a `truth` claim (`tag`, `ci`, `merged`, `doctor: clean`), a `page` claim
   (`url`, `contains`, `absent`) or a `talk` claim (`asked`, `not_asked`, `said`: patterns over what
-  Claude asked and said in the step).
+  Claude asked and said in the step). In a `talk` claim, `since: <step id>` widens `asked` and
+  `not_asked` to every step from that one to this, so a question Claude asks while it first scopes
+  the work still counts; `said` always reads the step's own last message. `offer: {page, button,
+  subject}` with `absent: true` claims that the page does not offer that button for that item.
 - **`only_if: {board: …}`** runs the step only when that board claim holds, such as
   `{release: {version: v0.1.0, stage: candidate}}` for a defect found on a candidate; otherwise the
   step is skipped with the finding `skipped`.
