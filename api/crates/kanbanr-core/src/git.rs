@@ -359,14 +359,216 @@ pub fn commit(dir: &Path, name: &str, email: &str, message: &str) -> bool {
 /// Stage everything and commit using the repo's configured identity (local mode). Returns true if
 /// a commit was made.
 pub fn commit_local(dir: &Path, message: &str) -> bool {
+    commit_write(dir, message).is_ok_and(|o| o.is_some())
+}
+
+/// How long a commit waits for git's own locks (`index.lock`, `HEAD.lock`, a ref's lock) before
+/// giving up (DEF-102). `KANBANR_COMMIT_WAIT_MS` overrides it, in milliseconds.
+pub const COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The wait in force: `COMMIT_WAIT` unless `KANBANR_COMMIT_WAIT_MS` names another.
+fn commit_wait() -> std::time::Duration {
+    std::env::var("KANBANR_COMMIT_WAIT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(COMMIT_WAIT, std::time::Duration::from_millis)
+}
+
+/// Why a board commit was not made (DEF-102).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitError {
+    /// Nobody to author the commit.
+    NoIdentity,
+    /// A git lock file stayed held for the whole wait.
+    Locked {
+        file: std::path::PathBuf,
+        waited: std::time::Duration,
+    },
+    /// git refused for any other reason.
+    Git(String),
+}
+
+impl std::fmt::Display for CommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommitError::NoIdentity => write!(f, "nobody to author the commit: {NO_IDENTITY}"),
+            CommitError::Locked { file, waited } => write!(
+                f,
+                "git's {} was held by another program for {waited:.1?}; if no git is running, \
+                 remove that file",
+                file.display()
+            ),
+            CommitError::Git(msg) => write!(f, "git refused the commit: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for CommitError {}
+
+#[cfg(test)]
+type BeforeCommitHook = Box<dyn FnOnce()>;
+
+#[cfg(test)]
+thread_local! {
+    /// A test seam: run once, between staging and `repo.commit`, to move HEAD under the commit.
+    static BEFORE_COMMIT: std::cell::RefCell<Option<BeforeCommitHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The lock file a git2 "locked" error names: the quoted path ending in `.lock`, else the index's.
+fn lock_file_of(repo_dir: &Path, e: &git2::Error) -> std::path::PathBuf {
+    let msg = e.message();
+    msg.split('\'')
+        .find(|part| part.ends_with(".lock"))
+        .map_or_else(
+            || git_dir(repo_dir).join("index.lock"),
+            std::path::PathBuf::from,
+        )
+}
+
+/// One staging-and-commit attempt on a freshly opened repository.
+fn commit_attempt(dir: &Path, message: &str) -> Result<Option<git2::Oid>, CommitAttempt> {
+    let repo = Repository::open(dir).map_err(|e| CommitAttempt::Failed(e.message().to_string()))?;
+    let sig = signature(&repo).map_err(|_| CommitAttempt::NoIdentity)?;
+    let tree_oid = stage_all(&repo).map_err(CommitAttempt::Retry)?;
+    let tree = repo.find_tree(tree_oid).map_err(CommitAttempt::Retry)?;
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    // Nothing to commit if the staged tree equals the current HEAD tree.
+    if let Some(p) = &parent
+        && p.tree_id() == tree_oid
+    {
+        return Ok(None);
+    }
+    crate::write::fault("staged");
+    #[cfg(test)]
+    BEFORE_COMMIT.with(|h| {
+        if let Some(hook) = h.borrow_mut().take() {
+            hook();
+        }
+    });
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+        .map(Some)
+        .map_err(CommitAttempt::Retry)
+}
+
+enum CommitAttempt {
+    NoIdentity,
+    Failed(String),
+    /// A git2 error: retried when it is a lock or a moved HEAD.
+    Retry(git2::Error),
+}
+
+/// Stage everything and commit on the current HEAD with the board's identity (DEF-102).
+/// `Ok(None)` when the tree equals HEAD's. A git lock is waited out for `COMMIT_WAIT`; a HEAD that
+/// moved under the commit is read again and the commit made on the new tip.
+pub fn commit_write(dir: &Path, message: &str) -> Result<Option<git2::Oid>, CommitError> {
+    commit_write_within(dir, message, commit_wait())
+}
+
+/// `commit_write` with the wait given, for tests.
+pub(crate) fn commit_write_within(
+    dir: &Path,
+    message: &str,
+    wait: std::time::Duration,
+) -> Result<Option<git2::Oid>, CommitError> {
+    use git2::ErrorCode;
     crate::project::assert_inside_fence(dir); // FEAT-195
-    let Ok(repo) = Repository::open(dir) else {
-        return false;
-    };
-    let Ok(sig) = signature(&repo) else {
-        return false;
-    };
-    do_commit(&repo, &sig, message).unwrap_or(false)
+    let started = std::time::Instant::now();
+    let mut pause = std::time::Duration::from_millis(10);
+    loop {
+        match commit_attempt(dir, message) {
+            Ok(oid) => return Ok(oid),
+            Err(CommitAttempt::NoIdentity) => return Err(CommitError::NoIdentity),
+            Err(CommitAttempt::Failed(msg)) => return Err(CommitError::Git(msg)),
+            Err(CommitAttempt::Retry(e)) => {
+                let waiting = matches!(e.code(), ErrorCode::Locked | ErrorCode::Modified);
+                if waiting && started.elapsed() < wait {
+                    let left = wait.saturating_sub(started.elapsed());
+                    std::thread::sleep(pause.min(left));
+                    pause = (pause * 2).min(std::time::Duration::from_millis(200));
+                    continue;
+                }
+                return Err(if e.code() == ErrorCode::Locked {
+                    CommitError::Locked {
+                        file: lock_file_of(dir, &e),
+                        waited: started.elapsed(),
+                    }
+                } else {
+                    CommitError::Git(e.message().to_string())
+                });
+            }
+        }
+    }
+}
+
+/// The board's changed paths (DEF-102): `is_clean`'s list, ignored files excluded and untracked
+/// ones included, sorted. Empty when `dir` is not a repository.
+pub fn changed_paths(dir: &Path) -> Vec<String> {
+    let mut paths = is_clean(dir).err().unwrap_or_default();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Put each of `paths` back as HEAD has it (DEF-102): the index entry and the file. A path HEAD
+/// does not have is deleted, and the folder kanbanr made for it with it when that is left empty.
+pub fn restore_to_head(dir: &Path, paths: &[String]) -> Result<(), git2::Error> {
+    crate::project::assert_inside_fence(dir); // FEAT-195
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for p in paths {
+        let rel = Path::new(p);
+        if rel.is_absolute()
+            || rel
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(git2::Error::from_str(&format!(
+                "{p} is outside the board, so it is not put back"
+            )));
+        }
+    }
+    let repo = Repository::open(dir)?;
+    let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    match &head {
+        Some(c) => repo.reset_default(Some(c.as_object()), paths.iter())?,
+        None => repo.reset_default(None, paths.iter())?,
+    }
+    let tree = head.as_ref().and_then(|c| c.tree().ok());
+    let in_head: Vec<&String> = paths
+        .iter()
+        .filter(|p| {
+            tree.as_ref()
+                .is_some_and(|t| t.get_path(Path::new(p)).is_ok())
+        })
+        .collect();
+    if !in_head.is_empty() {
+        let mut co = git2::build::CheckoutBuilder::new();
+        co.force();
+        for p in &in_head {
+            co.path(p.as_str());
+        }
+        repo.checkout_head(Some(&mut co))?;
+    }
+    for p in paths.iter().filter(|p| !in_head.contains(p)) {
+        let full = dir.join(p);
+        match std::fs::remove_file(&full) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(git2::Error::from_str(&format!("{}: {e}", full.display()))),
+        }
+        // A folder that is empty now was made for this file; remove it, up to the board's root.
+        let mut parent = full.parent();
+        while let Some(d) = parent {
+            if d == dir || std::fs::remove_dir(d).is_err() {
+                break;
+            }
+            parent = d.parent();
+        }
+    }
+    Ok(())
 }
 
 /// Credentials for a remote (FEAT-142): SSH through the user's agent, then their default key
@@ -2287,5 +2489,171 @@ mod tests {
             "{dirty:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// DEF-102 T2: the commit that waits, reports and can be undone.
+#[cfg(test)]
+mod commit_write_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    fn board(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kanbanr-cw-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ensure_repo_as(&dir, Some(("Ada Lovelace", "ada@example.com")));
+        let repo = Repository::open(&dir).unwrap();
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "Ada Lovelace").unwrap();
+        cfg.set_str("user.email", "ada@example.com").unwrap();
+        std::fs::write(dir.join("kept.txt"), "kept\n").unwrap();
+        assert!(commit_local(&dir, "seed"));
+        dir
+    }
+
+    fn commits(dir: &Path) -> usize {
+        let repo = Repository::open(dir).unwrap();
+        let mut walk = repo.revwalk().unwrap();
+        walk.push_head().unwrap();
+        walk.count()
+    }
+
+    fn head_has(dir: &Path, rel: &str) -> bool {
+        let repo = Repository::open(dir).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        tree.get_path(Path::new(rel)).is_ok()
+    }
+
+    /// DEF-102 R-1: git holds `index.lock` for a moment; the commit waits it out and lands once.
+    #[test]
+    fn commit_write_waits_out_a_held_index_lock() {
+        let dir = board("waits");
+        let before = commits(&dir);
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        let lock = git_dir(&dir).join("index.lock");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .unwrap();
+        let holder = {
+            let lock = lock.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                std::fs::remove_file(lock).unwrap();
+            })
+        };
+        let started = Instant::now();
+        let oid = commit_write_within(&dir, "add a", Duration::from_secs(5))
+            .expect("the commit waits and lands");
+        holder.join().unwrap();
+        assert!(oid.is_some());
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        assert_eq!(commits(&dir), before + 1, "exactly one new commit");
+        assert!(head_has(&dir, "a.txt"));
+        assert!(changed_paths(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-1: HEAD moves between reading the parent and updating the ref; the commit reads
+    /// HEAD again and lands on the new tip with both changes.
+    #[test]
+    fn commit_write_retries_when_head_moved_under_it() {
+        let dir = board("moved");
+        std::fs::write(dir.join("mine.txt"), "mine\n").unwrap();
+        let other = dir.clone();
+        BEFORE_COMMIT.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move || {
+                // A non-kanbanr git commits a file of its own on the same branch.
+                let repo = Repository::open(&other).unwrap();
+                let parent = repo.head().unwrap().peel_to_commit().unwrap();
+                std::fs::write(other.join("theirs.txt"), "theirs\n").unwrap();
+                let blob = repo.blob(b"theirs\n").unwrap();
+                let mut builder = repo.treebuilder(Some(&parent.tree().unwrap())).unwrap();
+                builder.insert("theirs.txt", blob, 0o100_644).unwrap();
+                let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+                let sig = Signature::now("Other", "o@example.com").unwrap();
+                repo.commit(Some("HEAD"), &sig, &sig, "theirs", &tree, &[&parent])
+                    .unwrap();
+            }));
+        });
+        let oid = commit_write_within(&dir, "add mine", Duration::from_secs(5))
+            .expect("the commit retries on the new HEAD");
+        assert!(oid.is_some());
+        assert!(head_has(&dir, "mine.txt"));
+        assert!(head_has(&dir, "theirs.txt"));
+        assert!(changed_paths(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-2: with the lock held throughout, the commit gives up after its wait and the
+    /// error names the lock file.
+    #[test]
+    fn commit_write_gives_up_after_its_wait_and_names_the_lock() {
+        let dir = board("gives-up");
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        let lock = git_dir(&dir).join("index.lock");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .unwrap();
+        let before = commits(&dir);
+        let started = Instant::now();
+        let err = commit_write_within(&dir, "add a", Duration::from_millis(200)).unwrap_err();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        match &err {
+            CommitError::Locked { file, waited } => {
+                assert!(file.ends_with("index.lock"), "{file:?}");
+                assert!(*waited >= Duration::from_millis(200));
+            }
+            other => panic!("expected Locked, got {other:?}"),
+        }
+        assert!(err.to_string().contains("index.lock"));
+        assert_eq!(commits(&dir), before, "no commit was made");
+        std::fs::remove_file(&lock).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-2: a modified tracked file, a new file and a staged change are each put back, and
+    /// the index matches HEAD.
+    #[test]
+    fn restore_to_head_puts_back_changed_and_removes_new_files() {
+        let dir = board("restore");
+        std::fs::write(dir.join("kept.txt"), "changed\n").unwrap();
+        std::fs::create_dir_all(dir.join("fresh")).unwrap();
+        std::fs::write(dir.join("fresh").join("new.txt"), "new\n").unwrap();
+        std::fs::write(dir.join("staged.txt"), "staged\n").unwrap();
+        {
+            let repo = Repository::open(&dir).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("staged.txt")).unwrap();
+            index.write().unwrap();
+        }
+        let mut paths = changed_paths(&dir);
+        paths.sort();
+        assert_eq!(paths, ["fresh/new.txt", "kept.txt", "staged.txt"]);
+        restore_to_head(&dir, &paths).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("kept.txt")).unwrap(),
+            "kept\n"
+        );
+        assert!(!dir.join("fresh").join("new.txt").exists());
+        assert!(
+            !dir.join("fresh").exists(),
+            "the folder kanbanr made goes too"
+        );
+        assert!(!dir.join("staged.txt").exists());
+        assert!(changed_paths(&dir).is_empty());
+        let repo = Repository::open(&dir).unwrap();
+        assert!(
+            repo.index()
+                .unwrap()
+                .get_path(Path::new("staged.txt"), 0)
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
