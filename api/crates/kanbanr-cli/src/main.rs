@@ -685,6 +685,26 @@ enum BuildCmd {
         #[arg(long)]
         since: Option<String>,
     },
+    /// The checks a change needs, from the files it touches and cargo's dependency graph, and
+    /// why: task (the changed modules), merge (the changed crates and their dependents) or line
+    /// (the full suite).
+    Affected {
+        #[arg(long, default_value = "task", value_parser = ["task", "merge", "line"])]
+        tier: String,
+        /// Compare with this revision. Default: the item branch under a task scope, the item's
+        /// line under an item scope, else main.
+        #[arg(long)]
+        base: Option<String>,
+    },
+    /// Run the checks `build affected` names, cheapest first, each through a build slot. Exits
+    /// non-zero when any failed.
+    Check {
+        #[arg(long, default_value = "task", value_parser = ["task", "merge", "line"])]
+        tier: String,
+        /// Compare with this revision (see `build affected`).
+        #[arg(long)]
+        base: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -7322,6 +7342,30 @@ fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
                     ms(k.run_p50_ms),
                     k.red
                 );
+            }
+            Ok(())
+        }
+        BuildCmd::Affected { tier, base } => {
+            let tier = kanbanr_core::buildplan::Tier::parse(tier)
+                .unwrap_or(kanbanr_core::buildplan::Tier::Task);
+            let v = buildrun::affected_here(&store, &p, &cwd, tier, base.as_deref())?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&v)?);
+                return Ok(());
+            }
+            let a = &v.affected;
+            println!("{} checks against {}: {}", tier.as_str(), v.base, a.reason);
+            for c in &a.checks {
+                println!("  {:<7} {}$ {}", c.name, c.dir, c.argv.join(" "));
+            }
+            Ok(())
+        }
+        BuildCmd::Check { tier, base } => {
+            let tier = kanbanr_core::buildplan::Tier::parse(tier)
+                .unwrap_or(kanbanr_core::buildplan::Tier::Task);
+            let code = buildrun::check(&store, &p, &cwd, tier, base.as_deref())?;
+            if code != 0 {
+                std::process::exit(code);
             }
             Ok(())
         }

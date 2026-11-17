@@ -6,6 +6,7 @@
 //! (its cache folder) and in the repository's git directory, never in the data folder. The CLI's
 //! `buildrun` holds the locks and runs the commands.
 
+use std::collections::BTreeSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -288,6 +289,500 @@ pub fn task_totals(rows: &[BuildRow], task: &str, since: &str) -> BuildTotals {
             t.wait_ms += r.queued_ms;
             t
         })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Affected checks
+// ---------------------------------------------------------------------------------------------
+
+/// How far a check reaches: a task's own change, a branch merged into an item branch, or the line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    /// The changed crates' lint and the changed modules' tests; dependents only compiled.
+    Task,
+    /// The changed crates and every crate that depends on one, tested.
+    Merge,
+    /// The full suite: the merge into the line.
+    Line,
+}
+
+impl Tier {
+    /// `task`, `merge` or `line`: the build log's `tier`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Task => "task",
+            Tier::Merge => "merge",
+            Tier::Line => "line",
+        }
+    }
+
+    /// `task`, `merge` or `line`; anything else is `None`.
+    pub fn parse(s: &str) -> Option<Tier> {
+        match s {
+            "task" => Some(Tier::Task),
+            "merge" => Some(Tier::Merge),
+            "line" => Some(Tier::Line),
+            _ => None,
+        }
+    }
+}
+
+/// One workspace crate, from `cargo metadata`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CrateInfo {
+    pub name: String,
+    /// Its folder, relative to the repository root, `/`-separated.
+    pub dir: String,
+    /// The crates it depends on by path (any kind: normal, dev, build).
+    pub deps: Vec<String>,
+    /// Its binary target's name, for a binary crate.
+    pub bin: Option<String>,
+}
+
+/// The workspace's crates out of `cargo metadata --no-deps --format-version 1`: each package's
+/// name, its folder (its manifest's, relative to `repo_root`), its path dependencies and its
+/// binary target.
+pub fn workspace_from_metadata(json: &str, repo_root: &Path) -> crate::Result<Vec<CrateInfo>> {
+    let bad = |why: String| crate::CoreError::Unsupported(format!("cargo metadata: {why}"));
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| bad(e.to_string()))?;
+    let packages = v["packages"]
+        .as_array()
+        .ok_or_else(|| bad("no packages".into()))?;
+    let canonical_root = std::fs::canonicalize(repo_root).ok();
+    let mut out = Vec::new();
+    for p in packages {
+        let name = p["name"]
+            .as_str()
+            .ok_or_else(|| bad("a package has no name".into()))?
+            .to_string();
+        let manifest = PathBuf::from(
+            p["manifest_path"]
+                .as_str()
+                .ok_or_else(|| bad(format!("{name} has no manifest_path")))?,
+        );
+        let folder = manifest.parent().unwrap_or(Path::new(""));
+        let rel = folder
+            .strip_prefix(repo_root)
+            .ok()
+            .or_else(|| {
+                canonical_root
+                    .as_deref()
+                    .and_then(|r| folder.strip_prefix(r).ok())
+            })
+            .ok_or_else(|| {
+                bad(format!(
+                    "{name} lies outside the repository at {}",
+                    repo_root.display()
+                ))
+            })?;
+        let dir = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        let mut deps: Vec<String> = p["dependencies"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|d| d.get("path").is_some_and(|x| !x.is_null()))
+            .filter_map(|d| d["name"].as_str().map(String::from))
+            .collect();
+        deps.sort();
+        deps.dedup();
+        let bin = p["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| {
+                t["kind"]
+                    .as_array()
+                    .is_some_and(|k| k.iter().any(|k| k == "bin"))
+            })
+            .and_then(|t| t["name"].as_str().map(String::from));
+        out.push(CrateInfo {
+            name,
+            dir,
+            deps,
+            bin,
+        });
+    }
+    Ok(out)
+}
+
+/// One command a check runs: `argv` in `dir` (relative to the repository root).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Check {
+    /// What kind of check: `fmt`, `clippy`, `check`, `test`, `scripts`, `web` or `docs`.
+    pub name: String,
+    pub dir: String,
+    pub argv: Vec<String>,
+}
+
+/// The checks a change needs, cheapest first, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Affected {
+    pub tier: Tier,
+    /// The full suite: at the line, or because a path every crate builds with changed.
+    pub full: bool,
+    pub reason: String,
+    /// The crates checked (the changed ones, and at the merge tier their dependents), sorted.
+    pub crates: Vec<String>,
+    pub checks: Vec<Check>,
+}
+
+/// What the repository holds that the checks call on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoShape {
+    /// `scripts/test.sh` exists (MNT-010): the merge and line tiers test through it.
+    pub test_script: bool,
+    /// `web/package.json` exists.
+    pub web: bool,
+    /// Every `check:*` script in `web/package.json`.
+    pub web_checks: Vec<String>,
+    /// The docs checks among them: `check:docs` and `check:markdown`, those present.
+    pub docs_checks: Vec<String>,
+    /// `scripts/tests/` exists.
+    pub script_tests: bool,
+    /// The project's configured line check, which replaces the test run of the full suite.
+    pub line_check: Option<Vec<String>>,
+}
+
+/// Where cargo runs: the workspace's folder.
+pub const CARGO_DIR: &str = "api";
+
+/// Paths every crate builds with: a change to one runs the full suite at any tier.
+const FULL_PATHS: &[&str] = &[
+    "api/Cargo.toml",
+    "api/Cargo.lock",
+    "api/.config/nextest.toml",
+];
+
+fn file_name(p: &str) -> &str {
+    p.rsplit('/').next().unwrap_or(p)
+}
+
+/// Does a change to `p` run the full suite: the workspace manifest or lock, cargo's or nextest's
+/// config, the toolchain, or any build script?
+fn forces_full(p: &str) -> bool {
+    FULL_PATHS.contains(&p)
+        || p.starts_with("api/.cargo/")
+        || matches!(file_name(p), "rust-toolchain.toml" | "build.rs")
+}
+
+fn strings(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|s| s.to_string()).collect()
+}
+
+/// `head`, then `-p <crate>` for each crate, then `tail`.
+fn per_crate(head: &[&str], crates: &[String], tail: &[&str]) -> Vec<String> {
+    let mut argv = strings(head);
+    for c in crates {
+        argv.push("-p".into());
+        argv.push(c.clone());
+    }
+    argv.extend(strings(tail));
+    argv
+}
+
+fn check(name: &str, dir: &str, argv: Vec<String>) -> Check {
+    Check {
+        name: name.into(),
+        dir: dir.into(),
+        argv,
+    }
+}
+
+/// Every crate that depends on one in `start`, transitively, with `start` itself.
+fn reverse_closure(ws: &[CrateInfo], start: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut set = start.clone();
+    loop {
+        let before = set.len();
+        for c in ws {
+            if !set.contains(&c.name) && c.deps.iter().any(|d| set.contains(d)) {
+                set.insert(c.name.clone());
+            }
+        }
+        if set.len() == before {
+            return set;
+        }
+    }
+}
+
+/// The crate a path lies in: the one with the longest folder holding it.
+fn crate_of<'a>(ws: &'a [CrateInfo], path: &str) -> Option<&'a CrateInfo> {
+    ws.iter()
+        .filter(|c| {
+            !c.dir.is_empty()
+                && path
+                    .strip_prefix(c.dir.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|c| c.dir.len())
+}
+
+/// The test run a changed file of crate `c` needs at the task tier, if any: a module's unit
+/// tests, a test target, or every test target when a shared test helper changed.
+fn task_test(c: &CrateInfo, path: &str) -> Option<Vec<String>> {
+    let rel = path.get(c.dir.len() + 1..)?;
+    let base = ["cargo", "test", "--locked", "-p", c.name.as_str()];
+    let mut argv = strings(&base);
+    // A binary crate's modules are tested through its binary.
+    let target: Vec<String> = match &c.bin {
+        Some(b) => strings(&["--bin", b]),
+        None => strings(&["--lib"]),
+    };
+    if let Some(src) = rel.strip_prefix("src/") {
+        match src {
+            "lib.rs" => argv.push("--lib".into()),
+            "main.rs" => argv.extend(target),
+            _ => {
+                let (module, nested) = match src.split_once('/') {
+                    Some((m, _)) => (m, true),
+                    None => (src.strip_suffix(".rs")?, false),
+                };
+                if module == "bin" || module.is_empty() || (!nested && module.contains('.')) {
+                    return None;
+                }
+                argv.extend(target);
+                argv.push(format!("{module}::"));
+            }
+        }
+        return Some(argv);
+    }
+    let t = rel.strip_prefix("tests/")?;
+    if t.starts_with("common/") || t.starts_with("fixtures/") {
+        argv.extend(strings(&["--test", "*"]));
+        return Some(argv);
+    }
+    let f = t.strip_suffix(".rs").filter(|f| !f.contains('/'))?;
+    argv.extend(strings(&["--test", f]));
+    Some(argv)
+}
+
+/// The bundle, then every `check:*` script of the web, sorted.
+fn web_checks(repo: &RepoShape) -> Vec<Check> {
+    let mut names = repo.web_checks.clone();
+    names.sort();
+    names.dedup();
+    std::iter::once("build".to_string())
+        .chain(names)
+        .map(|s| check("web", ".", strings(&["npm", "--prefix", "web", "run", &s])))
+        .collect()
+}
+
+fn docs_checks(repo: &RepoShape) -> Vec<Check> {
+    repo.docs_checks
+        .iter()
+        .map(|s| check("docs", ".", strings(&["npm", "--prefix", "web", "run", s])))
+        .collect()
+}
+
+/// The checks a change to `changed` (repository-relative paths) needs at `tier`, cheapest first:
+/// fmt, clippy, check, tests, scripts, web, docs.
+pub fn affected(changed: &[String], ws: &[CrateInfo], tier: Tier, repo: &RepoShape) -> Affected {
+    let mut paths: Vec<&str> = changed
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !p.is_empty())
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    if paths.is_empty() {
+        return Affected {
+            tier,
+            full: false,
+            reason: "nothing changed".into(),
+            crates: Vec::new(),
+            checks: Vec::new(),
+        };
+    }
+    let web = repo.web && paths.iter().any(|p| p.starts_with("web/"));
+    let docs = repo.web
+        && paths.iter().any(|p| {
+            p.starts_with("docs/")
+                || p.starts_with("skill/")
+                || (!p.contains('/') && p.ends_with(".md"))
+        });
+    let scripts = repo.script_tests && paths.iter().any(|p| p.starts_with("scripts/"));
+    let scripts_check = || {
+        check(
+            "scripts",
+            ".",
+            strings(&[
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "scripts/tests",
+            ]),
+        )
+    };
+    // Web then docs, each check once.
+    let push_web_and_docs = |checks: &mut Vec<Check>, web: bool, docs: bool| {
+        if web {
+            checks.extend(web_checks(repo));
+        }
+        if docs {
+            for d in docs_checks(repo) {
+                if !checks.iter().any(|c| c.argv == d.argv) {
+                    checks.push(d);
+                }
+            }
+        }
+    };
+
+    let trigger = paths.iter().find(|p| forces_full(p));
+    if tier == Tier::Line || trigger.is_some() {
+        let reason = match trigger {
+            Some(p) => format!("{p} changed and every crate builds with it: the full suite"),
+            None => "the merge into the line: the full suite".to_string(),
+        };
+        let mut checks = vec![
+            check(
+                "fmt",
+                CARGO_DIR,
+                strings(&["cargo", "fmt", "--all", "--check"]),
+            ),
+            check(
+                "clippy",
+                CARGO_DIR,
+                strings(&[
+                    "cargo",
+                    "clippy",
+                    "--locked",
+                    "--workspace",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ]),
+            ),
+            match &repo.line_check {
+                Some(cmd) if !cmd.is_empty() => check("test", ".", cmd.clone()),
+                _ if repo.test_script => check("test", ".", strings(&["scripts/test.sh"])),
+                _ => check(
+                    "test",
+                    CARGO_DIR,
+                    strings(&["cargo", "test", "--locked", "--workspace"]),
+                ),
+            },
+        ];
+        if scripts {
+            checks.push(scripts_check());
+        }
+        push_web_and_docs(&mut checks, repo.web, repo.web);
+        let mut crates: Vec<String> = ws.iter().map(|c| c.name.clone()).collect();
+        crates.sort();
+        return Affected {
+            tier,
+            full: true,
+            reason,
+            crates,
+            checks,
+        };
+    }
+
+    let changed_crates: BTreeSet<String> = paths
+        .iter()
+        .filter_map(|p| crate_of(ws, p).map(|c| c.name.clone()))
+        .collect();
+    let closure = reverse_closure(ws, &changed_crates);
+    let mut checks = Vec::new();
+    let crates: Vec<String> = match tier {
+        Tier::Merge => closure.iter().cloned().collect(),
+        _ => changed_crates.iter().cloned().collect(),
+    };
+    if !crates.is_empty() {
+        checks.push(check(
+            "fmt",
+            CARGO_DIR,
+            per_crate(&["cargo", "fmt", "--check"], &crates, &[]),
+        ));
+        checks.push(check(
+            "clippy",
+            CARGO_DIR,
+            per_crate(
+                &["cargo", "clippy", "--locked"],
+                &crates,
+                &["--all-targets", "--", "-D", "warnings"],
+            ),
+        ));
+    }
+    let reason = match tier {
+        Tier::Merge => {
+            if crates.is_empty() {
+                format!("{} changed file(s) outside the crates", paths.len())
+            } else {
+                format!(
+                    "{} changed file(s): crates {} and their dependents, tested",
+                    paths.len(),
+                    changed_crates
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+        _ => {
+            let dependents: Vec<String> = closure.difference(&changed_crates).cloned().collect();
+            if !dependents.is_empty() {
+                checks.push(check(
+                    "check",
+                    CARGO_DIR,
+                    per_crate(&["cargo", "check", "--locked", "--tests"], &dependents, &[]),
+                ));
+            }
+            for p in &paths {
+                if let Some(c) = crate_of(ws, p)
+                    && let Some(argv) = task_test(c, p)
+                    && !checks.iter().any(|x| x.argv == argv)
+                {
+                    checks.push(check("test", CARGO_DIR, argv));
+                }
+            }
+            if crates.is_empty() {
+                format!("{} changed file(s) outside the crates", paths.len())
+            } else if dependents.is_empty() {
+                format!(
+                    "{} changed file(s): crates {}, their changed modules tested",
+                    paths.len(),
+                    crates.join(", ")
+                )
+            } else {
+                format!(
+                    "{} changed file(s): crates {}, their changed modules tested; dependents {} compiled",
+                    paths.len(),
+                    crates.join(", "),
+                    dependents.join(", ")
+                )
+            }
+        }
+    };
+    if tier == Tier::Merge && !crates.is_empty() {
+        checks.push(if repo.test_script {
+            check("test", ".", per_crate(&["scripts/test.sh"], &crates, &[]))
+        } else {
+            check(
+                "test",
+                CARGO_DIR,
+                per_crate(&["cargo", "test", "--locked"], &crates, &[]),
+            )
+        });
+    }
+    if scripts {
+        checks.push(scripts_check());
+    }
+    push_web_and_docs(&mut checks, web, docs);
+    Affected {
+        tier,
+        full: false,
+        reason,
+        crates,
+        checks,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -598,6 +1093,377 @@ mod tests {
         );
         assert!(read_rows(&dir.join("nothing-here")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Four crates as `cargo metadata --no-deps` reports them: `lint` ← `core` ← `server` ←
+    /// `cli` (a binary, `kanbanr`), `cli` also on `core` directly, plus a registry dependency.
+    const METADATA: &str = r#"{
+      "packages": [
+        {"name": "lint", "manifest_path": "/repo/api/crates/lint/Cargo.toml",
+         "dependencies": [{"name": "serde", "kind": null}],
+         "targets": [{"kind": ["lib"], "name": "lint"}]},
+        {"name": "core", "manifest_path": "/repo/api/crates/core/Cargo.toml",
+         "dependencies": [{"name": "lint", "path": "/repo/api/crates/lint", "kind": null},
+                          {"name": "serde", "kind": null}],
+         "targets": [{"kind": ["lib"], "name": "core"}]},
+        {"name": "server", "manifest_path": "/repo/api/crates/server/Cargo.toml",
+         "dependencies": [{"name": "core", "path": "/repo/api/crates/core", "kind": null}],
+         "targets": [{"kind": ["lib"], "name": "server"},
+                     {"kind": ["custom-build"], "name": "build-script-build"}]},
+        {"name": "cli", "manifest_path": "/repo/api/crates/cli/Cargo.toml",
+         "dependencies": [{"name": "core", "path": "/repo/api/crates/core", "kind": null},
+                          {"name": "server", "path": "/repo/api/crates/server", "kind": null},
+                          {"name": "core", "path": "/repo/api/crates/core", "kind": "dev"}],
+         "targets": [{"kind": ["bin"], "name": "kanbanr"}]}
+      ],
+      "workspace_root": "/repo/api"
+    }"#;
+
+    fn ws() -> Vec<CrateInfo> {
+        workspace_from_metadata(METADATA, Path::new("/repo")).unwrap()
+    }
+
+    fn shape() -> RepoShape {
+        RepoShape {
+            test_script: true,
+            web: true,
+            web_checks: vec![
+                "check:ui".into(),
+                "check:docs".into(),
+                "check:markdown".into(),
+                "check:api-types".into(),
+            ],
+            docs_checks: vec!["check:docs".into(), "check:markdown".into()],
+            script_tests: true,
+            line_check: None,
+        }
+    }
+
+    fn paths(p: &[&str]) -> Vec<String> {
+        p.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Each check as one line, `<dir>$ <argv>`, to compare whole lists.
+    fn lines(a: &Affected) -> Vec<String> {
+        a.checks
+            .iter()
+            .map(|c| format!("{}$ {}", c.dir, c.argv.join(" ")))
+            .collect()
+    }
+
+    #[test]
+    fn a_task_check_runs_the_changed_modules_tests_and_checks_dependents() {
+        let ws = ws();
+        assert_eq!(
+            ws.iter()
+                .map(|c| (c.name.as_str(), c.dir.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("lint", "api/crates/lint"),
+                ("core", "api/crates/core"),
+                ("server", "api/crates/server"),
+                ("cli", "api/crates/cli")
+            ]
+        );
+        assert_eq!(ws[3].deps, ["core", "server"], "path deps only, once each");
+        assert!(ws[1].deps == ["lint"] && ws[0].deps.is_empty());
+        assert_eq!(ws[3].bin.as_deref(), Some("kanbanr"));
+        assert_eq!(ws[2].bin, None);
+
+        // A module of core: its own lint and module tests; its dependents only compiled.
+        let a = affected(
+            &paths(&[
+                "api/crates/core/src/store.rs",
+                "api/crates/core/src/store/index.rs",
+            ]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert!(!a.full, "{a:?}");
+        assert_eq!(a.tier, Tier::Task);
+        assert_eq!(a.crates, ["core"]);
+        assert_eq!(
+            lines(&a),
+            [
+                "api$ cargo fmt --check -p core",
+                "api$ cargo clippy --locked -p core --all-targets -- -D warnings",
+                "api$ cargo check --locked --tests -p cli -p server",
+                "api$ cargo test --locked -p core --lib store::",
+            ]
+        );
+        assert_eq!(
+            a.checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["fmt", "clippy", "check", "test"]
+        );
+
+        // An integration test file: that test target alone; cli has no dependents.
+        let a = affected(
+            &paths(&["api/crates/cli/tests/local_mode.rs"]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert_eq!(
+            lines(&a),
+            [
+                "api$ cargo fmt --check -p cli",
+                "api$ cargo clippy --locked -p cli --all-targets -- -D warnings",
+                "api$ cargo test --locked -p cli --test local_mode",
+            ]
+        );
+
+        // lib.rs: the whole library; a binary crate's main.rs and modules: its binary.
+        let a = affected(
+            &paths(&[
+                "api/crates/lint/src/lib.rs",
+                "api/crates/cli/src/main.rs",
+                "api/crates/cli/src/buildrun.rs",
+            ]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert_eq!(a.crates, ["cli", "lint"]);
+        let l = lines(&a);
+        assert!(
+            l.contains(&"api$ cargo check --locked --tests -p core -p server".to_string()),
+            "lint's dependents, transitively, less the changed crates: {l:?}"
+        );
+        assert!(l.contains(&"api$ cargo test --locked -p lint --lib".to_string()));
+        assert!(l.contains(&"api$ cargo test --locked -p cli --bin kanbanr".to_string()));
+        assert!(
+            l.contains(&"api$ cargo test --locked -p cli --bin kanbanr buildrun::".to_string())
+        );
+
+        // A shared test helper: every integration test of the crate.
+        let a = affected(
+            &paths(&["api/crates/cli/tests/common/mod.rs"]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert!(
+            lines(&a).contains(&"api$ cargo test --locked -p cli --test *".to_string()),
+            "{a:?}"
+        );
+        let a = affected(
+            &paths(&["api/crates/cli/tests/fixtures/board.yaml"]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert!(lines(&a).contains(&"api$ cargo test --locked -p cli --test *".to_string()));
+
+        // Nothing changed: nothing to run.
+        let a = affected(&[], &ws, Tier::Task, &shape());
+        assert!(a.checks.is_empty() && !a.full);
+        assert!(a.reason.starts_with("nothing changed"), "{}", a.reason);
+    }
+
+    #[test]
+    fn a_merge_check_tests_the_changed_crates_and_their_dependents() {
+        let ws = ws();
+        let a = affected(
+            &paths(&["api/crates/core/src/store.rs"]),
+            &ws,
+            Tier::Merge,
+            &shape(),
+        );
+        assert!(!a.full);
+        assert_eq!(a.crates, ["cli", "core", "server"], "the reverse closure");
+        assert_eq!(
+            lines(&a),
+            [
+                "api$ cargo fmt --check -p cli -p core -p server",
+                "api$ cargo clippy --locked -p cli -p core -p server --all-targets -- -D warnings",
+                ".$ scripts/test.sh -p cli -p core -p server",
+            ]
+        );
+
+        // Without scripts/test.sh, cargo test itself.
+        let plain = RepoShape {
+            test_script: false,
+            ..shape()
+        };
+        let a = affected(
+            &paths(&["api/crates/lint/src/rules.rs"]),
+            &ws,
+            Tier::Merge,
+            &plain,
+        );
+        assert_eq!(a.crates, ["cli", "core", "lint", "server"]);
+        assert_eq!(
+            lines(&a).last().unwrap(),
+            "api$ cargo test --locked -p cli -p core -p lint -p server"
+        );
+
+        // A leaf: itself alone.
+        let a = affected(
+            &paths(&["api/crates/cli/src/main.rs"]),
+            &ws,
+            Tier::Merge,
+            &shape(),
+        );
+        assert_eq!(a.crates, ["cli"]);
+        assert_eq!(lines(&a).last().unwrap(), ".$ scripts/test.sh -p cli");
+    }
+
+    #[test]
+    fn a_lockfile_toolchain_or_build_script_change_runs_the_full_suite() {
+        let ws = ws();
+        let full_with_web = [
+            "api$ cargo fmt --all --check",
+            "api$ cargo clippy --locked --workspace --all-targets -- -D warnings",
+            ".$ scripts/test.sh",
+            ".$ npm --prefix web run build",
+            ".$ npm --prefix web run check:api-types",
+            ".$ npm --prefix web run check:docs",
+            ".$ npm --prefix web run check:markdown",
+            ".$ npm --prefix web run check:ui",
+        ];
+        for trigger in [
+            "api/Cargo.toml",
+            "api/Cargo.lock",
+            "api/.cargo/config.toml",
+            "rust-toolchain.toml",
+            "api/crates/server/build.rs",
+            "api/.config/nextest.toml",
+        ] {
+            for tier in [Tier::Task, Tier::Merge] {
+                let a = affected(
+                    &paths(&[trigger, "api/crates/core/src/store.rs"]),
+                    &ws,
+                    tier,
+                    &shape(),
+                );
+                assert!(a.full, "{trigger} at {tier:?}: {a:?}");
+                assert!(
+                    a.reason.contains(trigger),
+                    "the reason names {trigger}: {}",
+                    a.reason
+                );
+                assert_eq!(lines(&a), full_with_web, "{trigger}");
+            }
+        }
+
+        // The line is always full, whatever changed.
+        let a = affected(
+            &paths(&["api/crates/core/src/store.rs"]),
+            &ws,
+            Tier::Line,
+            &shape(),
+        );
+        assert!(a.full);
+        assert!(a.reason.contains("line"), "{}", a.reason);
+        assert_eq!(lines(&a), full_with_web);
+
+        // A configured line check replaces the test run; without test.sh, cargo test; no web.
+        let a = affected(
+            &paths(&["api/Cargo.lock"]),
+            &ws,
+            Tier::Line,
+            &RepoShape {
+                line_check: Some(vec!["make".into(), "ci".into()]),
+                web: false,
+                ..shape()
+            },
+        );
+        assert_eq!(
+            lines(&a),
+            [
+                "api$ cargo fmt --all --check",
+                "api$ cargo clippy --locked --workspace --all-targets -- -D warnings",
+                ".$ make ci",
+            ]
+        );
+        let a = affected(
+            &paths(&["api/Cargo.lock"]),
+            &ws,
+            Tier::Task,
+            &RepoShape {
+                test_script: false,
+                web: false,
+                ..shape()
+            },
+        );
+        assert_eq!(
+            lines(&a).last().unwrap(),
+            "api$ cargo test --locked --workspace"
+        );
+    }
+
+    #[test]
+    fn web_and_docs_changes_run_their_checks_only() {
+        let ws = ws();
+        // The web alone: the bundle, then every check:* script, sorted; no cargo.
+        let a = affected(
+            &paths(&["web/src/App.tsx", "web/package-lock.json"]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert!(!a.full && a.crates.is_empty());
+        assert_eq!(
+            lines(&a),
+            [
+                ".$ npm --prefix web run build",
+                ".$ npm --prefix web run check:api-types",
+                ".$ npm --prefix web run check:docs",
+                ".$ npm --prefix web run check:markdown",
+                ".$ npm --prefix web run check:ui",
+            ]
+        );
+        assert!(a.checks.iter().all(|c| c.name == "web"));
+
+        // Docs, the skill or a top-level page: the two docs checks.
+        for p in [
+            "docs/guide/using/with-claude.md",
+            "skill/kanbanr/SKILL.md",
+            "CHANGELOG.md",
+        ] {
+            let a = affected(&paths(&[p]), &ws, Tier::Merge, &shape());
+            assert_eq!(
+                lines(&a),
+                [
+                    ".$ npm --prefix web run check:docs",
+                    ".$ npm --prefix web run check:markdown",
+                ],
+                "{p}"
+            );
+            assert!(a.checks.iter().all(|c| c.name == "docs"));
+        }
+
+        // Web and docs together: each check once.
+        let a = affected(
+            &paths(&["web/src/App.tsx", "docs/guide/index.md"]),
+            &ws,
+            Tier::Task,
+            &shape(),
+        );
+        assert_eq!(lines(&a).len(), 5, "{:?}", lines(&a));
+
+        // The scripts: their unit tests.
+        let a = affected(&paths(&["scripts/ci_local.py"]), &ws, Tier::Task, &shape());
+        assert_eq!(
+            lines(&a),
+            [".$ python3 -m unittest discover -s scripts/tests"]
+        );
+        assert_eq!(a.checks[0].name, "scripts");
+
+        // A nested page is not a top-level one; with no web folder, no docs checks to run.
+        let a = affected(&paths(&["api/README.md"]), &ws, Tier::Task, &shape());
+        assert!(a.checks.is_empty(), "{a:?}");
+        let a = affected(
+            &paths(&["docs/guide/index.md"]),
+            &ws,
+            Tier::Task,
+            &RepoShape {
+                web: false,
+                ..shape()
+            },
+        );
+        assert!(a.checks.is_empty(), "{a:?}");
     }
 
     fn entry(id: &str, into: &str, priority: u8, added_at: &str) -> QueueEntry {
