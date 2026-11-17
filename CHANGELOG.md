@@ -12,6 +12,8 @@ All notable changes to kanbanr are documented here. The format follows
   confirms several prepared decisions in one action (FTR-055).
 - The monitor computes docs drift in the background after each board or code change and serves the
   latest result at once, with the revisions and the time it was computed at (FTR-045).
+- `kanbanr walkthrough prepare --batch <name> <run>…` prepares one batch from several runs of one
+  build, and `walkthrough run --no-batch` leaves it to that (DEF-089, for FTR-054).
 
 ### Changed
 
@@ -31,6 +33,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- A walkthrough's results name the commit of the build it ran, and a dirty or unknown build is
+  refused unless `--rev` names one; the Review page shows each result's check id (DEF-089).
 - A delegation whose grant cannot be checked, because the board's git history cannot be read (for
   example a folder owned by another user), now says so and why, instead of reading as not granted
   through kanbanr (DEF-080).

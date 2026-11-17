@@ -99,6 +99,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
             "The Review page offers one click for a batch": LOCAL,
+            "The Review page shows a result's check id": LOCAL,
             "A prepared answer shows its outcome once": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
             "The monitor shows agent scopes and who made each change": LOCAL,
@@ -114,6 +115,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor always shows the keyboard focus ring": LOCAL,
             "The Review page says a grant cannot be checked and why": LOCAL,
             "The UI kit's accordion rows open on demand under a heading": LOCAL,
+            "The UI kit's table sorts, filters and exports correctly": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

@@ -1519,7 +1519,8 @@ kanbanr review FEAT-001           # the one-screen decision brief — show this 
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
 kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click
-kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions]   # a guide's run, headless; its checks prepared as one batch
+kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions] [--rev COMMIT] [--no-batch]   # a guide's run, headless; its checks prepared as one batch, at the build's commit (a dirty build needs --rev)
+kanbanr walkthrough prepare --batch NAME RUN…   # one batch from several --no-batch runs of one build (both guides for a release)
 kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them

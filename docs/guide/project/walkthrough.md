@@ -53,10 +53,24 @@ person can judge.
    `kanbanr walkthrough derive <run>` gives the same bytes again.
 9. **Puts the run's checks on your board.** A check whose test is `walkthrough:` kind is something
    the run proves, so it is recorded green or red directly, at the commit of the run's binary, as
-   `kanbanr test` records any automated result. A `manual:` check is prepared, and all of them form
-   one batch: the Review page offers **Confirm all N** and **Reject all N** beside the single
-   buttons; one click records them all. A check that measured nothing goes nowhere, and a run that
-   never made its board (`setup-incomplete`) puts nothing on yours.
+   `kanbanr test` records any automated result; a result that already says the same at the same
+   commit is left as it is (`R-n <test>: already recorded at <rev>`). A `manual:` check is
+   prepared, and all of them form one batch: the Review page offers **Confirm all N** and
+   **Reject all N** beside the single buttons; one click records them all. Each prepared result
+   shows its check id (**Check** `MT-6`) beside its result, note and commit, and the batch's
+   summary names its checks (`(checks MT-1, MT-4)`), so the Review page matches the run log and
+   Claude's report. A check that measured nothing goes nowhere, and a run that never made its
+   board (`setup-incomplete`, and `setup_failed true` in `raw/setup.log`) puts nothing on yours.
+
+**Every result names the commit the binary was built from; a dirty or unknown build is refused
+unless `--rev` names the commit.** The run reads the commit from the binary under test itself, not
+from the checkout it was started in, so a run from any folder records the same commit for the same
+build. A build from a modified tree (`<hash>-dirty`) or one without git metadata (`unknown`) holds
+no commit that proves its code, so the run refuses before any session starts and spends nothing.
+`--rev <commit>` (7 to 40 hex digits) is your statement of what the build holds: it is taken as
+given, never looked up in the checkout (the build may come from another clone or worktree), and
+`raw/setup.log` records it as `evidence_rev <commit>` with `evidence_rev_from --rev` (or
+`the build`), so the claim can be audited.
 
 A run stops early only at its budget (`--budget-usd`), its wall time (`--max-minutes`) or when the
 session ends; the stop is a finding, and the captures are made all the same.
@@ -124,6 +138,40 @@ nothing else.
 Two runbooks ship on this board: `walkthroughs/togaf.md` and `walkthroughs/agile.md`, for the two
 guides. Other projects on a board bring their own.
 
+## Release evidence: both guides
+
+The two runbooks share MT-1 to MT-5; MT-6 to MT-8 exist only in agile and MT-9 only in TOGAF, and
+each carries MT-10 (the guide reached its cut). A release's guide checks are therefore one batch
+made from two runs of one build:
+
+1. Build and install the candidate from a clean tree. Its `kanbanr --version` names a commit with
+   no `-dirty`.
+2. From the kanbanr checkout, run
+   `kanbanr walkthrough run walkthroughs/togaf.md --no-batch --name togaf-<version>-<n> --remotes <prefix>`.
+3. Then, never in parallel (one heavy job at a time), run
+   `kanbanr walkthrough run walkthroughs/agile.md --no-batch --name agile-<version>-<n> --remotes <prefix>`.
+   Watch the run logs and the machine's load as for any long job.
+4. Run `kanbanr walkthrough prepare --batch <version>-guides <togaf run> <agile run>`.
+5. Claude reports each check by its id from both runs' `checks.tsv` and findings, and you confirm
+   the batch on the Review page. MT-10 is recorded by step 4 as automated evidence, green only if
+   both runs reached their cut.
+
+`walkthrough prepare` reads only the run folders, so the batch is derived and the same every time.
+Each result's step is prefixed with its run's name (`togaf-v080-1:6.20a`), and a check measured in
+both runs passes only if it passed in both. It refuses, naming the run folder, and prepares
+nothing when:
+
+- a run's setup did not complete (`setup_failed true` in `raw/setup.log`);
+- a run's `raw/setup.log` names no `evidence_rev` (a run from before this was recorded): run it
+  again;
+- two runs name different commits: "two builds are not one release's evidence";
+- a run folder's `raw/MANIFEST.sha256` does not verify;
+- a check id is defined differently in the two runbooks (another item, requirement or test).
+
+A run that stopped early is noted (what it did not reach is not measured), not refused. Running
+`prepare` again with the same runs prepares nothing twice: each record already open in the batch
+is reported as `already prepared`, and each automated result as `already recorded at <rev>`.
+
 ## Options
 
 | Flag | Does |
@@ -137,6 +185,8 @@ guides. Other projects on a board bring their own.
 | `--runs <dir>` | Where runs are kept (default: `~/.cache/kanbanr-walkthroughs`, or `KANBANR_WALKTHROUGH_RUNS`) |
 | `--name` | The run's name, and the batch's |
 | `--no-browser` | Never open a browser: press and page steps are findings |
+| `--rev <commit>` | The commit the build under test was made from, when the binary cannot say (a dirty or unknown build); every result the run puts on the board names it |
+| `--no-batch` | Put nothing on your board; prepare the batch later with `kanbanr walkthrough prepare` |
 
 A run writes nothing outside its folder, its scratch board, its own remotes and your board's
 prepared records.

@@ -43,7 +43,9 @@
     "check:a11y-type": "node scripts/check-a11y-type.mjs",
     "check:a11y-focus": "node scripts/check-a11y-focus.mjs",
     "check:grant-unverifiable": "node scripts/check-grant-unverifiable.mjs",
-    "check:ui-accordion": "node scripts/check-ui-accordion.mjs"
+    "check:ui-accordion": "node scripts/check-ui-accordion.mjs",
+    "check:review-check-id": "node scripts/check-review-check-id.mjs",
+    "check:ui-table": "node scripts/check-ui-table.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

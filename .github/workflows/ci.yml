@@ -310,6 +310,10 @@ jobs:
       # beside the single buttons (FTR-037).
       - name: The Review page offers one click for a batch
         run: npm run check:review-batch
+      # Each prepared result names the runbook's check id (MT-n), and the batch summary lists them,
+      # so the person can match the Review page to the run log (DEF-089).
+      - name: The Review page shows a result's check id
+        run: npm run check:review-check-id
       # Rejecting or confirming a prepared answer shows its outcome and hides the form, and a
       # second press while the call is in flight sends nothing (DEF-090).
       - name: A prepared answer shows its outcome once
@@ -370,6 +374,10 @@ jobs:
       # toggle, and keep the open ids in the URL hash (FTR-046).
       - name: The UI kit's accordion rows open on demand under a heading
         run: npm run check:ui-accordion
+      # The table sorts stably with nulls last, filters on every token, exports CSV quoted and with
+      # formulas neutralised, and is drawn with a caption, aria-sort and a labelled filter (FTR-046).
+      - name: The UI kit's table sorts, filters and exports correctly
+        run: npm run check:ui-table
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
