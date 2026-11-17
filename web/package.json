@@ -41,6 +41,7 @@
     "check:ui-tabs": "node scripts/check-ui-tabs.mjs",
     "check:a11y-contrast": "node scripts/check-a11y-contrast.mjs",
     "check:a11y-type": "node scripts/check-a11y-type.mjs",
+    "check:a11y-focus": "node scripts/check-a11y-focus.mjs",
     "check:grant-unverifiable": "node scripts/check-grant-unverifiable.mjs",
     "check:ui-accordion": "node scripts/check-ui-accordion.mjs"
   },
