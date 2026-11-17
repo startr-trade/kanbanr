@@ -11,6 +11,7 @@ import { DataTable, ErrorState, LoadingState, filterRows, type Column } from "..
 import { ITEM_COLUMNS } from "../../releaseTabs";
 import { to as link } from "../../overviewLinks";
 import { unshownFor } from "../../prepared";
+import { snapshotLine } from "../../docViews";
 import { ReleaseButton } from "./ReleaseActions";
 import { ReleaseNotesSection } from "./ReleaseNotesSection";
 
@@ -78,6 +79,7 @@ export function ReleaseBody({
   const moveTargets = open
     ? planTargets([], index.data?.releases ?? []).filter((t) => t.key !== `release:${r.version}`)
     : [];
+  const sysViews = snapshotLine(r);
   return (
     <div className="release-body">
       {items.data ? (
@@ -142,6 +144,13 @@ export function ReleaseBody({
       {r.notes_doc ? (
         <p className="small">
           <Link to={`${base}/docs/file/${r.notes_doc.split("/").map(encodeURIComponent).join("/")}`}>Release notes</Link>
+        </p>
+      ) : null}
+      {sysViews ? (
+        <p className="small release-system-views">
+          <strong>System views</strong>: {sysViews.before}
+          {sysViews.dir ? <Link to={`${base}/folder/${sysViews.dir.split("/").map(encodeURIComponent).join("/")}`}>{sysViews.dir}</Link> : null}
+          {sysViews.after}
         </p>
       ) : null}
     </div>

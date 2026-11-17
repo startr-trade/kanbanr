@@ -620,6 +620,16 @@ changes the repository: nothing is checked out and no branch moves.
 On an item page, each sign-off that recorded a position adds "docs read at 1a2b3c4" and a link to
 each doc it read, opened at that commit, so the reviewer sees exactly what was signed.
 
+### Query blocks on a doc page
+
+A doc page draws each `katalogr-query` block ([Query blocks](documentation.md#query-blocks-katalogr))
+as a figure: the diagram katalogr answered with at the project's current position, the position line
+under it (the commit, whether the checkout is clean, whether the answer is exact, the view's ID and an
+"open in katalogr" link when katalogr gives one) and the block's one-line source. When katalogr is not
+running, is too old, holds no context for the position, or the block is not a query, the block stays as
+its source with one plain sentence under it. Nothing on the page is an action, and nothing here needs
+katalogr to be installed.
+
 ### How the monitor stays fast
 
 A page reads only what it shows (DEF-081). The header, the links in specs and docs, and the item
@@ -666,7 +676,10 @@ wrap. Every column sorts, the table has its own filter, and **Export CSV** saves
 table come **Remove** for a planned release that can still be removed, the rest of the release's
 button (what is missing with its fix, the cut preview, **Check again**, and the tag's panel once it
 is tagged), **Prepared, not required**, the **Release notes** section, collapsed until opened, and
-the link to the release's notes doc. A closed row reads none of this.
+the link to the release's notes doc, then a **System views** line when the cut ran katalogr's
+snapshot: "2 blocks, 3 views at 0123456 in `releases/v0.8.0/views` — repos named: a, b — check them
+before pushing a public board", or "no system views: `<reason>`" when it saved none; a release with no
+record shows nothing. It is text and a link to the folder, never a button. A closed row reads none of this.
 
 The **Filter** box above the list filters the open releases' tables, and hides closed releases
 whose version or name does not match. It never reads a closed release's items to search them.

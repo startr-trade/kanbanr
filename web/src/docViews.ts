@@ -2,7 +2,7 @@
 // no React and no network, so `scripts/check-katalogr.mjs` runs it in node with jsdom, the way
 // `check-markdown.mjs` runs the markdown renderer. Everything shown is text or a Pele diagram that
 // went through `safeSvg`; nothing here sets markup from a string except that sanitised SVG.
-import type { DocViewBlock, DocViews, PositionRef } from "./types";
+import type { DocViewBlock, DocViews, PositionRef, Release } from "./types";
 
 /** The query's operation: the first word of its one line. */
 function opOf(block: DocViewBlock): string {
@@ -129,4 +129,34 @@ export function webViewFor(views: DocViews | null, pair: Pair<unknown>): WebView
   if (!pair.block) return { kind: "say", text: "the daemon had no answer for this block" };
   if (pair.block.view) return { kind: "draw", block: pair.block };
   return { kind: "say", text: saidFor(views, pair.block) };
+}
+
+/** The Releases page's "System views" line: text around an optional docs folder to link. */
+export interface SnapshotLine {
+  before: string;
+  /** The docs folder holding the views, linked between `before` and `after`; absent when skipped. */
+  dir?: string;
+  after: string;
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * What a release's snapshot says (R-9): for `saved`, how many blocks and views, at which commit, in
+ * which folder, and every repo it names, so the person checks them before pushing a public board;
+ * for `skipped`, "no system views" and the reason; for no record, nothing. Text and one link only.
+ */
+export function snapshotLine(release: Pick<Release, "snapshot">): SnapshotLine | null {
+  const s = release.snapshot;
+  if (!s) return null;
+  if (s.state === "saved") {
+    const at = s.at ? s.at.slice(0, 7) : "the tag";
+    const repos = s.repos.length ? s.repos.join(", ") : "none";
+    return {
+      before: `${count(s.blocks, "block,", "blocks,")} ${count(s.views, "view", "views")} at ${at} in `,
+      dir: s.dir,
+      after: ` — repos named: ${repos} — check them before pushing a public board`,
+    };
+  }
+  return { before: `no system views: ${s.reason || "katalogr saved none"}`, after: "" };
 }

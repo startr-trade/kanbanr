@@ -50,6 +50,9 @@ changelog saying so.
 - **Positions, view IDs and the katalogr contract** — `kanbanr position`, `kanbanr view`, the
   position and view routes, and the position text and view ID formats shared with katalogr, until
   they are used (ADR-0014).
+- **The katalogr link** — `/api/projects/{project}/docs/views` and `/katalogr`, the `snapshot` record
+  of a release, the snapshot folder `docs/releases/<V>/views` and `kanbanr katalogr status`, until
+  the link has been used (ADR-0014).
 - **Anything marked experimental** in its own documentation.
 - **Undocumented behaviour**, including the order of items where no order is documented.
 

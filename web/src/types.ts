@@ -747,10 +747,23 @@ export interface Release {
   tagged_at?: string;
   /** The commit the tag names. */
   tag_commit?: string;
+  /** What katalogr's snapshot saved at the cut, or why it saved nothing (FTR-016); absent when no cut ran it. */
+  snapshot?: ReleaseSnapshot;
   /** The patch release that replaced it after its tag's CI run failed; its tag stays in git. */
   superseded_by?: string;
   /** For a patch: what its parent shipped, which the patch keeps (FEAT-184). */
   included?: string[];
+}
+
+/** A release's katalogr snapshot record (FTR-016): `saved` into the docs folder `dir`, or `skipped` with a reason. */
+export interface ReleaseSnapshot {
+  state: "saved" | "skipped" | string;
+  dir: string;
+  at: string;
+  repos: string[];
+  blocks: number;
+  views: number;
+  reason: string;
 }
 
 /** The Releases page's tab a release falls in (FTR-041): the route's words; the page labels `past` Released. */
