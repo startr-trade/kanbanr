@@ -28,7 +28,6 @@ import {
   askText,
   batchOf,
   decisionBody,
-  emptySelection,
   isTestsOnly,
   preselected,
   select,
@@ -232,7 +231,9 @@ export function GroupPanel(p: {
   // The second press of an ask-first step: one decision over the chosen rows. A selection that is
   // exactly one prepared batch, confirmed or turned down, goes through FTR-037's batch route, so
   // the batch is still one action and one commit (R-5); anything else is one group decision.
-  const send = (action: string, chosen: Selection, reason = "") => {
+  const send = (action: string, picked: Selection, reason = "") => {
+    // Only rows the person can see are sent (T12): a hidden selected row stays selected, unsent.
+    const chosen = shownOnly(picked);
     const batch = action === slice.action || action === "reject" ? batchOf(slice, chosen) : null;
     const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action, reason);
     const n = body.items.length;
@@ -250,7 +251,8 @@ export function GroupPanel(p: {
           const answer = await api.decideGroup(p.project, body);
           setOutcome(outcomeOf(answer, past(action), n));
         }
-        setSel(emptySelection(slice.key));
+        // What was sent leaves the selection; a selected row the filter hid stays.
+        setSel((s) => ({ group: s.group, keys: new Set([...s.keys].filter((k) => !chosen.keys.has(k))) }));
         p.onDecided?.();
       } catch (e) {
         setOutcome({ ok: false, text: e instanceof Error ? e.message : String(e), failed: [] });
@@ -260,13 +262,18 @@ export function GroupPanel(p: {
     });
   };
 
-  const n = [...sel.keys].filter((k) => slice.rows.some((r) => r.key === k)).length;
+  // A group action takes the selected rows that are shown (selection ∩ shown after the filter);
+  // a selected row the filter hides stays selected, is not counted and is never sent (T12).
+  const shownKeys = useMemo(() => new Set(shown.map((r) => r.key)), [shown]);
+  const shownOnly = (s: Selection): Selection => ({ group: s.group, keys: new Set([...s.keys].filter((k) => shownKeys.has(k))) });
+  const visible = shownOnly(sel);
+  const n = [...visible.keys].filter((k) => slice.rows.some((r) => r.key === k)).length;
   const selectable = shown.filter((r) => reasonFor(r) === "");
   const testsOnlyN = shown.filter((r) => isTestsOnly(r) && !pending.has(r.key) && r.blocked === "").length;
   const allOn = selectable.length > 0 && selectable.every((r) => sel.keys.has(r.key));
   const preparedSel: Selection = {
     group: sel.group,
-    keys: new Set([...sel.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
+    keys: new Set([...visible.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
   };
   const nothing = n === 0 ? "Select the rows to decide first" : "Recording…";
   // Turning down every open record of one batch, and nothing else, is the batch's "Reject all N".
@@ -281,8 +288,8 @@ export function GroupPanel(p: {
     return checks.length ? ` (checks ${checks.join(", ")})` : "";
   };
   const batchNames = [...new Set(slice.rows.map((r) => r.batch).filter((b) => b !== ""))];
-  const chosenBatch = batchOf(slice, sel);
-  const label = actionLabel(slice, sel, target) + (chosenBatch !== null ? checksOf(chosenBatch) : "");
+  const chosenBatch = batchOf(slice, visible);
+  const label = actionLabel(slice, visible, target) + (chosenBatch !== null ? checksOf(chosenBatch) : "");
 
   return (
     <div className="review-group">
@@ -358,20 +365,20 @@ export function GroupPanel(p: {
             <span className="review-group-actions">
               <AskFirst
                 label={label}
-                ask={askText(slice, sel, slice.rows, target)}
+                ask={askText(slice, visible, slice.rows, target)}
                 className={n > 0 ? "btn btn-primary" : "btn"}
                 disabled={n === 0 || inFlight || (plan && target === "")}
                 disabledWhy={plan && target === "" ? "No release is planned: ask Claude to add one" : nothing}
-                onConfirm={() => send(slice.action, sel)}
+                onConfirm={() => send(slice.action, visible)}
               />
               {slice.key === "delegated" ? (
                 <AskFirst
                   label={`Undo ${n}`}
-                  ask={askText({ ...slice, action: "Undo" }, sel, slice.rows)}
+                  ask={askText({ ...slice, action: "Undo" }, visible, slice.rows)}
                   className="btn"
                   disabled={n === 0 || inFlight}
                   disabledWhy={nothing}
-                  onConfirm={() => send("undo", sel)}
+                  onConfirm={() => send("undo", visible)}
                 />
               ) : null}
               {preparedSel.keys.size > 0 ? (

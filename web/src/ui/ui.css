@@ -77,7 +77,7 @@
 
 /* Accordion rows (R-2, R-11): one line of 36 px, the title cut with an ellipsis, properties as pills
    on the same line. */
-.ui-row { border-bottom: 1px solid var(--border); }
+.ui-row { border-bottom: 1px solid var(--border); min-width: 0; }
 .ui-row-head {
   display: flex;
   align-items: center;
@@ -85,12 +85,14 @@
   min-height: var(--row-h);
   white-space: nowrap;
   padding: 0 var(--sp-2);
+  min-width: 0;
 }
 .ui-row-select { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
 .ui-row-reason { color: var(--text-muted); font-size: var(--fs-1); }
 .ui-row-title {
   margin: 0;
-  min-width: 0;
+  /* Never squeezed to nothing by the pills beside it: the arrow and a few letters stay. */
+  min-width: 4rem;
   flex: 1 1 auto;
   font-size: var(--fs-2);
   font-weight: 600;
@@ -121,8 +123,18 @@
 }
 .ui-row-title > button:has(> .review-row-records)::before { grid-column: 1; grid-row: 1; }
 .ui-row-title > button:has(> .review-row-records) > * { grid-column: 2; min-width: 0; }
+/* A Manual item's heading is one span: its arrow sits on that line too, not above it (T12). */
+.ui-row-title > button:has(> .manual-item-title) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-1);
+}
+.ui-row-title > button:has(> .manual-item-title)::before { grid-column: 1; grid-row: 1; }
+.ui-row-title > button:has(> .manual-item-title) > * { grid-column: 2; min-width: 0; }
 .ui-row-meta, .ui-row-actions { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
-.ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; }
+/* The pills give way before the title does, so a long row stays inside the page. */
+.ui-row-meta { min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; overflow-wrap: anywhere; }
 
 /* Tables (R-3): tools above, a caption, button headers carrying the sort. */
 .ui-table-wrap { overflow-x: auto; }
