@@ -276,6 +276,8 @@ pub struct DecisionContext<'a> {
     /// taken from the taker.
     pub origin: Option<Origin>,
     pub now: String,
+    /// The pass the body names, when it exists and has not expired (FTR-035); `None` otherwise.
+    pub pass: Option<&'a crate::passes::Pass>,
 }
 
 impl DecisionContext<'_> {
@@ -376,8 +378,9 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
         Taker::Person => Origin::Terminal,
         Taker::Claude => Origin::Conversation,
     });
-    match crate::decisions::authorize(d, project, ctx.method, ctx.path, ctx.body, origin, &ctx.now)
-    {
+    match crate::decisions::authorize(
+        d, project, ctx.method, ctx.path, ctx.body, origin, &ctx.now, ctx.pass,
+    ) {
         Ok(_) => None,
         Err(why) if taker == Taker::Claude && !decisions_route => {
             Some(format!("{why} {PREPARE_INSTEAD}"))
@@ -591,6 +594,11 @@ pub fn stamp(method: &str, path: &str, body: Option<&Value>, origin: Origin) -> 
         _ => Value::Object(Default::default()),
     };
     v["origin"] = Value::String(origin.as_str().to_string());
+    // What the person answered is written by the write path from a pass, never taken from the
+    // request (FTR-035).
+    if let Value::Object(m) = &mut v {
+        m.remove("heard");
+    }
     Some(v)
 }
 
@@ -609,6 +617,24 @@ pub fn delegation_from_body(b: &Value) -> String {
         .and_then(|v| v.as_str())
         .map(|d| d.trim().to_string())
         .unwrap_or_default()
+}
+
+/// The pass a verdict body names (`P-3f2a9c1d7b40`), trimmed; "" when it names none (FTR-035).
+pub fn pass_from_body(b: &Value) -> String {
+    b.get("pass")
+        .and_then(|v| v.as_str())
+        .map(|d| d.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// The answer a conversation verdict was recorded from, as `apply_as` stamped it into the body
+/// (FTR-035). `None` when the body carries none, or one that is not an object of the right shape.
+pub fn heard_from_body(b: &Value) -> Option<crate::models::Heard> {
+    let h = b.get("heard")?;
+    if !h.is_object() {
+        return None;
+    }
+    serde_json::from_value(h.clone()).ok()
 }
 
 /// The record a repeat verdict collides with.
@@ -960,6 +986,7 @@ mod tests {
                     body: Some(&body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 let why = verdict_refusal(Verdict::GroupDecision, Taker::of_origin(origin), &ctx)
                     .unwrap_or_else(|| panic!("{mode}/{origin:?}: Claude took a group decision"));
@@ -974,6 +1001,7 @@ mod tests {
                     body: Some(&body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 assert_eq!(
                     verdict_refusal(Verdict::GroupDecision, Taker::Person, &ctx),
@@ -1074,6 +1102,7 @@ mod tests {
                     body: Some(body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 let got = verdict_refusal(Verdict::PlanningDecision, taker, &ctx);
                 match taker {
@@ -1175,7 +1204,7 @@ mod tests {
         let (store, dir) = board();
         let code = item(&store, true);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor", "")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "", None)
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "monitor");
@@ -1189,7 +1218,15 @@ mod tests {
         assert_eq!(d.approvals.last().unwrap().origin, "terminal");
 
         store
-            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation", "")
+            .ratify_feature_as(
+                "demo",
+                &code,
+                "Ada",
+                "built first",
+                "conversation",
+                "",
+                None,
+            )
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "conversation");
@@ -1677,7 +1714,7 @@ mod tests {
         // An approval withdrawn twice, and a sign-off withdrawn twice.
         let code = item(&store, false);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor", "")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "", None)
             .unwrap();
         store
             .unapprove_feature_as("demo", &code, "Ada", "no", "conversation")

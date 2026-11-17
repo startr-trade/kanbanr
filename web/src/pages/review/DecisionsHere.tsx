@@ -82,6 +82,7 @@ export function DecisionsHere({
             <select value={chosen} onChange={(e) => setMode(e.target.value)} aria-label="Decision mode">
               <option value="monitor">monitor</option>
               <option value="delegated">delegated</option>
+              <option value="conversation">conversation</option>
             </select>
           </label>{" "}
           <button
@@ -103,7 +104,7 @@ export function DecisionsHere({
         </p>
       ) : (
         <p className="muted small">
-          Change it with <code>kanbanr decisions mode &lt;monitor|delegated&gt;</code> in your own terminal.
+          Change it with <code>kanbanr decisions mode &lt;monitor|delegated|conversation&gt;</code> in your own terminal.
         </p>
       )}
       {waiting && waiting.length > 0 ? (

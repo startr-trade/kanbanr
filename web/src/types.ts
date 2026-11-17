@@ -177,6 +177,8 @@ export interface ApprovalEvent {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** The person's answer in the conversation it was taken from (FTR-035). */
+  heard?: Heard;
   /** `tests` when the approval agreed to a change to tests only (FTR-039); absent otherwise. */
   scope?: string;
 }
@@ -224,6 +226,8 @@ export interface Signoff {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** The person's answer in the conversation it was taken from (FTR-035). */
+  heard?: Heard;
   /** The position (`<commit>` or `<commit>+<dirty>`) the item resolved to when it was given (FTR-004). */
   position?: string;
   /** Each repository doc the item lists that existed at `position`, with its blob id (FTR-004). */
@@ -250,6 +254,8 @@ export interface Approval {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** The person's answer in the conversation it was taken from (FTR-035). */
+  heard?: Heard;
 }
 
 export interface Requirement {
@@ -1356,6 +1362,16 @@ export interface ModeChange {
   at: string;
   origin: string;
   reason?: string;
+}
+
+/** The person's answer a conversation verdict was recorded from (FTR-035). */
+export interface Heard {
+  question: string;
+  answer: string;
+  pass: string;
+  heard_at: string;
+  tool_use_id?: string;
+  session_id?: string;
 }
 
 /** A delegation: the verdicts Claude may take, on which items, until when (FTR-028). */
