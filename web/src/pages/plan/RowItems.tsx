@@ -17,10 +17,10 @@ import { TAGS, urls } from "../../data/urls";
 import Burndown from "../../components/Burndown";
 import { ErrorState, LoadingState, Timeline } from "../../ui";
 import { declinedByItem, itemBands } from "../../planTabs";
-import { pendingByItem } from "../../planning";
+import { dropRequest, pendingByItem } from "../../planning";
 import { to as link } from "../../overviewLinks";
 import { DeclinedPlanning, PlanningAction } from "../../components/PlanningAction";
-import type { PlacedItem, PlanLane, PlanningView, RowBody } from "../../types";
+import type { PlacedItem, PlanLane, PlanningRequest, PlanningView, RowBody } from "../../types";
 
 type Window = { from: string; to: string; today: string };
 
@@ -35,6 +35,26 @@ export type PlanningContext = {
   writable: boolean;
   who: string;
 };
+
+/** The drag's data type: an item dragged from an opened row, `{ item, from }` as JSON (FTR-049, R-7). */
+export const ITEM_DRAG = "application/x-kanbanr-item";
+
+/**
+ * The request a drop drafts (R-7): `raw` is what the dragged row carried, `laneKey` the lane it
+ * was dropped on, `targets` the sprints and releases still open to plan into. A lane that is not
+ * offered, the item's own lane, or data that is not an item's give null: nothing is drafted.
+ * It drafts only; the page asks before it records anything.
+ */
+export function draftDrop(raw: string, laneKey: string, targets: { key: string }[]): PlanningRequest | null {
+  let drag: { item?: unknown; from?: unknown };
+  try {
+    drag = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof drag?.item !== "string" || !drag.item || drag.from === laneKey) return null;
+  return targets.some((t) => t.key === laneKey) ? dropRequest(drag.item, laneKey) : null;
+}
 
 /** Reads the row's items; a failed read shows its error inside this row only. */
 export function RowItems(p: { project: string; lane: PlanLane; planning?: PlanningContext } & Window): JSX.Element {
@@ -81,6 +101,8 @@ export function RowItemsBody(p: { project: string; lane: PlanLane; body: RowBody
   // Planning into the row's own sprint or release changes nothing: it is not offered.
   const targets = (planning?.targets ?? []).filter((t) => t.key !== lane.key);
   const selectable = !!planning?.writable && targets.length > 0;
+  // An item can be dragged onto another sprint or release row to draft a request (R-7).
+  const dragPlan = !!planning?.writable && targets.length > 0;
   const chosen = body.items.map((i) => i.code).filter((c) => selected.includes(c));
   const toggle = (code: string, on: boolean) =>
     setSelected((s) => (on ? [...s.filter((c) => c !== code), code] : s.filter((c) => c !== code)));
@@ -143,7 +165,18 @@ export function RowItemsBody(p: { project: string; lane: PlanLane; body: RowBody
           </thead>
           <tbody>
             {body.items.map((i) => (
-              <tr key={i.code}>
+              <tr
+                key={i.code}
+                draggable={dragPlan}
+                onDragStart={
+                  dragPlan
+                    ? (e) => {
+                        e.dataTransfer.setData(ITEM_DRAG, JSON.stringify({ item: i.code, from: lane.key }));
+                        e.dataTransfer.effectAllowed = "copy";
+                      }
+                    : undefined
+                }
+              >
                 {selectable ? (
                   <td>
                     <input
