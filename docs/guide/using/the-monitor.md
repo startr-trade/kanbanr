@@ -451,7 +451,7 @@ it.
 | | | |
 |---|---|---|
 | ![Review: approve, ratify, sign off](../images/review.png) | ![The charter, goals and lessons](../images/charter.png) | ![The workflow and its gates](../images/workflow.png) |
-| **Review** — approve, ratify, sign off | **Charter** — purpose, goals, lessons | **Workflow** — stages and their gates |
+| **Review** — approve, ratify, sign off | **Charter** — goals, the way travelled, lessons | **Workflow** — stages and their gates |
 | ![Milestones](../images/milestones.png) | ![A milestone](../images/milestone.png) | ![The derived schedule](../images/schedule.png) |
 | **Milestones**, newest first, and their dependencies | **A milestone** and its items | **Schedule** — derived, never stored |
 | ![The Gantt](../images/gantt.png) | ![A status page](../images/status.png) | ![The Ongoing stream](../images/ongoing.png) |
@@ -467,6 +467,37 @@ offers **All items** and **Unscheduled**, the items not yet in any sprint:
 |---|---|---|
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
+
+### The Charter page
+
+The Charter page is where the project says why it exists and shows that it is getting there. It is
+compact: nothing the charter holds is left out, and the rest is drawn from the board's own records,
+never invented. Every number on it links to the list behind it.
+
+- **Purpose** and vision at the top, in the charter's own words, with the day it was adopted.
+- **Since you last looked**, one line when something changed: items finished toward which goals,
+  releases shipped and lessons recorded since you last opened the page. It says nothing on a first
+  visit and when nothing changed. The time you last looked is kept in this browser only, never on
+  the board.
+- **Goals** as a table: the goal, its measure and horizon, the items serving it (done and open), a
+  bar of its requirements proven by a green test, how many lessons name it, and a small trend. A
+  goal no item serves says so in words.
+- **The way travelled**: the releases that shipped, in the order they shipped, with the next planned
+  one ahead of them (carrying a date only if you set one), and a table of how many items each release
+  finished toward each goal.
+- **Progress per goal**: a small chart for each goal of the requirements proven across the releases,
+  all on one scale so they compare. The charts read today's evidence: a requirement added or a test
+  turned red after a release moves that release's point. Each has a table view.
+- **Lessons**: how the project's learning grew from one release cycle to the next, then the lessons
+  grouped by theme (a tag). Each lesson links to the item or retrospective it was learned in and to
+  the items whose specifications cite it. The counts are the ones `kanbanr lessons` (in force) and
+  `kanbanr lessons --all` print.
+- **Recent wins**: the latest finished items that serve a goal.
+- **What the project will not do**: non-goals, stakeholders and constraints as tables. A long entry
+  shows its first line, with the whole text one click away.
+
+The page says when it was read and from which board revision. A kanbanr older than this page has
+no progress route: the charter's tables still show, and each drawn section says to update kanbanr.
 
 ### The Plan page's Flow panel
 
