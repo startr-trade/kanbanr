@@ -62,7 +62,8 @@ export const NAV: NavArea[] = [
     label: "Architecture",
     entries: [
       { key: "workflow", label: "Workflow", path: (p) => `${base(p)}/workflow` },
-      // FTR-033 P8 adds Baseline here.
+      // The project's engineering baseline, beside its other technical decisions (FTR-033 R-6).
+      { key: "baseline", label: "Baseline", path: (p) => `${base(p)}/baseline` },
     ],
   },
   {

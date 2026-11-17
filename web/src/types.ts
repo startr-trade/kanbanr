@@ -1652,3 +1652,125 @@ export interface ItemFilter {
   release?: string;
   evidence?: "red" | "planned" | "stale" | "unproven" | "proven" | "untested" | "";
 }
+
+// ---- The engineering baseline (FTR-033): `GET /projects/{p}/baseline` and `…/profile` ----------
+
+/**
+ * One chosen option of a baseline answer. The published schema describes it as this object; the
+ * daemon writes the bare option id when it carries no value, so read it through
+ * `baseline.ts`'s `chosenId`, which takes either.
+ */
+export interface BaselineChosen {
+  option: string;
+  value: string;
+}
+
+/** One answer of a baseline revision. */
+export interface BaselineAnswer {
+  area: string;
+  options?: BaselineChosen[];
+  later?: boolean;
+  not_applicable?: string;
+  explained?: boolean;
+}
+
+/** One baseline entry: a requirement, constraint, non-goal or practice an answer records. */
+export interface BaselineEntry {
+  id: string;
+  pack: string;
+  area: string;
+  option: string;
+  kind: "nfr" | "constraint" | "non_goal" | "practice";
+  text: string;
+  why?: string;
+  iso25010?: string[];
+  /** The ADR written at acceptance, for a constraint. */
+  adr?: string;
+  revision: string;
+  superseded_by?: string;
+}
+
+/** An entry as the Baseline page shows it under its area. */
+export interface BaselineEntryView extends BaselineEntry {
+  in_force: boolean;
+  pack_removed: boolean;
+  /** Live items whose Design names it. */
+  named_by: string[];
+  /** Its acceptance is in the file but did not come through kanbanr, so it is not honoured. */
+  not_accepted_through_kanbanr: boolean;
+}
+
+/** One area of the followed packs, with its standing answer. */
+export interface BaselineArea {
+  id: string;
+  pack: string;
+  title: string;
+  question: string;
+  status: "open" | "later" | "proposed" | "answered" | "not_applicable";
+  options: BaselineChosen[];
+  value: string;
+  reason: string;
+  item: string;
+  revision: string;
+  entries: BaselineEntryView[];
+}
+
+/** One revision of the baseline, with what accepting it does. */
+export interface BaselineRevision {
+  id: string;
+  /** The item whose design asked; empty at setup. */
+  item?: string;
+  note?: string;
+  answers: BaselineAnswer[];
+  adds?: string[];
+  replaces?: string[];
+  proposed: DecisionStamp;
+  accepted?: DecisionStamp;
+  withdrawn?: DecisionStamp;
+  state: "proposed" | "accepted" | "withdrawn";
+  /** What the person pins when accepting. */
+  rev: string;
+  entries: BaselineEntry[];
+  replaces_entries: BaselineEntry[];
+  /** (stage, gate) acceptance will require. */
+  stage_gates: [string, string][];
+  /** Items naming a replaced entry, their ADRs, and docs holding its id. */
+  depends_on: string[];
+  /** `kanbanr baseline accept REV-n`. */
+  command: string;
+  warnings?: string[];
+  /** Accepted, but whether through kanbanr cannot be checked: why. */
+  acceptance_unverifiable?: string;
+}
+
+/** A pack the project follows or followed, with its drift as sentences. */
+export interface BaselinePack {
+  name: string;
+  library: "board" | "personal" | "builtin";
+  version: number;
+  rev: string;
+  adopted: DecisionStamp;
+  removed?: DecisionStamp;
+  messages?: string[];
+}
+
+/** The Baseline page's whole read: `GET /projects/{p}/baseline`. */
+export interface BaselineView {
+  packs: BaselinePack[];
+  areas: BaselineArea[];
+  revisions: BaselineRevision[];
+  /** The charter's constraints, shown read-only beside the baseline. */
+  charter_constraints: string[];
+}
+
+/** The packs of a project with their drift: `GET /projects/{p}/profile`. Internal. */
+export interface ProfileStatus {
+  packs: {
+    name: string;
+    library: "board" | "personal" | "builtin";
+    version: number;
+    removed: boolean;
+    drift?: { newer: number | null; gone: boolean; new_areas: string[]; changed_recommendations: string[] };
+    messages: string[];
+  }[];
+}

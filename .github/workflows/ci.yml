@@ -295,6 +295,10 @@ jobs:
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button
         run: npm run check:prepared
+      # The Baseline page groups the areas, accepts a proposed revision on the prepared panel only
+      # while it may write, and sits under Architecture (FTR-033 R-3, R-6).
+      - name: The Baseline page shows the areas and accepts a revision
+        run: npm run check:baseline
       # An open prepared record no form on a release's entry shows is listed there under Prepared,
       # not required, with Confirm and Reject (DEF-095).
       - name: The Releases page lists prepared records no form shows

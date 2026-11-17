@@ -1,6 +1,7 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
+import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 
@@ -404,6 +405,27 @@ export const api = {
       "take a group decision",
       "kanbanr review",
     ) as Promise<GroupDecisionAnswer>,
+  // The engineering baseline (FTR-033): read by the Baseline page only, never by the whole-board fetch.
+  /** The baseline: the packs followed, the areas and their answers, every revision, the charter's constraints. */
+  getBaseline: (id: string) => getJson<BaselineView>(apiUrl(`/projects/${encodeURIComponent(id)}/baseline`)),
+  /** The packs the project follows, each against its library's current copy. */
+  getProfile: (id: string) => getJson<ProfileStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/profile`)),
+  /** The person accepts a proposed baseline revision, pinned to the `rev` the page showed: theirs alone. */
+  acceptBaseline: (id: string, revision: string, rev: string, by: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/baseline/revisions/${encodeURIComponent(revision)}/accept`,
+      { rev, by },
+      "accept a baseline revision",
+      `kanbanr baseline accept ${revision}`,
+    ) as Promise<BaselineRevision>,
+  /** Withdraw a proposed baseline revision; a reason is required. */
+  withdrawBaseline: (id: string, revision: string, by: string, reason: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/baseline/revisions/${encodeURIComponent(revision)}/withdraw`,
+      { reason, by },
+      "withdraw a baseline revision",
+      `kanbanr baseline withdraw ${revision} --reason "…"`,
+    ) as Promise<BaselineRevision>,
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
