@@ -20,6 +20,8 @@ import BaselinePage from "./pages/BaselinePage";
 import ItemsPage from "./pages/ItemsPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
+import RepoDocsPage from "./pages/RepoDocsPage";
+import RepoDocPage from "./pages/RepoDocPage";
 import ReleasesPage from "./pages/ReleasesPage";
 import UiGalleryPage from "./pages/UiGalleryPage";
 import { loadConfig, routing } from "./runtimeConfig";
@@ -54,6 +56,9 @@ const routes: RouteObject[] = [
       { path: "p/:project/docs", element: <DocsPage /> },
       { path: "p/:project/docs/folder/*", element: <DocsPage /> },
       { path: "p/:project/docs/file/*", element: <DocPage /> },
+      // The code repository's docs at the position picked (FTR-004).
+      { path: "p/:project/repo", element: <RepoDocsPage /> },
+      { path: "p/:project/repo/*", element: <RepoDocPage /> },
     ],
   },
 ];

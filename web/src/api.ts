@@ -7,6 +7,7 @@ import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
+import type { PickView, Picked, RepoDoc, RepoTree } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
@@ -509,6 +510,14 @@ export const api = {
     getText(apiUrl(`/projects/${encodeURIComponent(id)}/docs/content?path=${encodeURIComponent(path)}`)),
   getActivity: (id: string, params = "") =>
     getJson<Activity[]>(apiUrl(`/projects/${encodeURIComponent(id)}/activity${params}`)),
+  // Docs read at a position (FTR-004): the picker's entries, a pick resolved, the repository's docs
+  // and one doc at a pick, and a doc's raw bytes for its images.
+  getPositions: (id: string) => getJson<PickView[]>(urls.positions(id)),
+  getPosition: (id: string, at: string) =>
+    getJson<Picked>(apiUrl(`/projects/${encodeURIComponent(id)}/positions/resolve?at=${encodeURIComponent(at)}`)),
+  getRepoTree: (id: string, at: string) => getJson<RepoTree>(urls.repoDocs(id, at)),
+  getRepoDoc: (id: string, path: string, at: string) => getJson<RepoDoc>(urls.repoDoc(id, path, at)),
+  repoDocRawUrl: (id: string, path: string, at: string) => urls.repoDocRaw(id, path, at),
   // Raw bytes of a doc asset (e.g. an image), served with a content-type by the daemon.
   docRawUrl: (id: string, path: string) =>
     apiUrl(`/projects/${encodeURIComponent(id)}/docs/raw?path=${encodeURIComponent(path)}`),

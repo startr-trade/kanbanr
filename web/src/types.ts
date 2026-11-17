@@ -222,6 +222,10 @@ export interface Signoff {
   origin?: string;
   /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
   delegation?: string;
+  /** The position (`<commit>` or `<commit>+<dirty>`) the item resolved to when it was given (FTR-004). */
+  position?: string;
+  /** Each repository doc the item lists that existed at `position`, with its blob id (FTR-004). */
+  docs_read?: Record<string, string>;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -2160,4 +2164,54 @@ export interface CatalogStatus {
   gaps: Cell[];
   problems?: string[];
   docs_read: number;
+}
+
+// ---- Docs read at a position (FTR-004) ----
+
+/** One repository's position (CD-2): a commit, and the hash of the uncommitted changes when there are any. */
+export interface PositionRef {
+  repo: string;
+  commit: string | null;
+  dirty: string | null;
+}
+
+/** A pick resolved to a position: what the banner says and where the bytes come from. */
+export interface Picked {
+  /** The pick's text: `main`, `worktree`, an item code, a sprint code, a version or a commit. */
+  pick: string;
+  /** `main`, `worktree`, `item`, `sprint`, `release` or `commit`. */
+  kind: string;
+  position: PositionRef;
+  /** `git` reads objects at a commit; `disk` reads the working tree. */
+  source: "git" | "disk";
+  /** `FTR-004 · feat/FTR-004-read-docs @ 1a2b3c4`, `main @ 6a973c6`. */
+  label: string;
+  /** The rule that found the commit: `branch tip`, `tag`, `merge commit recorded on the item` … */
+  resolved_from: string;
+}
+
+/** A repository doc at a position: its text, or why it is not there. */
+export interface RepoDoc extends Picked {
+  path: string;
+  text: string | null;
+  blob: string | null;
+  missing: boolean;
+  why: string;
+  /** For a missing doc, whether main has it. */
+  at_main: boolean | null;
+}
+
+/** The `.md` files under `root` at a position. */
+export interface RepoTree extends Picked {
+  root: string;
+  files: string[];
+}
+
+/** One entry of the position picker: whether it resolves here, and why not. */
+export interface PickView {
+  pick: string;
+  kind: string;
+  label: string;
+  available: boolean;
+  why: string;
 }

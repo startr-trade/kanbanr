@@ -129,6 +129,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The Needs-you badge and drawer show what waits on the person": LOCAL,
             "The Items page reads its filters from the URL": LOCAL,
             "The Overview is the project's landing and every number leads to its list": LOCAL,
+            "Docs are read at the position you pick": LOCAL,
             "The item page shows why an item changes no docs": LOCAL,
             "Planning decisions from the pages": LOCAL,
             "The Plan page": LOCAL,
