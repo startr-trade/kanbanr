@@ -69,6 +69,8 @@ export interface TodoList {
 
 export interface Feature {
   code: string;
+  /** Codes the item had before a rename; a link or a bookmark under one still reaches it (FTR-056). */
+  aliases?: string[];
   title: string;
   specification: string;
   status: string;
@@ -1455,6 +1457,8 @@ export interface IndexConfig {
 /** One item as a card: its fields, no bodies. `done`/`total` count tasks across its todo-lists. */
 export interface IndexItem {
   code: string;
+  /** Earlier codes of the item, absent when it was never renamed (FTR-056). */
+  aliases?: string[];
   title: string;
   kind?: string;
   status: string;

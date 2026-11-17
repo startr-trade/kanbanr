@@ -67,7 +67,8 @@
     "check:plan-flow": "node scripts/check-plan-flow.mjs",
     "check:position": "node scripts/check-position.mjs",
     "check:boards": "node scripts/check-boards.mjs",
-    "check:test-durations": "node scripts/check-test-durations.mjs"
+    "check:test-durations": "node scripts/check-test-durations.mjs",
+    "check:aliases": "node scripts/check-aliases.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

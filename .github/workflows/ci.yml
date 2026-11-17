@@ -447,6 +447,10 @@ jobs:
       # (FTR-058).
       - name: An item's tests show their last duration
         run: npm run check:test-durations
+      # An item page opened under an earlier code of a renamed item redirects to its current code
+      # (FTR-056).
+      - name: An earlier code redirects to the item
+        run: npm run check:aliases
       # A planning action asks first and records one decision as the person's; a declined one offers
       # the nearest valid move on one press (FTR-049).
       - name: Planning decisions from the pages
