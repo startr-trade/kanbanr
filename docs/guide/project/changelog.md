@@ -116,6 +116,7 @@ All notable changes to kanbanr are documented here. The format follows
 ### Fixed
 
 - The Review page's Approve group draws a "tests only" pill on a row whose approval lapsed or grew through an edit to its tests alone, and offers "Select tests only (N)" to tick those rows together (DEF-111).
+- A payload that approves one question and declines another no longer drops the declined one: the conversation hook makes the pass for the approved question and says, as it does for a declined question asked alone, that the person did not choose it and nothing is recorded or pending (DEF-110).
 - The daemon's background warm-up covers every project the served boards hold, not the folder marker's project: a daemon started in a folder whose project the board lacks no longer warns `project not found`, and a daemon serving several boards warms them all (DEF-109).
 - The session-start hook no longer stops on macOS's stock bash 3.2 when no project argument is passed: its empty project-argument array is expanded in a form bash 3.2 accepts under `set -u`, and a test lints the hook scripts for that and runs the hook on macOS too (DEF-101).
 - `kanbanr signoff` and `kanbanr approve` name the record they wrote: a person's sign-off on an item whose latest earlier sign-off was delegated prints the person, not "under DLG-001" (DEF-107).
