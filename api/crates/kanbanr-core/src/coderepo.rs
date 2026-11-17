@@ -116,6 +116,60 @@ fn succeeds(root: &Path, args: &[&str]) -> bool {
     run(root, args).is_ok_and(|o| o.status.success())
 }
 
+/// A short fingerprint of the repository's state: HEAD, every ref, and the working tree's status
+/// (each changed file with its size and modification time, so a second edit to an already modified
+/// file shows). Empty when `repo` is not a repository. It moves with a commit, a ref move or an
+/// uncommitted edit, and stays put while nothing changes (DEF-106).
+pub fn fingerprint(repo: &Path) -> String {
+    let Ok(head) = git(repo, &["rev-parse", "--verify", "-q", "HEAD"]) else {
+        // No commits yet, or not a repository: only the latter has no fingerprint.
+        if git(repo, &["rev-parse", "--git-dir"]).is_err() {
+            return String::new();
+        }
+        return fingerprint_of(repo, "");
+    };
+    fingerprint_of(repo, &head)
+}
+
+fn fingerprint_of(repo: &Path, head: &str) -> String {
+    let refs =
+        git(repo, &["for-each-ref", "--format=%(refname) %(objectname)"]).unwrap_or_default();
+    let mut refs: Vec<&str> = refs.lines().collect();
+    refs.sort_unstable();
+    let status = git_raw(
+        repo,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    )
+    .unwrap_or_default();
+    let root = repo_root_in(repo).unwrap_or_else(|| repo.to_path_buf());
+    let mut text = format!("{head}\n{}\n", refs.join("\n"));
+    let status = String::from_utf8_lossy(&status);
+    let mut entries = status.split('\0').filter(|e| !e.is_empty());
+    while let Some(e) = entries.next() {
+        text.push_str(e);
+        if e.len() > 3 {
+            // A directory of new files is one entry; its own size and time still move with them.
+            let path = e[3..].to_string();
+            if let Ok(meta) = std::fs::metadata(root.join(&path)) {
+                let nanos = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
+                text.push_str(&format!(" {} {nanos}", meta.len()));
+            }
+        }
+        // A rename or copy lists its origin as the next entry.
+        if matches!(e.as_bytes().first(), Some(b'R' | b'C'))
+            && let Some(from) = entries.next()
+        {
+            text.push_str(&format!(" <{from}"));
+        }
+        text.push('\n');
+    }
+    crate::hash::stable_hash(&text)
+}
+
 /// The working tree root of the repository `dir` is in.
 pub fn repo_root_in(dir: &Path) -> Option<PathBuf> {
     git(dir, &["rev-parse", "--show-toplevel"])
@@ -1162,6 +1216,56 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// DEF-106 R-4: a commit, a ref and an uncommitted edit each move the fingerprint.
+    #[test]
+    fn fingerprint_moves_with_a_commit_a_ref_or_an_uncommitted_edit() {
+        let repo = scratch_repo("fingerprint-moves");
+        let base = fingerprint(&repo);
+        assert!(!base.is_empty());
+        // A ref moves it: a branch, then a tag.
+        create_branch_from(&repo, "feat/x", "main").unwrap();
+        let with_branch = fingerprint(&repo);
+        assert_ne!(with_branch, base);
+        git(&repo, &["tag", "v1"]).unwrap();
+        let with_tag = fingerprint(&repo);
+        assert_ne!(with_tag, with_branch);
+        // An uncommitted edit, a second edit to the same file, and a new file each move it.
+        std::fs::write(repo.join("README"), "edited\n").unwrap();
+        let edited = fingerprint(&repo);
+        assert_ne!(edited, with_tag);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(repo.join("README"), "edited again, longer\n").unwrap();
+        let edited_twice = fingerprint(&repo);
+        assert_ne!(edited_twice, edited);
+        std::fs::write(repo.join("new.txt"), "n").unwrap();
+        let untracked = fingerprint(&repo);
+        assert_ne!(untracked, edited_twice);
+        // A commit moves it.
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "all"]).unwrap();
+        assert_ne!(fingerprint(&repo), untracked);
+        // Not a repository: empty.
+        let plain = std::env::temp_dir().join(format!("kanbanr-fp-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(fingerprint(&plain), "");
+        let _ = std::fs::remove_dir_all(plain);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    /// DEF-106 R-4: asked again with nothing changed, the fingerprint is the same.
+    #[test]
+    fn fingerprint_is_stable_while_nothing_changes() {
+        let repo = scratch_repo("fingerprint-stable");
+        std::fs::write(repo.join("README"), "dirty\n").unwrap();
+        std::fs::write(repo.join("new.txt"), "n").unwrap();
+        let first = fingerprint(&repo);
+        assert!(!first.is_empty());
+        for _ in 0..3 {
+            assert_eq!(fingerprint(&repo), first);
+        }
+        let _ = std::fs::remove_dir_all(repo);
     }
 
     /// DEF-051 R-1: only a merged, unoccupied branch goes, and nothing else is touched.
