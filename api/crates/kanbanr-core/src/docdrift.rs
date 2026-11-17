@@ -1599,10 +1599,19 @@ pub fn flags_for_item_in(ctx: &DriftCtx, code: &str) -> Result<Vec<Flag>> {
                 (text.clone(), vec![file])
             }
         };
-        let refs: Vec<&Path> = files.iter().map(|f| f.as_path()).collect();
+        // When the text last changed, by DEF-102's rule: an item's spec file when it has one,
+        // so a task, test, history or status write to its YAML does not count.
+        let refs: Vec<&Path> = match l.target.kind {
+            TargetKind::Item => match files.get(1).filter(|spec| spec.is_file()) {
+                Some(spec) => vec![spec.as_path()],
+                None => files.first().map(|y| y.as_path()).into_iter().collect(),
+            },
+            _ => files.iter().map(|f| f.as_path()).collect(),
+        };
         let Some(at) = changed_at_in(ctx, &refs) else {
             continue;
         };
+        let text_hash = crate::hash::stable_hash(&text);
         let versions = match l.target.kind {
             TargetKind::Item => files
                 .get(1)
@@ -1613,7 +1622,7 @@ pub fn flags_for_item_in(ctx: &DriftCtx, code: &str) -> Result<Vec<Flag>> {
                 .map(|file| target_versions_in(ctx, file, &text))
                 .unwrap_or_default(),
         };
-        if let Some(flag) = flag_for(&l, &text, &versions, &at, changes) {
+        if let Some(flag) = flag_for(&l, &text, &versions, &at, &text_hash, changes) {
             flags.push(flag);
         }
     }
