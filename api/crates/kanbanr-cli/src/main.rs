@@ -7586,6 +7586,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 return Ok(());
             }
             let ready = report.ready();
+            let board = client.store().load(&p)?;
             let reports: Vec<Value> = report
                 .items
                 .iter()
@@ -7638,6 +7639,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 // A manual test nobody ran: a note, not a gap (DEF-003).
                 for open in r["open_manual"].as_array().into_iter().flatten() {
                     println!("    manual test not run: {}", open.as_str().unwrap_or(""));
+                }
+                // Manual tests that break the judgement rule (FTR-039): the doctor's warning, as a note.
+                if let Some(line) = r["code"]
+                    .as_str()
+                    .and_then(|c| board.feature(c).ok())
+                    .and_then(kanbanr_core::doctor::judgement_warning)
+                {
+                    println!("    {line}");
                 }
                 // The next stage: what it is for, and what moving on still needs.
                 for next in r["next"].as_array().into_iter().flatten() {
