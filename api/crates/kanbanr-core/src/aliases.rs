@@ -40,10 +40,7 @@ pub fn taken(project: &Project) -> BTreeSet<String> {
 /// `except` is the item being renamed, so renaming back to its own alias is allowed.
 pub fn check_free(project: &Project, code: &str, except: Option<&str>) -> Result<()> {
     if let Some(f) = project.features.iter().find(|f| f.code == code) {
-        return Err(CoreError::FeatureExists(format!(
-            "{code} is {}'s code",
-            f.code
-        )));
+        return Err(CoreError::CodeTaken(format!("{code} is {}'s code", f.code)));
     }
     if let Some(f) = project
         .features
@@ -51,7 +48,7 @@ pub fn check_free(project: &Project, code: &str, except: Option<&str>) -> Result
         .find(|f| f.aliases.iter().any(|a| a == code))
         && except != Some(f.code.as_str())
     {
-        return Err(CoreError::FeatureExists(format!(
+        return Err(CoreError::CodeTaken(format!(
             "{code} was an earlier code of {}, and a code is never given to another item",
             f.code
         )));
@@ -117,6 +114,7 @@ mod tests {
         assert!(check_free(&p, "FEAT-003", None).is_ok());
         let is_code = check_free(&p, "FTR-002", None).unwrap_err().to_string();
         assert!(is_code.contains("FTR-002 is FTR-002's code"), "{is_code}");
+        assert!(!is_code.contains("already exists"), "{is_code}");
         let was = check_free(&p, "FEAT-001", None).unwrap_err().to_string();
         assert!(was.contains("was an earlier code of DEF-001"), "{was}");
         assert!(check_free(&p, "FEAT-001", Some("DEF-001")).is_ok());
