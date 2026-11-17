@@ -8,10 +8,16 @@
 //     `clampWindow` keeps at least 14 days around today; the hidden list holds every band and mark;
 //   web::check_stepper_marks_done_current_and_next — `stepsFromStages` for no current stage, the
 //     middle one, the last one and shipped; the current step carries aria-current.
+//   web::check_growth_chart_has_a_table_and_one_axis (FTR-076, R-5) — `growthPath` draws a step line
+//     and a track in the plot; the chart is one `<svg role=img>` named by its caption with one y
+//     axis (0 and the maximum), a marker of at least 8 px and a `<title>` per point, the last point
+//     labelled directly, a hidden table holding every point, and a "Show as table" button whose
+//     table view carries the same numbers.
 //
 // Usage: npm run check:ui-charts
 import { clampWindow, scale } from "../src/ui/timeline.ts";
 import { stepsFromStages } from "../src/ui/stepper.ts";
+import { growthPath, pointText } from "../src/ui/growth.ts";
 import { closeRender, render } from "./lib/render.mjs";
 
 function report(name, problems) {
@@ -175,6 +181,70 @@ try {
     eq(problems, "a done step's date and who", lis[0]?.querySelector(".ui-step-when")?.textContent, "2026-11-12 · the person");
     if (lis[1]?.querySelector(".ui-step-when") || lis[2]?.querySelector(".ui-step-when")) problems.push("a step that is not done shows a date");
     if (lis.some((li) => li.querySelector(".ui-step-dot")?.getAttribute("aria-hidden") !== "true")) problems.push("a dot is not aria-hidden");
+    ok = report(name, problems) && ok;
+  }
+
+  // FTR-076 R-5: the growth chart has a table and one axis.
+  current = "web::check_growth_chart_has_a_table_and_one_axis";
+  {
+    const name = current;
+    const problems = [];
+    const points = [
+      { label: "v0.5.0", value: 12, total: 20 },
+      { label: "v0.6.0", value: 26, total: 34 },
+      { label: "v0.7.0", value: 41, total: 52 },
+    ];
+    const path = growthPath(points, 60, 200, 80);
+    eq(problems, "the step line", path.line, "M0 64 H100 V45.33 H200 V25.33");
+    eq(problems, "the track", path.track, "M0 53.33 H100 V34.67 H200 V10.67");
+    eq(problems, "the ticks", path.ticks, [{ x: 0, label: "v0.5.0" }, { x: 100, label: "v0.6.0" }, { x: 200, label: "v0.7.0" }]);
+    eq(problems, "no points", growthPath([], 10, 100, 50), { line: "", track: "", ticks: [] });
+    eq(problems, "no track without totals", growthPath([{ label: "a", value: 1 }], 2, 100, 50).track, "");
+    eq(problems, "one point sits in the middle", growthPath([{ label: "a", value: 0 }], 2, 100, 50).line, "M50 50");
+    eq(problems, "a value over the maximum stays in the plot", growthPath([{ label: "a", value: 9 }], 3, 100, 50).line, "M50 0");
+    eq(problems, "the hover text", pointText(points[2], "requirements proven"), "v0.7.0: 41 of 52 requirements proven");
+    eq(problems, "the hover text without a total", pointText({ label: "c3", value: 7 }, "lessons"), "c3: 7 lessons");
+
+    const props = { points, max: 60, unit: "requirements proven", caption: "Requirements proven by release", tableCaption: "Requirements proven, by release" };
+    const { html, document } = await render("src/ui/GrowthChart.tsx", "GrowthChart", props);
+    const svgs = [...document.querySelectorAll("svg")];
+    eq(problems, "one svg", svgs.length, 1);
+    eq(problems, "its role and name", [svgs[0]?.getAttribute("role"), svgs[0]?.getAttribute("aria-label")], ["img", "Requirements proven by release"]);
+    eq(problems, "its size", svgs[0]?.getAttribute("viewBox"), "0 0 320 120");
+    eq(problems, "one y axis: labels 0 and the maximum", [...document.querySelectorAll(".ui-growth-grid text")].map((t) => t.textContent), ["0", "60"]);
+    eq(problems, "three grid lines", document.querySelectorAll(".ui-growth-grid line").length, 3);
+    const markers = [...document.querySelectorAll(".ui-growth-point circle")];
+    eq(problems, "a marker per point", markers.length, 3);
+    if (markers.some((c) => Number(c.getAttribute("r")) * 2 < 8)) problems.push("a marker is under 8 px");
+    eq(problems, "a title per point", [...document.querySelectorAll(".ui-growth-point title")].map((t) => t.textContent), [
+      "v0.5.0: 12 of 20 requirements proven",
+      "v0.6.0: 26 of 34 requirements proven",
+      "v0.7.0: 41 of 52 requirements proven",
+    ]);
+    eq(problems, "the line is 2 px", document.querySelector(".ui-growth-line")?.getAttribute("stroke-width"), "2");
+    if (!document.querySelector(".ui-growth-track")) problems.push("no track");
+    eq(problems, "the last point is labelled directly", document.querySelector(".ui-growth-last")?.textContent, "41");
+    const hidden = document.querySelector("table.ui-sr-only");
+    eq(problems, "the hidden table's caption", hidden?.querySelector("caption")?.textContent, "Requirements proven, by release");
+    eq(problems, "the hidden table holds every point", [...(hidden?.querySelectorAll("tbody tr") ?? [])].map((tr) => [...tr.children].map((c) => c.textContent)), [
+      ["v0.5.0", "12", "20"],
+      ["v0.6.0", "26", "34"],
+      ["v0.7.0", "41", "52"],
+    ]);
+    const button = document.querySelector("button.ui-growth-toggle");
+    eq(problems, "the toggle", [button?.textContent, button?.getAttribute("aria-pressed")], ["Show as table", "false"]);
+
+    const view = await render("src/ui/GrowthChart.tsx", "GrowthChart", { ...props, asTable: true });
+    if (view.document.querySelector("svg")) problems.push("the table view still draws the svg");
+    const table = view.document.querySelector("table");
+    eq(problems, "the table view's caption", table?.querySelector("caption")?.textContent, "Requirements proven, by release");
+    const cells = [...view.document.querySelectorAll("tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent?.trim()));
+    eq(problems, "the table view's numbers", cells, [
+      ["v0.5.0", "12", "20"],
+      ["v0.6.0", "26", "34"],
+      ["v0.7.0", "41", "52"],
+    ]);
+    eq(problems, "the toggle goes back", view.document.querySelector("button.ui-growth-toggle")?.textContent, "Show as chart");
     ok = report(name, problems) && ok;
   }
 } catch (e) {

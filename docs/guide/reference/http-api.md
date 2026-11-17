@@ -36,6 +36,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/features/{code}` | — | JSON `FeatureItem` | One item, with its specification |
 | `GET /api/projects/{project}/features` | `status` (optional), `milestone` (optional) | JSON `FeatureItem[]` | Items, without specifications |
 | `GET /api/projects/{project}/charter` | — | JSON `Charter` | The project's charter: purpose, goals, scope and constraints |
+| `GET /api/projects/{project}/charter/progress` | — | JSON `CharterProgress` | The charter's progress: each goal's items and proven requirements, the releases travelled, the lessons by theme and cycle, and recent wins |
 | `GET /api/projects/{project}/facts` | — | JSON `any` | The project's facts (FTR-005): its languages, runtimes, where it runs, its parts and its data; `{}` when no facts record is set |
 | `GET /api/projects/{project}/catalog` | — | JSON `CatalogStatus` | The project's content catalog (FTR-005): each row with whether it applies and why, its source's state and its protections, and the (question, perspective) cells no applying row fills; no rows with no catalog |
 | `GET /api/projects/{project}/readiness` | — | JSON `ProjectReadiness` | What each live item is missing, and its next stages, keyed by code |

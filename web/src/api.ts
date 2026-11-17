@@ -9,6 +9,7 @@ import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, BoardInfo, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 import type { PickView, Picked, RepoDoc, RepoTree } from "./types";
 import type { PlanningAssessment, PlanningDecision, PlanningRequest, PlanningView } from "./types";
+import type { CharterProgress } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -91,6 +92,7 @@ export const api = {
   getReleaseSlice: (id: string, scope: Scope) => getJson<Release[]>(urls.releases(id, scope)),
   /** The Releases page's counts per tab and the tab it opens on (FTR-041). */
   getReleasesSummary: (id: string) => getJson<ReleasesSummary>(urls.releasesSummary(id)),
+  charterProgress: (p: string) => getJson<CharterProgress>(urls.charterProgress(p)),
   /** One release's item table (FTR-041). */
   getReleaseItems: (id: string, version: string) => getJson<ReleaseItemRow[]>(urls.releaseItems(id, version)),
   /**

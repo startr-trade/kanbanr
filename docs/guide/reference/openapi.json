@@ -1273,6 +1273,79 @@
         ],
         "type": "object"
       },
+      "CharterProgress": {
+        "description": "The Charter page's derived read.",
+        "properties": {
+          "board_rev": {
+            "description": "The board commit this answer was read from; empty when the board is not a git repository.",
+            "type": "string"
+          },
+          "finished": {
+            "description": "Every finished item that serves a goal, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/Finished"
+            },
+            "type": "array"
+          },
+          "generated_at": {
+            "description": "When this answer was read, RFC 3339.",
+            "type": "string"
+          },
+          "goals": {
+            "description": "One per charter goal, in charter order.",
+            "items": {
+              "$ref": "#/components/schemas/GoalProgress"
+            },
+            "type": "array"
+          },
+          "lessons": {
+            "$ref": "#/components/schemas/LessonGrowth"
+          },
+          "marks": {
+            "description": "Items per goal and release, only the non-zero cells.",
+            "items": {
+              "$ref": "#/components/schemas/GoalMark"
+            },
+            "type": "array"
+          },
+          "project": {
+            "type": "string"
+          },
+          "releases_on": {
+            "description": "The project works in releases (`cadence.releases`); when false `route`, `marks` and\n`series` are empty.",
+            "type": "boolean"
+          },
+          "route": {
+            "description": "Shipped releases in ship order, then the next planned one.",
+            "items": {
+              "$ref": "#/components/schemas/RouteStop"
+            },
+            "type": "array"
+          },
+          "series": {
+            "description": "Per goal, one point per shipped release.",
+            "items": {
+              "$ref": "#/components/schemas/GoalSeries"
+            },
+            "type": "array"
+          },
+          "wins": {
+            "description": "The most recently finished items that serve a goal, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/Win"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project",
+          "generated_at",
+          "releases_on",
+          "goals",
+          "lessons"
+        ],
+        "type": "object"
+      },
       "Check": {
         "description": "A condition an item can be checked against. The vocabulary is closed on purpose: a workflow can\nonly require what kanbanr knows how to evaluate from the board.",
         "oneOf": [
@@ -1813,6 +1886,34 @@
         "required": [
           "code",
           "ships"
+        ],
+        "type": "object"
+      },
+      "Cycle": {
+        "description": "Lessons recorded in one release cycle.",
+        "properties": {
+          "cumulative": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "recorded": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "recorded",
+          "cumulative"
         ],
         "type": "object"
       },
@@ -3023,6 +3124,29 @@
         ],
         "type": "object"
       },
+      "Finished": {
+        "description": "A finished item that serves a goal, for \"since you last looked\".",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "at",
+          "goals"
+        ],
+        "type": "object"
+      },
       "Flag": {
         "description": "A linked text that names something changed in the code. A flag says which text names which\nchanged name, never that the text is wrong. It stays open after the text is edited, until a\ncheck settles it (DEF-050).",
         "properties": {
@@ -3492,6 +3616,94 @@
           "items_open",
           "req_proven",
           "req_total"
+        ],
+        "type": "object"
+      },
+      "GoalMark": {
+        "description": "Items serving `goal` in `release`.",
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "items": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "release": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "goal",
+          "release",
+          "items"
+        ],
+        "type": "object"
+      },
+      "GoalProgress": {
+        "description": "One charter goal with the work and the lessons serving it.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "items_done": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items_open": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lessons": {
+            "description": "The ids of the lessons that name this goal.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "req_proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "description": "The goal's statement.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "items_done",
+          "items_open",
+          "req_proven",
+          "req_total"
+        ],
+        "type": "object"
+      },
+      "GoalSeries": {
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/SeriesPoint"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "goal",
+          "points"
         ],
         "type": "object"
       },
@@ -4416,6 +4628,52 @@
         ],
         "type": "object"
       },
+      "LessonGrowth": {
+        "description": "The lessons, counted and grouped.",
+        "properties": {
+          "cycles": {
+            "items": {
+              "$ref": "#/components/schemas/Cycle"
+            },
+            "type": "array"
+          },
+          "in_force": {
+            "description": "Lessons in force, by the rule `kanbanr lessons` uses.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retired": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/LessonRow"
+            },
+            "type": "array"
+          },
+          "themes": {
+            "items": {
+              "$ref": "#/components/schemas/Theme"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "All lessons, by the rule `kanbanr lessons --all` uses.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "in_force",
+          "total",
+          "retired"
+        ],
+        "type": "object"
+      },
       "LessonKind": {
         "oneOf": [
           {
@@ -4434,6 +4692,88 @@
             "type": "string"
           }
         ]
+      },
+      "LessonRow": {
+        "description": "One lesson with where it was learned and cited.",
+        "properties": {
+          "affirmed": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "at": {
+            "type": "string"
+          },
+          "cited_by": {
+            "description": "Items, other than the one it came from, whose specification cites the lesson.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "confidence_now": {
+            "description": "Confidence as of now, 0 to 1.",
+            "format": "double",
+            "type": "number"
+          },
+          "contradicted": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "from_item": {
+            "type": "string"
+          },
+          "from_retro": {
+            "type": "string"
+          },
+          "goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "in_force": {
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LessonKind"
+          },
+          "lesson": {
+            "type": "string"
+          },
+          "retro_kind": {
+            "description": "`sprint`, `milestone` or empty.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LessonStatus"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "lesson",
+          "kind",
+          "status",
+          "at",
+          "confidence_now",
+          "in_force",
+          "affirmed",
+          "contradicted"
+        ],
+        "type": "object"
       },
       "LessonStatus": {
         "oneOf": [
@@ -7963,6 +8303,43 @@
         ],
         "type": "object"
       },
+      "RouteStop": {
+        "description": "One release on the way travelled.",
+        "properties": {
+          "items": {
+            "description": "Items whose release is this version.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "patch_of": {
+            "description": "The release this patches, for a patch release.",
+            "type": "string"
+          },
+          "shipped_at": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StopState"
+          },
+          "target": {
+            "description": "The target date as the person set it; empty when none was set.",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "state",
+          "items"
+        ],
+        "type": "object"
+      },
       "RowBody": {
         "description": "An opened row's body: its items placed, a milestone's items by status, and what it carried out.",
         "properties": {
@@ -8216,6 +8593,36 @@
           "records"
         ],
         "type": "string"
+      },
+      "SeriesPoint": {
+        "description": "A goal's proof as of one shipped release, read from the evidence recorded today.",
+        "properties": {
+          "items": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "release": {
+            "type": "string"
+          },
+          "req_proven": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "release",
+          "items",
+          "req_proven",
+          "req_total"
+        ],
+        "type": "object"
       },
       "SettledText": {
         "properties": {
@@ -8987,6 +9394,14 @@
         ],
         "type": "object"
       },
+      "StopState": {
+        "description": "Whether a stop on the way travelled has shipped.",
+        "enum": [
+          "shipped",
+          "next"
+        ],
+        "type": "string"
+      },
       "TagResult": {
         "description": "The newest result recorded for a release's tag (FTR-026), read from the board only.",
         "properties": {
@@ -9233,6 +9648,30 @@
           "green"
         ],
         "type": "string"
+      },
+      "Theme": {
+        "description": "A group of lessons sharing a tag.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lessons": {
+            "description": "Lesson ids.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "lessons"
+        ],
+        "type": "object"
       },
       "TimingReport": {
         "description": "The slowest tests and those that slowed most since the last shipped release, derived from the\nkept runs only.",
@@ -9607,6 +10046,36 @@
         "required": [
           "id",
           "waits"
+        ],
+        "type": "object"
+      },
+      "Win": {
+        "description": "A recently finished item that serves a goal.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "goals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "release": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "at",
+          "goals"
         ],
         "type": "object"
       },
@@ -10200,6 +10669,47 @@
           }
         },
         "summary": "The project's charter: purpose, goals, scope and constraints"
+      }
+    },
+    "/api/projects/{project}/charter/progress": {
+      "get": {
+        "operationId": "getProjectsCharterProgress",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CharterProgress"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The charter's progress: each goal's items and proven requirements, the releases travelled, the lessons by theme and cycle, and recent wins"
       }
     },
     "/api/projects/{project}/config": {

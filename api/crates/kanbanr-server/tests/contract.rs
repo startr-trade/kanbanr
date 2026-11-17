@@ -113,7 +113,7 @@ fn fixture(data: &std::path::Path) {
             &store,
             "POST",
             "/projects/shop/features",
-            json!({"title": title, "specification": "# Spec\n\nText.", "milestone": "M1"}),
+            json!({"title": title, "specification": "# Spec\n\nText. Applies L-1.", "milestone": "M1"}),
         );
         let code = f["code"].as_str().unwrap().to_string();
         write(

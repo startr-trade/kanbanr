@@ -3171,6 +3171,96 @@ fn the_releases_summary_and_a_tab_slice_meet_their_budgets() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-076 R-10: on a generated board of 12 shipped releases, 60 lessons and 400 items serving
+/// three goals, the Charter page's progress read answers under 50 ms, the median of 20 warm reads
+/// through the daemon. The cold read is printed, not asserted.
+#[test]
+fn the_charter_progress_read_meets_its_budget() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let per = 400 / 12 + 1;
+    let codes: Vec<String> = (1..=400).map(|i| format!("FEAT-{i:03}")).collect();
+    let releases: Vec<Release> = (0..12)
+        .map(|k| Release {
+            version: format!("v0.{k}.0"),
+            state: ReleaseState::Shipped,
+            shipped_at: format!("2026-{:02}-01T10:00:00Z", k + 1),
+            shipped: codes.iter().skip(per * k).take(per).cloned().collect(),
+            ..Default::default()
+        })
+        .collect();
+    let (base, data) = releases_board("charter-progress-budget", 400, &releases);
+    let store = kanbanr_core::Store::new(data.clone());
+    kanbanr_core::dispatch::dispatch(
+        &store,
+        "PUT",
+        "/projects/shop/charter",
+        Some(&serde_json::json!({
+            "purpose": "Sell things",
+            "goals": [
+                {"statement": "Customers can pay"},
+                {"statement": "Customers keep their cart"},
+                {"statement": "The shop stays fast"},
+            ],
+        })),
+    )
+    .unwrap();
+    for (i, code) in codes.iter().enumerate() {
+        // One file edit each: `set_feature_release` loads every item every time.
+        let features = data.join("projects/shop/features");
+        let file = std::fs::read_dir(&features)
+            .unwrap()
+            .map(|d| d.unwrap().path().join(format!("{code}.yaml")))
+            .find(|f| f.is_file())
+            .unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        let version = format!("v0.{}.0", (i / per).min(11));
+        let from = format!("code: {code}\n");
+        assert!(text.contains(&from), "{}", file.display());
+        kanbanr_core::atomic::write(
+            &file,
+            text.replacen(&from, &format!("{from}release: {version}\n"), 1),
+        )
+        .unwrap();
+    }
+    for n in 1..=60 {
+        kanbanr_core::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects/shop/lessons",
+            Some(&serde_json::json!({
+                "lesson": format!("Lesson {n}: name the boundary first"),
+                "evidence": "It went wrong once and was fixed.",
+                "tags": [format!("tag-{}", n % 12)],
+                "goals": [format!("G-{}", n % 3 + 1)],
+                "confidence": 0.8,
+            })),
+        )
+        .unwrap();
+    }
+    let (_daemon, url) = serve_ui(&base, None);
+    let path = "/projects/shop/charter/progress";
+    let started = Instant::now();
+    let (code, body) = plan_get(&url, path);
+    let cold = started.elapsed();
+    assert_eq!(code, 200, "{path}: {body}");
+    let mut times: Vec<Duration> = (0..20)
+        .map(|_| {
+            let started = Instant::now();
+            let (code, _) = plan_get(&url, path);
+            assert_eq!(code, 200);
+            started.elapsed()
+        })
+        .collect();
+    times.sort();
+    let median = times[times.len() / 2];
+    eprintln!("{path}: cold {cold:?}, warm median {median:?}");
+    assert!(
+        median < Duration::from_millis(50),
+        "the progress read took {median:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-004 R-2: the five repository doc routes answer at a pick with nothing checked out: `at`
 /// absent means main, a commit reads that commit's text from git, `worktree` reads the disk and
 /// says so, a file's bytes come back as they are, a doc missing at the pick says whether main has

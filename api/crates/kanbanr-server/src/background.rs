@@ -66,6 +66,8 @@ pub fn warm_routes(project: &str) -> Vec<String> {
         format!("/projects/{project}/plan/summary"),
         // The Releases page's counts (FTR-041), so its tab labels draw warm.
         format!("/projects/{project}/releases/summary"),
+        // The Charter page's progress read (FTR-076); it does not read the code repository.
+        format!("/projects/{project}/charter/progress"),
     ]
 }
 
@@ -986,7 +988,8 @@ mod tests {
                 "/projects/demo/overview".to_string(),
                 "/projects/demo/attention".to_string(),
                 "/projects/demo/plan/summary".to_string(),
-                "/projects/demo/releases/summary".to_string()
+                "/projects/demo/releases/summary".to_string(),
+                "/projects/demo/charter/progress".to_string()
             ]
         );
         let key = memo::canonical("/projects/demo/index");
