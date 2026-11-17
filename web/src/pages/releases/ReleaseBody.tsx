@@ -194,9 +194,10 @@ export function ReleaseItems({
           type="checkbox"
           aria-label={`Select ${row.code}`}
           checked={selected.includes(row.code)}
-          onChange={(e) =>
-            setSelected((s) => (e.target.checked ? [...s.filter((c) => c !== row.code), row.code] : s.filter((c) => c !== row.code)))
-          }
+          onChange={(e) => {
+            const on = e.target.checked;
+            setSelected((s) => (on ? [...s.filter((c) => c !== row.code), row.code] : s.filter((c) => c !== row.code)));
+          }}
         />
       ),
       narrow: "keep",
