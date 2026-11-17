@@ -68,6 +68,7 @@ pub mod monitorindex;
 #[cfg(feature = "schema")]
 pub mod openapi;
 pub mod origin;
+pub mod overview;
 pub mod passes;
 pub mod portfolio;
 pub mod position;

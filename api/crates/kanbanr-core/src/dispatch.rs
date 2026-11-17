@@ -2844,6 +2844,12 @@ fn dispatch_routes(
             ser(&crate::attention::attention(store, p, repo)?)
         }
 
+        // ---- the project Overview (FTR-048) ----
+        ("GET", ["projects", p, "overview"]) => {
+            only_params(query, &[])?;
+            ser(&crate::overview::overview(store, p, repo)?)
+        }
+
         // ---- items, filtered (FTR-048) ----
         ("GET", ["projects", p, "items"]) => {
             let filter = crate::items::parse_filter(query)?;

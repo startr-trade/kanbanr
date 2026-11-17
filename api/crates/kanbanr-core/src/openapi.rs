@@ -602,6 +602,13 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::attention::Attention>),
         },
+        // ---- the project Overview (FTR-048) ----
+        RouteDoc {
+            path: "/api/projects/{project}/overview",
+            summary: "The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::overview::Overview>),
+        },
         // ---- items, filtered (FTR-048) ----
         RouteDoc {
             path: "/api/projects/{project}/items",

@@ -67,6 +67,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/docs/raw` | `path` | the file's bytes | A documentation file's bytes, such as an image |
 | `GET /api/projects/{project}/drift/latest` | `flags` (optional) | JSON `Latest` | The latest background drift result, with its revisions and age |
 | `GET /api/projects/{project}/attention` | — | JSON `Attention` | What needs the person, each kind counted, the person's own decisions totalled |
+| `GET /api/projects/{project}/overview` | — | JSON `Overview` | The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity |
 | `GET /api/projects/{project}/items` | `kind` (optional), `status` (optional), `milestone` (optional), `goal` (optional), `sprint` (optional), `release` (optional), `evidence=red\|planned\|stale\|unproven\|proven\|untested` (optional) | JSON `ItemRow[]` | Items, filtered |
 | `GET /api/projects/{project}/activity` | `ref` (optional), `ongoing` (optional), `limit` (optional) | JSON `Activity[]` | Recent changes to the project, newest first |
 | `GET /api/projects/{project}/features/{code}/export` | `format=md\|json` (optional) | JSON `FeatureExport`, or `text/markdown` | One item, as Markdown, or as JSON with `?format=json` |
