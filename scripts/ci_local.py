@@ -134,6 +134,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The item page shows why an item changes no docs": LOCAL,
             "Planning decisions from the pages": LOCAL,
             "The Plan page": LOCAL,
+            "The Charter page": LOCAL,
             "The Releases page has tabs and accordions": LOCAL,
             "The Plan page's flow": LOCAL,
             "The monitor's types match the published API": LOCAL,

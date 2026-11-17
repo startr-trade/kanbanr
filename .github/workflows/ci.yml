@@ -451,6 +451,10 @@ jobs:
       # the tab and the open rows, and /schedule and /gantt go to the Plan page (FTR-043).
       - name: The Plan page
         run: npm run check:plan-page
+      # The Charter page's model: goal rows and links, the way travelled, series, lesson themes and
+      # the "since you last looked" line (FTR-076).
+      - name: The Charter page
+        run: npm run check:charter-page
       # The Releases page has Current, Planned and Released tabs with counts; each release is an
       # accordion whose two-line header carries its chips, stage stepper and next step, and whose
       # body, read only when open, is its item table; plans are read only for Current and open
