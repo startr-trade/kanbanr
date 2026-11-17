@@ -231,6 +231,31 @@ try {
     report("web::check_overview_numbers_all_link", problems);
   }
 
+  // R-5: each milestone is one link that carries its name, code and done/total.
+  {
+    const problems = [];
+    const o = { ...full, now: { ...full.now, milestones: [{ code: "MS-004", name: "Ongoing maintenance", done: 31, total: 32 }, { code: "MS-009", name: "", done: 0, total: 2 }] } };
+    const { document: d } = await body(ok(o));
+    const col = [...d.querySelectorAll(".overview-col")].find((c) => text(c.querySelector("h3")) === "Milestones");
+    const ms = col ? [...col.querySelectorAll("a.overview-ms")] : [];
+    if (ms.length !== 2) problems.push(`Milestones has ${ms.length} milestone links, expected 2`);
+    const [named, bare] = ms;
+    if (named) {
+      if (named.getAttribute("href") !== "/p/x/milestone/MS-004") problems.push(`the named milestone links ${named.getAttribute("href")}`);
+      const t = text(named);
+      for (const want of ["Ongoing maintenance", "MS-004", "31/32"]) if (!t.includes(want)) problems.push(`the named milestone does not show "${want}" (shows "${t}")`);
+      if (named.querySelectorAll("a").length) problems.push("the named milestone holds a second link");
+    }
+    if (bare) {
+      if (bare.getAttribute("href") !== "/p/x/milestone/MS-009") problems.push(`the nameless milestone links ${bare.getAttribute("href")}`);
+      const t = text(bare);
+      if (t.split("MS-009").length !== 2) problems.push(`the nameless milestone shows MS-009 ${t.split("MS-009").length - 1} times, expected once (shows "${t}")`);
+      if (!t.includes("0/2")) problems.push(`the nameless milestone does not show 0/2 (shows "${t}")`);
+    }
+    if (col && col.querySelectorAll("a").length !== 2) problems.push(`Milestones holds ${col.querySelectorAll("a").length} links, expected one per milestone`);
+    report("web::check_overview_milestones_are_named", problems);
+  }
+
   // R-10: empty states ask Claude; loading is never empty.
   {
     const problems = [];

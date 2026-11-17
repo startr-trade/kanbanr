@@ -16,7 +16,9 @@ import { urls } from "../src/data/urls.ts";
 import { closeRender, render } from "./lib/render.mjs";
 
 const NAME = "web::check_items_page_reads_its_filters_from_the_url";
+const NAME2 = "web::check_items_codes_do_not_wrap";
 const problems = [];
+const nowrap = [];
 const same = (got, want) => JSON.stringify(got) === JSON.stringify(want);
 const expect = (what, got, want) => {
   if (!same(got, want)) problems.push(`${what}: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
@@ -100,6 +102,28 @@ if (!links.includes("/p/shop/feature/DEF-1")) problems.push(`the row does not li
 const cells = [...document.querySelectorAll("tbody tr td")].map(text);
 expect("the row's cells", cells, ["DEF-1", "Cart drops a line", "defect", "In Progress", "MS-001", "SP-001", "", "1 of 3", "2", "stale"]);
 
+// The Code, Sprint and Release cells stay on one line (UX-18); the numeric headers are right-aligned.
+{
+  const wrapped = (col) => {
+    const i = [...document.querySelectorAll("thead th")].findIndex((th) => text(th) === col);
+    const td = i < 0 ? null : document.querySelectorAll("tbody tr")[0]?.querySelectorAll("td")[i];
+    return td ? td.querySelector("span.items-nowrap") : null;
+  };
+  for (const col of ["Code", "Sprint", "Release"]) if (!wrapped(col)) nowrap.push(`the ${col} cell does not wrap its text in .items-nowrap`);
+  let css = "";
+  try {
+    css = read("pages/ItemsPage.css");
+  } catch {
+    nowrap.push("ItemsPage.css does not exist");
+  }
+  if (!/\.items-page\s+\.items-nowrap\s*\{[^}]*white-space:\s*nowrap/.test(css)) nowrap.push("ItemsPage.css does not give .items-nowrap white-space: nowrap");
+  if (!/import\s+"\.\/ItemsPage\.css"/.test(page)) nowrap.push("ItemsPage.tsx does not import ItemsPage.css");
+  for (const col of ["Requirements proven", "Red tests"]) {
+    const th = [...document.querySelectorAll("thead th")].find((x) => text(x).startsWith(col));
+    if (!th || !th.classList.contains("ui-end")) nowrap.push(`the ${col} header does not carry ui-end`);
+  }
+}
+
 // A URL value the index does not list is still shown, so the select never hides a filter in force.
 {
   const { document: d } = await render("src/pages/ItemsPage.tsx", "ItemsBody", { project: "shop", index, items: ok }, { url: "/p/shop/items?milestone=MS-009" });
@@ -136,4 +160,7 @@ if (problems.length) {
   for (const p of problems) console.error(`${NAME} — ${p}`);
   process.exit(1);
 }
+for (const p of nowrap) console.error(`${NAME2} — ${p}`);
+if (nowrap.length) process.exit(1);
+console.log(`${NAME2} — the Code, Sprint and Release cells are .items-nowrap, and the numeric headers are right-aligned.`);
 console.log(`${NAME} — the URL's filters become the /items query and the selects, rows link their items, and Items sits under Work.`);

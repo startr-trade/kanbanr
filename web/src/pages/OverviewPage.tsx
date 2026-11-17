@@ -15,6 +15,7 @@ import { DelegatedParts, EndingLines, useLastLook } from "../components/Delegate
 import { ago } from "../driftAge";
 import { to } from "../overviewLinks";
 import type { CompactIndex, DriftLatest, GoalFacts, Overview, Recent } from "../types";
+import "./OverviewPage.css";
 
 /** The most action cards Needs you shows; past it, the last card opens the drawer. */
 const MAX_CARDS = 5;
@@ -152,16 +153,21 @@ function NowSection(p: { project: string; overview: Overview; cadence: { sprints
         <h3>Milestones</h3>
         {milestones.length > 0 ? (
           milestones.map((m) => (
-            <ProgressBar
-              key={m.code}
-              label={m.name ? `${m.code} ${m.name}` : m.code}
-              total={m.total}
-              to={to.milestone(pr, m.code)}
-              segments={[
-                { key: "done", label: "Done", value: m.done, tone: "ok" },
-                { key: "open", label: "Open", value: Math.max(0, m.total - m.done), tone: "neutral" },
-              ]}
-            />
+            <Link key={m.code} className="overview-ms" to={to.milestone(pr, m.code)}>
+              <span className="overview-ms-head">
+                <span className="overview-ms-name">{m.name || m.code}</span>
+                {m.name ? <code className="overview-ms-code">{m.code}</code> : null}
+                <span className="overview-ms-count">{`${m.done}/${m.total}`}</span>
+              </span>
+              <ProgressBar
+                label={m.name ? `${m.code} ${m.name}` : m.code}
+                total={m.total}
+                segments={[
+                  { key: "done", label: "Done", value: m.done, tone: "ok" },
+                  { key: "open", label: "Open", value: Math.max(0, m.total - m.done), tone: "neutral" },
+                ]}
+              />
+            </Link>
           ))
         ) : (
           <Empty title="No milestone is in progress." />
