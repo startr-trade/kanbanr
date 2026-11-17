@@ -17079,3 +17079,221 @@ fn the_merge_queue_refuses_a_red_or_conflicting_branch_and_leaves_the_line() {
     assert_no_queue_worktree(&base, &work);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-062 R-9: `kanbanr build bench` with a stub `cargo` that logs where and how it ran: every
+/// scenario runs before (plain, no slot, the environment as it is) and after (through the slots
+/// with the project's jobs), each mode in its own fresh worktree; warm touches `lib.rs` in it;
+/// slots runs three checks under 2 × 5 and under 3 × 3; a target folder from the environment is
+/// never used; every row is in the build log, the bench worktrees are gone and the checkout is
+/// as it was.
+#[cfg(unix)]
+#[test]
+fn build_bench_records_before_and_after_rows_for_each_scenario() {
+    use std::os::unix::fs::PermissionsExt;
+    let (base, work) = diagram_scratch("bench");
+    let board =
+        PathBuf::from(String::from_utf8_lossy(&run_in(&base, &work, &["where"]).stdout).trim());
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{}",
+        board.display()
+    );
+    let ok = |o: Output| {
+        assert!(
+            o.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    let lib = work.join("api/crates/kanbanr-core/src/lib.rs");
+    std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
+    std::fs::write(&lib, "pub fn core() {}\n").unwrap();
+    std::fs::write(work.join(".gitignore"), ".claude/\n").unwrap();
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(&base, &work, &["commit", "-q", "-m", "base"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "build",
+            "--sccache",
+            "off",
+            "--jobs-per-slot",
+            "3",
+            "--max-load",
+            "1000",
+            "--reserve-mem-gib",
+            "0",
+        ],
+    ));
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let calls = base.join("cargo-calls.txt");
+    let cargo = bin.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nwarm=$(grep -c 'bench: warm' crates/kanbanr-core/src/lib.rs)\necho \
+             \"$PWD|$*|jobs=${{CARGO_BUILD_JOBS:-}}|target=${{CARGO_TARGET_DIR:-}}|warm=$warm\" >> {}\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let bench = |args: &[&str]| {
+        Command::new(cli())
+            .args(["--json", "build"])
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env("PATH", &path)
+            .env("KANBANR_BUILD_DIR", base.join("machine"))
+            .env("CARGO_TARGET_DIR", base.join("shared-target"))
+            .env_remove("CARGO_BUILD_JOBS")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&ok(bench(&["bench"]))).unwrap();
+    let notes: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            assert_eq!(r["kind"], "bench", "{r}");
+            assert_eq!(r["exit"], 0, "{r}");
+            r["note"]
+                .as_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            "cold/before",
+            "warm/before",
+            "task/before",
+            "cold/after",
+            "warm/after",
+            "task/after",
+            "slots/2x5",
+            "slots/2x5",
+            "slots/2x5",
+            "slots/3x3",
+            "slots/3x3",
+            "slots/3x3",
+        ]
+    );
+    for r in &rows[..3] {
+        assert_eq!(r["queued_ms"], 0, "a before run takes no slot: {r}");
+    }
+
+    // One cargo call per row, in each mode's own worktree, never in the shared target folder.
+    let text = std::fs::read_to_string(&calls).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 12, "{text}");
+    let field = |l: &str, i: usize| l.split('|').nth(i).unwrap().to_string();
+    let tree = |l: &str| {
+        let pwd = field(l, 0);
+        let p = Path::new(&pwd);
+        assert_eq!(p.file_name().unwrap(), "api", "{l}");
+        let t = p.parent().unwrap();
+        assert!(
+            t.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("bench-"),
+            "{l}"
+        );
+        assert!(t.parent().unwrap().ends_with(".claude/worktrees"), "{l}");
+        t.to_path_buf()
+    };
+    assert!(lines.iter().all(|l| field(l, 3) == "target="), "{text}");
+    assert_eq!(field(lines[0], 1), "check --locked -p kanbanr-core");
+    assert_eq!(
+        field(lines[2], 1),
+        "test --locked -p kanbanr-core --lib models::"
+    );
+    // Before: as it is (no jobs set here); after: the project's 3 jobs; slots: 5, then 3.
+    let jobs: Vec<String> = lines.iter().map(|l| field(l, 2)).collect();
+    assert_eq!(&jobs[..3], ["jobs=", "jobs=", "jobs="], "{text}");
+    assert_eq!(&jobs[3..6], ["jobs=3", "jobs=3", "jobs=3"], "{text}");
+    let mut slot_jobs: Vec<String> = jobs[6..].to_vec();
+    slot_jobs.sort();
+    assert_eq!(
+        slot_jobs,
+        ["jobs=3", "jobs=3", "jobs=3", "jobs=5", "jobs=5", "jobs=5"],
+        "{text}"
+    );
+    let warm: Vec<String> = lines[..6].iter().map(|l| field(l, 4)).collect();
+    assert_eq!(
+        warm,
+        ["warm=0", "warm=1", "warm=0", "warm=0", "warm=1", "warm=0"],
+        "{text}"
+    );
+    let before = tree(lines[0]);
+    assert!(lines[..3].iter().all(|l| tree(l) == before), "{text}");
+    let after = tree(lines[3]);
+    assert!(lines[3..6].iter().all(|l| tree(l) == after), "{text}");
+    assert_ne!(before, after, "each mode in a fresh worktree: {text}");
+    let mut slot_trees: Vec<PathBuf> = lines[6..].iter().map(|l| tree(l)).collect();
+    slot_trees.sort();
+    slot_trees.dedup();
+    assert_eq!(
+        slot_trees.len(),
+        6,
+        "three fresh worktrees per setting: {text}"
+    );
+    assert!(!slot_trees.contains(&before) && !slot_trees.contains(&after));
+
+    // Every row is in the repository's build log; the bench worktrees are gone; the checkout is
+    // as it was.
+    let log: Vec<serde_json::Value> = serde_json::from_str(&ok(bench(&["log"]))).unwrap();
+    assert_eq!(log.iter().filter(|r| r["kind"] == "bench").count(), 12);
+    let list = ok(git_in(&base, &work, &["worktree", "list", "--porcelain"]));
+    assert!(!list.contains("/bench-"), "{list}");
+    let left: Vec<String> = std::fs::read_dir(work.join(".claude").join("worktrees"))
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(std::fs::read_to_string(&lib).unwrap(), "pub fn core() {}\n");
+    assert!(ok(git_in(&base, &work, &["status", "--porcelain"])).is_empty());
+
+    // One scenario alone; warm brings cold; an unknown one is refused.
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&ok(bench(&["bench", "--scenario", "warm"]))).unwrap();
+    let notes: Vec<&str> = rows
+        .iter()
+        .map(|r| r["note"].as_str().unwrap().split(';').next().unwrap())
+        .collect();
+    assert_eq!(
+        notes,
+        ["cold/before", "warm/before", "cold/after", "warm/after"]
+    );
+    let o = bench(&["bench", "--scenario", "hot"]);
+    assert!(!o.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
