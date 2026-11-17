@@ -916,4 +916,23 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// FTR-049 R-8: the skill tells Claude to carry out the person's planning decisions with their
+    /// own commands and never to record one.
+    #[test]
+    fn skill_says_claude_carries_out_planning_decisions_and_never_records_one() {
+        let flat = skill_flat();
+        for needle in [
+            "kanbanr planning list --state pending",
+            "kanbanr planning check PD-n",
+            "kanbanr sprint plan SP-n CODE --decision PD-n",
+            "kanbanr sprint unplan CODE --decision PD-n",
+            "kanbanr release plan vX.Y.Z CODE --decision PD-n",
+            "kanbanr planning decline PD-n --reason",
+            "--nearest",
+            "Never record a planning decision yourself; it is the person's",
+        ] {
+            assert!(flat.contains(needle), "the skill lacks: {needle}");
+        }
+    }
 }

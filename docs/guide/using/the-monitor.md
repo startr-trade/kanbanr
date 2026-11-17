@@ -784,6 +784,27 @@ a newer one for the same decision replaces it. A read-only monitor shows the rec
 command that takes the same decision in your own terminal. Claude can prepare a record but can
 never confirm or reject one.
 
+### Planning from the pages
+
+You can plan items from the pages instead of asking Claude in the conversation (FTR-049). On the
+Plan page, open a row: each item in its table has a checkbox, and one **Plan into…** button acts on
+the selection, with the sprints and releases that are not frozen as targets. You can also drag an
+item's table row onto a sprint or release row of the Plan page. On the Releases page, an item
+table's selection has **Move to…**, with the other planned releases as targets.
+
+Every route asks first. The first press (or the drop) shows the question, for example "Plan
+FTR-044 and DEF-076 into SP-004?", with a button of the same words and Cancel; the second press
+records it. A drop never records anything by itself.
+
+What is recorded is your decision, as you, from the monitor: one commit, one file under
+`planning/`. It does not change any plan. The row shows it as **pending: Claude carries it out at
+its next turn**, and the Overview lists it under Decisions without counting it in the badge, since
+it waits for Claude. Claude then checks dependencies, frozen scope, capacity and dates, and either
+plans the items (the outcome shows as carried) or declines with its reason and the nearest valid
+move, shown on the item's row with a one-press "Ask for v0.9.0 instead". Claude can never record a
+planning decision, and you can carry out your own in a terminal with `--decision`. A read-only
+monitor shows pending decisions but not the buttons.
+
 ### Decisions here
 
 **Decisions here**, a collapsed section above the Review page's groups, says where this project's

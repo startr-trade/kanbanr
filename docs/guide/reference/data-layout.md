@@ -23,6 +23,9 @@ sibling cannot be.
         ├── prepared/                   # evidence prepared for a decision, each file written once (FTR-034)
         │   ├── <id>.yaml
         │   └── <id>.resolved.yaml
+        ├── planning/                   # the person's planning decisions, each file written once (FTR-049)
+        │   ├── PD-<n>.yaml              # {id, action, target, items, by, origin, at, note?}
+        │   └── PD-<n>.outcome.yaml      # {decision, outcome: carried|declined, by, origin, at, reason?, nearest?}
         ├── manual/                     # manual test results, one file per result, written once (DEF-040)
         │   └── <time>-<CODE>-<R-n>.yaml
         ├── pins/<CODE>/<rev>.md        # a spec as a design sign-off saw it, written once (FTR-023)
