@@ -378,6 +378,13 @@ fn apply_build_change(
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
+/// The planning decision a plan route carries out (FTR-049): the body's `decision`, trimmed, when
+/// it names one.
+fn decision_of(body: &Value) -> Option<String> {
+    str_field(body, "decision")
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+}
 fn bool_field(body: &Value, k: &str) -> Option<bool> {
     body.get(k).and_then(|v| v.as_bool())
 }
@@ -1907,7 +1914,20 @@ fn dispatch_routes(
         },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
-            let release = crate::releases::plan(store, p, &percent_decode(version), &items)?;
+            // `decision?: "PD-n"` carries out the person's planning decision (FTR-049): checked
+            // before any write, its outcome written with the change, in this one dispatch.
+            let release = match decision_of(b) {
+                Some(d) => crate::releases::plan_for_decision(
+                    store,
+                    p,
+                    &percent_decode(version),
+                    &items,
+                    &d,
+                    &crate::planning::carrier(store, str_field(b, "by"))?,
+                    &crate::origin::from_body(b),
+                )?,
+                None => crate::releases::plan(store, p, &percent_decode(version), &items)?,
+            };
             // Items now in a release but in no running sprint are named, not planned in
             // (DEF-029): the reply is the release as ever, with `not_in_sprint` when there are any.
             let project = store.load(p)?;
@@ -2605,7 +2625,19 @@ fn dispatch_routes(
         }
         ("POST", ["projects", p, "sprints", code, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
-            ser(&crate::sprints::plan(store, p, code, &items)?)
+            // `decision?: "PD-n"` carries out the person's planning decision (FTR-049).
+            match decision_of(b) {
+                Some(d) => ser(&crate::sprints::plan_for_decision(
+                    store,
+                    p,
+                    code,
+                    &items,
+                    &d,
+                    &crate::planning::carrier(store, str_field(b, "by"))?,
+                    &crate::origin::from_body(b),
+                )?),
+                None => ser(&crate::sprints::plan(store, p, code, &items)?),
+            }
         }
         // Take items out of their sprint (DEF-018).
         ("POST", ["projects", p, "sprints", "unplan"]) => {
@@ -2613,7 +2645,18 @@ fn dispatch_routes(
             if items.is_empty() {
                 return Err(CoreError::Unsupported("name at least one item".into()));
             }
-            ser(&crate::sprints::unplan(store, p, &items)?)
+            // `decision?: "PD-n"` carries out the person's planning decision (FTR-049).
+            match decision_of(b) {
+                Some(d) => ser(&crate::sprints::unplan_for_decision(
+                    store,
+                    p,
+                    &items,
+                    &d,
+                    &crate::planning::carrier(store, str_field(b, "by"))?,
+                    &crate::origin::from_body(b),
+                )?),
+                None => ser(&crate::sprints::unplan(store, p, &items)?),
+            }
         }
         // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {

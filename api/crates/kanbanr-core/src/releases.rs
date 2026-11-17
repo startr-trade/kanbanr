@@ -962,6 +962,50 @@ pub fn plan(store: &Store, id: &str, version: &str, items: &[String]) -> Result<
     Ok(release)
 }
 
+/// [`plan`], carrying out the person's planning decision `decision` (FTR-049). The decision must
+/// be pending and name exactly this release and these items, checked before anything is written;
+/// then the items are planned and the outcome `carried` is written, by `by` from `origin`, in the
+/// same dispatch, so the change and its outcome land in one commit. If the outcome cannot be
+/// written, the items' releases are put back and the error is returned.
+pub fn plan_for_decision(
+    store: &Store,
+    id: &str,
+    version: &str,
+    items: &[String],
+    decision: &str,
+    by: &str,
+    origin: &str,
+) -> Result<Release> {
+    use crate::planning;
+    planning::check_carry(store, id, decision, planning::INTO_RELEASE, version, items)?;
+    let before = planning::snapshot(store, id, items, |f| f.release.clone())?;
+    let release = plan(store, id, version, items)
+        .and_then(|release| {
+            planning::carry(
+                store,
+                id,
+                decision,
+                planning::INTO_RELEASE,
+                version,
+                items,
+                by,
+                origin,
+            )
+            .map(|()| release)
+        })
+        .map_err(|e| {
+            planning::restore(
+                store,
+                id,
+                before,
+                |f| f.release.clone(),
+                Store::set_feature_release,
+                e,
+            )
+        })?;
+    Ok(release)
+}
+
 /// Whether an item can ship, and to which end status — or why not. It ships if it is already
 /// finished, or if its work is done (every task complete) and the workflow allows it to an end
 /// status whose gate it meets. A workflow that declares no gates holds it to what `finish` asks.

@@ -452,6 +452,73 @@ pub fn carry(
     )
 }
 
+/// Who carries out a decision named by a plan route's `decision`: the body's `by`, else the board's
+/// git identity (R-9: the person carrying out their own decision in a terminal is recorded as the
+/// board's identity). Refused when neither names anyone.
+pub(crate) fn carrier(store: &Store, body_by: Option<String>) -> Result<String> {
+    body_by
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty())
+        .or_else(|| crate::git::identity(store.data_dir()).map(|(name, _)| name))
+        .ok_or_else(|| unsupported("a carried-out planning decision names who carried it out"))
+}
+
+/// What each of `items` was planned into before a plan change made for a decision, read by
+/// `field` (its sprint or its release), so a failed outcome write can put the plan back.
+pub(crate) fn snapshot(
+    store: &Store,
+    p: &str,
+    items: &[String],
+    field: fn(&FeatureItem) -> Option<String>,
+) -> Result<Vec<(String, Option<String>)>> {
+    let project = store.load_meta(p)?;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for code in items {
+        if seen.insert(code.as_str()) {
+            out.push((code.clone(), field(project.feature(code)?)));
+        }
+    }
+    Ok(out)
+}
+
+/// Put the plan back as [`snapshot`] read it, after the change for a decision failed part way or
+/// its outcome could not be written, and turn `cause` into the error to report. Only an item whose
+/// `field` now differs is written, so a change refused before it began leaves every file as it
+/// was. Nothing is committed on an error; an item that cannot be put back is named, so the board
+/// is known to be changed on disk.
+pub(crate) fn restore(
+    store: &Store,
+    p: &str,
+    before: Vec<(String, Option<String>)>,
+    field: fn(&FeatureItem) -> Option<String>,
+    set: fn(&Store, &str, &str, Option<String>) -> Result<FeatureItem>,
+    cause: CoreError,
+) -> CoreError {
+    let now = store.load_meta(p).ok();
+    let changed = |code: &str, was: &Option<String>| match &now {
+        Some(project) => project
+            .feature(code)
+            .map(|f| &field(f) != was)
+            .unwrap_or(false),
+        None => true,
+    };
+    let stuck: Vec<String> = before
+        .into_iter()
+        .filter(|(code, was)| changed(code, was))
+        .filter_map(|(code, was)| set(store, p, &code, was).err().map(|_| code))
+        .collect();
+    if stuck.is_empty() {
+        cause
+    } else {
+        unsupported(format!(
+            "{cause}; and the plan of {} could not be put back, so it is changed on disk but NOT \
+             committed",
+            stuck.join(", ")
+        ))
+    }
+}
+
 /// Decline decision `id`, keeping the reason and the nearest valid move. Refused when it is not
 /// pending, the reason is empty, or the nearest move names an unknown action.
 pub fn decline(
@@ -1273,6 +1340,170 @@ mod tests {
 
         // The check changed nothing: every decision is still pending.
         assert_eq!(list(&store, "shop", Some("pending")).unwrap().len(), 8);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-049 R-4: a plan route naming a decision carries it out: the plan change and the outcome
+    /// are written by one dispatch; a command that does not match its decision (another target,
+    /// another item), or one that names a decision already carried out or declined, is refused
+    /// with nothing written; an outcome that cannot be written puts the plan back.
+    #[test]
+    fn carrying_out_records_the_outcome_with_the_change() {
+        let (store, codes, dir) = board("r4");
+        let (a, b, c) = (&codes[0], &codes[1], &codes[2]);
+        let post = |path: &str, body: Value| {
+            crate::dispatch::dispatch(&store, "POST", path, Some(&body)).map(|_| ())
+        };
+        let item = |code: &str| {
+            store
+                .load_meta("shop")
+                .unwrap()
+                .feature(code)
+                .unwrap()
+                .clone()
+        };
+        let outcome_file = |id: &str| {
+            store
+                .project_dir("shop")
+                .join(FOLDER)
+                .join(format!("{id}{OUTCOME}"))
+        };
+        let state_of = |id: &str| get(&store, "shop", id).unwrap();
+
+        // Into a sprint: the items are planned and the outcome is written, by one dispatch.
+        let pd1 = decide(&store, INTO_SPRINT, "SP-001", &[a, b]).unwrap();
+        post(
+            "/projects/shop/sprints/SP-001/plan",
+            json!({"items": [b, a], "decision": pd1.id, "by": "Claude", "origin": "conversation"}),
+        )
+        .unwrap();
+        assert_eq!(item(a).sprint.as_deref(), Some("SP-001"));
+        assert_eq!(item(b).sprint.as_deref(), Some("SP-001"));
+        let v = state_of("PD-1");
+        assert_eq!(v.state, "carried");
+        let o = v.outcome.unwrap();
+        assert_eq!(
+            (o.by.as_str(), o.origin.as_str()),
+            ("Claude", "conversation")
+        );
+        assert_eq!(o.reason, "planned by `kanbanr sprint plan`");
+
+        // Carried out once only.
+        let again = post(
+            "/projects/shop/sprints/SP-001/plan",
+            json!({"items": [a, b], "decision": "PD-1", "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(again.to_string().contains("already carried out"), "{again}");
+
+        // A mismatch is refused before anything is written: another target, then another item.
+        let pd2 = decide(&store, INTO_RELEASE, "v0.9.0", &[c]).unwrap();
+        let other_target = post(
+            "/projects/shop/releases/v0.8.0/plan",
+            json!({"items": [c], "decision": pd2.id, "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(
+            other_target
+                .to_string()
+                .contains("into v0.9.0, not into v0.8.0"),
+            "{other_target}"
+        );
+        let other_route = post(
+            "/projects/shop/sprints/SP-002/plan",
+            json!({"items": [c], "decision": pd2.id, "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(
+            other_route.to_string().contains("PD-2 plans"),
+            "{other_route}"
+        );
+        let other_item = post(
+            "/projects/shop/releases/v0.9.0/plan",
+            json!({"items": [a], "decision": pd2.id, "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(other_item.to_string().contains("not "), "{other_item}");
+        assert_eq!(item(c).release, None);
+        assert_eq!(item(c).sprint, None);
+        assert_eq!(item(a).release, None);
+        assert!(!outcome_file("PD-2").exists());
+        assert_eq!(state_of("PD-2").state, "pending");
+
+        // Into a release, matching: carried.
+        post(
+            "/projects/shop/releases/v0.9.0/plan",
+            json!({"items": [c], "decision": pd2.id, "by": "Claude"}),
+        )
+        .unwrap();
+        assert_eq!(item(c).release.as_deref(), Some("v0.9.0"));
+        let o = state_of("PD-2").outcome.unwrap();
+        assert_eq!(o.reason, "planned by `kanbanr release plan`");
+
+        // A declined decision is refused, and the plan stays as it was.
+        let pd3 = decide(&store, OUT_OF_SPRINT, "", &[a]).unwrap();
+        decline(
+            &store,
+            "shop",
+            &pd3.id,
+            "Claude",
+            "conversation",
+            "a stays in",
+            None,
+        )
+        .unwrap();
+        let declined = post(
+            "/projects/shop/sprints/unplan",
+            json!({"items": [a], "decision": pd3.id, "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(
+            declined.to_string().contains("already declined"),
+            "{declined}"
+        );
+        assert_eq!(item(a).sprint.as_deref(), Some("SP-001"));
+
+        // Out of a sprint, matching: carried.
+        let pd4 = decide(&store, OUT_OF_SPRINT, "", &[b]).unwrap();
+        post(
+            "/projects/shop/sprints/unplan",
+            json!({"items": [b], "decision": pd4.id, "by": "Claude"}),
+        )
+        .unwrap();
+        assert_eq!(item(b).sprint, None);
+        assert_eq!(
+            state_of("PD-4").outcome.unwrap().reason,
+            "planned by `kanbanr sprint unplan`"
+        );
+
+        // An outcome that cannot be written puts the plan back: an unreadable outcome file leaves
+        // the decision pending but blocks the write.
+        let pd5 = decide(&store, INTO_SPRINT, "SP-002", &[c]).unwrap();
+        std::fs::write(outcome_file(&pd5.id), ": not yaml [").unwrap();
+        assert_eq!(state_of("PD-5").state, "pending");
+        let blocked = post(
+            "/projects/shop/sprints/SP-002/plan",
+            json!({"items": [c], "decision": pd5.id, "by": "Claude"}),
+        )
+        .unwrap_err();
+        assert!(
+            blocked.to_string().contains("already has an outcome"),
+            "{blocked}"
+        );
+        assert_eq!(item(c).sprint, None);
+
+        // Without a decision the routes plan as they always have, and write no outcome.
+        let before = std::fs::read_dir(store.project_dir("shop").join(FOLDER))
+            .unwrap()
+            .count();
+        post("/projects/shop/sprints/SP-002/plan", json!({"items": [b]})).unwrap();
+        assert_eq!(item(b).sprint.as_deref(), Some("SP-002"));
+        assert_eq!(
+            std::fs::read_dir(store.project_dir("shop").join(FOLDER))
+                .unwrap()
+                .count(),
+            before
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
