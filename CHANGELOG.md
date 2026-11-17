@@ -115,6 +115,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The Review page's Manual checks group says what it is for and no longer mixes the release being cut with checks nobody will judge: a line on top ("A manual check is one only you can judge. An item ships when its check is recorded passed."), the release being shipped open first, then collapsed sections "Shipped without a judgement", "Later releases" and "Not planned". A check left on a release that has already shipped can be retired, several at once with one reason: a retirement is your own verdict on the Review page, is kept with its reason, never counts as passed, and takes the check out of the group. Claude can only prepare one (`kanbanr prepare test … --retired --note …`) for you to confirm (DEF-113).
 - The Review page's Approve group draws a "tests only" pill on a row whose approval lapsed or grew through an edit to its tests alone, and offers "Select tests only (N)" to tick those rows together (DEF-111).
 - A payload that approves one question and declines another no longer drops the declined one: the conversation hook makes the pass for the approved question and says, as it does for a declined question asked alone, that the person did not choose it and nothing is recorded or pending (DEF-110).
 - The daemon's background warm-up covers every project the served boards hold, not the folder marker's project: a daemon started in a folder whose project the board lacks no longer warns `project not found`, and a daemon serving several boards warms them all (DEF-109).
