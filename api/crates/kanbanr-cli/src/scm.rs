@@ -193,4 +193,83 @@ mod tests {
         assert!(!dir.join("pre-commit").exists());
         let _ = std::fs::remove_dir_all(&repo);
     }
+
+    /// FTR-059 R-2: a hook kanbanr chained (`<name>.pre-kanbanr`) still runs before kanbanr's,
+    /// and its failure still fails the commit; when it passes, the commit goes through. Run with
+    /// kanbanr off PATH, so kanbanr's own check steps aside and only the chain decides.
+    #[cfg(unix)]
+    #[test]
+    fn a_chained_hook_runs_first_and_its_failure_fails_the_commit() {
+        use std::process::Command;
+        let repo = scratch_repo("chain");
+        let dir = hooks_dir(&repo).unwrap();
+        assert!(
+            dir.canonicalize()
+                .unwrap()
+                .starts_with(repo.canonicalize().unwrap()),
+            "the test's hooks are its own repository's: {}",
+            dir.display()
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        let prior = |code: u8| {
+            std::fs::write(
+                dir.join("commit-msg"),
+                format!("#!/bin/sh\necho ran >> \"$(dirname \"$0\")/../chain.log\"; exit {code}\n"),
+            )
+            .unwrap();
+            make_executable(&dir.join("commit-msg")).unwrap();
+        };
+        prior(1);
+        install_hooks(&repo, true).unwrap();
+        assert!(dir.join("commit-msg.pre-kanbanr").is_file());
+        assert!(is_ours(&dir.join("commit-msg")));
+
+        // PATH with git and sh but no kanbanr.
+        let path: Vec<PathBuf> = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .filter(|d| !d.join("kanbanr").exists())
+            .collect();
+        let path = std::env::join_paths(path).unwrap();
+        let commit = || {
+            Command::new("git")
+                .current_dir(&repo)
+                .env("PATH", &path)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "x",
+                ])
+                .output()
+                .unwrap()
+        };
+        let log = dir.join("../chain.log");
+
+        let failed = commit();
+        assert!(
+            !failed.status.success(),
+            "the chained hook's failure fails the commit: {}",
+            String::from_utf8_lossy(&failed.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "ran\n");
+
+        // The chained hook passing lets the commit through.
+        std::fs::rename(dir.join("commit-msg"), dir.join("kanbanr-commit-msg")).unwrap();
+        prior(0);
+        std::fs::rename(dir.join("commit-msg"), dir.join("commit-msg.pre-kanbanr")).unwrap();
+        std::fs::rename(dir.join("kanbanr-commit-msg"), dir.join("commit-msg")).unwrap();
+        let passed = commit();
+        assert!(
+            passed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&passed.stderr)
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "ran\nran\n");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
