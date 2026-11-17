@@ -2752,6 +2752,7 @@ fn dispatch_routes(
             let req = crate::agentscope::IssueRequest {
                 role,
                 item: str_field(b, "item").unwrap_or_default(),
+                task: str_field(b, "task").filter(|t| !t.trim().is_empty()),
                 hours: b.get("hours").and_then(Value::as_u64).map(|h| h as u32),
                 note: str_field(b, "note").unwrap_or_default(),
                 worktree: str_field(b, "worktree")
