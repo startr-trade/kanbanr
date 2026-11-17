@@ -31,6 +31,8 @@ export const urls = {
   sprint: (p: string, s: string) => apiUrl(`${project(p)}/sprints/${enc(s)}`),
   gitModel: (p: string) => apiUrl(`${project(p)}/git/model`),
   docTree: (p: string) => apiUrl(`${project(p)}/docs`),
+  /** One doc's markdown: text, not JSON. */
+  doc: (p: string, path: string) => apiUrl(`${project(p)}/docs/content?path=${enc(path)}`),
   /** The lessons in force, or those that bear on one item when `for` is given. */
   lessons: (p: string, q: { for?: string } = {}) => apiUrl(`${project(p)}/lessons${query([["for", q.for]])}`),
   /** The project's agent scopes with their state (FEAT-214). */
@@ -94,6 +96,8 @@ export const TAGS = {
   charter: ["charter"],
   sprints: ["sprints", "items"],
   docTree: ["docs"],
+  /** One doc: the watcher names each changed doc by its path under docs/. */
+  doc: (path: string) => [`doc:${path}`],
   lessons: ["lessons"],
   /** `lessons?for=`: matched against the item's labels, kind and goals. */
   lessonsFor: (c: string) => ["lessons", `item:${c}`],

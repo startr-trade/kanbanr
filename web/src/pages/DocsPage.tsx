@@ -1,6 +1,6 @@
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import type { DocFolder } from "../types";
 
@@ -20,8 +20,8 @@ export default function DocsPage() {
   const params = useParams();
   const project = params.project ?? "";
   const folderPath = (params["*"] ?? "").replace(/\/$/, "");
-  const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getDocTree(project), [project, tick]);
+  // The doc tree through the shared cache, re-read only when a doc changes (DEF-081).
+  const { data, error, loading } = useQuery<DocFolder>(project, urls.docTree(project), TAGS.docTree);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
