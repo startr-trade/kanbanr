@@ -22,6 +22,10 @@
 //     to the Plan page and turns `schedule` and `gantt` into redirects (to Planned, and to the
 //     page); GanttPage.tsx and SchedulePage.tsx are gone; NAV's Plan area has one `plan` entry,
 //     active on the old paths too, and no Schedule or Gantt entry.
+//   web::check_portfolio_timeline_has_one_row_per_project (R-7) — the portfolio page reads
+//     `GET /portfolio/plan` through the shared cache, and its "Now" timeline, rendered, has one lane
+//     per project, in the daemon's order: a project running a sprint has its band, its release in
+//     flight a diamond, a project with no cadence a lane with nothing on it; today is drawn once.
 //
 // Usage: npm run check:plan-page
 import { defaultTab, itemBands, legacyRedirect, openLanes, planTabs, toTimeline } from "../src/planTabs.ts";
@@ -354,6 +358,42 @@ await check(
     for (const path of ["/p/x/plan", "/p/x/schedule", "/p/x/gantt"]) {
       expect(`${path} marks Plan active`, activeEntry(NAV, "x", path), { area: "plan", entry: "plan" });
     }
+  },
+);
+
+await check(
+  "web::check_portfolio_timeline_has_one_row_per_project",
+  "the portfolio reads /portfolio/plan through the shared cache, and its Now timeline draws one lane per project: a running sprint's band, a release's diamond, an empty lane for a project with no cadence, and one today line.",
+  async (expect, problems) => {
+    const page = src("pages/PortfolioPage.tsx");
+    if (!/useQuery<PortfolioPlan>\(\s*null\s*,\s*urls\.portfolioPlan\(\)\s*,\s*\[\s*"\*"\s*\]\s*\)/.test(page)) problems.push('PortfolioPage.tsx does not read urls.portfolioPlan() with useQuery(null, …, ["*"])');
+    if (/\bgetGantt\b|portfolio\/gantt/.test(page)) problems.push("PortfolioPage.tsx reads the Mermaid Gantt");
+
+    const plan = {
+      from: "2026-11-03",
+      to: "2026-12-01",
+      today: "2026-11-17",
+      lanes: [
+        {
+          project: "shop",
+          label: "Shop",
+          bands: [{ from: "2026-11-15", to: "2026-11-28", label: "SP-004", tone: "info", progress: 0.5 }],
+          marks: [{ at: "2026-11-24", label: "v0.8.0", kind: "diamond" }],
+        },
+        { project: "notes", label: "Notes", bands: [], marks: [] },
+      ],
+    };
+    const { document } = await render("src/pages/PortfolioPage.tsx", "PortfolioNow", { plan }, { url: "/portfolio" });
+    const svg = document.querySelector(".ui-timeline svg");
+    if (!svg) return problems.push("the Now section draws no timeline");
+    expect("one lane per project, in order", [...svg.querySelectorAll(".ui-tl-lane-label")].map(text), ["Shop", "Notes"]);
+    expect("the running sprint's band", [...svg.querySelectorAll(".ui-tl-band")].length, 1);
+    expect("the release in flight", svg.querySelectorAll(".ui-tl-diamond").length, 1);
+    expect("one today line", svg.querySelectorAll(".ui-tl-today line").length, 1);
+
+    const none = await render("src/pages/PortfolioPage.tsx", "PortfolioNow", { plan: { ...plan, lanes: [] } }, { url: "/portfolio" });
+    if (none.document.querySelector(".ui-timeline")) problems.push("an empty portfolio still draws a timeline");
+    if (!none.document.querySelector(".ui-empty-title")) problems.push("an empty portfolio says nothing");
   },
 );
 
