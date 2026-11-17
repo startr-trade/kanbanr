@@ -282,6 +282,29 @@ submodule's pointer does). And a checkout whose line endings git converts on che
 (`core.autocrlf`, `.gitattributes` `eol=crlf`) reads as clean, as `git status` and katalogr read it,
 so a view there is exact at the commit too.
 
+### Repository docs at a position
+
+The docs that live with the code (`docs/guide`, `docs/system`) branch with it, so what a doc says
+depends on where you read it. kanbanr reads them at a position you pick, from git, with nothing
+checked out (FTR-004): `main`, the working tree, an item (its merge commit once integrated, else its
+branch tip), a sprint (its closing commit, else its branch), a release (its tag, else its branch) or
+a commit. The monitor's Docs page has the picker (see [The monitor](the-monitor.md#docs-at-a-position)),
+and `kanbanr doc show <path> --at <pick>` prints the doc after a line that says what was read.
+
+**Links.** In a spec, a design or a doc, link a repository doc by its path under `docs/`:
+`[docs/guide/using/x.md](docs/guide/using/x.md)`. The monitor opens it at the item's position, and
+`kanbanr doctor` checks it there: a link to a file the item's branch does not have is an error
+naming the position. An item with no branch yet is judged against `main`, and the message says so.
+A path in backticks is listed but not checked. Run `doctor` from the project folder; from elsewhere
+it cannot see the repository and says once that repository links were not checked (nothing is said
+when no spec has one).
+
+**What is recorded.** An item's merge commit is written on its integration transition, and a
+sprint's closing commit on the sprint, so those positions stay readable after the branch is gone. A
+sign-off given from the project folder records the position it was given at and the blob of each
+repository doc the item names, so the reviewer can open exactly the text that was signed. An older
+record has none of these and reads as before.
+
 ### Drift as work lands
 
 A doc can name `--since` or a route that an item then changed, and stay as it was. kanbanr finds

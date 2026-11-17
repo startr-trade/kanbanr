@@ -551,6 +551,43 @@ shows its path. With no facts the page says so and names `kanbanr facts set`; wi
 names `kanbanr catalog init`. The page is read-only: Claude keeps the catalog. See
 [Living architecture docs](living-docs.md#what-a-project-documents-the-content-catalog).
 
+### Docs at a position
+
+The Docs page, and the repository doc pages that open from it, read a doc **at the position you
+pick** (FTR-004). A position is where a doc is read from: `main`, the working tree, an item, a
+sprint, a release or a commit. The picker is a select in the header of the Docs page, the repository
+docs page and each repository doc page (and nowhere else: an item page has none, because its
+repository doc links already open at the item). It lists `main`, the working tree, each sprint and
+each release, with the reason beside one that cannot be read (a sprint with no branch yet, a release
+with no tag); a text field beside it takes an item code, a commit or a position text. Your choice is
+kept for the session and carried on every repository doc link, so moving between docs keeps the
+position.
+
+Repository docs are the files under `docs/` in the code repository. The page at `/p/<project>/repo`
+lists them at the position, and `/p/<project>/repo/<path>` shows one. A link in a spec or a doc such
+as `[docs/guide/using/x.md](docs/guide/using/x.md)` opens there, at the item's position on an item
+page and at the current pick elsewhere. A link under `/p/<project>/docs/file/` is a board doc and
+never changes.
+
+Every doc page says what it read, in one line above the text:
+
+- `docs/guide/using/x.md · at FTR-004 · feat/FTR-004-read-docs @ 1a2b3c4 · from git (merge commit recorded on the item)`:
+  the item's merge commit when it has been integrated, else its branch tip. The text is the commit's
+  own, whatever is checked out.
+- `docs/guide/using/x.md · working tree @ 6a973c6+1f3e… · from disk, with uncommitted changes`: the
+  files on disk, the only position that shows an edit you have not committed.
+- `board doc · one record, the same at every position`: a board doc does not depend on the
+  position.
+
+A doc that is not there says so and whether `main` has it: "docs/system/store.md is not in the
+repository at v0.6.0 (tag v0.6.0 @ 9fe1d20). main has it." The picker stays on the page to choose
+another position. Without a code repository (a monitor started outside the project folder), these
+pages say that no checkout holds the position, as `kanbanr view docs --at` does. Reading never
+changes the repository: nothing is checked out and no branch moves.
+
+On an item page, each sign-off that recorded a position adds "docs read at 1a2b3c4" and a link to
+each doc it read, opened at that commit, so the reviewer sees exactly what was signed.
+
 ### How the monitor stays fast
 
 A page reads only what it shows (DEF-081). The header, the links in specs and docs, and the item

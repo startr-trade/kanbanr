@@ -1792,7 +1792,7 @@ steps:
     /// The two guide runbooks that ship as fixtures (the board copies are made from them): each
     /// parses, lints clean, and places every check it defines — SPK-004's MT-1 to MT-5 and DEF-056's
     /// MT-9 for TOGAF, MT-1 to MT-8 for agile, the v0.6.0 checks, counted without FTR-054's MT-10
-    /// (DEF-087); a marker on several steps is one check — and names no person, account or server.
+    /// (DEF-087) and FTR-004's MT-11; a marker on several steps is one check — and names no person, account or server.
     #[test]
     fn the_guide_runbooks_parse_and_lint_clean_with_their_eight_checks() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1807,7 +1807,10 @@ steps:
             assert_eq!(rb.process, process);
             assert_eq!(rb.model, "sonnet");
             assert_eq!(
-                rb.checks.keys().filter(|k| *k != "MT-10").count(),
+                rb.checks
+                    .keys()
+                    .filter(|k| !matches!(k.as_str(), "MT-10" | "MT-11"))
+                    .count(),
                 markers,
                 "{file}"
             );

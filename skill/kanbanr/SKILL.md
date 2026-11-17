@@ -765,8 +765,10 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
 - **Affects docs**: the Design ends with links to the board docs the change touches, and the same
   paths go into the definition's `affects_docs`, which the integrate role checks. Under the same
   heading, write each repository doc the change touches (guides, reference pages, `SECURITY.md`,
-  `CHANGELOG.md`) as a path in backticks, one per bullet, and add a task for each document to
-  build, naming its path. `docs-folded` is offered to the user only once those are built.
+  `CHANGELOG.md`) as a link, one per bullet (`[docs/guide/using/x.md](docs/guide/using/x.md)`), and
+  add a task for each document to build, naming its path. The monitor opens that link at the item's
+  position, and `kanbanr doctor` checks it there; a path in backticks is listed but not checked.
+  `docs-folded` is offered to the user only once those are built.
 - **Catalog rows**: name the rows of the project's catalog (`kanbanr catalog`) the change touches,
   and put each one's written source doc in **Affects docs**.
 - **Two docs folders in the repository**: the product guide, which the published book is built
@@ -1413,9 +1415,11 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   `[FEAT-012](/p/<project>/feature/FEAT-012)` (a requirement: `…/feature/FEAT-012#R-2`),
   `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and
   `/p/<project>/docs/file/<path>` for an ADR or a doc. A code in prose is linked too, but a link
-  says you mean it. A file in the code repository is not a board doc: name it as a code path
-  (`docs/guide/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
-  is made of these links. `kanbanr doctor` reports any that point at nothing — fix them before
+  says you mean it. A file in the code repository is not a board doc: link it by its path under
+  `docs/` (`[docs/guide/using/processes.md](docs/guide/using/processes.md)`), never as a
+  `/docs/file/` link. The monitor opens it at the item's position and `doctor` checks it there; a
+  path in backticks is listed but not checked. A design's **Affects docs** list is made of these
+  links. `kanbanr doctor` reports any that point at nothing — fix them before
   calling the item done. `kanbanr trace <doc.md>` shows what a doc names and what links to it.
 
 ## Where the rules live
@@ -1682,6 +1686,11 @@ nothing checked out; a dirty position is answerable only while the checkout is a
 checkout holds the position, exit 2 for text that is not a position). Show the warnings; never treat
 an answer without an ID as repeatable.
 
+The monitor and `kanbanr doc show <path> --at <pick>` read a repository doc at a pick: `main`, `worktree`
+(the working tree), an item code, a sprint, a release version or a commit. `--at` here takes a pick,
+`view docs --at` a position text. The doc comes from git with nothing checked out; the first line
+says what was read.
+
 Setup / configuration:
 ```
 kanbanr project init <name> [--description D] [--statuses A,B,C] [--default-state A] [--displayed-states A,B] [--no-op-states X,Y]
@@ -1829,6 +1838,8 @@ Under a phased process, grow an item's definition stage by stage.
   approval, not after it.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
+  A sign-off given from the project folder records the position it was given at and the blob of each
+  repository doc it read, so the reviewer can open exactly what was signed.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the
   user says so.
 ```
