@@ -1122,7 +1122,15 @@ impl Store {
     /// Runs after the item's own flush; a crash between leaves a dependency that still resolves
     /// through the alias.
     fn rewrite_qualified_deps(&self, id: &str, old: &str, new: &str) -> Result<()> {
-        let (from, to) = (format!("{id}:{old}"), format!("{id}:{new}"));
+        self.rewrite_qualified_deps_many(id, &[(old.to_string(), new.to_string())])
+    }
+
+    /// [`Self::rewrite_qualified_deps`] for several renames at once: one flush per project touched.
+    fn rewrite_qualified_deps_many(&self, id: &str, renames: &[(String, String)]) -> Result<()> {
+        let map: std::collections::BTreeMap<String, String> = renames
+            .iter()
+            .map(|(old, new)| (format!("{id}:{old}"), format!("{id}:{new}")))
+            .collect();
         for q in self.list_projects()? {
             if q == id {
                 continue;
@@ -1131,9 +1139,11 @@ impl Store {
             let mut pending = Pending::default();
             for f in other.features.iter_mut() {
                 let mut changed = false;
-                for d in f.depends_on.iter_mut().filter(|d| **d == from) {
-                    *d = to.clone();
-                    changed = true;
+                for d in f.depends_on.iter_mut() {
+                    if let Some(to) = map.get(d.as_str()) {
+                        *d = to.clone();
+                        changed = true;
+                    }
                 }
                 if changed {
                     pending.persist_features.insert(f.code.clone());
@@ -1144,6 +1154,44 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// FTR-056: apply the bulk recode plan `rev` names, if it is still what
+    /// [`crate::aliases::recode_plan`] gives: every mismatched item is renamed (its earlier code
+    /// kept as an alias, dependencies rewritten) in one flush, then the other projects' qualified
+    /// dependencies in one flush each. A stale plan is refused before any write.
+    pub fn apply_recode(&self, id: &str, rev: &str) -> Result<crate::aliases::RecodePlan> {
+        let mut project = self.load(id)?;
+        let plan = crate::aliases::recode_plan(&project);
+        if plan.rev != rev {
+            return Err(CoreError::Refused(format!(
+                "the board changed after the plan {rev} was made; print it again with kanbanr \
+                 feature recode"
+            )));
+        }
+        if plan.renames.is_empty() {
+            return Ok(plan);
+        }
+        let mut pending = Pending::default();
+        for r in &plan.renames {
+            Self::edit_feature_on(
+                &mut project,
+                &mut pending,
+                &r.from,
+                None,
+                None,
+                None,
+                Some(r.to.clone()),
+            )?;
+        }
+        self.flush(id, &project, &pending)?;
+        let pairs: Vec<(String, String)> = plan
+            .renames
+            .iter()
+            .map(|r| (r.from.clone(), r.to.clone()))
+            .collect();
+        self.rewrite_qualified_deps_many(id, &pairs)?;
+        Ok(plan)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6091,6 +6139,132 @@ mod tests {
         assert!(err.contains("DEF-001 is DEF-001's code"), "{err}");
         let p = store.load("demo").unwrap();
         assert_eq!(p.feature("FEAT-002").unwrap().code, "FEAT-002");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board of three mismatched items (a bug, a chore, a feature), a dependency among them and
+    /// one from another project, under this board's kind prefixes.
+    fn recode_board(name: &str) -> (Store, PathBuf) {
+        let (store, dir) = atomic_board(name);
+        for (title, kind) in [("A", "bug"), ("B", "chore"), ("C", "feature")] {
+            store
+                .add_feature_of_kind("demo", title, "spec", "M", None, Some(kind))
+                .unwrap();
+        }
+        store
+            .set_codes(
+                "demo",
+                crate::config::CodesChange {
+                    set: [("feature", "FTR"), ("bug", "DEF"), ("chore", "MNT")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                "FEAT-003",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["FEAT-001".into()]),
+            )
+            .unwrap();
+        store
+            .init_project("other", ProjectConfig::default_for("other"))
+            .unwrap();
+        store
+            .add_milestone("other", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        store.add_feature("other", "D", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "other",
+                "FEAT-001",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["demo:FEAT-002".into()]),
+            )
+            .unwrap();
+        (store, dir)
+    }
+
+    /// R-7: every mismatched item is renamed with its alias, dependencies follow, in one write.
+    #[test]
+    fn applying_a_recode_plan_renames_every_item_in_one_write() {
+        let (store, dir) = recode_board("recode-apply");
+        let plan = crate::aliases::recode_plan(&store.load("demo").unwrap());
+        assert_eq!(plan.renames.len(), 3);
+        let applied = store.apply_recode("demo", &plan.rev).unwrap();
+        assert_eq!(applied, plan);
+        let p = store.load("demo").unwrap();
+        for (old, new) in [
+            ("FEAT-001", "DEF-001"),
+            ("FEAT-002", "MNT-001"),
+            ("FEAT-003", "FTR-001"),
+        ] {
+            let f = p.feature(new).unwrap();
+            assert_eq!(f.code, new);
+            assert_eq!(f.aliases, [old]);
+            assert_eq!(p.feature(old).unwrap().code, new, "{old} still resolves");
+            assert_eq!(f.specification, "spec");
+            assert!(item_file(&dir, &f.status, new).exists());
+            assert!(!item_file(&dir, &f.status, old).exists());
+        }
+        assert_eq!(p.feature("FTR-001").unwrap().depends_on, ["DEF-001"]);
+        let other = store.load("other").unwrap();
+        assert_eq!(
+            other.feature("FEAT-001").unwrap().depends_on,
+            ["demo:MNT-001"]
+        );
+        // Nothing is left to do.
+        let again = crate::aliases::recode_plan(&p);
+        assert!(again.renames.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_recode_plan_is_refused_and_changes_nothing() {
+        let (store, dir) = recode_board("recode-stale");
+        let plan = crate::aliases::recode_plan(&store.load("demo").unwrap());
+        store
+            .add_feature_of_kind("demo", "E", "", "M", None, Some("bug"))
+            .unwrap();
+        let tree = |d: &Path| {
+            let mut out = Vec::new();
+            let mut stack = vec![d.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push((p.clone(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            out.sort();
+            out
+        };
+        let before = tree(&dir);
+        let err = store.apply_recode("demo", &plan.rev).unwrap_err();
+        assert!(matches!(err, CoreError::Refused(_)), "{err:?}");
+        assert!(
+            err.to_string().contains("the board changed after the plan"),
+            "{err}"
+        );
+        assert_eq!(tree(&dir), before, "no file changed");
+        assert!(store.apply_recode("demo", "").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

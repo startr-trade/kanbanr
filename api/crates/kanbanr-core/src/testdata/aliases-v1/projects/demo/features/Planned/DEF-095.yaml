@@ -1,0 +1,19 @@
+code: DEF-095
+aliases:
+- FEAT-001
+- BUG-001
+title: The board drops a field
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+created_at: 2026-11-17T07:54:04.969960362Z
+updated_at: 2026-11-17T07:54:05.035420338Z

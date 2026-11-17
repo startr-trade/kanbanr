@@ -5,6 +5,7 @@
 use crate::error::{CoreError, Result};
 use crate::models::FeatureItem;
 use crate::store::Project;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// The item `code` names, current code or alias. A current code wins over an alias, should a
@@ -54,6 +55,58 @@ pub fn check_free(project: &Project, code: &str, except: Option<&str>) -> Result
         )));
     }
     Ok(())
+}
+
+/// One rename of a bulk recode: the item `from` becomes `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Recode {
+    pub from: String,
+    pub to: String,
+    pub kind: Option<String>,
+    pub title: String,
+}
+
+/// What a bulk recode would do, and the revision that names it: confirming applies exactly this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RecodePlan {
+    pub renames: Vec<Recode>,
+    pub rev: String,
+}
+
+/// The letters before a code's last `-`.
+fn prefix_of(code: &str) -> &str {
+    code.rsplit_once('-').map_or(code, |(p, _)| p)
+}
+
+/// Every item whose code's prefix is not `codes.prefix_for(kind)`, each with its new code. Items
+/// are taken in `created_at` order, then by code; each new code continues its prefix's counter
+/// past every code and earlier code taken, so no number is reused. Reads only; an empty plan is
+/// valid.
+pub fn recode_plan(project: &Project) -> RecodePlan {
+    let codes = &project.config.codes;
+    let mut items: Vec<&FeatureItem> = project.features.iter().collect();
+    items.sort_by(|a, b| (&a.created_at, &a.code).cmp(&(&b.created_at, &b.code)));
+    let mut taken = taken(project);
+    let mut renames = Vec::new();
+    for f in items {
+        let prefix = codes.prefix_for(f.kind.as_deref());
+        if prefix_of(&f.code) == prefix {
+            continue;
+        }
+        let existing: Vec<String> = taken.iter().cloned().collect();
+        let to = crate::validate::next_code(prefix, &existing);
+        taken.insert(to.clone());
+        renames.push(Recode {
+            from: f.code.clone(),
+            to,
+            kind: f.kind.clone(),
+            title: f.title.clone(),
+        });
+    }
+    let rev = crate::hash::stable_hash(&crate::hash::canonical_json(&renames));
+    RecodePlan { renames, rev }
 }
 
 #[cfg(test)]
@@ -298,5 +351,200 @@ mod tests {
             "the grant's item list holds an earlier code of the item"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A project whose kinds map as this board's do: bug and defect `DEF`, chore `MNT`, feature
+    /// `FTR`.
+    fn kinded(items: Vec<(&str, Option<&str>, &str)>) -> Project {
+        let mut p = project(Vec::new());
+        p.config.codes = p.config.codes.apply(&crate::config::CodesChange {
+            set: [("feature", "FTR"), ("bug", "DEF"), ("chore", "MNT")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        });
+        for (code, kind, at) in items {
+            let mut f = item(code, &[]);
+            f.kind = kind.map(str::to_string);
+            f.created_at = at.to_string();
+            p.features.push(f);
+        }
+        p
+    }
+
+    /// R-6: each mismatched item gets its kind's next code, in creation order, skipping every
+    /// number taken (current or earlier); the rev repeats for the same board.
+    #[test]
+    fn the_recode_plan_gives_each_mismatched_item_its_kinds_next_code() {
+        let mut p = kinded(vec![
+            ("FEAT-003", Some("bug"), "2026-11-03T00:00:00Z"),
+            ("FEAT-001", Some("chore"), "2026-11-01T00:00:00Z"),
+            ("FEAT-002", Some("bug"), "2026-11-02T00:00:00Z"),
+            ("FEAT-004", Some("feature"), "2026-11-04T00:00:00Z"),
+            ("DEF-001", Some("bug"), "2026-11-05T00:00:00Z"),
+            ("FTR-007", None, "2026-11-06T00:00:00Z"),
+            ("MNT-002", Some("chore"), "2026-11-07T00:00:00Z"),
+        ]);
+        // DEF-002 was given up by an item that is now an FTR: its number stays retired.
+        p.features
+            .iter_mut()
+            .find(|f| f.code == "FTR-007")
+            .unwrap()
+            .aliases
+            .push("DEF-002".into());
+        let plan = recode_plan(&p);
+        let pairs: Vec<(&str, &str)> = plan
+            .renames
+            .iter()
+            .map(|r| (r.from.as_str(), r.to.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("FEAT-001", "MNT-003"),
+                ("FEAT-002", "DEF-003"),
+                ("FEAT-003", "DEF-004"),
+                ("FEAT-004", "FTR-008"),
+            ]
+        );
+        assert_eq!(plan.renames[0].kind.as_deref(), Some("chore"));
+        assert_eq!(plan.renames[0].title, "FEAT-001");
+        assert_eq!(
+            recode_plan(&p).rev,
+            plan.rev,
+            "the same board, the same rev"
+        );
+        // A different board has a different rev.
+        p.features.push({
+            let mut f = item("FEAT-005", &[]);
+            f.kind = Some("bug".into());
+            f
+        });
+        assert_ne!(recode_plan(&p).rev, plan.rev);
+    }
+
+    #[test]
+    fn the_recode_plan_is_empty_when_every_code_fits() {
+        let p = kinded(vec![
+            ("DEF-001", Some("bug"), "2026-11-01T00:00:00Z"),
+            ("MNT-001", Some("chore"), "2026-11-02T00:00:00Z"),
+            ("FTR-001", None, "2026-11-03T00:00:00Z"),
+        ]);
+        let plan = recode_plan(&p);
+        assert!(plan.renames.is_empty());
+        assert_eq!(plan.rev, recode_plan(&p).rev);
+        assert!(recode_plan(&project(Vec::new())).renames.is_empty());
+    }
+
+    /// Copy the shipped example board into a scratch folder under the temp dir (L-41), so loading
+    /// it can never touch a real board.
+    fn example_board(name: &str, strip_aliases: bool) -> std::path::PathBuf {
+        fn copy(from: &std::path::Path, to: &std::path::Path, strip: bool) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let (src, dst) = (e.path(), to.join(e.file_name()));
+                if src.is_dir() {
+                    copy(&src, &dst, strip);
+                } else if src.extension().is_some_and(|x| x == "yaml") && strip {
+                    let text = std::fs::read_to_string(&src).unwrap();
+                    let mut out = String::new();
+                    let mut in_aliases = false;
+                    for line in text.lines() {
+                        if line == "aliases:" {
+                            in_aliases = true;
+                        } else if in_aliases && line.starts_with("- ") {
+                        } else {
+                            in_aliases = false;
+                            out.push_str(line);
+                            out.push('\n');
+                        }
+                    }
+                    std::fs::write(&dst, out).unwrap();
+                } else {
+                    std::fs::copy(&src, &dst).unwrap();
+                }
+            }
+        }
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-aliases-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/aliases-v1");
+        copy(&src, &dir, strip_aliases);
+        dir
+    }
+
+    /// R-8: each reference in the shipped example resolves as the documented rules say. A
+    /// reference is `kanbanr:<CODE>[/R-n | /TL-n/Tn]`, `<CODE> R-n`, `/p/<project>/feature/<CODE>`
+    /// or `<project>:<CODE>`; the code in it may be an earlier code.
+    #[test]
+    fn the_contract_example_resolves_as_documented() {
+        let dir = example_board("contract", false);
+        let store = crate::store::Store::new(dir.clone());
+        let project = store.load("demo").unwrap();
+        let expected: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/testdata/aliases-v1/expected.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let code_of = |text: &str| -> String {
+            let t = text
+                .strip_prefix("kanbanr:")
+                .or_else(|| text.rsplit_once("/feature/").map(|(_, c)| c))
+                .map(str::to_string)
+                .unwrap_or_else(|| text.to_string());
+            let t = t.rsplit_once(':').map_or(t.as_str(), |(_, c)| c);
+            t.split(['/', ' ']).next().unwrap().to_string()
+        };
+        let refs = expected["references"].as_object().unwrap();
+        assert!(refs.len() >= 10, "the example covers every form");
+        for (text, want) in refs {
+            let got = current(&project, &code_of(text));
+            assert_eq!(got, want.as_str(), "{text}");
+        }
+        // Rule 1: every code and earlier code is distinct.
+        let all: Vec<String> = project
+            .features
+            .iter()
+            .flat_map(|f| f.codes().map(str::to_string))
+            .collect();
+        assert_eq!(all.len(), taken(&project).len());
+        // Rule 5: the spec file is named by the current code.
+        assert!(
+            dir.join("projects/demo/features/Planned/features-spec/DEF-095.md")
+                .is_file()
+        );
+        assert_eq!(
+            project.feature("BUG-001").unwrap().aliases,
+            ["FEAT-001", "BUG-001"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-10: no schema bump. The example is stamped with the version a board without aliases has,
+    /// and loads; so does a copy with every `aliases` removed, as a 0.7.0 board reads.
+    #[test]
+    fn an_aliased_board_needs_no_new_schema_version() {
+        assert_eq!(
+            ProjectConfig::default_for("demo").required_schema_version(),
+            5
+        );
+        for (strip, name) in [(false, "schema-with"), (true, "schema-without")] {
+            let dir = example_board(name, strip);
+            let store = crate::store::Store::new(dir.clone());
+            let project = store.load("demo").unwrap();
+            assert_eq!(project.config.schema_version, 5);
+            assert_eq!(
+                project.config.schema_version,
+                project.config.required_schema_version()
+            );
+            assert_eq!(project.features.len(), 2);
+            let with = project.features.iter().any(|f| !f.aliases.is_empty());
+            assert_eq!(with, !strip, "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

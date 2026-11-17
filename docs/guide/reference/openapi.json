@@ -7164,6 +7164,52 @@
         ],
         "type": "object"
       },
+      "Recode": {
+        "description": "One rename of a bulk recode: the item `from` becomes `to`.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind",
+          "title"
+        ],
+        "type": "object"
+      },
+      "RecodePlan": {
+        "description": "What a bulk recode would do, and the revision that names it: confirming applies exactly this.",
+        "properties": {
+          "renames": {
+            "items": {
+              "$ref": "#/components/schemas/Recode"
+            },
+            "type": "array"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "renames",
+          "rev"
+        ],
+        "type": "object"
+      },
       "RecordCounts": {
         "description": "Other records.",
         "properties": {
@@ -12773,6 +12819,47 @@
           }
         },
         "summary": "What can start now, task by task (FTR-060): the tasks in progress, the tasks free to start with their critical-path mark and remaining chain, why each other open task waits, and with lanes up to that many ready tasks that can start together, critical path first"
+      }
+    },
+    "/api/projects/{project}/recode": {
+      "get": {
+        "operationId": "getProjectsRecode",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecodePlan"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What a bulk recode would do, with nothing changed (FTR-056): each item whose code's prefix is not its kind's, with the code it would become, and the plan's revision. Applying it is the person's `POST` with that revision"
       }
     },
     "/api/projects/{project}/releases": {

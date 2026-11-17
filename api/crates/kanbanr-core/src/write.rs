@@ -1746,4 +1746,92 @@ mod tests {
         assert!(e.to_string().contains("write path"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// FTR-056 R-7: a recode plan is the person's, in every mode. Claude, in the conversation or
+    /// under a delegation, is refused the route and nothing changes; the person's terminal and the
+    /// monitor apply it, as one commit with a trailer per new code, and a stale plan is refused.
+    #[test]
+    fn claude_cannot_apply_a_recode_plan() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-write-recode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        let write = |origin: Origin, m: &str, p: &str, b: Value| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Auto,
+                m,
+                p,
+                Some(&b),
+                None,
+                &eventing::NullSender,
+                &ProcessScope::Unscoped,
+                origin,
+            )
+        };
+        let t = Origin::Terminal;
+        write(t, "POST", "/projects", json!({"name": "demo"})).unwrap();
+        write(
+            t,
+            "POST",
+            "/projects/demo/milestones",
+            json!({"name": "M", "code": "M"}),
+        )
+        .unwrap();
+        for title in ["one", "two"] {
+            write(
+                t,
+                "POST",
+                "/projects/demo/features",
+                json!({"title": title, "milestone": "M", "kind": "bug"}),
+            )
+            .unwrap();
+        }
+        // Codes are configured after the items exist, so the first is the mismatched one.
+        write(
+            t,
+            "PUT",
+            "/projects/demo/config/codes",
+            json!({"set": {"bug": "DEF"}}),
+        )
+        .unwrap();
+        write(
+            t,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "three", "milestone": "M", "kind": "bug"}),
+        )
+        .unwrap();
+        let plan = crate::aliases::recode_plan(&store.load("demo").unwrap());
+        assert_eq!(plan.renames.len(), 2, "{plan:?}");
+        let route = "/projects/demo/recode";
+        let before = head(&dir);
+        for o in [Origin::Conversation, Origin::Delegated] {
+            let e = write(o, "POST", route, json!({"rev": plan.rev})).unwrap_err();
+            assert!(
+                e.to_string().contains("recode is the person's own"),
+                "{o:?}: {e}"
+            );
+        }
+        assert_eq!(head(&dir), before, "refused: no commit");
+        assert!(
+            store.load("demo").unwrap().feature("DEF-002").is_err(),
+            "nothing renamed"
+        );
+        // A stale plan is refused for the person too.
+        assert!(write(t, "POST", route, json!({"rev": "0000"})).is_err());
+        assert_eq!(head(&dir), before);
+        write(Origin::Monitor, "POST", route, json!({"rev": plan.rev})).unwrap();
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        let to = &plan.renames[0].to;
+        assert!(
+            log.contains("recode 2 items to their kinds' prefixes"),
+            "{log}"
+        );
+        assert!(log.contains(&format!("kanbanr:{to}")), "{log}");
+        assert!(log.contains("Kanbanr-Origin: monitor"), "{log}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
