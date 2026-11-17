@@ -8658,6 +8658,64 @@ pub(crate) mod tests {
         clean(&dir, &repo);
     }
 
+    /// FTR-039 R-4: a requirement whose only open test is a judgement (manual) test is asked at
+    /// the cut, among the requirements accepted untested; once its judgement is green it is not.
+    /// This was already true at main (981eec4): the test pins it, so it was not seen red first.
+    #[test]
+    fn an_open_judgement_test_is_asked_at_the_cut() {
+        let (store, dir, repo) = board_and_repo("ftr039-judgement-cut");
+        let code = store
+            .add_feature("shop", "Notes", "", "M", None)
+            .unwrap()
+            .code;
+        let judgement = "manual: the person judges whether the notes read clearly";
+        store
+            .set_feature_definition(
+                "shop",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Write notes".into(),
+                    requirements: vec![crate::models::Requirement {
+                        text: "THE SYSTEM SHALL write release notes".into(),
+                        tests: vec![crate::models::TestRef {
+                            name: judgement.into(),
+                            kind: "manual".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // A manual check opens once the code it checks exists (at Scheduled).
+        store
+            .move_feature_approved("shop", &code, "Scheduled", None)
+            .unwrap();
+        let asked = |store: &Store| {
+            let project = store.load("shop").unwrap();
+            let cut = project.config.cadence.cut_index();
+            super::untested(&project, std::slice::from_ref(&code), cut)
+        };
+        let u = asked(&store);
+        assert_eq!(u.len(), 1, "{u:?}");
+        assert_eq!(u[0].code, code);
+        assert_eq!(u[0].requirement, "R-1");
+        assert_eq!(u[0].tests, [judgement.to_string()]);
+        store
+            .set_test_state(
+                "shop",
+                &code,
+                "R-1",
+                judgement,
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        assert!(asked(&store).is_empty());
+        clean(&dir, &repo);
+    }
+
     // ---- DEF-043: tests checked later, and the cut's acceptance ----
 
     /// A finished item planned into v1 with R-1 proven and R-2's one test planned, checked `at`.

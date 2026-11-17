@@ -2243,10 +2243,13 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
         }
         Check::TestsGreen => {
             // A test checked later (DEF-043: after main is pushed, at the cut or at a release
-            // stage) holds that stage, not the item's gate.
+            // stage) holds that stage, not the item's gate. A judgement test never holds it: the
+            // person is asked it at the release's cut, or in a walkthrough (FTR-039 R-3).
             if !r.tests.is_empty()
                 && !r.tests.iter().any(|t| t.state == TestState::Green)
-                && r.tests.iter().any(|t| t.at.trim().is_empty())
+                && r.tests
+                    .iter()
+                    .any(|t| t.at.trim().is_empty() && !crate::judgement::is_judgement(t))
             {
                 // A walkthrough test is proved by a run, never asked of the person (FTR-037 R-6).
                 let hint = if r
@@ -3671,6 +3674,39 @@ mod tests {
         });
         let f = item(Some(FeatureDefinition {
             requirements: vec![later],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "not proven");
+    }
+
+    /// FTR-039 R-3: a requirement whose only open test is a judgement (manual) test passes the
+    /// item's `TestsGreen`; with a manual and a planned unit test it still waits for the unit test.
+    #[test]
+    fn a_judgement_test_never_holds_an_items_gate() {
+        let mut judged = requirement(
+            "R-3",
+            "reads",
+            &[(
+                "manual: the person judges whether the page reads clearly",
+                TestState::Planned,
+            )],
+        );
+        judged.tests[0].kind = "manual".into();
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![judged.clone()],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        judged.tests.push(TestRef {
+            name: "page::renders".into(),
+            kind: "unit".into(),
+            ..Default::default()
+        });
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![judged],
             ..Default::default()
         }));
         let gaps = evaluate(&f, None, &[Check::TestsGreen]);
