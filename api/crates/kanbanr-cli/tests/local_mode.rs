@@ -11347,7 +11347,10 @@ fn release_promote_plan_names_the_unmerged_items() {
     assert!(said.contains("items_merged"), "{said}");
     assert!(said.contains(&format!("{behind} is at Planned")), "{said}");
     assert!(
-        said.contains(&format!("{behind}: move it to Completed")),
+        said.contains(&format!(
+            "{behind} is at Planned: integrate it into release/v1.0.0 with \
+             `kanbanr feature move {behind} \"Completed\"`"
+        )),
         "{said}"
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -11400,6 +11403,65 @@ fn release_stage_accepts_items_merged_and_after() {
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-077 R-4: under the git model, `release stages` shows the `items_merged` kanbanr asks of the
+/// stage that moves main as "(implied)", and `--json` carries it as `implied`.
+#[test]
+fn release_stages_show_the_implied_items_merged() {
+    let (base, work) = release_scratch("implied-stages");
+    assert!(base.starts_with(std::env::temp_dir()), "{}", base.display());
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // This board's shape: candidate asks nothing, main moves main, production tags.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "cadence",
+            "--git-model",
+            "on",
+            "--release-stages",
+            "candidate,main,production",
+        ],
+    ));
+    for args in [
+        &["candidate", "--on-enter", "branch"][..],
+        &[
+            "main",
+            "--requires",
+            "items_finished",
+            "--on-enter",
+            "move_main",
+        ][..],
+        &["production", "--on-enter", "tag"][..],
+    ] {
+        let mut all = vec!["config", "release-stage"];
+        all.extend_from_slice(args);
+        ok(run_in(&base, &work, &all));
+    }
+    let stages = ok(run_in(&base, &work, &["release", "stages"]));
+    let row = |name: &str| {
+        stages
+            .lines()
+            .find(|l| l.starts_with(&format!("{name} ")))
+            .unwrap_or_else(|| panic!("no {name} row: {stages}"))
+            .to_string()
+    };
+    assert!(
+        row("main").contains("items_finished, items_merged (implied)"),
+        "{stages}"
+    );
+    assert!(!row("candidate").contains("items_merged"), "{stages}");
+    assert!(!row("production").contains("items_merged"), "{stages}");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "release", "stages"]))).unwrap();
+    assert_eq!(json[1]["implied"], serde_json::json!(["items_merged"]));
+    assert!(json[0].get("implied").is_none(), "{json}");
     let _ = std::fs::remove_dir_all(&base);
 }
 

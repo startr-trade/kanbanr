@@ -12899,9 +12899,14 @@ fn print_release_plan(
         for c in &conditions {
             let holds = c["holds"] == true;
             println!(
-                "    {} {} ({}): {}{}",
+                "    {} {}{} ({}): {}{}",
                 if holds { "✓" } else { "✗" },
                 c["check"].as_str().unwrap_or_default(),
+                if c["implied"] == true {
+                    " (implied)"
+                } else {
+                    ""
+                },
                 c["stage"].as_str().unwrap_or_default(),
                 c["detail"].as_str().unwrap_or_default(),
                 c["fix"]
@@ -13060,6 +13065,15 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         if let Some(after) = s["after"].as_array().filter(|a| !a.is_empty()) {
             let after: Vec<&str> = after.iter().filter_map(Value::as_str).collect();
             let text = format!("after {}", after.join(", "));
+            requires = if requires == "—" {
+                text
+            } else {
+                format!("{requires}, {text}")
+            };
+        }
+        // The checks kanbanr asks of the stage beyond its own, last (DEF-077).
+        for c in s["implied"].as_array().into_iter().flatten() {
+            let text = format!("{} (implied)", c.as_str().unwrap_or_default());
             requires = if requires == "—" {
                 text
             } else {
