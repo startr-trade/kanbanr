@@ -24,7 +24,7 @@
 use anyhow::{Result, anyhow};
 pub use kanbanr_core::git::PushPolicy;
 use kanbanr_core::git::SyncOutcome;
-use kanbanr_core::{Store, activity, agentscope, dispatch, eventing, git};
+use kanbanr_core::{Store, activity, agentscope, dispatch, eventing, git, writejournal};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -130,8 +130,13 @@ impl Backend {
             &self.data_dir,
             "`kanbanr migrate` writes outside the board's write path",
         )?;
-        kanbanr_core::migrate::run(&self.store, &self.data_dir, self.push)
-            .map_err(|e| anyhow!(e.to_string()))
+        let report = kanbanr_core::migrate::run(&self.store, &self.data_dir, self.push)
+            .map_err(|e| anyhow!(e.to_string()))?;
+        // The commit could not be made and the files were put back: run it again (DEF-102).
+        if let Some(problem) = &report.problem {
+            return Err(anyhow!(problem.clone()));
+        }
+        Ok(report)
     }
 
     /// A read that needs the project's code repository (FEAT-189: the git model reads its
@@ -192,6 +197,11 @@ impl Backend {
     /// releases it if the process dies. Reads (`get`) are intentionally not locked.
     fn with_write_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
         kanbanr_core::write::with_lock(&self.data_dir, f).map_err(|e| {
+            // Another write held the board for the whole wait: its own text names the holder
+            // (DEF-102).
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                return anyhow!(e.to_string());
+            }
             anyhow!(
                 "could not take the write lock in {}: {e}",
                 self.data_dir.display()
@@ -245,7 +255,7 @@ impl Backend {
             dir,
         )
         .map_err(|e| anyhow!(e.to_string()))?;
-        for w in &applied.push_failures {
+        for w in applied.push_failures.iter().chain(&applied.warnings) {
             eprintln!("kanbanr: {w}");
         }
         if let (false, Some(project)) = (dry_run, project_of(path)) {
@@ -365,7 +375,7 @@ impl Backend {
             )
         }
         .map_err(|e| anyhow!(e.to_string()))?;
-        for w in &applied.push_failures {
+        for w in applied.push_failures.iter().chain(&applied.warnings) {
             eprintln!("kanbanr: {w}");
         }
         Ok(applied.body)
@@ -406,19 +416,61 @@ impl Backend {
             "`kanbanr doc add` of a file that is not text writes outside the board's write path",
         )?;
         git::ensure_repo(&self.data_dir);
+        // A write that died before its commit is finished first; this one is journalled, and
+        // committed or put back (DEF-102).
+        if let writejournal::Recovery::RolledBack { op, paths } =
+            writejournal::recover(&self.data_dir).map_err(|e| {
+                anyhow!(
+                    "an earlier write stopped before its commit, and its changes could not be \
+                     put back ({e}); nothing was changed"
+                )
+            })?
+        {
+            eprintln!(
+                "kanbanr: an earlier write (`{op}`) stopped before its commit; its changes were \
+                 put back: {}",
+                paths.join(", ")
+            );
+        }
         git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
-        let saved = self
-            .store
-            .write_doc_bytes(project, rel, bytes)
-            .map_err(|e| anyhow!(e.to_string()))?;
+        let before = git::changed_paths(&self.data_dir);
+        writejournal::begin(
+            &self.data_dir,
+            &writejournal::Journal {
+                version: 1,
+                pid: std::process::id(),
+                started_at: kanbanr_core::now_rfc3339(),
+                head: git::head_commit(&self.data_dir).unwrap_or_default(),
+                op: format!("PUT /projects/{project}/docs/{rel}"),
+                dirty_before: before.clone(),
+            },
+        )
+        .map_err(|e| {
+            anyhow!("the write journal could not be written ({e}); nothing was changed")
+        })?;
+        let saved = match self.store.write_doc_bytes(project, rel, bytes) {
+            Ok(saved) => saved,
+            Err(e) => {
+                let changed: Vec<String> = git::changed_paths(&self.data_dir)
+                    .into_iter()
+                    .filter(|p| !before.contains(p))
+                    .collect();
+                if git::restore_to_head(&self.data_dir, &changed).is_ok() {
+                    writejournal::end(&self.data_dir);
+                }
+                return Err(anyhow!(e.to_string()));
+            }
+        };
         let msg = format!("add document asset {saved}");
         let actor = git::identity(&self.data_dir)
             .map(|(n, _)| n)
             .unwrap_or_else(|| "kanbanr".into());
         activity::append(&self.data_dir, project, &actor, &msg, None);
         kanbanr_core::writer::stamp(&self.data_dir);
-        let committed = git::commit_local(&self.data_dir, &msg); // architecture: allowed because gated by outside_core_refusal
-        if committed {
+        let committed = kanbanr_core::write::commit_or_restore(&self.data_dir, &msg, &before) // architecture: allowed because gated by outside_core_refusal
+            .map_err(|e| anyhow!(e.to_string()))?;
+        writejournal::end(&self.data_dir);
+        if committed.is_some() {
             self.after_commit();
         }
         Ok(saved)

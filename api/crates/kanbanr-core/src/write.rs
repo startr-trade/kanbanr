@@ -15,6 +15,7 @@ use crate::git::{self, PushPolicy};
 use crate::origin::{self, DecisionContext, Origin, Taker, Verdict};
 use crate::{
     CoreError, Store, activity, decisions, dispatch, eventing, passes, prepared, reviewgroups,
+    writejournal,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -25,6 +26,9 @@ use std::path::Path;
 pub struct Applied {
     pub body: String,
     pub push_failures: Vec<String>,
+    /// What the write has to say beside its answer (DEF-102): an earlier write it put back, files
+    /// changed outside kanbanr that its commit took. Also in the answer's `warnings`.
+    pub warnings: Vec<String>,
 }
 
 /// Why a write did not happen. The operation's own failure keeps core's error, so a front end that
@@ -35,13 +39,19 @@ pub enum WriteError {
     Core(CoreError),
     /// Refused before dispatch ran: nobody can author the commit, or the lock could not be taken.
     Refused(String),
+    /// The board's commit could not be made, so the write was undone (DEF-102).
+    NotCommitted(String),
+    /// Another kanbanr write held the board for the whole wait (DEF-102).
+    Busy(String),
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WriteError::Core(e) => e.fmt(f),
-            WriteError::Refused(why) => f.write_str(why),
+            WriteError::Refused(why) | WriteError::NotCommitted(why) | WriteError::Busy(why) => {
+                f.write_str(why)
+            }
         }
     }
 }
@@ -49,33 +59,200 @@ impl std::fmt::Display for WriteError {
 impl std::error::Error for WriteError {}
 
 impl WriteError {
-    /// The HTTP status: core's for an operation that failed, 400 for a write refused up front.
+    /// The HTTP status: core's for an operation that failed, 400 for a write refused up front, 503
+    /// for a write that could not commit or could not take the board (DEF-102).
     pub fn status(&self) -> u16 {
         match self {
             WriteError::Core(e) => e.status(),
             WriteError::Refused(_) => 400,
+            WriteError::NotCommitted(_) | WriteError::Busy(_) => 503,
         }
     }
 }
 
-/// A fault point of the write recipe (DEF-102). T4 gives it its body; until then it does nothing.
-pub(crate) fn fault(_step: &str) {}
+/// How long a write waits for the board's write lock (DEF-102). `KANBANR_LOCK_WAIT_SECS`
+/// overrides it.
+pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Run `f` holding the board's exclusive advisory write lock (FEAT-029). The OS releases it if the
-/// process dies. Reads are intentionally not locked.
-pub fn with_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T> {
+/// The wait in force: `LOCK_WAIT` unless `KANBANR_LOCK_WAIT_SECS` names another.
+fn lock_wait() -> std::time::Duration {
+    std::env::var("KANBANR_LOCK_WAIT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(LOCK_WAIT, std::time::Duration::from_secs)
+}
+
+/// Who holds the board's write lock, written into the lock file once it is held (DEF-102). It
+/// names the method and path only, never a body.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Holder {
+    pub pid: u32,
+    pub op: String,
+    pub since: String,
+}
+
+impl Holder {
+    /// "pid 1234, `PUT …`, since 23:18:27Z".
+    fn describe(&self) -> String {
+        let since = self
+            .since
+            .split_once('T')
+            .map_or(self.since.as_str(), |(_, t)| t);
+        format!("pid {}, `{}`, since {since}", self.pid, self.op)
+    }
+}
+
+/// The steps of the write recipe a debug build can be stopped at (DEF-102), in order.
+pub(crate) const FAULT_STEPS: [&str; 7] = [
+    "locked",
+    "journal",
+    "files",
+    "activity",
+    "staged",
+    "committed",
+    "done",
+];
+
+/// A fault point of the write recipe (DEF-102): a debug build with `KANBANR_FAULT=<step>` aborts
+/// here, as a killed process would. The release build has no such path.
+pub(crate) fn fault(step: &str) {
+    debug_assert!(FAULT_STEPS.contains(&step), "unknown fault step {step}");
+    if cfg!(debug_assertions) && std::env::var("KANBANR_FAULT").as_deref() == Ok(step) {
+        std::process::abort()
+    }
+}
+
+/// Run `f` holding the board's exclusive advisory write lock (FEAT-029), waiting at most `wait`
+/// for it (DEF-102). Once held, the lock file names this write (`op` is its method and path); a
+/// write that gives up names the one holding it. The OS releases the lock if the process dies, and
+/// the file is never removed. Reads are intentionally not locked.
+pub fn with_lock_for<T>(
+    data_dir: &Path,
+    wait: std::time::Duration,
+    op: &str,
+    f: impl FnOnce() -> T,
+) -> Result<T, WriteError> {
     use fs2::FileExt;
+    use std::io::Write as _;
     let lock_path = data_dir.join(git::WRITE_LOCK_FILE);
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        // The lock file holds no content; never truncate it.
+        // Never truncated before the lock is held: the holder's name is in it.
         .truncate(false)
-        .open(&lock_path)?;
-    file.lock_exclusive()?;
+        .open(&lock_path)
+        .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?;
+    let started = std::time::Instant::now();
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(_) if started.elapsed() < wait => {
+                let left = wait.saturating_sub(started.elapsed());
+                std::thread::sleep(std::time::Duration::from_millis(50).min(left));
+            }
+            Err(_) => {
+                let holder = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<Holder>(&t).ok())
+                    .map_or_else(|| "a kanbanr process".to_string(), |h| h.describe());
+                return Err(WriteError::Busy(format!(
+                    "the board is busy: another kanbanr write ({holder}) has held it for \
+                     {wait:?}; nothing was changed. Run the command again, or check that process"
+                )));
+            }
+        }
+    }
+    let me = Holder {
+        pid: std::process::id(),
+        op: op.to_string(),
+        since: crate::now_rfc3339(),
+    };
+    if let Ok(text) = serde_json::to_vec(&me) {
+        let _ = file
+            .set_len(0)
+            .and_then(|()| file.write_all(&text))
+            .and_then(|()| file.sync_data());
+    }
     let result = f();
     let _ = file.unlock();
     Ok(result)
+}
+
+/// Run `f` holding the board's write lock, waiting at most [`LOCK_WAIT`] (for `migrate`, `sync`
+/// and `push_pending`). A wait that runs out is `WouldBlock`, carrying the busy message.
+pub fn with_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T> {
+    with_lock_for(data_dir, lock_wait(), "kanbanr", f).map_err(|e| match e {
+        WriteError::Busy(why) => std::io::Error::new(std::io::ErrorKind::WouldBlock, why),
+        other => std::io::Error::other(other.to_string()),
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test seam: the commit's wait for git's locks, in place of `COMMIT_WAIT`.
+    static COMMIT_WAIT_HERE: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+    /// A test seam: the dispatch fails after it has written its files.
+    static FAIL_AFTER_DISPATCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The paths changed now that were not changed in `before`.
+fn changed_since(data_dir: &Path, before: &[String]) -> Vec<String> {
+    git::changed_paths(data_dir)
+        .into_iter()
+        .filter(|p| !before.contains(p))
+        .collect()
+}
+
+/// Put back what this write changed (every changed path not in `before`) and end its journal.
+/// When the files cannot be put back the journal is kept, so the next write puts them back.
+fn undo(data_dir: &Path, before: &[String]) -> Result<(), git2::Error> {
+    git::restore_to_head(data_dir, &changed_since(data_dir, before))?;
+    writejournal::end(data_dir);
+    Ok(())
+}
+
+/// Commit the write (DEF-102). If the commit cannot be made, the write's own changes are put back
+/// and its journal ended, and the answer says nothing was changed; if even that fails, the journal
+/// is kept for the next write to finish.
+pub fn commit_or_restore(
+    data_dir: &Path,
+    msg: &str,
+    before: &[String],
+) -> Result<Option<git2::Oid>, WriteError> {
+    #[cfg(test)]
+    let committed = match COMMIT_WAIT_HERE.with(std::cell::Cell::get) {
+        Some(wait) => git::commit_write_within(data_dir, msg, wait),
+        None => git::commit_write(data_dir, msg),
+    };
+    #[cfg(not(test))]
+    let committed = git::commit_write(data_dir, msg);
+    committed.map_err(|e| match undo(data_dir, before) {
+        Ok(()) => WriteError::NotCommitted(format!(
+            "nothing was changed: the board's commit could not be made ({e}). Run the command \
+             again"
+        )),
+        Err(err) => WriteError::NotCommitted(format!(
+            "the board's commit could not be made ({e}), and the files could not be put back \
+             ({err}): the next write will put them back. Run the command again"
+        )),
+    })
+}
+
+/// Add `warning` to the answer's `warnings` when the answer is a JSON object.
+fn push_warning(body: &mut String, warning: &str) {
+    if let Ok(Value::Object(mut m)) = serde_json::from_str::<Value>(body) {
+        match m.get_mut("warnings") {
+            Some(Value::Array(w)) => w.push(Value::String(warning.to_string())),
+            _ => {
+                m.insert(
+                    "warnings".into(),
+                    Value::Array(vec![Value::String(warning.to_string())]),
+                );
+            }
+        }
+        *body = Value::Object(m).to_string();
+    }
 }
 
 /// Apply one data-route write: the whole recipe, under the lock. `method` is POST/PUT/PATCH/DELETE;
@@ -222,9 +399,30 @@ pub fn apply_as(
     scope: &ProcessScope,
     origin: Origin,
 ) -> Result<Applied, WriteError> {
-    with_lock(data_dir, || {
+    let op = format!("{method} {path}");
+    with_lock_for(data_dir, lock_wait(), &op, || {
+        fault("locked");
         git::ensure_repo(data_dir);
         let records = dispatch::is_mutation(method) && !dispatch::is_dry_run(body);
+        // A write that died before its commit is finished first, before the scope checks, so its
+        // leftovers never get a scoped agent refused (DEF-102).
+        let mut warnings: Vec<String> = Vec::new();
+        if records {
+            match writejournal::recover(data_dir) {
+                Ok(writejournal::Recovery::RolledBack { op, paths }) => warnings.push(format!(
+                    "an earlier write (`{op}`) stopped before its commit; its changes were put \
+                     back: {}",
+                    paths.join(", ")
+                )),
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(WriteError::Refused(format!(
+                        "an earlier write stopped before its commit, and its changes could not \
+                         be put back ({e}); nothing was changed"
+                    )));
+                }
+            }
+        }
         let mut held_body: Option<Value> = None;
         let scoped = match scope {
             ProcessScope::Scoped(s) => Some(s),
@@ -288,250 +486,333 @@ pub fn apply_as(
             }
             git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
-        let body = held_body.as_ref().or(body);
-        // A whole batch of prepared records confirmed at once (FTR-037): each record expands into
-        // its verdict's own route and goes through as a direct verdict would, all in one commit.
-        if let Some((project, batch, action)) = prepared::batch_route(method, path)
-            && action == "confirm"
-        {
-            return confirm_batch(
-                store, data_dir, policy, &project, &batch, path, body, repo, sender, scope, origin,
-            );
-        }
-        // One decision for several rows of a Review group (FTR-038): each row's own verdict,
-        // through its own route, all in one commit.
-        if let Some(project) = reviewgroups::decide_route(method, path) {
-            return decide_group(
-                store, data_dir, policy, &project, path, body, repo, sender, scope, origin,
-            );
-        }
-        // Who may take a verdict is decided here, under the lock, by the one guard, against the
-        // project's decision mode and delegations (FTR-028): a revoke and a delegated verdict are
-        // ordered by the lock. Answering a prepared record is the person's alone (FTR-034).
-        let mut under = if records {
-            judge(store, method, path, body, origin)?
-        } else {
-            None
-        };
-        // A confirmation becomes the verdict it prepares, before the origin is stamped, so from
-        // here on it is exactly what a direct verdict is.
-        let mut expanded: Option<(String, prepared::Expanded)> = None;
-        if let Some((project, id, action)) = prepared::answer_route(method, path)
-            && action == "confirm"
-        {
-            let e = prepared::expand(store, &project, &id, body.unwrap_or(&Value::Null), origin)
-                .map_err(WriteError::Core)?;
-            expanded = Some((project, e));
-        }
-        // A manual test's result is a person's check (DEF-040): refused to Claude here, for the
-        // tests route and for a batch alike, before anything is written.
-        if let Some(v) = origin::guarded_verdict(store, method, path, body)
-            && let Some(why) = origin::verdict_refusal(
-                v,
-                Taker::of_origin(origin),
-                &DecisionContext {
-                    origin: Some(origin),
-                    ..DecisionContext::monitor_mode()
+        // What was already changed before this write, kept out of what it undoes; and the journal
+        // that lets the next write finish this one if it dies (DEF-102).
+        let before = if records {
+            let before = git::changed_paths(data_dir);
+            writejournal::begin(
+                data_dir,
+                &writejournal::Journal {
+                    version: 1,
+                    pid: std::process::id(),
+                    started_at: crate::now_rfc3339(),
+                    head: git::head_commit(data_dir).unwrap_or_default(),
+                    op: op.clone(),
+                    dirty_before: before.clone(),
                 },
             )
-        {
-            return Err(WriteError::Refused(format!("refused: {why}")));
-        }
-        // Another item's approved spec is not Claude's to edit outside a proposed change
-        // (DEF-050): refused here, under the lock, before anything is written.
-        if records
-            && let Some(why) = origin::guarded_spec_edit(
-                store,
-                method,
-                path,
-                body,
-                Taker::of_origin(origin),
-                (Taker::of_origin(origin) == Taker::Claude
-                    && (method == "PATCH" || path.ends_with("/batch")))
-                .then(|| project_of(path).and_then(|p| current_item(store, &p, scope, repo)))
-                .flatten()
-                .as_deref(),
-            )
-        {
-            return Err(WriteError::Refused(why));
-        }
-        let (method, path, body) = match &expanded {
-            Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
-            None => (method, path, body),
+            .map_err(|e| {
+                WriteError::Refused(format!(
+                    "the write journal could not be written ({e}); nothing was changed"
+                ))
+            })?;
+            fault("journal");
+            before
+        } else {
+            Vec::new()
         };
-        if expanded.is_some() {
-            under = judge(store, method, path, body, origin)?;
-        }
-        // The front end names where a verdict was taken, never the request (DEF-028). A verdict
-        // taken under a delegation is Claude's, recorded as delegated and naming its delegation,
-        // whatever the request said.
-        let mut stamped = origin::stamp(method, path, body, origin);
-        let origin = match &under {
-            // The person's answer in the conversation (FTR-035): Claude records it, the person
-            // decided it; `by` stays the commit identity the request named, and the answer, the
-            // pass and the question go on the record.
-            Some(Under::Pass(pass)) => {
-                let mut b = stamped.take().unwrap_or_else(|| {
-                    body.cloned()
-                        .unwrap_or_else(|| Value::Object(Default::default()))
-                });
-                if let Some(m) = b.as_object_mut() {
-                    m.insert(
-                        "origin".into(),
-                        Value::String(Origin::Conversation.as_str().into()),
-                    );
-                    m.insert(
-                        "heard".into(),
-                        serde_json::to_value(crate::models::Heard {
-                            question: pass.question.clone(),
-                            answer: pass.answer.clone(),
-                            pass: pass.id.clone(),
-                            heard_at: pass.at.clone(),
-                            tool_use_id: pass.tool_use_id.clone(),
-                            session_id: pass.session_id.clone(),
-                            extra: Default::default(),
-                        })
-                        .unwrap_or(Value::Null),
-                    );
+        let result = (|| -> Result<Applied, WriteError> {
+            let body = held_body.as_ref().or(body);
+            // A whole batch of prepared records confirmed at once (FTR-037): each record expands into
+            // its verdict's own route and goes through as a direct verdict would, all in one commit.
+            if let Some((project, batch, action)) = prepared::batch_route(method, path)
+                && action == "confirm"
+            {
+                return confirm_batch(
+                    store, data_dir, policy, &project, &batch, path, body, repo, sender, scope,
+                    origin, &before,
+                );
+            }
+            // One decision for several rows of a Review group (FTR-038): each row's own verdict,
+            // through its own route, all in one commit.
+            if let Some(project) = reviewgroups::decide_route(method, path) {
+                return decide_group(
+                    store, data_dir, policy, &project, path, body, repo, sender, scope, origin,
+                    &before,
+                );
+            }
+            // Who may take a verdict is decided here, under the lock, by the one guard, against the
+            // project's decision mode and delegations (FTR-028): a revoke and a delegated verdict are
+            // ordered by the lock. Answering a prepared record is the person's alone (FTR-034).
+            let mut under = if records {
+                judge(store, method, path, body, origin)?
+            } else {
+                None
+            };
+            // A confirmation becomes the verdict it prepares, before the origin is stamped, so from
+            // here on it is exactly what a direct verdict is.
+            let mut expanded: Option<(String, prepared::Expanded)> = None;
+            if let Some((project, id, action)) = prepared::answer_route(method, path)
+                && action == "confirm"
+            {
+                let e =
+                    prepared::expand(store, &project, &id, body.unwrap_or(&Value::Null), origin)
+                        .map_err(WriteError::Core)?;
+                expanded = Some((project, e));
+            }
+            // A manual test's result is a person's check (DEF-040): refused to Claude here, for the
+            // tests route and for a batch alike, before anything is written.
+            if let Some(v) = origin::guarded_verdict(store, method, path, body)
+                && let Some(why) = origin::verdict_refusal(
+                    v,
+                    Taker::of_origin(origin),
+                    &DecisionContext {
+                        origin: Some(origin),
+                        ..DecisionContext::monitor_mode()
+                    },
+                )
+            {
+                return Err(WriteError::Refused(format!("refused: {why}")));
+            }
+            // Another item's approved spec is not Claude's to edit outside a proposed change
+            // (DEF-050): refused here, under the lock, before anything is written.
+            if records
+                && let Some(why) = origin::guarded_spec_edit(
+                    store,
+                    method,
+                    path,
+                    body,
+                    Taker::of_origin(origin),
+                    (Taker::of_origin(origin) == Taker::Claude
+                        && (method == "PATCH" || path.ends_with("/batch")))
+                    .then(|| project_of(path).and_then(|p| current_item(store, &p, scope, repo)))
+                    .flatten()
+                    .as_deref(),
+                )
+            {
+                return Err(WriteError::Refused(why));
+            }
+            let (method, path, body) = match &expanded {
+                Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
+                None => (method, path, body),
+            };
+            if expanded.is_some() {
+                under = judge(store, method, path, body, origin)?;
+            }
+            // The front end names where a verdict was taken, never the request (DEF-028). A verdict
+            // taken under a delegation is Claude's, recorded as delegated and naming its delegation,
+            // whatever the request said.
+            let mut stamped = origin::stamp(method, path, body, origin);
+            let origin = match &under {
+                // The person's answer in the conversation (FTR-035): Claude records it, the person
+                // decided it; `by` stays the commit identity the request named, and the answer, the
+                // pass and the question go on the record.
+                Some(Under::Pass(pass)) => {
+                    let mut b = stamped.take().unwrap_or_else(|| {
+                        body.cloned()
+                            .unwrap_or_else(|| Value::Object(Default::default()))
+                    });
+                    if let Some(m) = b.as_object_mut() {
+                        m.insert(
+                            "origin".into(),
+                            Value::String(Origin::Conversation.as_str().into()),
+                        );
+                        m.insert(
+                            "heard".into(),
+                            serde_json::to_value(crate::models::Heard {
+                                question: pass.question.clone(),
+                                answer: pass.answer.clone(),
+                                pass: pass.id.clone(),
+                                heard_at: pass.at.clone(),
+                                tool_use_id: pass.tool_use_id.clone(),
+                                session_id: pass.session_id.clone(),
+                                extra: Default::default(),
+                            })
+                            .unwrap_or(Value::Null),
+                        );
+                    }
+                    stamped = Some(b);
+                    Origin::Conversation
                 }
-                stamped = Some(b);
-                Origin::Conversation
-            }
-            Some(Under::Delegation(delegation)) => {
-                let mut b = stamped.take().unwrap_or_else(|| {
-                    body.cloned()
-                        .unwrap_or_else(|| Value::Object(Default::default()))
-                });
-                if let Some(m) = b.as_object_mut() {
-                    m.insert(
-                        "origin".into(),
-                        Value::String(Origin::Delegated.as_str().into()),
-                    );
-                    m.insert("by".into(), Value::String("Claude".into()));
-                    m.insert("delegation".into(), Value::String(delegation.clone()));
+                Some(Under::Delegation(delegation)) => {
+                    let mut b = stamped.take().unwrap_or_else(|| {
+                        body.cloned()
+                            .unwrap_or_else(|| Value::Object(Default::default()))
+                    });
+                    if let Some(m) = b.as_object_mut() {
+                        m.insert(
+                            "origin".into(),
+                            Value::String(Origin::Delegated.as_str().into()),
+                        );
+                        m.insert("by".into(), Value::String("Claude".into()));
+                        m.insert("delegation".into(), Value::String(delegation.clone()));
+                    }
+                    stamped = Some(b);
+                    Origin::Delegated
                 }
-                stamped = Some(b);
-                Origin::Delegated
+                None => origin,
+            };
+            let body = stamped.as_ref().or(body);
+            let verdict = origin::is_verdict_route(method, path);
+            let out =
+                dispatch::dispatch_in(store, method, path, body, repo).map_err(WriteError::Core)?;
+            #[cfg(test)]
+            if FAIL_AFTER_DISPATCH.with(std::cell::Cell::get) {
+                return Err(WriteError::Core(CoreError::Unsupported(
+                    "test: the dispatch failed after writing its files".into(),
+                )));
             }
-            None => origin,
-        };
-        let body = stamped.as_ref().or(body);
-        let verdict = origin::is_verdict_route(method, path);
-        let out =
-            dispatch::dispatch_in(store, method, path, body, repo).map_err(WriteError::Core)?;
-        let mut applied = Applied {
-            body: out,
-            ..Default::default()
-        };
-        // The pass was used, whether the answer was recorded now or had been already (FTR-035).
-        if let Some(Under::Pass(pass)) = &under
-            && let Err(e) = passes::consume(store, &pass.id)
-        {
-            let warning = format!("pass {} could not be removed: {e}", pass.id);
-            if let Ok(Value::Object(mut m)) = serde_json::from_str::<Value>(&applied.body) {
-                if let Some(w) = m
-                    .entry("warnings")
-                    .or_insert_with(|| Value::Array(Vec::new()))
-                    .as_array_mut()
-                {
-                    w.push(Value::String(warning));
+            if records {
+                fault("files");
+            }
+            let mut applied = Applied {
+                body: out,
+                ..Default::default()
+            };
+            // The pass was used, whether the answer was recorded now or had been already (FTR-035).
+            if let Some(Under::Pass(pass)) = &under
+                && let Err(e) = passes::consume(store, &pass.id)
+            {
+                let warning = format!("pass {} could not be removed: {e}", pass.id);
+                if let Ok(Value::Object(mut m)) = serde_json::from_str::<Value>(&applied.body) {
+                    if let Some(w) = m
+                        .entry("warnings")
+                        .or_insert_with(|| Value::Array(Vec::new()))
+                        .as_array_mut()
+                    {
+                        w.push(Value::String(warning));
+                    }
+                    applied.body = Value::Object(m).to_string();
                 }
-                applied.body = Value::Object(m).to_string();
             }
-        }
-        // A verdict that adds nothing to the record leaves no activity entry, event or commit.
-        if verdict && applied.body.contains("\"already_recorded\"") {
-            let said = serde_json::from_str::<Value>(&applied.body)
-                .ok()
-                .is_some_and(|v| v.get("already_recorded").is_some());
-            if said {
-                return Ok(applied);
+            // A verdict that adds nothing to the record leaves no activity entry, event or commit.
+            if verdict && applied.body.contains("\"already_recorded\"") {
+                let said = serde_json::from_str::<Value>(&applied.body)
+                    .ok()
+                    .is_some_and(|v| v.get("already_recorded").is_some());
+                if said {
+                    return Ok(applied);
+                }
             }
-        }
-        // The verdict stands; now keep the person's answer beside what Claude prepared, in the
-        // same commit. If that fails the verdict is still theirs, and the record reads stale.
-        if let Some((project, e)) = &expanded {
-            let mut v: Value = serde_json::from_str(&applied.body)
-                .unwrap_or_else(|_| Value::Object(Default::default()));
-            if let Value::Object(m) = &mut v {
-                m.insert("prepared".into(), Value::String(e.resolution.id.clone()));
-                if let Err(err) = prepared::resolve(store, project, &e.resolution) {
-                    let warning = Value::String(format!(
-                        "{} could not be marked confirmed: {err}",
-                        e.resolution.id
-                    ));
-                    match m.get_mut("warnings") {
-                        Some(Value::Array(w)) => w.push(warning),
-                        _ => {
-                            m.insert("warnings".into(), Value::Array(vec![warning]));
+            // The verdict stands; now keep the person's answer beside what Claude prepared, in the
+            // same commit. If that fails the verdict is still theirs, and the record reads stale.
+            if let Some((project, e)) = &expanded {
+                let mut v: Value = serde_json::from_str(&applied.body)
+                    .unwrap_or_else(|_| Value::Object(Default::default()));
+                if let Value::Object(m) = &mut v {
+                    m.insert("prepared".into(), Value::String(e.resolution.id.clone()));
+                    if let Err(err) = prepared::resolve(store, project, &e.resolution) {
+                        let warning = Value::String(format!(
+                            "{} could not be marked confirmed: {err}",
+                            e.resolution.id
+                        ));
+                        match m.get_mut("warnings") {
+                            Some(Value::Array(w)) => w.push(warning),
+                            _ => {
+                                m.insert("warnings".into(), Value::Array(vec![warning]));
+                            }
                         }
                     }
                 }
+                applied.body = v.to_string();
             }
-            applied.body = v.to_string();
-        }
-        let origin = if verdict { origin.as_str() } else { "" };
-        if records {
-            let msg = dispatch::commit_message_after(method, path, body, &applied.body);
-            let by = scoped.map(|s| s.by_agent());
-            if let Some(project) = project_of(path) {
-                let actor = git::identity(data_dir)
-                    .map(|(n, _)| n)
-                    .unwrap_or_else(|| "kanbanr".into());
-                activity::append_with(
+            let origin = if verdict { origin.as_str() } else { "" };
+            if records {
+                let msg = dispatch::commit_message_after(method, path, body, &applied.body);
+                let by = scoped.map(|s| s.by_agent());
+                if let Some(project) = project_of(path) {
+                    let actor = git::identity(data_dir)
+                        .map(|(n, _)| n)
+                        .unwrap_or_else(|| "kanbanr".into());
+                    activity::append_with(
+                        data_dir,
+                        &project,
+                        &actor,
+                        &msg,
+                        item_of(path)
+                            .or_else(|| scope_item(path, &applied.body))
+                            .as_deref(),
+                        by.as_ref(),
+                        origin,
+                    );
+                }
+                let events = eventing::record_with(
+                    store,
                     data_dir,
-                    &project,
-                    &actor,
-                    &msg,
-                    item_of(path)
-                        .or_else(|| scope_item(path, &applied.body))
-                        .as_deref(),
+                    method,
+                    path,
+                    &applied.body,
                     by.as_ref(),
                     origin,
                 );
+                // From an agent's worktree the board is never pushed — under a scope, and by the claim
+                // that binds one: the coordinator reviews and pushes.
+                let policy = match scope {
+                    ProcessScope::Unscoped => policy,
+                    _ => PushPolicy::Off,
+                };
+                // A verdict's commit says where it was taken, and under which delegation (FTR-028).
+                let mut trailers: Vec<(&str, &str)> = Vec::new();
+                if verdict {
+                    trailers.push(("Kanbanr-Origin", origin));
+                }
+                match &under {
+                    Some(Under::Delegation(d)) => trailers.push(("Kanbanr-Delegation", d.as_str())),
+                    Some(Under::Pass(p)) => trailers.push(("Kanbanr-Pass", p.id.as_str())),
+                    None => {}
+                }
+                let msg = with_outside_changes(&msg, &before, &mut applied);
+                let msg = agentscope::with_trailers(&msg, &trailers);
+                let msg = match scoped {
+                    Some(s) => agentscope::with_trailer(&msg, s),
+                    None => msg,
+                };
+                // The writer record moves in the write's own commit (FTR-036).
+                crate::writer::stamp(data_dir);
+                fault("activity");
+                // Committed, or undone and said so: nothing is pushed or delivered then (DEF-102).
+                let committed = commit_or_restore(data_dir, &msg, &before)?;
+                fault("committed");
+                writejournal::end(data_dir);
+                fault("done");
+                if committed.is_some()
+                    && let Some(outcome) = git::after_commit(data_dir, policy)
+                {
+                    applied.push_failures = outcome.failures;
+                }
+                eventing::deliver_all(data_dir, &events, sender);
             }
-            let events = eventing::record_with(
-                store,
-                data_dir,
-                method,
-                path,
-                &applied.body,
-                by.as_ref(),
-                origin,
-            );
-            // From an agent's worktree the board is never pushed — under a scope, and by the claim
-            // that binds one: the coordinator reviews and pushes.
-            let policy = match scope {
-                ProcessScope::Unscoped => policy,
-                _ => PushPolicy::Off,
-            };
-            // A verdict's commit says where it was taken, and under which delegation (FTR-028).
-            let mut trailers: Vec<(&str, &str)> = Vec::new();
-            if verdict {
-                trailers.push(("Kanbanr-Origin", origin));
+            Ok(applied)
+        })();
+        // A write that failed after its journal began leaves nothing behind (DEF-102). A commit
+        // that could not be made has already been undone.
+        let result = match result {
+            Err(e) if records && !matches!(e, WriteError::NotCommitted(_)) => {
+                let _ = undo(data_dir, &before);
+                Err(e)
             }
-            match &under {
-                Some(Under::Delegation(d)) => trailers.push(("Kanbanr-Delegation", d.as_str())),
-                Some(Under::Pass(p)) => trailers.push(("Kanbanr-Pass", p.id.as_str())),
-                None => {}
+            Ok(applied) => {
+                if records {
+                    writejournal::end(data_dir);
+                }
+                Ok(applied)
             }
-            let msg = agentscope::with_trailers(&msg, &trailers);
-            let msg = match scoped {
-                Some(s) => agentscope::with_trailer(&msg, s),
-                None => msg,
-            };
-            // The writer record moves in the write's own commit (FTR-036).
-            crate::writer::stamp(data_dir);
-            if git::commit_local(data_dir, &msg)
-                && let Some(outcome) = git::after_commit(data_dir, policy)
-            {
-                applied.push_failures = outcome.failures;
+            other => other,
+        };
+        result.map(|mut applied| {
+            warnings.append(&mut applied.warnings);
+            for w in &warnings {
+                push_warning(&mut applied.body, w);
             }
-            eventing::deliver_all(data_dir, &events, sender);
-        }
-        Ok(applied)
-    })
-    .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?
+            applied.warnings = warnings;
+            applied
+        })
+    })?
+}
+
+/// A write's commit message, naming the files changed outside kanbanr that its commit takes with
+/// it (DEF-102, Q2 A); the answer's warnings say the same. A scoped write never gets here with any:
+/// it was refused before dispatch.
+fn with_outside_changes(msg: &str, before: &[String], applied: &mut Applied) -> String {
+    if before.is_empty() {
+        return msg.to_string();
+    }
+    let line = format!(
+        "Also committed, changed outside this write: {}",
+        before.join(", ")
+    );
+    applied.warnings.push(line.clone());
+    format!("{}\n\n{line}", msg.trim_end())
 }
 
 /// Confirm every open record of a batch (FTR-037 R-5), under the lock the caller holds: the
@@ -552,6 +833,7 @@ fn confirm_batch(
     sender: &dyn eventing::WebhookSender,
     scope: &ProcessScope,
     origin: Origin,
+    before: &[String],
 ) -> Result<Applied, WriteError> {
     if let Some(why) = origin::verdict_refusal(
         Verdict::ConfirmPrepared,
@@ -600,6 +882,7 @@ fn confirm_batch(
         sender,
         scope,
         origin,
+        before,
         |outcomes| {
             let results: Vec<prepared::Resolved> = open
                 .iter()
@@ -651,6 +934,7 @@ fn apply_verdict_ops(
     sender: &dyn eventing::WebhookSender,
     scope: &ProcessScope,
     origin: Origin,
+    before: &[String],
     answer: impl FnOnce(&[OpOutcome]) -> (String, String),
 ) -> Result<Applied, WriteError> {
     let mut results = Vec::with_capacity(ops.len());
@@ -686,6 +970,7 @@ fn apply_verdict_ops(
             error: outcome.err(),
         });
     }
+    fault("files");
     let (out, msg) = answer(&results);
     let scoped = match scope {
         ProcessScope::Scoped(s) => Some(s),
@@ -717,16 +1002,23 @@ fn apply_verdict_ops(
         ProcessScope::Unscoped => policy,
         _ => PushPolicy::Off,
     };
+    let mut applied = Applied {
+        body: out,
+        ..Default::default()
+    };
+    let msg = with_outside_changes(&msg, before, &mut applied);
     let msg = agentscope::with_trailers(&msg, &[("Kanbanr-Origin", origin.as_str())]);
     let msg = match scoped {
         Some(s) => agentscope::with_trailer(&msg, s),
         None => msg,
     };
-    let mut applied = Applied {
-        body: out,
-        ..Default::default()
-    };
-    if git::commit_local(data_dir, &msg)
+    fault("activity");
+    // Committed, or undone and said so (DEF-102).
+    let committed = commit_or_restore(data_dir, &msg, before)?;
+    fault("committed");
+    writejournal::end(data_dir);
+    fault("done");
+    if committed.is_some()
         && let Some(outcome) = git::after_commit(data_dir, policy)
     {
         applied.push_failures = outcome.failures;
@@ -753,6 +1045,7 @@ fn decide_group(
     sender: &dyn eventing::WebhookSender,
     scope: &ProcessScope,
     origin: Origin,
+    before: &[String],
 ) -> Result<Applied, WriteError> {
     if let Some(why) = origin::verdict_refusal(
         Verdict::GroupDecision,
@@ -785,6 +1078,7 @@ fn decide_group(
         sender,
         scope,
         origin,
+        before,
         |outcomes| {
             let results: Vec<Value> = keys
                 .iter()
@@ -1913,6 +2207,343 @@ mod tests {
         );
         assert!(log.contains(&format!("kanbanr:{to}")), "{log}");
         assert!(log.contains("Kanbanr-Origin: monitor"), "{log}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // DEF-102 T4: the write recipe commits or undoes.
+
+    /// A board with project `demo`, milestone `M` and item FEAT-001, written through the recipe.
+    fn demo_board(tag: &str) -> (std::path::PathBuf, Store) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-write-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        for (p, b) in [
+            ("/projects", json!({"name": "demo"})),
+            (
+                "/projects/demo/milestones",
+                json!({"name": "M", "code": "M"}),
+            ),
+            (
+                "/projects/demo/features",
+                json!({"title": "T", "milestone": "M"}),
+            ),
+        ] {
+            unscoped(&store, &dir, "POST", p, b).unwrap();
+        }
+        assert!(git::changed_paths(&dir).is_empty());
+        (dir, store)
+    }
+
+    fn unscoped(
+        store: &Store,
+        dir: &Path,
+        m: &str,
+        p: &str,
+        b: Value,
+    ) -> Result<Applied, WriteError> {
+        apply_as(
+            store,
+            dir,
+            PushPolicy::Off,
+            m,
+            p,
+            Some(&b),
+            None,
+            &eventing::NullSender,
+            &ProcessScope::Unscoped,
+            Origin::Terminal,
+        )
+    }
+
+    fn commit_count(dir: &Path) -> usize {
+        crate::coderepo::git(dir, &["rev-list", "--count", "HEAD"])
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    fn files_of_head(dir: &Path) -> Vec<String> {
+        crate::coderepo::git(dir, &["show", "--name-only", "--format=", "HEAD"])
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    fn hold_index_lock(dir: &Path) -> std::path::PathBuf {
+        let lock = git::git_dir(dir).join("index.lock");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .unwrap();
+        lock
+    }
+
+    fn warnings_of(applied: &Applied) -> Vec<String> {
+        let v: Value = serde_json::from_str(&applied.body).unwrap_or(Value::Null);
+        v["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|w| w.as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// DEF-102 R-1: another program holds git's index for a moment; the write waits it out and
+    /// lands in exactly one commit holding its files, with the tree clean.
+    #[test]
+    fn a_write_whose_commit_meets_a_locked_index_waits_and_commits() {
+        let (dir, store) = demo_board("locked-waits");
+        let before = commit_count(&dir);
+        let lock = hold_index_lock(&dir);
+        let freed = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::fs::remove_file(lock).unwrap();
+        });
+        unscoped(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "U", "milestone": "M"}),
+        )
+        .expect("the write waits for git and commits");
+        freed.join().unwrap();
+        assert_eq!(commit_count(&dir), before + 1, "exactly one new commit");
+        let files = files_of_head(&dir);
+        assert!(
+            files.iter().any(|f| f.ends_with("FEAT-002.yaml")),
+            "{files:?}"
+        );
+        assert!(git::changed_paths(&dir).is_empty(), "the tree is clean");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-2: git's index stays held for the whole wait; the write is undone and says so.
+    #[test]
+    fn a_write_whose_commit_cannot_be_made_leaves_the_board_as_it_was() {
+        let (dir, store) = demo_board("locked-gives-up");
+        let head_before = head(&dir);
+        let lock = hold_index_lock(&dir);
+        COMMIT_WAIT_HERE.with(|w| w.set(Some(std::time::Duration::from_millis(200))));
+        let err = unscoped(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "U", "milestone": "M"}),
+        )
+        .unwrap_err();
+        COMMIT_WAIT_HERE.with(|w| w.set(None));
+        assert!(matches!(err, WriteError::NotCommitted(_)), "{err:?}");
+        assert_eq!(err.status(), 503);
+        let text = err.to_string();
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("index.lock"), "{text}");
+        std::fs::remove_file(&lock).unwrap();
+        assert_eq!(head(&dir), head_before, "no commit");
+        assert!(
+            git::changed_paths(&dir).is_empty(),
+            "{:?}",
+            git::changed_paths(&dir)
+        );
+        assert!(writejournal::pending(&dir).is_none(), "the journal ended");
+        assert!(store.load("demo").unwrap().feature("FEAT-002").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-2: a dispatch that fails after writing its first file leaves no file changed.
+    #[test]
+    fn a_dispatch_that_fails_halfway_leaves_the_board_as_it_was() {
+        let (dir, store) = demo_board("dispatch-halfway");
+        let head_before = head(&dir);
+        FAIL_AFTER_DISPATCH.with(|f| f.set(true));
+        let err = unscoped(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "U", "milestone": "M"}),
+        )
+        .unwrap_err();
+        FAIL_AFTER_DISPATCH.with(|f| f.set(false));
+        assert!(matches!(err, WriteError::Core(_)), "{err:?}");
+        assert_eq!(head(&dir), head_before, "no commit");
+        assert!(
+            git::changed_paths(&dir).is_empty(),
+            "{:?}",
+            git::changed_paths(&dir)
+        );
+        assert!(writejournal::pending(&dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-4: the board lock is waited for at most its bound, and the refusal names the write
+    /// that holds it; once the lock is free a waiting write goes ahead.
+    #[test]
+    fn a_write_waits_for_the_lock_at_most_its_bound_and_names_the_holder() {
+        use fs2::FileExt;
+        use std::io::Write as _;
+        use std::time::{Duration, Instant};
+        let dir = std::env::temp_dir().join(format!("kanbanr-write-busy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut held = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(dir.join(git::WRITE_LOCK_FILE))
+            .unwrap();
+        held.lock_exclusive().unwrap();
+        let holder = Holder {
+            pid: 4242,
+            op: "PUT /projects/demo/features/FEAT-001/todos/TL-001/tasks/T5".into(),
+            since: "2026-11-16T23:18:27Z".into(),
+        };
+        held.set_len(0).unwrap();
+        held.write_all(&serde_json::to_vec(&holder).unwrap())
+            .unwrap();
+        held.sync_data().unwrap();
+
+        let started = Instant::now();
+        let err = with_lock_for(&dir, Duration::from_millis(300), "POST /x", || ()).unwrap_err();
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_millis(300), "{waited:?}");
+        assert!(waited < Duration::from_secs(2), "{waited:?}");
+        assert!(matches!(err, WriteError::Busy(_)), "{err:?}");
+        assert_eq!(err.status(), 503);
+        let text = err.to_string();
+        assert!(text.contains("pid 4242"), "{text}");
+        assert!(
+            text.contains("PUT /projects/demo/features/FEAT-001"),
+            "{text}"
+        );
+        assert!(text.contains("23:18:27Z"), "{text}");
+        assert!(text.contains("nothing was changed"), "{text}");
+
+        let waiter = {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                with_lock_for(&dir, Duration::from_secs(10), "POST /y", || 7)
+            })
+        };
+        std::thread::sleep(Duration::from_millis(150));
+        held.unlock().unwrap();
+        assert_eq!(
+            waiter.join().unwrap().unwrap(),
+            7,
+            "the waiting call goes ahead"
+        );
+        let now: Holder =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(now.op, "POST /y", "the taker names itself in the lock file");
+        assert_eq!(now.pid, std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-7: files changed outside kanbanr that an unscoped write picks up are named in its
+    /// commit and its answer.
+    #[test]
+    fn changes_made_outside_kanbanr_are_named_in_the_commit_that_takes_them() {
+        let (dir, store) = demo_board("outside");
+        std::fs::write(dir.join("by-hand.md"), "edited by hand\n").unwrap();
+        let applied = unscoped(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "U", "milestone": "M"}),
+        )
+        .unwrap();
+        let body = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            body.contains("Also committed, changed outside this write: by-hand.md"),
+            "{body}"
+        );
+        let warnings = warnings_of(&applied);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("changed outside this write") && w.contains("by-hand.md")),
+            "{warnings:?}"
+        );
+        assert!(applied.warnings.iter().any(|w| w.contains("by-hand.md")));
+        assert!(files_of_head(&dir).contains(&"by-hand.md".to_string()));
+        assert!(git::changed_paths(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-102 R-5: a write that died before its commit left a journal and files behind; the next
+    /// write puts them back, says so, and commits only its own change.
+    #[test]
+    fn a_write_after_a_dead_one_reports_what_was_put_back() {
+        let (dir, store) = demo_board("after-dead");
+        let item = crate::coderepo::git(&dir, &["ls-files"])
+            .unwrap()
+            .lines()
+            .find(|l| l.ends_with("FEAT-001.yaml"))
+            .map(|l| dir.join(l))
+            .expect("FEAT-001 is tracked");
+        let item_before = std::fs::read_to_string(&item).unwrap();
+        let folder = item.parent().unwrap().to_path_buf();
+        // The dead write: its journal, a changed tracked file, a new file and a temporary file.
+        writejournal::begin(
+            &dir,
+            &writejournal::Journal {
+                version: 1,
+                pid: 1,
+                started_at: crate::now_rfc3339(),
+                head: git::head_commit(&dir).unwrap(),
+                op: "PUT /projects/demo/features/FEAT-001/todos/TL-001/tasks/T5".into(),
+                dirty_before: Vec::new(),
+            },
+        )
+        .unwrap();
+        std::fs::write(&item, "half written\n").unwrap();
+        std::fs::write(folder.join("dead.yaml"), "x\n").unwrap();
+        std::fs::write(folder.join(".FEAT-001.yaml.1.2.tmp"), "x").unwrap();
+
+        let applied = unscoped(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "U", "milestone": "M"}),
+        )
+        .unwrap();
+        let warnings = warnings_of(&applied);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("stopped before its commit")
+                    && w.contains("PUT /projects/demo/features/FEAT-001/todos/TL-001/tasks/T5")
+                    && w.contains("dead.yaml")),
+            "{warnings:?}"
+        );
+        assert!(
+            applied
+                .warnings
+                .iter()
+                .any(|w| w.contains("stopped before its commit"))
+        );
+        assert!(!warnings.iter().any(|w| w.contains("changed outside")));
+        let files = files_of_head(&dir);
+        assert!(!files.iter().any(|f| f.ends_with("dead.yaml")), "{files:?}");
+        assert!(
+            !files.iter().any(|f| f.ends_with("FEAT-001.yaml")),
+            "{files:?}"
+        );
+        assert!(!folder.join("dead.yaml").exists());
+        assert!(!folder.join(".FEAT-001.yaml.1.2.tmp").exists());
+        assert_eq!(std::fs::read_to_string(&item).unwrap(), item_before);
+        assert!(writejournal::pending(&dir).is_none());
+        assert!(git::changed_paths(&dir).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

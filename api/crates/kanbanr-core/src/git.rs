@@ -532,11 +532,24 @@ pub fn restore_to_head(dir: &Path, paths: &[String]) -> Result<(), git2::Error> 
     }
     let repo = Repository::open(dir)?;
     let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    match &head {
-        Some(c) => repo.reset_default(Some(c.as_object()), paths.iter())?,
-        None => repo.reset_default(None, paths.iter())?,
-    }
     let tree = head.as_ref().and_then(|c| c.tree().ok());
+    let reset = match &head {
+        Some(c) => repo.reset_default(Some(c.as_object()), paths.iter()),
+        None => repo.reset_default(None, paths.iter()),
+    };
+    // Another program holds git's index (DEF-102): when the index already matches HEAD for every
+    // path (the write's staging never reached it), only the files need putting back, and the
+    // index is left alone.
+    let index_free = match reset {
+        Ok(()) => true,
+        Err(e)
+            if e.code() == git2::ErrorCode::Locked
+                && index_matches(&repo, tree.as_ref(), paths) =>
+        {
+            false
+        }
+        Err(e) => return Err(e),
+    };
     let in_head: Vec<&String> = paths
         .iter()
         .filter(|p| {
@@ -546,7 +559,7 @@ pub fn restore_to_head(dir: &Path, paths: &[String]) -> Result<(), git2::Error> 
         .collect();
     if !in_head.is_empty() {
         let mut co = git2::build::CheckoutBuilder::new();
-        co.force();
+        co.force().update_index(index_free);
         for p in &in_head {
             co.path(p.as_str());
         }
@@ -569,6 +582,19 @@ pub fn restore_to_head(dir: &Path, paths: &[String]) -> Result<(), git2::Error> 
         }
     }
     Ok(())
+}
+
+/// Does the index hold, for each of `paths`, what `tree` (HEAD's) holds: the same blob, or no
+/// entry where HEAD has none?
+fn index_matches(repo: &Repository, tree: Option<&git2::Tree>, paths: &[String]) -> bool {
+    let Ok(index) = repo.index() else {
+        return false;
+    };
+    paths.iter().all(|p| {
+        let staged = index.get_path(Path::new(p), 0).map(|e| e.id);
+        let committed = tree.and_then(|t| t.get_path(Path::new(p)).ok().map(|e| e.id()));
+        staged == committed
+    })
 }
 
 /// Credentials for a remote (FEAT-142): SSH through the user's agent, then their default key
