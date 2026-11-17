@@ -46,7 +46,9 @@ const entries = NAV.flatMap((a) => a.entries.map((e) => ({ area: a.key, ...e, at
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
   // Detail pages are reached from an entry, not listed in the nav.
   const detail = [/^feature\/:/, /^milestone\/:/, /^state\/:/, /^docs\/file\//, /^docs\/folder\//, /^ui(\/|$)/];
-  const routes = [...main.matchAll(/path:\s*"p\/:project(?:\/([^"]*))?"/g)]
+  // An old URL kept as a redirect (`element: <Navigate …/>`, FTR-043's /schedule and /gantt) is not a page.
+  const routes = [...main.matchAll(/path:\s*"p\/:project(?:\/([^"]*))?"(?:,\s*element:\s*<(\w+))?/g)]
+    .filter((m) => m[2] !== "Navigate")
     .map((m) => m[1] ?? "")
     .filter((r) => !detail.some((d) => d.test(r)));
   if (routes.length === 0) problems.push("found no project routes in main.tsx");
