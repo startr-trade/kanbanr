@@ -572,6 +572,72 @@ pub(crate) fn only_params(query: Option<&str>, allowed: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// `GET /projects/{p}/plan/flow` (FTR-061): `scope` is `sprint:SP`, `release:V`, `milestone:MS`
+/// or `open` (the running sprint, else `open`, when absent); `lanes` a comma list replacing the
+/// default lane counts; `slots` and `build_share` override the defaults. Anything malformed is
+/// `Unsupported`.
+fn plan_flow(store: &Store, p: &str, query: Option<&str>) -> Result<crate::forecast::FlowPlan> {
+    use crate::forecast::{PlanScope, default_options, plan_for};
+    let project = store.load_meta(p)?;
+    let sprints = crate::sprints::load(store, p).unwrap_or_default();
+    let scope = match query_param(query, "scope") {
+        None => PlanScope::default_for(&sprints, crate::sprints::today()),
+        Some(s) => match s.split_once(':') {
+            Some(("sprint", c)) if !c.is_empty() => PlanScope::Sprint(c.to_string()),
+            Some(("release", v)) if !v.is_empty() => PlanScope::Release(v.to_string()),
+            Some(("milestone", m)) if !m.is_empty() => PlanScope::Milestone(m.to_string()),
+            None if s == "open" => PlanScope::Open,
+            _ => {
+                return Err(CoreError::Unsupported(format!(
+                    "scope={s}: sprint:<code>, release:<version>, milestone:<code> or open"
+                )));
+            }
+        },
+    };
+    let sprint = match &scope {
+        PlanScope::Sprint(c) => sprints.iter().find(|s| s.code == *c),
+        _ => None,
+    };
+    let mut opts = default_options(&project.config, sprint);
+    if let Some(l) = query_param(query, "lanes") {
+        let mut lanes = Vec::new();
+        for n in l.split(',') {
+            match n.trim().parse::<usize>() {
+                Ok(n) if n > 0 => lanes.push(n),
+                _ => {
+                    return Err(CoreError::Unsupported(format!(
+                        "lanes={l}: whole numbers of lanes, comma-separated"
+                    )));
+                }
+            }
+        }
+        lanes.sort_unstable();
+        lanes.dedup();
+        opts.lanes = lanes;
+    }
+    if let Some(n) = query_param(query, "slots") {
+        opts.slots = match n.parse::<usize>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                return Err(CoreError::Unsupported(format!(
+                    "slots={n}: a whole number of build slots, at least 1"
+                )));
+            }
+        };
+    }
+    if let Some(f) = query_param(query, "build_share") {
+        opts.build_share = match f.parse::<f64>() {
+            Ok(f) if f > 0.0 && f <= 1.0 => Some(f),
+            _ => {
+                return Err(CoreError::Unsupported(format!(
+                    "build_share={f}: a share of a task's time, over 0 and at most 1"
+                )));
+            }
+        };
+    }
+    plan_for(store, &project, &scope, &opts, &crate::now_rfc3339())
+}
+
 /// The code repository a position or view read needs (FTR-003).
 fn position_repo(repo: Option<&std::path::Path>) -> Result<&std::path::Path> {
     repo.ok_or_else(|| CoreError::PositionUnavailable {
@@ -1199,6 +1265,12 @@ fn dispatch_routes(
             };
             let graph = crate::taskgraph::TaskGraph::build(store, p, Some(&project))?;
             ser(&graph.readiness(p, &project.config.tasks.append_only, lanes))
+        }
+        // The flow plan (FTR-061): a scope's work in agent-hours over its task graph, what runs,
+        // is ready and is blocked, and a forecast per lane count bounded by build slots.
+        ("GET", ["projects", p, "plan", "flow"]) => {
+            only_params(query, &["scope", "lanes", "slots", "build_share"])?;
+            ser(&plan_flow(store, p, query)?)
         }
         ("GET", ["projects", p, "blocked"]) => {
             store.load(p)?;

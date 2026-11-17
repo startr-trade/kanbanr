@@ -2355,3 +2355,179 @@ fn serve_with_board_and_data_dir_is_refused() {
     );
     let _ = std::fs::remove_dir_all(data.parent().unwrap());
 }
+
+/// FTR-061 R-6: `GET /projects/{p}/plan/flow` answers what `forecast::plan` derives for the scope
+/// and options it is given: totals and the critical path in agent-hours, what is ready and what is
+/// blocked, and one forecast per lane count. A malformed `scope`, a scope the project does not
+/// have, a bad lane list or an unknown parameter is `Unsupported` (400).
+#[test]
+fn the_plan_flow_route_answers_the_forecast() {
+    use kanbanr_core::forecast::{self, ForecastOptions, PlanScope};
+    use kanbanr_core::store::TaskFields;
+
+    let base = scratch("planflow");
+    let data = base.join("data");
+    // The board is this test's own, under the system temp folder (L-41).
+    assert!(data.starts_with(std::env::temp_dir()));
+    let run = |args: &[&str]| {
+        let o = cli_cmd()
+            .args(args)
+            .env("HOME", base.join("home"))
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["--project", "demo", "project", "init", "demo"]);
+    run(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--code",
+        "MS-1",
+    ]);
+    run(&[
+        "--project",
+        "demo",
+        "feature",
+        "add",
+        "--title",
+        "Login",
+        "--milestone",
+        "MS-1",
+    ]);
+
+    let store = kanbanr_core::Store::new(data.clone());
+    let code = store.load_meta("demo").unwrap().features[0].code.clone();
+    store
+        .add_todo_list("demo", &code, "Build", Some("TL-001".into()))
+        .unwrap();
+    // T1 (4 h) then T2 (2 h) after it; T3 (1 h) on its own, writing other files.
+    for (key, deps, writes, h) in [
+        ("T1", vec![], "api/a.rs", 4.0),
+        ("T2", vec!["T1".to_string()], "api/b.rs", 2.0),
+        ("T3", vec![], "web/c.ts", 1.0),
+    ] {
+        store
+            .add_task(
+                "demo",
+                &code,
+                "TL-001",
+                &format!("task {key}"),
+                Some(key.into()),
+                &TaskFields {
+                    depends_on: Some(deps),
+                    writes: Some(vec![writes.into()]),
+                    estimate_h: Some(Some(h)),
+                    ..TaskFields::default()
+                },
+            )
+            .unwrap();
+    }
+    // At the build stage, so its tasks can start.
+    let build = store
+        .load_meta("demo")
+        .unwrap()
+        .config
+        .role_status(kanbanr_core::config::Role::Build)
+        .expect("a build stage");
+    store.move_feature("demo", &code, &build).unwrap();
+
+    let (_daemon, url) = serve_ui(&base, None);
+    let get = |path: &str| -> serde_json::Value {
+        serde_json::from_str(
+            &ureq::get(&format!("{url}/api/projects/demo{path}"))
+                .call()
+                .unwrap_or_else(|e| panic!("GET {path}: {e}"))
+                .into_string()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    let status = |path: &str| match ureq::get(&format!("{url}/api/projects/demo{path}")).call() {
+        Ok(r) => r.status(),
+        Err(ureq::Error::Status(s, _)) => s,
+        Err(e) => panic!("GET {path}: {e}"),
+    };
+
+    let got = get("/plan/flow?scope=open&lanes=1,4,8&slots=2&build_share=0.25");
+    let want = forecast::plan(
+        &store,
+        "demo",
+        &PlanScope::Open,
+        &ForecastOptions {
+            lanes: vec![1, 4, 8],
+            slots: 2,
+            build_share: Some(0.25),
+        },
+        "2026-11-17T00:00:00Z",
+    )
+    .unwrap();
+    assert_eq!(got, serde_json::to_value(&want).unwrap());
+    assert_eq!(got["scope"], "open");
+    assert_eq!(got["total_h"], 7.0);
+    assert_eq!(got["remaining_h"], 7.0);
+    assert_eq!(got["critical_h"], 6.0);
+    let path: Vec<&str> = got["critical_path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(path.len(), 2, "{got}");
+    assert!(
+        path[0].ends_with("/T1") && path[1].ends_with("/T2"),
+        "{path:?}"
+    );
+    assert_eq!(got["widest"], 2);
+    assert_eq!(got["ready"].as_array().unwrap().len(), 2, "{got}");
+    assert_eq!(got["blocked"].as_array().unwrap().len(), 1, "{got}");
+    assert!(
+        got["blocked"][0]["id"].as_str().unwrap().ends_with("/T2"),
+        "{got}"
+    );
+    let finish: Vec<(u64, f64)> = got["forecasts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["lanes"].as_u64().unwrap(),
+                f["finish_h"].as_f64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(finish, vec![(1, 7.0), (4, 6.0), (8, 6.0)]);
+    assert_eq!(got["dates"], serde_json::json!([]));
+
+    // With no options the defaults apply: lanes 1, 4 and 8 over every open item.
+    let plain = get("/plan/flow");
+    assert_eq!(plain["scope"], "open");
+    assert_eq!(plain["forecasts"].as_array().unwrap().len(), 3, "{plain}");
+
+    // Refused: a malformed scope, a sprint the project does not have, bad lanes, slots or share,
+    // an unknown parameter.
+    for bad in [
+        "/plan/flow?scope=week",
+        "/plan/flow?scope=sprint:",
+        "/plan/flow?scope=sprint:SP-404",
+        "/plan/flow?lanes=1,x",
+        "/plan/flow?lanes=0",
+        "/plan/flow?slots=0",
+        "/plan/flow?build_share=2",
+        "/plan/flow?nope=1",
+    ] {
+        assert_eq!(status(bad), 400, "{bad}");
+    }
+
+    let _ = std::fs::remove_dir_all(&base);
+}
