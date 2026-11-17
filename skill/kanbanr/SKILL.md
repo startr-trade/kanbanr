@@ -1259,9 +1259,17 @@ project revision it was observed at. So:
   since anything proved that requirement. Re-run rather than re-assert.
 
 `kanbanr check FEAT-001` before calling anything done: it reports what the item has not said and
-what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a green whose test was
-renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
-`kind: manual`; it is exempt from that sweep, so use it only for what a person judges (below).
+what it cannot yet show. `kanbanr tests`, run from the project folder, reconciles the board's
+evidence with the code: results whose test is gone (vanished, with the revision last recorded and
+a likely rename), greens at a revision that never held their test (misattributed), tests never run
+or failing, unproven requirements on finished items, open manual checks per item and per release,
+and finished items with no definition. Run it before a sprint close or a release and after
+renaming tests. For a vanished result with a rename hint, propose the rename as a definition edit
+and tell the person the approval will lapse; `--write` returns what is truly gone to `planned`.
+For a misattributed green, re-run the suite on the current branch so the hook stamps it again.
+Never record a manual result to clear the list. `kanbanr doctor` carries the counts. Mark a check
+a person performs as `kind: manual`; it is exempt from the sweep, so use it only for what a person
+judges (below).
 
 **A manual test's result is the person's, recorded on the monitor.** A manual test that is not
 green waits on the Review page, under **Manual checks**, with its requirement and the check to
@@ -1643,7 +1651,7 @@ kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--ma
 kanbanr walkthrough prepare --batch NAME RUN…   # one batch from several --no-batch runs of one build (both guides for a release)
 kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
-kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
+kanbanr tests [--write] [--json] # the evidence reconciled with the code; --write returns vanished results to planned
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
 kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
 kanbanr claude permissions [--write]            # the Claude Code allow rules for delegated commands; --write adds the missing ones to .claude/settings.local.json, with the person's yes

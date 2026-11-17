@@ -90,7 +90,7 @@ same action on the item's page, collecting the reason in the page. Both verdicts
 
 ```bash
 kanbanr test FEAT-001 R-1 cart::retains green    # normally you never run this by hand
-kanbanr tests [--write]                          # tracked tests that no longer exist in the repo
+kanbanr tests [--write]                          # the board's evidence reconciled with the code
 ```
 
 A PostToolUse hook reads the output of every test run you make and flips the tracked tests to match,
@@ -116,6 +116,29 @@ a second one, and one whose wording names something a run can check, naming the 
 `judgement test open: R-4: <name> (asked at the release's cut, or in a walkthrough)`
 (`open_manual` in `--json`). It is a note, not a gap: a judgement test never holds an item, and
 the person is asked it at the release's cut.
+
+`kanbanr tests`, run from the project folder, reconciles the board's evidence with the code. It
+looks for each tracked test by its kind (a Rust test in its module's file, a Python test by its
+file and class, a monitor check by the name its script prints, a test file by its path), never
+by a substring, and prints these sections, each with its count:
+
+- **Vanished**: a recorded result whose test is not defined under that name at HEAD, with the
+  revision it was last recorded at, whether the test was defined there, and a likely rename (the
+  same test defined elsewhere). A description no runner prints is listed here too: name it as the
+  runner does, or make it the item's `manual:` or a `walkthrough:` test.
+- **Misattributed**: a green whose revision cannot have run its test: none recorded, one the
+  repository does not know, one off the current line, or one where the test was not yet defined.
+  The result is not wrong, but nothing shows it; re-running the suite on the current branch
+  stamps it again.
+- **Never run** (split by whether the test is written) and **Failing**.
+- **Unproven requirements on finished items**, **Manual checks open** per release and per item
+  (walkthrough tests counted apart), and **Finished items without a definition**, split at the
+  charter's adoption.
+
+`kanbanr tests --write` returns the vanished results to `planned`, and the commit's message names
+each test and the revision it was recorded at, so the board's history keeps it. Nothing else is
+written: the report is derived each time. `kanbanr doctor` and the monitor's Workflow page carry
+one line with the counts of vanished results, misattributed greens and open manual checks.
 
 A manual test that is not green also waits on the monitor's **Review** page, under **Manual
 checks**, with its requirement and the check to make. The person who did the check clicks Passed
