@@ -24,6 +24,7 @@ import {
   TABLE_STATE_KEY,
   actionLabel,
   askText,
+  batchOf,
   decisionBody,
   emptySelection,
   preselected,
@@ -32,6 +33,7 @@ import {
   type Selection,
 } from "../../reviewGroups";
 import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
+import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
 import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
 
@@ -104,6 +106,14 @@ function outcomeOf(answer: GroupDecisionAnswer, word: string, n: number): GroupO
   const failed = answer.results.filter((r) => r.error).map((r) => ({ key: r.key, error: r.error ?? "" }));
   const made = answer.results.length - failed.length;
   return { ok: failed.length === 0, text: `${word} ${made} of ${n}`, failed };
+}
+
+/** A whole batch's answer (FTR-037), each record by its id: "confirmed all 3", or how many went through. */
+function batchOutcomeOf(answer: BatchAnswer, word: string): GroupOutcome {
+  const failed = answer.results.filter((r) => r.error).map((r) => ({ key: r.id, error: r.error ?? "" }));
+  const n = answer.results.length;
+  const made = n - failed.length;
+  return { ok: failed.length === 0, text: failed.length === 0 ? `${word} all ${n}` : `${word} ${made} of ${n}`, failed };
 }
 
 /** The open group, read through the shared cache; a read that fails says so, never "empty". */
@@ -197,15 +207,27 @@ export function GroupPanel(p: {
   const guard = useRef<ReturnType<typeof guardInFlight<[() => Promise<void>]>> | null>(null);
   if (!guard.current) guard.current = guardInFlight((call: () => Promise<void>) => call());
 
-  // The second press of an ask-first step: one decision over the chosen rows.
+  // The second press of an ask-first step: one decision over the chosen rows. A selection that is
+  // exactly one prepared batch, confirmed or turned down, goes through FTR-037's batch route, so
+  // the batch is still one action and one commit (R-5); anything else is one group decision.
   const send = (action: string, chosen: Selection) => {
+    const batch = action === slice.action || action === "reject" ? batchOf(slice, chosen) : null;
     const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action);
     const n = body.items.length;
+    const by = p.who ?? "";
     void guard.current?.run(async () => {
       setInFlight(true);
       try {
-        const answer = await api.decideGroup(p.project, body);
-        setOutcome(outcomeOf(answer, past(action), n));
+        if (batch !== null) {
+          const answer =
+            action === "reject"
+              ? await api.rejectPreparedBatch(p.project, batch, by)
+              : await api.confirmPreparedBatch(p.project, batch, by);
+          setOutcome(batchOutcomeOf(answer, action === "reject" ? "rejected" : "confirmed"));
+        } else {
+          const answer = await api.decideGroup(p.project, body);
+          setOutcome(outcomeOf(answer, past(action), n));
+        }
         setSel(emptySelection(slice.key));
         p.onDecided?.();
       } catch (e) {
@@ -224,6 +246,9 @@ export function GroupPanel(p: {
     keys: new Set([...sel.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
   };
   const nothing = n === 0 ? "Select the rows to decide first" : "Recording…";
+  // Turning down every open record of one batch, and nothing else, is the batch's "Reject all N".
+  const rejectLabel =
+    batchOf(slice, preparedSel) !== null ? `Reject all ${preparedSel.keys.size}` : `Reject ${preparedSel.keys.size} prepared`;
   const plan = slice.key === "which-release";
 
   return (
@@ -305,7 +330,7 @@ export function GroupPanel(p: {
               ) : null}
               {preparedSel.keys.size > 0 ? (
                 <AskFirst
-                  label={`Reject ${preparedSel.keys.size} prepared`}
+                  label={rejectLabel}
                   ask={askText({ ...slice, action: "Reject what Claude prepared for" }, preparedSel, slice.rows)}
                   className="btn"
                   disabled={inFlight}
