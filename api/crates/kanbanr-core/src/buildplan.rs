@@ -691,6 +691,9 @@ pub struct RepoShape {
     pub script_tests: bool,
     /// The project's configured line check, which replaces the test run of the full suite.
     pub line_check: Option<Vec<String>>,
+    /// The Rust workspace's folder ([`CARGO_DIR`]) exists. Without it the line tier runs no cargo
+    /// check.
+    pub workspace: bool,
 }
 
 /// Where cargo runs: the workspace's folder.
@@ -886,17 +889,19 @@ pub fn affected(changed: &[String], ws: &[CrateInfo], tier: Tier, repo: &RepoSha
 
     let trigger = paths.iter().find(|p| forces_full(p));
     if tier == Tier::Line || trigger.is_some() {
-        let reason = match trigger {
+        let mut reason = match trigger {
             Some(p) => format!("{p} changed and every crate builds with it: the full suite"),
             None => "the merge into the line: the full suite".to_string(),
         };
-        let mut checks = vec![
-            check(
+        let mut checks = Vec::new();
+        // No workspace folder, no cargo check: a repository without Rust code (T7's Q2).
+        if repo.workspace {
+            checks.push(check(
                 "fmt",
                 CARGO_DIR,
                 strings(&["cargo", "fmt", "--all", "--check"]),
-            ),
-            check(
+            ));
+            checks.push(check(
                 "clippy",
                 CARGO_DIR,
                 strings(&[
@@ -909,17 +914,22 @@ pub fn affected(changed: &[String], ws: &[CrateInfo], tier: Tier, repo: &RepoSha
                     "-D",
                     "warnings",
                 ]),
-            ),
-            match &repo.line_check {
-                Some(cmd) if !cmd.is_empty() => check("test", ".", cmd.clone()),
-                _ if repo.test_script => check("test", ".", strings(&["scripts/test.sh"])),
-                _ => check(
-                    "test",
-                    CARGO_DIR,
-                    strings(&["cargo", "test", "--locked", "--workspace"]),
-                ),
-            },
-        ];
+            ));
+        } else {
+            reason.push_str(&format!(
+                "; no Rust workspace ({CARGO_DIR}/), so no cargo checks"
+            ));
+        }
+        match &repo.line_check {
+            Some(cmd) if !cmd.is_empty() => checks.push(check("test", ".", cmd.clone())),
+            _ if repo.test_script => checks.push(check("test", ".", strings(&["scripts/test.sh"]))),
+            _ if repo.workspace => checks.push(check(
+                "test",
+                CARGO_DIR,
+                strings(&["cargo", "test", "--locked", "--workspace"]),
+            )),
+            _ => {}
+        }
         if scripts {
             checks.push(scripts_check());
         }
@@ -1681,6 +1691,7 @@ Max cache size                       10 GiB
             docs_checks: vec!["check:docs".into(), "check:markdown".into()],
             script_tests: true,
             line_check: None,
+            workspace: true,
         }
     }
 
@@ -1897,6 +1908,48 @@ Max cache size                       10 GiB
         );
         assert_eq!(a.crates, ["cli"]);
         assert_eq!(lines(&a).last().unwrap(), ".$ scripts/test.sh -p cli");
+    }
+
+    /// FTR-062 R-7 (T7's Q2, decided 17 Nov): a repository without the Rust workspace's folder
+    /// gets no cargo check at the line tier, and the reason says so; its own line check, scripts
+    /// and web checks still run.
+    #[test]
+    fn a_line_check_without_a_rust_workspace_runs_no_cargo_checks() {
+        let no_rust = RepoShape {
+            workspace: false,
+            test_script: false,
+            line_check: Some(vec!["sh".into(), "check.sh".into()]),
+            ..shape()
+        };
+        let a = affected(&paths(&["base.txt"]), &[], Tier::Line, &no_rust);
+        assert!(a.full);
+        assert!(a.reason.contains("no Rust workspace"), "{}", a.reason);
+        assert!(
+            a.checks.iter().all(|c| c.argv[0] != "cargo"),
+            "{:?}",
+            lines(&a)
+        );
+        assert_eq!(lines(&a)[0], ".$ sh check.sh");
+        assert!(lines(&a).contains(&".$ npm --prefix web run build".to_string()));
+
+        // Without a line check either: nothing of cargo's, and no cargo test in its place.
+        let a = affected(
+            &paths(&["base.txt"]),
+            &[],
+            Tier::Line,
+            &RepoShape {
+                workspace: false,
+                test_script: false,
+                web: false,
+                ..shape()
+            },
+        );
+        assert!(a.checks.is_empty(), "{:?}", lines(&a));
+        assert!(a.reason.contains("no Rust workspace"), "{}", a.reason);
+
+        // With the workspace, the line keeps its cargo checks.
+        let a = affected(&paths(&["base.txt"]), &[], Tier::Line, &shape());
+        assert_eq!(lines(&a)[0], "api$ cargo fmt --all --check");
     }
 
     #[test]

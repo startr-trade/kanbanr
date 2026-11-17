@@ -2687,6 +2687,12 @@ fn command_access(cmd: &Command) -> Access {
             | ScopeCmd::Revoke { .. }
             | ScopeCmd::Renew { .. } => Core,
         },
+        // A queue run moves a line or main (update-ref, fast-forward, `move`): no agent scope's to
+        // do (FTR-062 T7, Q1). Adding to, listing and taking from the queue touch only its file.
+        Command::Build(BuildCmd::Queue(QueueCmd::Run { .. })) => Outside(
+            "`kanbanr build queue run` moves the queue's targets (a line or main) outside the \
+             board's write path",
+        ),
         // Builds keep their state on the machine and in the git directory, never on the board,
         // and agents are meant to run them (FTR-062).
         Command::Build(_) => Read,

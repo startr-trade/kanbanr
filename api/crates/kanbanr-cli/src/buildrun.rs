@@ -1047,6 +1047,7 @@ fn repo_shape(root: &Path, line_check: Option<Vec<String>>) -> RepoShape {
         docs_checks,
         script_tests: root.join("scripts").join("tests").is_dir(),
         line_check,
+        workspace: root.join(buildplan::CARGO_DIR).is_dir(),
     }
 }
 

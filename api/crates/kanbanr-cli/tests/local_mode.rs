@@ -9273,6 +9273,35 @@ fn an_agent_walks_a_process_through_on_a_temporary_board() {
     let _ = std::fs::remove_dir_all(&walk);
 }
 
+/// FTR-062 R-8 (T7's Q1, decided 17 Nov): `kanbanr build queue run` moves a line or main, so a
+/// build-scoped agent's run is refused before it starts; adding to, listing and taking from the
+/// queue stay open to it, and the board is untouched.
+#[test]
+fn a_build_scoped_agent_may_not_run_the_merge_queue() {
+    let fx = ScopeFx::new("queue-run");
+    let wt = fx.claimed("agent-mq");
+    let before = snapshot(&fx.board);
+    for args in [
+        vec!["build", "queue", "run"],
+        vec!["build", "queue", "run", "--once"],
+    ] {
+        let err = fx.refused(&wt, &args);
+        assert!(
+            err.contains("refused by agent scope SC-001"),
+            "{args:?}: {err}"
+        );
+        assert!(err.contains("build queue run"), "{args:?}: {err}");
+        assert!(
+            err.contains("which no agent scope allows"),
+            "{args:?}: {err}"
+        );
+    }
+    let listed = fx.ok(&wt, &["build", "queue", "list"]);
+    assert!(listed.contains("the merge queue is empty"), "{listed}");
+    assert!(snapshot(&fx.board) == before, "the board is untouched");
+    let _ = std::fs::remove_dir_all(&fx.base);
+}
+
 /// FEAT-214 R-13: in an agent worktree, the commands that change kanbanr itself or write outside the
 /// board's write path are refused before they run, and the board is untouched.
 #[test]
