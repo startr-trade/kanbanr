@@ -35,7 +35,7 @@ export default function App() {
         <div className="brand">
           <Link to="/" aria-label="kanbanr — all projects">
             <BrandMark />
-            kanbanr
+            <span className="brand-word">kanbanr</span>
           </Link>
         </div>
         <ShellNav project={project} index={index.data} />
