@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use kanbanr_core::Store;
-use kanbanr_core::buildplan::{self, BuildRow, Effective, Priority};
+use kanbanr_core::buildplan::{self, Affected, BuildRow, Effective, Priority, RepoShape, Tier};
 use kanbanr_core::coderepo;
 use serde::{Deserialize, Serialize};
 
@@ -81,12 +81,7 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
     let pointer = facts
         .as_ref()
         .and_then(|f| kanbanr_core::agentscope::read_pointer(&f.git_dir));
-    let bound = pointer.as_ref().and_then(|p| {
-        kanbanr_core::agentscope::load(store, &p.project)
-            .ok()?
-            .into_iter()
-            .find(|s| s.id == p.scope)
-    });
+    let bound = facts.as_ref().and_then(|f| bound_scope(store, f));
     let task = match &req.task {
         Some(t) => Some(task_ref(t, project)?),
         None => bound
@@ -116,6 +111,18 @@ fn plan(store: &Store, project: &str, repo: &Path, req: &RunRequest) -> anyhow::
         branch: facts.and_then(|f| f.branch).unwrap_or_default(),
         machine_waits: cfg!(target_os = "linux"),
     })
+}
+
+/// The agent scope bound to the worktree `facts` describes, if any.
+fn bound_scope(
+    store: &Store,
+    facts: &kanbanr_core::agentscope::WorktreeFacts,
+) -> Option<kanbanr_core::agentscope::Scope> {
+    let p = kanbanr_core::agentscope::read_pointer(&facts.git_dir)?;
+    kanbanr_core::agentscope::load(store, &p.project)
+        .ok()?
+        .into_iter()
+        .find(|s| s.id == p.scope)
 }
 
 /// `--task` as `CODE/TL-001/T3`; any other form is refused.
@@ -477,6 +484,243 @@ fn wait_for_slot(plan: &Plan, cmd: &[String]) -> anyhow::Result<Slot> {
         }
         std::thread::sleep(POLL);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Affected checks
+// ---------------------------------------------------------------------------------------------
+
+/// What `kanbanr build affected` reports, and `build check` runs.
+#[derive(Debug, Clone, Serialize)]
+pub struct AffectedView {
+    /// The revision the change is measured from.
+    pub base: String,
+    /// The files changed since `base`, committed or not, repository-relative.
+    pub changed: Vec<String>,
+    #[serde(flatten)]
+    pub affected: Affected,
+}
+
+/// The checks the change in the worktree at `repo` needs at `tier`: the files changed from `base`
+/// (by default the scope's base: see [`default_base`]) to `HEAD`, plus those `git status` lists.
+pub fn affected_here(
+    store: &Store,
+    project: &str,
+    repo: &Path,
+    tier: Tier,
+    base: Option<&str>,
+) -> anyhow::Result<AffectedView> {
+    let facts = coderepo::worktree_facts(repo)
+        .ok_or_else(|| anyhow::anyhow!("not in a git repository: checks follow a git change"))?;
+    let root = facts.root.clone();
+    let config = store.load_meta(project).ok().map(|p| p.config);
+    let base = match base {
+        Some(b) => b.to_string(),
+        None => default_base(store, project, config.as_ref(), &facts),
+    };
+    let mut changed = coderepo::changed_files(&root, &base, "HEAD").map_err(|e| {
+        anyhow::anyhow!("cannot compare with {base}: {e} (name another with --base REV)")
+    })?;
+    changed.extend(uncommitted(&root));
+    let changed: Vec<String> = changed.into_iter().collect();
+    let ws = workspace(&root)?;
+    let effective = config
+        .as_ref()
+        .map(|c| c.build.clone())
+        .unwrap_or_default()
+        .effective(cpus(), &facts.main_root);
+    let shape = repo_shape(&root, effective.line_check.clone());
+    let mut affected = buildplan::affected(&changed, &ws, tier, &shape);
+    if affected.checks.is_empty() && changed.is_empty() {
+        affected.reason = format!("nothing changed since {base}");
+    }
+    Ok(AffectedView {
+        base,
+        changed,
+        affected,
+    })
+}
+
+/// The base a check compares with when none is named: under a task scope its item branch; under
+/// an item scope the item's line (else main); otherwise main.
+fn default_base(
+    store: &Store,
+    project: &str,
+    config: Option<&kanbanr_core::config::ProjectConfig>,
+    facts: &kanbanr_core::agentscope::WorktreeFacts,
+) -> String {
+    let main = match config {
+        Some(c) => kanbanr_core::gitmodel::main_of(c, &facts.root),
+        None => coderepo::default_branch(&facts.root),
+    };
+    let Some(scope) = bound_scope(store, facts) else {
+        return main;
+    };
+    if scope.task.is_some() {
+        // A task branch is `<item branch>--tl-001-t3`.
+        return scope
+            .branch
+            .as_deref()
+            .and_then(|b| b.rsplit_once("--").map(|(item, _)| item.to_string()))
+            .unwrap_or(main);
+    }
+    let line = || -> Option<String> {
+        let (model, _) = kanbanr_core::gitmodel::load(store, project, &facts.root).ok()?;
+        let item = store.load_feature(project, &scope.item).ok()?;
+        let releases = kanbanr_core::releases::load(store, project).unwrap_or_default();
+        kanbanr_core::gitmodel::line_for(&model, &item, &releases)
+    };
+    line().unwrap_or(main)
+}
+
+/// The paths `git status` lists as changed or new, repository-relative; a rename lists both.
+fn uncommitted(root: &Path) -> Vec<String> {
+    // Untrimmed: the first entry's status may start with a space.
+    let Ok(raw) = coderepo::git_raw(root, &["status", "--porcelain=v1", "-z", "-uall"]) else {
+        return Vec::new();
+    };
+    let out = String::from_utf8_lossy(&raw);
+    let mut paths = Vec::new();
+    let mut fields = out.split('\0').filter(|f| !f.is_empty());
+    while let Some(f) = fields.next() {
+        let Some(path) = f.get(3..) else { continue };
+        paths.push(path.to_string());
+        // A rename or copy is followed by its original path.
+        if matches!(f.as_bytes()[0], b'R' | b'C')
+            && let Some(from) = fields.next()
+        {
+            paths.push(from.to_string());
+        }
+    }
+    paths
+}
+
+/// The workspace's crates, from `cargo metadata` in the workspace folder; none without one.
+fn workspace(root: &Path) -> anyhow::Result<Vec<buildplan::CrateInfo>> {
+    let dir = root.join(buildplan::CARGO_DIR);
+    if !dir.join("Cargo.toml").is_file() {
+        return Ok(Vec::new());
+    }
+    let out = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| anyhow::anyhow!("could not run cargo metadata: {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(buildplan::workspace_from_metadata(
+        &String::from_utf8_lossy(&out.stdout),
+        root,
+    )?)
+}
+
+/// What the repository at `root` holds that the checks call on.
+fn repo_shape(root: &Path, line_check: Option<Vec<String>>) -> RepoShape {
+    let package = root.join("web").join("package.json");
+    let web_checks: Vec<String> = std::fs::read(&package)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["scripts"].as_object().cloned())
+        .map(|s| {
+            s.keys()
+                .filter(|k| k.starts_with("check:"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let docs_checks = ["check:docs", "check:markdown"]
+        .iter()
+        .filter(|c| web_checks.iter().any(|w| w == *c))
+        .map(|c| c.to_string())
+        .collect();
+    RepoShape {
+        test_script: root.join("scripts").join("test.sh").is_file(),
+        web: package.is_file(),
+        web_checks,
+        docs_checks,
+        script_tests: root.join("scripts").join("tests").is_dir(),
+        line_check,
+    }
+}
+
+/// Run `cmd` in `dir`, inheriting stdio. A program named by a relative path with a folder in it
+/// (`scripts/test.sh`) is found from `dir`.
+fn spawn_in(dir: &Path, cmd: &[String]) -> std::io::Result<i32> {
+    let program = if cmd[0].contains('/') && Path::new(&cmd[0]).is_relative() {
+        dir.join(&cmd[0]).into_os_string()
+    } else {
+        cmd[0].clone().into()
+    };
+    let status = std::process::Command::new(program)
+        .args(&cmd[1..])
+        .current_dir(dir)
+        .status()?;
+    Ok(exit_code(status))
+}
+
+/// Run the checks the change needs at `tier`, cheapest first, each through a build slot and
+/// recorded as a `check` of that tier. Every check runs; the status is non-zero when any failed,
+/// with a summary line per check.
+pub fn check(
+    store: &Store,
+    project: &str,
+    repo: &Path,
+    tier: Tier,
+    base: Option<&str>,
+) -> anyhow::Result<i32> {
+    let view = affected_here(store, project, repo, tier, base)?;
+    let a = &view.affected;
+    println!(
+        "{} checks against {}: {}",
+        tier.as_str(),
+        view.base,
+        a.reason
+    );
+    if a.checks.is_empty() {
+        return Ok(0);
+    }
+    let root = coderepo::worktree_facts(repo)
+        .map(|f| f.root)
+        .unwrap_or_else(|| repo.to_path_buf());
+    let plan = plan(store, project, repo, &RunRequest::default())?;
+    let mut results: Vec<(String, i32, u64)> = Vec::new();
+    for c in &a.checks {
+        let req = RunRequest {
+            cmd: c.argv.clone(),
+            task: None,
+            kind: "check".into(),
+            tier: Some(tier.as_str().into()),
+        };
+        let dir = root.join(&c.dir);
+        let line = format!("{} {}", c.name, c.argv.join(" "));
+        match run_planned(&plan, &req, &|cmd| spawn_in(&dir, cmd)) {
+            Ok((code, row)) => results.push((line, code, row.run_ms)),
+            Err(e) => {
+                eprintln!("{e}");
+                results.push((line, 127, 0));
+            }
+        }
+    }
+    let failed = results.iter().filter(|(_, code, _)| *code != 0).count();
+    println!();
+    for (line, code, ms) in &results {
+        let verdict = if *code == 0 {
+            "ok  ".to_string()
+        } else {
+            format!("FAIL (exit {code})")
+        };
+        println!("{verdict} {line}  [{:.1} s]", *ms as f64 / 1000.0);
+    }
+    println!(
+        "{} of {} checks passed",
+        results.len() - failed,
+        results.len()
+    );
+    Ok(i32::from(failed > 0))
 }
 
 // ---------------------------------------------------------------------------------------------
