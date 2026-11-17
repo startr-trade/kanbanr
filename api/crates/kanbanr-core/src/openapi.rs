@@ -310,8 +310,41 @@ pub fn public_routes() -> Vec<RouteDoc> {
         RouteDoc {
             path: "/api/projects/{project}/releases",
             summary: "The project's releases, each with what it ships",
-            params: &[PROJECT],
+            params: &[
+                PROJECT,
+                Param {
+                    name: "scope",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::OneOf(&["current", "planned", "past"]),
+                    description: "One Releases tab, newest first (FTR-041): current (at a stage, \
+                                  not shipped), planned (not yet at a stage) or past (shipped or \
+                                  superseded). Without it, every release.",
+                },
+            ],
             response: Response::Json(schema_of::<Vec<crate::releases::ReleaseReport>>),
+        },
+        // ---- the Releases page (FTR-041) ----
+        RouteDoc {
+            path: "/api/projects/{project}/releases/summary",
+            summary: "The Releases page's counts per tab (current, planned, past) and the tab it opens on",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::releases::ReleasesSummary>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/releases/{version}/items",
+            summary: "One release's item table: each item's status, tests, approval and sign-offs",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "version",
+                    location: In::Path,
+                    required: true,
+                    kind: Kind::String,
+                    description: "The release's version, such as 1.0.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::releases::ReleaseItemRow>>),
         },
         RouteDoc {
             path: "/api/projects/{project}/sprints",

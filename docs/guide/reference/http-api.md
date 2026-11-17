@@ -45,7 +45,9 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/review/summary` | — | JSON `GroupCount[]` | The decision groups waiting for the person, each counted, in the page's order |
 | `GET /api/projects/{project}/review/groups/{key}` | — | JSON `GroupSlice` | One decision group's rows, in the default order |
 | `GET /api/projects/{project}/review/groups/{key}/rows/{row}` | — | JSON `RowEvidence` | One row's full evidence |
-| `GET /api/projects/{project}/releases` | — | JSON `ReleaseReport[]` | The project's releases, each with what it ships |
+| `GET /api/projects/{project}/releases` | `scope=current\|planned\|past` (optional) | JSON `ReleaseReport[]` | The project's releases, each with what it ships |
+| `GET /api/projects/{project}/releases/summary` | — | JSON `ReleasesSummary` | The Releases page's counts per tab (current, planned, past) and the tab it opens on |
+| `GET /api/projects/{project}/releases/{version}/items` | — | JSON `ReleaseItemRow[]` | One release's item table: each item's status, tests, approval and sign-offs |
 | `GET /api/projects/{project}/sprints` | — | JSON `Sprint[]` | The project's sprints |
 | `GET /api/projects/{project}/sprints/{sprint}` | — | JSON `SprintReport` | One sprint's report |
 | `GET /api/projects/{project}/adrs` | — | JSON `Adr[]` | The project's architecture decision records |

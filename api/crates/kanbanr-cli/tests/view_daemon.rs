@@ -2808,3 +2808,363 @@ fn the_plan_summary_and_a_tab_slice_meet_their_budgets() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A board for the Releases page (FTR-041) under the temp dir: `items` items `FEAT-001…` in one
+/// milestone, and `releases` written to `releases.yaml` as given. Returns the scratch folder and
+/// its data folder.
+fn releases_board(
+    name: &str,
+    items: usize,
+    releases: &[kanbanr_core::releases::Release],
+) -> (PathBuf, PathBuf) {
+    use serde_json::json;
+    let base = scratch(name);
+    let data = base.join("data");
+    // The board is this test's own, under the system temp folder (L-41).
+    assert!(
+        std::fs::canonicalize(&data)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "a test board lives in the temp dir: {}",
+        data.display()
+    );
+    let store = kanbanr_core::Store::new(data.clone());
+    store
+        .init_project(
+            "shop",
+            kanbanr_core::config::ProjectConfig::default_for("shop"),
+        )
+        .unwrap();
+    kanbanr_core::dispatch::dispatch(
+        &store,
+        "PUT",
+        "/projects/shop/config/cadence",
+        Some(&json!({"releases": true})),
+    )
+    .unwrap();
+    let mut ops = vec![json!({"op": "milestone.add", "name": "Milestone 1", "code": "M1"})];
+    for i in 1..=items {
+        ops.push(json!({
+            "op": "feature.add",
+            "code": format!("FEAT-{i:03}"),
+            "title": format!("Item {i}"),
+            "milestone": "M1",
+        }));
+    }
+    let ops: Vec<kanbanr_core::batch::BatchOp> = ops
+        .into_iter()
+        .map(|op| serde_json::from_value(op).unwrap())
+        .collect();
+    store.apply_batch("shop", ops).unwrap();
+    write_releases(&data, releases);
+    (base, data)
+}
+
+/// Replace the test board's `releases.yaml` with `releases`.
+fn write_releases(data: &std::path::Path, releases: &[kanbanr_core::releases::Release]) {
+    std::fs::write(
+        data.join("projects").join("shop").join("releases.yaml"),
+        kanbanr_core::yaml::to_string(&releases.to_vec()).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The versions of a releases list answered as JSON, in order.
+fn versions_of(list: &serde_json::Value) -> Vec<String> {
+    list.as_array()
+        .unwrap_or_else(|| panic!("a list: {list}"))
+        .iter()
+        .map(|r| r["version"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// FTR-041 R-1: through the daemon, the Releases summary counts each tab — a release not yet at
+/// a stage is Planned; one at a stage, one tagged and waiting for its workflow (DEF-049) and a
+/// patch at candidate are Current; a shipped one and a superseded one are Past — and opens on
+/// Current when a release is in flight, else Planned, else Past. Each tab's slice holds what its
+/// count says, and a scope that is not a tab is refused.
+#[test]
+fn the_releases_summary_counts_each_tab() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let rel = |v: &str| Release {
+        version: v.into(),
+        ..Default::default()
+    };
+    let releases = vec![
+        rel("v0.9.0"),
+        rel("v1.0.0"),
+        Release {
+            stage: "candidate".into(),
+            ..rel("v0.8.0")
+        },
+        Release {
+            stage: "main".into(),
+            tagged_at: "2026-11-10T10:00:00Z".into(),
+            ..rel("v0.7.2")
+        },
+        Release {
+            stage: "candidate".into(),
+            parent: "v0.7.0".into(),
+            ..rel("v0.7.1")
+        },
+        Release {
+            state: ReleaseState::Shipped,
+            shipped_at: "2026-11-01T10:00:00Z".into(),
+            ..rel("v0.7.0")
+        },
+        Release {
+            superseded_by: "v0.6.1".into(),
+            ..rel("v0.6.0")
+        },
+        Release {
+            state: ReleaseState::Shipped,
+            shipped_at: "2026-10-20T10:00:00Z".into(),
+            ..rel("v0.6.1")
+        },
+    ];
+    let (base, data) = releases_board("releases-counts", 3, &releases);
+    {
+        let (_daemon, url) = serve_ui(&base, None);
+        let (code, s) = plan_get(&url, "/projects/shop/releases/summary");
+        assert_eq!(code, 200, "{s}");
+        assert_eq!(
+            s,
+            serde_json::json!({"current": 3, "planned": 2, "past": 3, "open": "current"}),
+            "{s}"
+        );
+        // The same as the core computes.
+        let store = kanbanr_core::Store::new(data.clone());
+        let core = kanbanr_core::releases::summary(&store, "shop").unwrap();
+        assert_eq!(s, serde_json::to_value(&core).unwrap());
+        for (scope, want) in [
+            ("current", vec!["v0.8.0", "v0.7.2", "v0.7.1"]),
+            ("planned", vec!["v1.0.0", "v0.9.0"]),
+            ("past", vec!["v0.7.0", "v0.6.1", "v0.6.0"]),
+        ] {
+            let (code, tab) = plan_get(&url, &format!("/projects/shop/releases?scope={scope}"));
+            assert_eq!(code, 200, "{scope}: {tab}");
+            assert_eq!(versions_of(&tab), want, "{scope}");
+            assert_eq!(serde_json::json!(want.len()), s[scope], "{scope}");
+        }
+        // Without a scope the list is every release, as before.
+        let (code, all) = plan_get(&url, "/projects/shop/releases");
+        assert_eq!(code, 200, "{all}");
+        assert_eq!(versions_of(&all).len(), releases.len());
+        for bad in ["later", "released", ""] {
+            let (code, body) = plan_get(&url, &format!("/projects/shop/releases?scope={bad}"));
+            assert_eq!(code, 400, "{bad}: {body}");
+            assert!(
+                body.to_string()
+                    .contains("scope is current, planned or past"),
+                "{bad}: {body}"
+            );
+        }
+        let (code, _) = plan_get(&url, "/projects/nowhere/releases/summary");
+        assert_eq!(code, 404);
+    }
+    // Nothing in flight: the page opens on Planned; nothing planned either: on Past.
+    for (kept, open) in [(&releases[..2], "planned"), (&releases[5..6], "past")] {
+        write_releases(&data, kept);
+        let (_daemon, url) = serve_ui(&base, None);
+        let (code, s) = plan_get(&url, "/projects/shop/releases/summary");
+        assert_eq!(code, 200, "{s}");
+        assert_eq!(s["open"], open, "{s}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-041 R-2: a tab's slice lists only its own releases, newest first by version with a
+/// pre-release before its release (DEF-034 R-1), whatever order they were added in.
+#[test]
+fn a_releases_tab_lists_only_its_releases_newest_first() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let shipped = |v: &str| Release {
+        version: v.into(),
+        state: ReleaseState::Shipped,
+        shipped_at: "2026-11-01T10:00:00Z".into(),
+        ..Default::default()
+    };
+    let mut releases: Vec<Release> = [
+        "v0.3.0",
+        "v0.2.1",
+        "v0.10.0",
+        "v0.5.1",
+        "v0.5.0-rc.1",
+        "v0.5.0",
+    ]
+    .iter()
+    .map(|v| shipped(v))
+    .collect();
+    releases.push(Release {
+        version: "v0.11.0".into(),
+        stage: "candidate".into(),
+        ..Default::default()
+    });
+    releases.push(Release {
+        version: "v0.12.0".into(),
+        ..Default::default()
+    });
+    let (base, _data) = releases_board("releases-order", 1, &releases);
+    let (_daemon, url) = serve_ui(&base, None);
+    let (code, past) = plan_get(&url, "/projects/shop/releases?scope=past");
+    assert_eq!(code, 200, "{past}");
+    assert_eq!(
+        versions_of(&past),
+        vec![
+            "v0.10.0",
+            "v0.5.1",
+            "v0.5.0",
+            "v0.5.0-rc.1",
+            "v0.3.0",
+            "v0.2.1"
+        ]
+    );
+    let (_, current) = plan_get(&url, "/projects/shop/releases?scope=current");
+    assert_eq!(versions_of(&current), vec!["v0.11.0"]);
+    let (_, planned) = plan_get(&url, "/projects/shop/releases?scope=planned");
+    assert_eq!(versions_of(&planned), vec!["v0.12.0"]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-041 R-4: a release's items route answers that release's rows alone — its planned items,
+/// with each row's fields — and 404 for a version the board does not hold.
+#[test]
+fn a_release_items_route_returns_only_that_release() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let releases = vec![
+        Release {
+            version: "v0.8.0".into(),
+            stage: "candidate".into(),
+            ..Default::default()
+        },
+        Release {
+            version: "v0.9.0".into(),
+            ..Default::default()
+        },
+        Release {
+            version: "v0.7.0".into(),
+            state: ReleaseState::Shipped,
+            shipped: vec!["FEAT-005".into()],
+            ..Default::default()
+        },
+    ];
+    let (base, data) = releases_board("release-items", 6, &releases);
+    let store = kanbanr_core::Store::new(data.clone());
+    for (code, version) in [
+        ("FEAT-001", "v0.8.0"),
+        ("FEAT-002", "v0.8.0"),
+        ("FEAT-003", "v0.8.0"),
+        ("FEAT-004", "v0.9.0"),
+    ] {
+        store
+            .set_feature_release("shop", code, Some(version.into()))
+            .unwrap();
+    }
+    let (_daemon, url) = serve_ui(&base, None);
+    let codes = |rows: &serde_json::Value| -> Vec<String> {
+        rows.as_array()
+            .unwrap_or_else(|| panic!("a list: {rows}"))
+            .iter()
+            .map(|r| r["code"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (code, rows) = plan_get(&url, "/projects/shop/releases/v0.8.0/items");
+    assert_eq!(code, 200, "{rows}");
+    assert_eq!(codes(&rows), vec!["FEAT-001", "FEAT-002", "FEAT-003"]);
+    let first = &rows[0];
+    assert_eq!(first["title"], "Item 1", "{first}");
+    for key in [
+        "kind",
+        "status",
+        "sprint",
+        "tests_green",
+        "tests_named",
+        "approval",
+        "design_review",
+        "docs_folded",
+        "carried_to",
+        "finished",
+    ] {
+        assert!(first.get(key).is_some(), "{key} in {first}");
+    }
+    // The same as the core computes.
+    let core = kanbanr_core::releases::items_table(&store, "shop", "v0.8.0").unwrap();
+    assert_eq!(rows, serde_json::to_value(&core).unwrap());
+    let (_, rows) = plan_get(&url, "/projects/shop/releases/v0.9.0/items");
+    assert_eq!(codes(&rows), vec!["FEAT-004"]);
+    let (_, rows) = plan_get(&url, "/projects/shop/releases/v0.7.0/items");
+    assert_eq!(codes(&rows), vec!["FEAT-005"]);
+    let (code, body) = plan_get(&url, "/projects/shop/releases/v9.9.9/items");
+    assert_eq!(code, 404, "{body}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-041 R-7: on a generated board of 12 releases and 400 items, the Releases summary answers
+/// under 50 ms and a tab's slice under 150 ms — the median of 20 warm reads through the daemon.
+#[test]
+fn the_releases_summary_and_a_tab_slice_meet_their_budgets() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let per = 400 / 12 + 1;
+    let codes: Vec<String> = (1..=400).map(|i| format!("FEAT-{i:03}")).collect();
+    let releases: Vec<Release> = (0..12)
+        .map(|k| {
+            let version = format!("v0.{k}.0");
+            match k {
+                0..=7 => Release {
+                    version,
+                    state: ReleaseState::Shipped,
+                    shipped_at: format!("2026-0{}-01T10:00:00Z", k + 1),
+                    shipped: codes.iter().skip(per * k).take(per).cloned().collect(),
+                    ..Default::default()
+                },
+                8 => Release {
+                    version,
+                    stage: "candidate".into(),
+                    ..Default::default()
+                },
+                _ => Release {
+                    version,
+                    ..Default::default()
+                },
+            }
+        })
+        .collect();
+    let (base, data) = releases_board("releases-budget", 400, &releases);
+    let store = kanbanr_core::Store::new(data.clone());
+    for (i, code) in codes.iter().enumerate().skip(per * 8) {
+        let k = (8 + (i - per * 8) / per).min(11);
+        store
+            .set_feature_release("shop", code, Some(format!("v0.{k}.0")))
+            .unwrap();
+    }
+    let (_daemon, url) = serve_ui(&base, None);
+    let median = |path: &str| {
+        let started = Instant::now();
+        let (code, body) = plan_get(&url, path);
+        let cold = started.elapsed();
+        assert_eq!(code, 200, "{path}: {body}");
+        let mut times: Vec<Duration> = (0..20)
+            .map(|_| {
+                let started = Instant::now();
+                let (code, _) = plan_get(&url, path);
+                assert_eq!(code, 200);
+                started.elapsed()
+            })
+            .collect();
+        times.sort();
+        let m = times[times.len() / 2];
+        eprintln!("{path}: cold {cold:?}, warm median {m:?}");
+        m
+    };
+    let summary = median("/projects/shop/releases/summary");
+    assert!(
+        summary < Duration::from_millis(50),
+        "the summary took {summary:?}"
+    );
+    for scope in ["current", "planned", "past"] {
+        let path = format!("/projects/shop/releases?scope={scope}");
+        let slice = median(&path);
+        assert!(slice < Duration::from_millis(150), "{path} took {slice:?}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
