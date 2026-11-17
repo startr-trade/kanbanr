@@ -137,6 +137,11 @@ enum Command {
     /// revisions the person accepts on the Baseline page.
     #[command(subcommand)]
     Baseline(BaselineCmd),
+    /// The person's planning decisions from the monitor pages (FTR-049): list them, show one,
+    /// check it, or decline it with a reason. Carry one out with the plan command and
+    /// `--decision PD-n`. Only the person records one, on the Plan or Releases page.
+    #[command(subcommand)]
+    Planning(PlanningCmd),
     /// The project's facts (FTR-005): its languages, runtimes, where it runs, its parts and its
     /// data. With no subcommand, prints the record.
     Facts {
@@ -1107,6 +1112,31 @@ enum BaselineCmd {
 }
 
 #[derive(Subcommand)]
+enum PlanningCmd {
+    /// The planning decisions, oldest first, one line each with its state.
+    List {
+        /// Only those in this state.
+        #[arg(long, value_parser = ["pending", "carried", "declined"])]
+        state: Option<String>,
+    },
+    /// One decision: what it plans, who made it, and what became of it.
+    Show { id: String },
+    /// Check a decision against frozen scope, closed sprints, dependencies, capacity and dates,
+    /// changing nothing: its problems (reasons to decline), warnings and the nearest valid move.
+    Check { id: String },
+    /// Decline a pending decision, with the reason and the nearest valid move.
+    Decline {
+        id: String,
+        #[arg(long)]
+        reason: String,
+        /// The nearest valid move, `ACTION:TARGET` (e.g. `into-release:v0.9.0`, `into-sprint:SP-004`,
+        /// `out-of-sprint`).
+        #[arg(long, value_name = "ACTION:TARGET")]
+        nearest: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum RemoteCmd {
     /// Add a git remote (commits are pulled+pushed to it after each write).
     Add { name: String, url: String },
@@ -2024,6 +2054,10 @@ enum ReleaseCmd {
         version: String,
         #[arg(required = true)]
         items: Vec<String>,
+        /// Carry out the person's planning decision `PD-n` (FTR-049): refused unless it is pending
+        /// and names this release and exactly these items.
+        #[arg(long, value_name = "PD-n")]
+        decision: Option<String>,
     },
     /// A release's notes as they are on its branch `release/<VERSION>`, and where they are; with
     /// --file or --edit, commit new text there — nothing checked out — until the release is cut
@@ -2103,11 +2137,19 @@ enum SprintCmd {
         code: String,
         #[arg(required = true)]
         items: Vec<String>,
+        /// Carry out the person's planning decision `PD-n` (FTR-049): refused unless it is pending
+        /// and names this sprint and exactly these items.
+        #[arg(long, value_name = "PD-n")]
+        decision: Option<String>,
     },
     /// Take items out of their sprint; each goes back to no sprint.
     Unplan {
         #[arg(required = true)]
         items: Vec<String>,
+        /// Carry out the person's planning decision `PD-n` (FTR-049): refused unless it is pending
+        /// and takes exactly these items out of their sprint.
+        #[arg(long, value_name = "PD-n")]
+        decision: Option<String>,
     },
     /// Change a sprint that has not started: name, goal, first day, length or last day, capacity.
     /// A started sprint is a record and is refused.
@@ -2717,6 +2759,10 @@ fn command_access(cmd: &Command) -> Access {
         Command::Catalog { cmd } => match cmd {
             None | Some(CatalogCmd::Show) | Some(CatalogCmd::Init { print: true, .. }) => Read,
             Some(_) => Core,
+        },
+        Command::Planning(cmd) => match cmd {
+            PlanningCmd::List { .. } | PlanningCmd::Show { .. } | PlanningCmd::Check { .. } => Read,
+            PlanningCmd::Decline { .. } => Core,
         },
         Command::Baseline(cmd) => match cmd {
             BaselineCmd::Show => Read,
@@ -5491,6 +5537,12 @@ fn verdict_refusal(
             // A baseline revision waits on the Baseline page (FTR-033).
             match review_url.strip_suffix("/review") {
                 Some(base) => format!("{base}/baseline"),
+                None => review_url.to_string(),
+            }
+        } else if verdict == kanbanr_core::origin::Verdict::PlanningDecision {
+            // A planning decision is made on the Plan page (FTR-049).
+            match review_url.strip_suffix("/review") {
+                Some(base) => format!("{base}/plan"),
                 None => review_url.to_string(),
             }
         } else {
@@ -8508,6 +8560,285 @@ fn print_pack_change(cli: &Cli, p: &str, resp: &str, dry_run: bool) -> anyhow::R
 }
 
 /// `kanbanr baseline show|propose|accept|withdraw` (FTR-033).
+/// Who carries out or declines a planning decision (FTR-049): Claude in a Claude Code session, else
+/// the board's identity, as the person carrying out their own decision in a terminal (R-9).
+fn planning_by(cli: &Cli) -> anyhow::Result<String> {
+    if kanbanr_core::Origin::of_cli() == kanbanr_core::Origin::Conversation {
+        return Ok("Claude".into());
+    }
+    verdict_author(cli, None)
+}
+
+/// A plan command's body: its items, and with `--decision` the decision it carries out and who
+/// carries it out (FTR-049). Core stamps the origin.
+fn plan_body(cli: &Cli, items: &[String], decision: Option<&str>) -> anyhow::Result<Value> {
+    Ok(match decision {
+        Some(d) => json!({ "items": items, "decision": d, "by": planning_by(cli)? }),
+        None => json!({ "items": items }),
+    })
+}
+
+/// What a plan command's line adds when it carried out a decision.
+fn carried_note(decision: Option<&str>) -> String {
+    decision
+        .map(|d| format!(", carrying out {d}"))
+        .unwrap_or_default()
+}
+
+/// A decision's `at`, RFC 3339 in UTC, as `16 Nov 14:02`; anything else as it is.
+fn planning_when(at: &str) -> String {
+    let (date, time) = at.split_once('T').unwrap_or((at, ""));
+    let day = plan_date(date);
+    let day = day.rsplit_once(' ').map(|(d, _)| d).unwrap_or(&day);
+    match time.get(..5) {
+        Some(hm) => format!("{day} {hm}"),
+        None => day.to_string(),
+    }
+}
+
+fn planning_items(d: &Value) -> Vec<String> {
+    d["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(String::from)
+        .collect()
+}
+
+/// Where a decision puts its items, in words: `into SP-004`, or `out of their sprint`.
+fn planning_where(d: &Value) -> String {
+    match d["action"].as_str().unwrap_or_default() {
+        "out-of-sprint" => "out of their sprint".to_string(),
+        _ => format!("into {}", d["target"].as_str().unwrap_or_default()),
+    }
+}
+
+/// The plan command that carries out decision `d`, naming it.
+fn planning_command(d: &Value) -> String {
+    let (id, target) = (
+        d["id"].as_str().unwrap_or_default(),
+        d["target"].as_str().unwrap_or_default(),
+    );
+    let items = planning_items(d).join(" ");
+    match d["action"].as_str().unwrap_or_default() {
+        "into-sprint" => format!("kanbanr sprint plan {target} {items} --decision {id}"),
+        "into-release" => format!("kanbanr release plan {target} {items} --decision {id}"),
+        _ => format!("kanbanr sprint unplan {items} --decision {id}"),
+    }
+}
+
+/// One line for a decision view: `PD-3 pending: into-sprint SP-004 FTR-044, DEF-076 (by Ada,
+/// 16 Nov 14:02, monitor)`.
+fn planning_line(v: &Value) -> String {
+    let d = &v["decision"];
+    let target = d["target"].as_str().unwrap_or_default();
+    let mut who = vec![format!("by {}", d["by"].as_str().unwrap_or_default())];
+    who.push(planning_when(d["at"].as_str().unwrap_or_default()));
+    if let Some(o) = d["origin"].as_str().filter(|o| !o.is_empty()) {
+        who.push(o.to_string());
+    }
+    format!(
+        "{} {}: {}{} {} ({})",
+        d["id"].as_str().unwrap_or_default(),
+        v["state"].as_str().unwrap_or_default(),
+        d["action"].as_str().unwrap_or_default(),
+        if target.is_empty() {
+            String::new()
+        } else {
+            format!(" {target}")
+        },
+        planning_items(d).join(", "),
+        who.join(", ")
+    )
+}
+
+/// What `board` says about the person's planning decisions no one has carried out or declined
+/// yet (FTR-049): one line, only when there are some. Nothing when they cannot be read.
+fn planning_waiting_line(client: &Backend, p: &str) -> Option<String> {
+    let v: Value = client
+        .get(&format!("/projects/{p}/planning?state=pending"))
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok())?;
+    let each: Vec<String> = v
+        .as_array()?
+        .iter()
+        .map(|view| {
+            let d = &view["decision"];
+            format!(
+                "{} ({}: {})",
+                d["id"].as_str().unwrap_or_default(),
+                planning_where(d),
+                planning_items(d).join(", ")
+            )
+        })
+        .collect();
+    if each.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "Planning decisions waiting for Claude: {}. Check each with `kanbanr planning check`, then \
+         carry it out or decline it.",
+        each.join(", ")
+    ))
+}
+
+/// The view of decision `id`, from the list.
+fn planning_view(client: &Backend, p: &str, id: &str) -> anyhow::Result<Value> {
+    let all: Value = serde_json::from_str(&client.get(&format!("/projects/{p}/planning"))?)?;
+    all.as_array()
+        .into_iter()
+        .flatten()
+        .find(|v| v["decision"]["id"] == id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("there is no planning decision {id}"))
+}
+
+fn run_planning(cli: &Cli, client: &Backend, cmd: &PlanningCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let base = format!("/projects/{p}/planning");
+    match cmd {
+        PlanningCmd::List { state } => {
+            let path = match state {
+                Some(s) => format!("{base}?state={s}"),
+                None => base.clone(),
+            };
+            let resp = client.get(&path)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let views = v.as_array().cloned().unwrap_or_default();
+            if views.is_empty() {
+                println!("(no planning decisions)");
+            }
+            for view in &views {
+                println!("{}", planning_line(view));
+            }
+            Ok(())
+        }
+        PlanningCmd::Show { id } => {
+            let view = planning_view(client, &p, id)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
+            println!("{}", planning_line(&view));
+            let d = &view["decision"];
+            if let Some(note) = d["note"].as_str().filter(|n| !n.is_empty()) {
+                println!("note: {note}");
+            }
+            let o = &view["outcome"];
+            if o.is_object() {
+                println!(
+                    "{} by {}, {}{}",
+                    o["outcome"].as_str().unwrap_or_default(),
+                    o["by"].as_str().unwrap_or_default(),
+                    planning_when(o["at"].as_str().unwrap_or_default()),
+                    o["origin"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| format!(", {s}"))
+                        .unwrap_or_default()
+                );
+                if let Some(r) = o["reason"].as_str().filter(|r| !r.is_empty()) {
+                    println!("reason: {r}");
+                }
+                if o["nearest"].is_object() {
+                    println!(
+                        "nearest valid move: {} {}",
+                        o["nearest"]["action"].as_str().unwrap_or_default(),
+                        o["nearest"]["target"].as_str().unwrap_or_default()
+                    );
+                }
+            } else {
+                println!(
+                    "pending: check it with `kanbanr planning check {id}`, then carry it out \
+                     with `{}` or decline it",
+                    planning_command(d)
+                );
+            }
+            Ok(())
+        }
+        PlanningCmd::Check { id } => {
+            let resp = client.get(&format!("{base}/{id}/check"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let a: Value = serde_json::from_str(&resp)?;
+            let view = planning_view(client, &p, id)?;
+            println!("{}", planning_line(&view));
+            let list = |k: &str| -> Vec<String> {
+                a[k].as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            };
+            let (problems, warnings) = (list("problems"), list("warnings"));
+            for x in &problems {
+                println!("problem: {x}");
+            }
+            for x in &warnings {
+                println!("warning: {x}");
+            }
+            let nearest = a["nearest"].is_object().then(|| {
+                let (action, target) = (
+                    a["nearest"]["action"].as_str().unwrap_or_default(),
+                    a["nearest"]["target"].as_str().unwrap_or_default(),
+                );
+                if target.is_empty() {
+                    action.to_string()
+                } else {
+                    format!("{action}:{target}")
+                }
+            });
+            if let Some(n) = &nearest {
+                println!("nearest valid move: {n}");
+            }
+            if let Some(first) = problems.first() {
+                println!(
+                    "decline it: kanbanr planning decline {id} --reason \"{first}\"{}",
+                    nearest
+                        .map(|n| format!(" --nearest {n}"))
+                        .unwrap_or_default()
+                );
+            } else {
+                println!(
+                    "{}carry it out: {}",
+                    if warnings.is_empty() {
+                        ""
+                    } else {
+                        "judge the warnings; if it holds, "
+                    },
+                    planning_command(&view["decision"])
+                );
+            }
+            Ok(())
+        }
+        PlanningCmd::Decline {
+            id,
+            reason,
+            nearest,
+        } => {
+            let nearest = nearest.as_deref().map(|n| {
+                let (action, target) = n.split_once(':').unwrap_or((n, ""));
+                json!({ "action": action.trim(), "target": target.trim() })
+            });
+            let mut body = json!({ "by": planning_by(cli)?, "reason": reason });
+            if let Some(n) = nearest {
+                body["nearest"] = n;
+            }
+            let resp = client.write(Method::Post, &format!("{base}/{id}/decline"), Some(body))?;
+            print_write(cli, &resp, format!("declined {id}: {reason}"));
+            Ok(())
+        }
+    }
+}
+
 fn run_baseline(cli: &Cli, client: &Backend, cmd: &BaselineCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let base = format!("/projects/{p}/baseline");
@@ -9211,6 +9542,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Process(cmd) => run_process_drift(cli, &client, cmd),
         Command::Profile(cmd) => run_profile(cli, &client, cmd),
         Command::Baseline(cmd) => run_baseline(cli, &client, cmd),
+        Command::Planning(cmd) => run_planning(cli, &client, cmd),
         Command::Facts { cmd } => run_facts(cli, &client, cmd.as_ref()),
         Command::Catalog { cmd } => run_catalog(cli, &client, cmd.as_ref()),
         Command::Activity => run_activity(cli, &client),
@@ -10047,6 +10379,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             } else {
                 print_board(&project);
                 if let (Some(line), _) = decisions_summary(&client, &p) {
+                    println!("{line}");
+                }
+                if let Some(line) = planning_waiting_line(&client, &p) {
                     println!("{line}");
                 }
             }
@@ -14678,16 +15013,24 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             )?;
             print_write(cli, &resp, format!("removed {version}"));
         }
-        ReleaseCmd::Plan { version, items } => {
+        ReleaseCmd::Plan {
+            version,
+            items,
+            decision,
+        } => {
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/plan", urlencode_segment(version)),
-                Some(json!({ "items": items })),
+                Some(plan_body(cli, items, decision.as_deref())?),
             )?;
             print_write(
                 cli,
                 &resp,
-                format!("planned {} into {version}", items.join(", ")),
+                format!(
+                    "planned {} into {version}{}",
+                    items.join(", "),
+                    carried_note(decision.as_deref())
+                ),
             );
             // The command's result, not a log (DEF-029): what the sprint is missing and how to add it.
             if !cli.json {
@@ -15679,20 +16022,25 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 println!("  {date}  {bar} {}", num(&json!(remaining)));
             }
         }
-        SprintCmd::Plan { code, items } => {
+        SprintCmd::Plan {
+            code,
+            items,
+            decision,
+        } => {
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/plan"),
-                Some(json!({ "items": items })),
+                Some(plan_body(cli, items, decision.as_deref())?),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             print_write(
                 cli,
                 &resp,
                 format!(
-                    "planned {} into {code} ({} committed)",
+                    "planned {} into {code} ({} committed){}",
                     items.join(", "),
-                    num(&v["committed"])
+                    num(&v["committed"]),
+                    carried_note(decision.as_deref())
                 ),
             );
             if !cli.json
@@ -15701,11 +16049,11 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 eprintln!("  warning: {over}");
             }
         }
-        SprintCmd::Unplan { items } => {
+        SprintCmd::Unplan { items, decision } => {
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/sprints/unplan"),
-                Some(json!({ "items": items })),
+                Some(plan_body(cli, items, decision.as_deref())?),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             // One clause per sprint the items left, then the items that were in none.
@@ -15733,7 +16081,11 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             if !none.is_empty() {
                 said.push(format!("{} was in no sprint", none.join(", ")));
             }
-            print_write(cli, &resp, said.join("; "));
+            print_write(
+                cli,
+                &resp,
+                format!("{}{}", said.join("; "), carried_note(decision.as_deref())),
+            );
         }
         SprintCmd::Start { code } => {
             // With the git model on, the sprint's branch is made in this repository (FEAT-189).

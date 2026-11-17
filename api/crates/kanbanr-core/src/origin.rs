@@ -147,6 +147,11 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
                 | ["projects", _, "baseline", "revisions", _, "withdraw"]
                 // A planning decision's decline says where it was declined (FTR-049).
                 | ["projects", _, "planning", _, "decline"]
+                // A plan route says where a planning decision it carries out was carried out
+                // (FTR-049): the outcome's origin is stamped, never taken from the body.
+                | ["projects", _, "sprints", _, "plan"]
+                | ["projects", _, "sprints", "unplan"]
+                | ["projects", _, "releases", _, "plan"]
         ),
         // A pack removed says where it was removed (FTR-033).
         "DELETE" => matches!(seg.as_slice(), ["projects", _, "baseline", "packs", _]),
@@ -993,6 +998,31 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-049 R-9: the plan routes that carry out a planning decision are stamped with their
+    /// origin, so the outcome says where it was carried out, whatever the body claims; they are
+    /// not verdicts, and their reads are not stamped.
+    #[test]
+    fn a_plan_route_carrying_out_a_decision_is_stamped_with_its_origin() {
+        for route in [
+            "/projects/demo/sprints/SP-001/plan",
+            "/projects/demo/sprints/unplan",
+            "/projects/demo/releases/v0.9.0/plan",
+        ] {
+            assert!(stamps_origin("POST", route), "{route}");
+            assert!(!stamps_origin("GET", route), "{route}");
+            assert!(!is_verdict_route("POST", route), "{route}");
+            assert_eq!(verdict_of_route("POST", route), None, "{route}");
+            let claimed = json!({"items": ["FEAT-001"], "decision": "PD-1", "origin": "monitor"});
+            let stamped = stamp("POST", route, Some(&claimed), Origin::Terminal).unwrap();
+            assert_eq!(from_body(&stamped), "terminal", "{route}");
+            assert_eq!(stamped["decision"], "PD-1", "{route}");
+        }
+        assert!(!stamps_origin(
+            "POST",
+            "/projects/demo/sprints/SP-001/start"
+        ));
     }
 
     // ---- a scratch board -----------------------------------------------------------------
