@@ -308,3 +308,32 @@ Each git container logs lines of the form `<UTC time> sync: [<board>] <text>`. R
 - **Every request answers 403.** The request's host is not the Ingress host. Behind another proxy,
   name its host in `KANBANR_ALLOWED_HOSTS` (compose), or set `ingress_host` to the name readers
   use.
+
+## Before you publish
+
+A hosted site serves everything on each board's remote: items, specs, docs, ADRs, the activity log,
+and the board's git history. Before you make the host public, check that none of it holds a
+person's name, an account, a repository or server name, a home path, or a quotation that should
+not be public.
+
+`scripts/privacy_scan.py` lists those for you. Run it over each board, with your own pattern file:
+
+```
+python3 scripts/privacy_scan.py --board kanbanr=<board folder> --board other=<board folder> \
+    --patterns <your pattern file> --out <output folder>
+```
+
+- **Keep the pattern file outside the repositories.** Each line is `<category>: <regex>`, such as
+  `name: Alex`, or `allow: <regex>` for a match that may stand; `#` starts a comment. Its contents
+  are exactly what must not be public, so never commit it. The script already knows home paths,
+  e-mail addresses, scratch paths and quotations attributed to the person.
+- **Keep the output outside the repositories too.** `hits.tsv` holds every matched text, so the
+  script refuses an output folder inside a board or inside kanbanr's own repository. `summary.md`
+  holds only counts and each board's HEAD.
+- **Fix what it finds at HEAD** through the normal board writes, one commit per item or doc, and
+  run it again until it exits 0. Quotations and commit identities are listed for you to read, and
+  never fail the scan by themselves.
+- **History is reported, never rewritten.** A match that only history holds is listed, with its
+  commit, for you to judge. Rewriting a pushed board would break every clone, the site's included.
+
+The script only reads the boards. It needs Python 3 and `git`, nothing else.

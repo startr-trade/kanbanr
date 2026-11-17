@@ -37,6 +37,8 @@ All notable changes to kanbanr are documented here. The format follows
   page (FTR-040).
 - A read-only site for Kubernetes, as an OpenTofu/Terraform module that serves a list of boards
   and keeps each current from its git remote, and a compose file for the same locally (FTR-030).
+- `scripts/privacy_scan.py` lists names, accounts, home paths and other private text in a board, at
+  HEAD and in its history, before the board is published (MNT-012).
 
 ### Changed
 
