@@ -161,6 +161,9 @@ pub struct Scope {
     /// The tip of `branch` at issue; drift counts `base..branch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The one task a build scope covers, `TL-001/T3` (FTR-060); none for an item-wide scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     pub issued_by: String,
     pub issued_at: String,
     pub expires_at: String,
@@ -224,7 +227,12 @@ impl Scope {
         }
         let mut parts = Vec::new();
         if self.operations.contains(&Operation::TaskState) {
-            parts.push(format!("`kanbanr task state {} …`", self.item));
+            match self.task.as_deref().and_then(|t| t.split_once('/')) {
+                Some((todo, key)) => {
+                    parts.push(format!("`kanbanr task state {} {todo} {key} …`", self.item))
+                }
+                None => parts.push(format!("`kanbanr task state {} …`", self.item)),
+            }
         }
         if self.operations.contains(&Operation::TestState) {
             parts.push(format!("`kanbanr test {} …`", self.item));
@@ -353,6 +361,8 @@ pub struct Requested {
     pub op: Option<Operation>,
     pub project: String,
     pub item: Option<String>,
+    /// The task a `task.state` write names, `TL-001/T3` (FTR-060).
+    pub task: Option<String>,
     /// What to call it in a refusal.
     pub label: String,
 }
@@ -456,6 +466,8 @@ pub fn active<'a>(scopes: &'a [Scope], now: &str) -> Vec<&'a Scope> {
 pub struct IssueRequest {
     pub role: Role,
     pub item: String,
+    /// The one task a build scope covers: `T3` or `TL-001/T3` (FTR-060).
+    pub task: Option<String>,
     /// Default [`DEFAULT_HOURS`], at most [`MAX_HOURS`].
     pub hours: Option<u32>,
     pub note: String,
@@ -499,7 +511,8 @@ fn item_branch(
     let main = gitmodel::main_of(config, root);
     let facts = coderepo::branch_facts(root, &main)?;
     if let Some(existing) = facts.branches.keys().find(|b| {
-        crate::scm::item_code_from_branch(pattern, b).as_deref() == Some(item.code.as_str())
+        crate::scm::task_of_branch(b).is_none()
+            && crate::scm::item_code_from_branch(pattern, b).as_deref() == Some(item.code.as_str())
     }) {
         return Ok((existing.clone(), false));
     }
@@ -536,6 +549,150 @@ fn open_task_refusal(item: &FeatureItem) -> Option<String> {
             code = item.code
         )
     })
+}
+
+/// The task `task` names on `item` (FTR-060), as `(todo, key)`: `T3` across the item's lists (in
+/// none, `TaskNotFound`; in two, refused naming both), or `TL-001/T3`.
+fn resolve_task(item: &FeatureItem, task: &str) -> Result<(String, String)> {
+    let task = task.trim();
+    if let Some((todo, key)) = task.split_once('/') {
+        let list = item
+            .todo_lists
+            .iter()
+            .find(|l| l.code == todo)
+            .ok_or_else(|| CoreError::TodoListNotFound(todo.to_string(), item.code.clone()))?;
+        if !list.tasks.iter().any(|t| t.key == key) {
+            return Err(CoreError::TaskNotFound(key.to_string(), todo.to_string()));
+        }
+        return Ok((todo.to_string(), key.to_string()));
+    }
+    let lists: Vec<&str> = item
+        .todo_lists
+        .iter()
+        .filter(|l| l.tasks.iter().any(|t| t.key == task))
+        .map(|l| l.code.as_str())
+        .collect();
+    match lists.as_slice() {
+        [] => {
+            let all: Vec<&str> = item.todo_lists.iter().map(|l| l.code.as_str()).collect();
+            Err(CoreError::TaskNotFound(
+                task.to_string(),
+                if all.is_empty() {
+                    format!("any list of {}", item.code)
+                } else {
+                    all.join(", ")
+                },
+            ))
+        }
+        [one] => Ok((one.to_string(), task.to_string())),
+        many => Err(CoreError::Unsupported(format!(
+            "{} has a task {task} in {}: name the list, `--task {}/{task}`",
+            item.code,
+            many.join(" and "),
+            many[0]
+        ))),
+    }
+}
+
+/// Why a scope for task `todo/key` of `item` can't be issued now (FTR-060): the task is
+/// Completed, a task it waits on is not, a live task scope's task writes its files (or is this
+/// task), or a live item-wide build scope holds the item.
+#[allow(clippy::too_many_arguments)]
+fn task_scope_refusal(
+    store: &Store,
+    id: &str,
+    project: &Project,
+    item: &FeatureItem,
+    todo: &str,
+    key: &str,
+    scopes: &[Scope],
+    now: &str,
+) -> Result<Option<String>> {
+    let graph = crate::taskgraph::TaskGraph::build(store, id, Some(project))?;
+    let node_of = |code: &str, todo: &str, key: &str| {
+        let tid = crate::taskgraph::TaskId {
+            project: id.to_string(),
+            code: code.to_string(),
+            todo: todo.to_string(),
+            key: key.to_string(),
+        };
+        graph.nodes.get(&tid.to_string())
+    };
+    let task = format!("{todo}/{key}");
+    let Some(node) = node_of(&item.code, todo, key) else {
+        return Err(CoreError::TaskNotFound(key.to_string(), todo.to_string()));
+    };
+    if node.state == crate::models::TaskState::Completed {
+        return Ok(Some(format!(
+            "{} {task} is Completed: there is nothing left to build under a scope for it",
+            item.code
+        )));
+    }
+    let label = |t: &crate::taskgraph::TaskId| {
+        if t.project == id {
+            t.local()
+        } else {
+            t.to_string()
+        }
+    };
+    let waiting: Vec<String> =
+        node.depends_on
+            .iter()
+            .chain(node.implicit.iter())
+            .filter(|d| {
+                graph.nodes.get(&d.to_string()).is_none_or(|n| {
+                    n.state != crate::models::TaskState::Completed && !n.item_terminal
+                })
+            })
+            .map(label)
+            .collect();
+    if !waiting.is_empty() {
+        return Ok(Some(format!(
+            "{} {task} waits on {}: issue its scope once they are Completed",
+            item.code,
+            waiting.join(", ")
+        )));
+    }
+    let append_only = &project.config.tasks.append_only;
+    for s in active(scopes, now) {
+        if s.role != Role::Build {
+            continue;
+        }
+        match s.task.as_deref() {
+            None if s.item == item.code => {
+                return Ok(Some(format!(
+                    "agent scope {} is live for the whole of {}: one agent holds the item, so                      revoke it before issuing a scope for one of its tasks",
+                    s.id, item.code
+                )));
+            }
+            None => {}
+            Some(t) if s.item == item.code && t == task => {
+                return Ok(Some(format!(
+                    "{} {task} is already worked under agent scope {}",
+                    item.code, s.id
+                )));
+            }
+            Some(t) => {
+                let Some((other_todo, other_key)) = t.split_once('/') else {
+                    continue;
+                };
+                let Some(other) = node_of(&s.item, other_todo, other_key) else {
+                    continue;
+                };
+                let paths = crate::taskgraph::overlaps(&node.writes, &other.writes, append_only);
+                if !paths.is_empty() {
+                    return Ok(Some(format!(
+                        "{} {task} writes {}, which {}/{t} is writing under agent scope {}: issue                          it once that scope is revoked",
+                        item.code,
+                        paths.join(", "),
+                        s.item,
+                        s.id
+                    )));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Issue a scope (R-1): record it with its issuer, item, operations, branch, issue time and
@@ -595,8 +752,58 @@ pub fn issue(
         }
     }
     let mut scopes = load(store, id)?;
+    // A task scope (FTR-060): its task must be free to start, and no other scope may hold it.
+    let task = match (&req.task, req.role) {
+        (None, _) => None,
+        (Some(t), Role::Build) => Some(resolve_task(&item, t)?),
+        (Some(_), Role::Design) => {
+            return Err(CoreError::Unsupported(
+                "a design scope reads the whole item; only a build scope covers one task".into(),
+            ));
+        }
+    };
+    if let Some((todo, key)) = &task {
+        if let Some(why) = task_scope_refusal(store, id, &project, &item, todo, key, &scopes, now)?
+        {
+            return Err(CoreError::Unsupported(why));
+        }
+    } else if req.role == Role::Build
+        && let Some(s) = active(&scopes, now)
+            .into_iter()
+            .find(|s| s.role == Role::Build && s.item == item.code && s.task.is_some())
+    {
+        return Err(CoreError::Unsupported(format!(
+            "agent scope {} is live for {} {}: while a task of {} is worked under its own scope,              a scope for the whole item is refused; revoke the task scopes first",
+            s.id,
+            item.code,
+            s.task.as_deref().unwrap_or_default(),
+            item.code
+        )));
+    }
+    let mut made: Vec<String> = Vec::new();
     let (branch, base, created) = if req.role == Role::Build {
-        let (branch, created) = item_branch(store, &project, &item, root)?;
+        let (item_branch, item_created) = item_branch(store, &project, &item, root)?;
+        if item_created {
+            made.push(item_branch.clone());
+        }
+        let (branch, created) = match &task {
+            Some((todo, key)) => {
+                let name = crate::scm::task_branch_for(&item_branch, todo, key);
+                if coderepo::branch_exists(root, &name) {
+                    (name, false)
+                } else {
+                    if let Err(e) = coderepo::create_branch_from(root, &name, &item_branch) {
+                        for b in &made {
+                            let _ = coderepo::delete_branch(root, b);
+                        }
+                        return Err(e);
+                    }
+                    made.insert(0, name.clone());
+                    (name, true)
+                }
+            }
+            None => (item_branch, item_created),
+        };
         if let Some(at) = coderepo::worktree_of(root, &branch) {
             let main_root = coderepo::worktree_facts(root).map(|w| w.main_root);
             let agent = main_root.as_ref().is_some_and(|m| {
@@ -623,6 +830,7 @@ pub fn issue(
         operations: req.role.operations(),
         branch,
         base,
+        task: task.map(|(todo, key)| format!("{todo}/{key}")),
         issued_by: by.to_string(),
         issued_at: now.to_string(),
         expires_at: add_hours(now, hours)?,
@@ -637,7 +845,7 @@ pub fn issue(
     };
     scopes.push(scope.clone());
     if let Err(e) = save(store, id, &scopes) {
-        if created && let Some(b) = &scope.branch {
+        for b in &made {
             let _ = coderepo::delete_branch(root, b);
         }
         return Err(e);
@@ -1115,14 +1323,20 @@ pub fn requested(method: &str, path: &str, body: Option<&Value>) -> Vec<Requeste
         op,
         project: project.clone(),
         item,
+        task: None,
         label,
     };
     match (method.to_ascii_uppercase().as_str(), segs.as_slice()) {
-        ("PUT", ["projects", _, "features", code, "todos", _, "tasks", _]) => vec![one(
-            Some(Operation::TaskState),
-            Some(code.to_string()),
-            "task.state".into(),
-        )],
+        ("PUT", ["projects", _, "features", code, "todos", todo, "tasks", key]) => {
+            vec![Requested {
+                task: Some(format!("{todo}/{key}")),
+                ..one(
+                    Some(Operation::TaskState),
+                    Some(code.to_string()),
+                    "task.state".into(),
+                )
+            }]
+        }
         ("PUT", ["projects", _, "features", code, "tests", _, _]) => vec![one(
             Some(Operation::TestState),
             Some(code.to_string()),
@@ -1145,7 +1359,19 @@ pub fn requested(method: &str, path: &str, body: Option<&Value>) -> Vec<Requeste
                     let name = op.get("op").and_then(Value::as_str).unwrap_or_default();
                     let item = op.get("feature").and_then(Value::as_str).map(String::from);
                     match Operation::parse(name).filter(|o| *o != Operation::Commit) {
-                        Some(o) => one(Some(o), item, o.as_str().to_string()),
+                        Some(o) => {
+                            let field = |k: &str| op.get(k).and_then(Value::as_str);
+                            let task = match (o, field("todo"), field("key")) {
+                                (Operation::TaskState, Some(todo), Some(key)) => {
+                                    Some(format!("{todo}/{key}"))
+                                }
+                                _ => None,
+                            };
+                            Requested {
+                                task,
+                                ..one(Some(o), item, o.as_str().to_string())
+                            }
+                        }
                         None => one(None, item, format!("batch op {name}")),
                     }
                 })
@@ -1193,6 +1419,19 @@ pub fn check(scope: &Scope, req: &[Requested], now: &str) -> std::result::Result
             return Err(Refusal(format!(
                 "{head}: `{}` is on {other}; this scope covers {} only.",
                 r.label, scope.item
+            )));
+        }
+        // A task scope records its own task's state only (FTR-060).
+        if let Some(task) = scope.task.as_deref()
+            && r.op == Some(Operation::TaskState)
+            && r.task.as_deref() != Some(task)
+        {
+            return Err(Refusal(format!(
+                "{head}: `{}` is on {} {}; this scope covers {} {task} only.",
+                r.label,
+                scope.item,
+                r.task.as_deref().unwrap_or("no named task"),
+                scope.item
             )));
         }
     }
@@ -1349,7 +1588,6 @@ pub fn brief(scope: &Scope, project: &Project) -> String {
 
 /// The brief with the temporary directory named in its Tests row (a parameter, for tests).
 pub fn brief_in(scope: &Scope, project: &Project, temp: &Path) -> String {
-    let _ = project;
     let temp = temp.display();
     let item = &scope.item;
     let mut out = format!(
@@ -1377,16 +1615,64 @@ pub fn brief_in(scope: &Scope, project: &Project, temp: &Path) -> String {
             scope.id
         )),
     }
+    // A task scope (FTR-060): the task, its files and its branch.
+    let task = scope
+        .task
+        .as_deref()
+        .map(|t| t.split_once('/').unwrap_or(("", t)));
+    if let Some((todo, key)) = task {
+        let found = project
+            .features
+            .iter()
+            .find(|f| f.code == *item)
+            .and_then(|f| f.todo_lists.iter().find(|l| l.code == todo))
+            .and_then(|l| l.tasks.iter().find(|t| t.key == key));
+        let text = found
+            .map(|t| format!(": {}", t.text.trim()))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "This scope covers one task of {item}, {todo}/{key}{text}\n"
+        ));
+        let quoted = |v: &[String]| {
+            v.iter()
+                .map(|p| format!("`{p}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match found {
+            Some(t) if !t.writes.is_empty() => {
+                out.push_str(&format!("Its files: {}.\n", quoted(&t.writes)))
+            }
+            _ => out.push_str(&format!(
+                "Its files: none recorded, so it works alone within {item}.\n"
+            )),
+        }
+        if let Some(t) = found.filter(|t| !t.reads.is_empty()) {
+            out.push_str(&format!("It reads: {}.\n", quoted(&t.reads)));
+        }
+        if let Some(branch) = &scope.branch {
+            out.push_str(&format!("Its branch: {branch}.\n"));
+        }
+        out.push('\n');
+    }
     out.push_str("| Area | Allowed | Refused |\n|---|---|---|\n");
     out.push_str("| Read the board and the code | everything | — |\n");
     match scope.role {
         Role::Build => {
             let branch = scope.branch.as_deref().unwrap_or_default();
-            out.push_str(&format!(
-                "| {item}'s record | `kanbanr task state {item} <TL> <T> <state>` as each task \
-                 starts and lands; `kanbanr test {item} R-n \"<name>\" green --rev <sha>` | moves, \
-                 approvals, sign-offs, definitions, specs, docs, config, other items |\n"
-            ));
+            match task {
+                Some((todo, key)) => out.push_str(&format!(
+                    "| {item}'s record | `kanbanr task state {item} {todo} {key} <state>` as the \
+                     task starts and lands; `kanbanr test {item} R-n \"<name>\" green --rev <sha>` \
+                     | other tasks, moves, approvals, sign-offs, definitions, specs, docs, config, \
+                     other items |\n"
+                )),
+                None => out.push_str(&format!(
+                    "| {item}'s record | `kanbanr task state {item} <TL> <T> <state>` as each task \
+                     starts and lands; `kanbanr test {item} R-n \"<name>\" green --rev <sha>` | \
+                     moves, approvals, sign-offs, definitions, specs, docs, config, other items |\n"
+                )),
+            }
             out.push_str(&format!(
                 "| Code | commits on {branch}, each naming {item} (`kanbanr commit`) | commits on \
                  any other branch |\n"
@@ -1661,6 +1947,7 @@ mod tests {
             operations: role.operations(),
             branch: (role == Role::Build).then(|| "feat/FEAT-214-agent-scopes".to_string()),
             base: None,
+            task: None,
             issued_by: "Venkatraman B".into(),
             issued_at: "2026-10-21T09:00:00Z".into(),
             expires_at: "2026-10-21T17:00:00Z".into(),
@@ -2830,6 +3117,368 @@ mod tests {
         let revoked = revoke(&store, "demo", "SC-007", "me", "done", NOW).unwrap();
         assert_eq!(delete_agent_branch(&revoked, &repo, "main"), None);
         assert!(coderepo::branch_exists(&repo, "worktree-agent-a1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- FTR-060: task scopes -----------------------------------------------------------
+
+    /// A board under the temp dir (L-41) with FEAT-001 "Cart" at the build stage holding `tasks`
+    /// in TL-001, and a repository on `main` whose item branch `feat/FEAT-001-cart` is one commit
+    /// ahead of it.
+    fn task_fixture(name: &str, tasks: Vec<crate::models::Task>) -> (PathBuf, Store, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-ftr060-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (board, repo) = (dir.join("board"), dir.join("repo"));
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(
+            board.starts_with(std::env::temp_dir()),
+            "the test's own board"
+        );
+        for args in [
+            &["init", "-q", "--initial-branch=main"][..],
+            &["config", "user.email", "t@example.com"],
+            &["config", "user.name", "T"],
+            &["config", "commit.gpgsign", "false"],
+            &["commit", "-q", "--allow-empty", "-m", "base"],
+            &["switch", "-q", "-c", "feat/FEAT-001-cart"],
+            &["commit", "-q", "--allow-empty", "-m", "cart work"],
+            &["switch", "-q", "main"],
+        ] {
+            coderepo::git(&repo, args).unwrap();
+        }
+        let store = Store::new(board);
+        let config = crate::ProjectConfig::default_for("demo");
+        let build = config
+            .role_status(crate::config::Role::Build)
+            .expect("a build stage");
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut f = store
+            .add_feature("demo", "Cart", "", "M", Some("FEAT-001".into()))
+            .unwrap();
+        // Remove the item's files at its first status, then write it at the build stage.
+        fn remove_item_files(dir: &Path, code: &str) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    remove_item_files(&p, code);
+                } else if p.file_stem().is_some_and(|s| s.to_string_lossy() == code) {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+        remove_item_files(&store.features_dir("demo"), &f.code);
+        f.status = build;
+        f.todo_lists = vec![crate::models::TodoList {
+            code: "TL-001".into(),
+            description: String::new(),
+            tasks,
+            created_at: crate::now_rfc3339(),
+            extra: Default::default(),
+        }];
+        store.persist_feature_for_test("demo", &f).unwrap();
+        (dir, store, repo)
+    }
+
+    fn task(
+        key: &str,
+        state: crate::models::TaskState,
+        deps: &[&str],
+        writes: &[&str],
+    ) -> crate::models::Task {
+        crate::models::Task {
+            key: key.into(),
+            text: format!("task {key}"),
+            state,
+            changed_at: None,
+            depends_on: deps.iter().map(|d| d.to_string()).collect(),
+            writes: writes.iter().map(|w| w.to_string()).collect(),
+            reads: vec![],
+            estimate_h: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn issue_req(task: Option<&str>) -> IssueRequest {
+        IssueRequest {
+            role: Role::Build,
+            item: "FEAT-001".into(),
+            task: task.map(String::from),
+            hours: None,
+            note: String::new(),
+            worktree: None,
+            hooks_ready: true,
+            claude_hooks_ready: true,
+        }
+    }
+
+    /// FTR-060 R-5: a task scope records its task and works on its own branch,
+    /// `<item-branch>--tl-001-t2`, made from the item branch's tip; `item_branch` never takes a
+    /// task branch for the item's.
+    #[test]
+    fn a_task_scope_records_its_task_on_its_own_branch() {
+        use crate::models::TaskState::NotStarted as Open;
+        assert_eq!(
+            crate::scm::task_branch_for("feat/FTR-060-tasks-carry", "TL-001", "T3"),
+            "feat/FTR-060-tasks-carry--tl-001-t3"
+        );
+        assert_eq!(
+            crate::scm::task_of_branch("feat/FTR-060-tasks-carry--tl-001-t3"),
+            Some(("TL-001".to_string(), "T3".to_string()))
+        );
+        for not_a_task in [
+            "feat/FTR-060-tasks-carry",
+            "feat/FTR-060-tasks-carry--notes",
+            "feat/x--tl-1-3",
+            "--tl-001-t3",
+        ] {
+            assert_eq!(crate::scm::task_of_branch(not_a_task), None, "{not_a_task}");
+        }
+
+        let (dir, store, repo) = task_fixture(
+            "records",
+            vec![
+                task("T1", Open, &[], &["src/a.rs"]),
+                task("T2", Open, &[], &["src/b.rs"]),
+            ],
+        );
+        let now = crate::now_rfc3339();
+        let issued = issue(
+            &store,
+            "demo",
+            &issue_req(Some("T2")),
+            "me",
+            Some(&repo),
+            &now,
+        )
+        .unwrap();
+        let s = &issued.scope.scope;
+        assert_eq!(s.task.as_deref(), Some("TL-001/T2"));
+        assert_eq!(s.branch.as_deref(), Some("feat/FEAT-001-cart--tl-001-t2"));
+        assert!(issued.branch_created);
+        assert_eq!(
+            coderepo::rev_parse(&repo, "feat/FEAT-001-cart--tl-001-t2").unwrap(),
+            coderepo::rev_parse(&repo, "feat/FEAT-001-cart").unwrap(),
+            "made from the item branch's tip"
+        );
+        assert_eq!(
+            s.base,
+            coderepo::rev_parse(&repo, "feat/FEAT-001-cart").ok()
+        );
+        // Recorded on the board, and in the view the routes answer with.
+        assert_eq!(
+            load(&store, "demo").unwrap()[0].task.as_deref(),
+            Some("TL-001/T2")
+        );
+        let view = serde_json::to_value(&issued.scope).unwrap();
+        assert_eq!(view["task"], "TL-001/T2");
+        // The brief names the task, its files and its branch.
+        for want in [
+            "This scope covers one task of FEAT-001, TL-001/T2: task T2",
+            "Its files: `src/b.rs`.",
+            "Its branch: feat/FEAT-001-cart--tl-001-t2.",
+            "`kanbanr task state FEAT-001 TL-001 T2 <state>`",
+            "| Code | commits on feat/FEAT-001-cart--tl-001-t2, each naming FEAT-001",
+        ] {
+            assert!(
+                issued.brief.contains(want),
+                "the brief says {want:?}:\n{}",
+                issued.brief
+            );
+        }
+        // The task the graph reads it from is the scope's.
+        let graph = crate::taskgraph::TaskGraph::build(&store, "demo", None).unwrap();
+        assert_eq!(
+            graph.nodes["demo:FEAT-001/TL-001/T2"].scope.as_deref(),
+            Some(s.id.as_str())
+        );
+        assert_eq!(graph.nodes["demo:FEAT-001/TL-001/T1"].scope, None);
+
+        // With only a task branch left, the item's branch is made afresh, never the task's.
+        coderepo::git(&repo, &["branch", "-D", "feat/FEAT-001-cart"]).unwrap();
+        let project = store.load_meta("demo").unwrap();
+        let item = project.feature("FEAT-001").unwrap().clone();
+        assert_eq!(
+            item_branch(&store, &project, &item, &repo).unwrap(),
+            ("feat/FEAT-001-cart".to_string(), true)
+        );
+        // A key in no list, and a list that does not exist, are named.
+        assert!(matches!(
+            resolve_task(&item, "T9"),
+            Err(CoreError::TaskNotFound(k, _)) if k == "T9"
+        ));
+        assert!(matches!(
+            resolve_task(&item, "TL-002/T1"),
+            Err(CoreError::TodoListNotFound(..))
+        ));
+        assert_eq!(
+            resolve_task(&item, "TL-001/T1").unwrap(),
+            ("TL-001".to_string(), "T1".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-060 R-5: a task scope allows its own task's state, and refuses another task's —
+    /// through the route and in a batch — naming the task.
+    #[test]
+    fn a_task_scope_allows_only_its_own_task_state() {
+        let s = Scope {
+            task: Some("TL-001/T3".into()),
+            ..scope(Role::Build)
+        };
+        let put = |key: &str| {
+            requested(
+                "PUT",
+                &format!("/projects/kanbanr/features/FEAT-214/todos/TL-001/tasks/{key}"),
+                Some(&json!({"state": "InProgress"})),
+            )
+        };
+        assert_eq!(put("T3")[0].task.as_deref(), Some("TL-001/T3"));
+        assert!(check(&s, &put("T3"), NOW).is_ok());
+        let other = check(&s, &put("T2"), NOW).unwrap_err();
+        assert!(
+            other
+                .0
+                .starts_with("refused by agent scope SC-007 (build, FEAT-214)"),
+            "{other}"
+        );
+        assert!(
+            other.0.contains(
+                "`task.state` is on FEAT-214 TL-001/T2; this scope covers FEAT-214 TL-001/T3 only."
+            ),
+            "{other}"
+        );
+        let batch = |key: &str| {
+            requested(
+                "POST",
+                "/projects/kanbanr/batch",
+                Some(&json!({"operations": [
+                    {"op": "task.state", "feature": "FEAT-214", "todo": "TL-001", "key": key, "state": "Completed"},
+                    {"op": "test.state", "feature": "FEAT-214", "requirement": "R-1", "test": "x", "state": "green"},
+                ]})),
+            )
+        };
+        assert!(check(&s, &batch("T3"), NOW).is_ok(), "its task and a test");
+        let smuggled = check(&s, &batch("T1"), NOW).unwrap_err();
+        assert!(
+            smuggled.0.contains("is on FEAT-214 TL-001/T1"),
+            "{smuggled}"
+        );
+        // An item-wide scope still records any of its item's tasks.
+        assert!(check(&scope(Role::Build), &put("T2"), NOW).is_ok());
+        // What it may do names the task.
+        let refused = check(
+            &s,
+            &requested("POST", "/projects/kanbanr/features/FEAT-214/move", None),
+            NOW,
+        )
+        .unwrap_err();
+        assert!(
+            refused
+                .0
+                .contains("Under this scope you may: `kanbanr task state FEAT-214 TL-001 T3 …`"),
+            "{refused}"
+        );
+    }
+
+    /// FTR-060 R-5: a task scope is refused while its task waits on another, while a live task
+    /// scope writes its files or works it, while an item-wide build scope holds the item, and for
+    /// a Completed task; an item-wide scope is refused while a task scope lives.
+    #[test]
+    fn a_task_scope_is_refused_while_its_task_waits_or_conflicts() {
+        use crate::models::TaskState::{Completed as Done, NotStarted as Open};
+        let (dir, store, repo) = task_fixture(
+            "refused",
+            vec![
+                task("T1", Open, &[], &["src/a.rs"]),
+                task("T2", Open, &["T1"], &["src/b.rs"]),
+                task("T3", Open, &[], &["src/"]),
+                task("T4", Done, &[], &["src/d.rs"]),
+                task("T5", Open, &[], &["docs/x.md", "CHANGELOG.md"]),
+                task("T6", Open, &[], &["CHANGELOG.md"]),
+            ],
+        );
+        let now = crate::now_rfc3339();
+        let go = |t: Option<&str>| issue(&store, "demo", &issue_req(t), "me", Some(&repo), &now);
+        let refused = |t: Option<&str>| match go(t) {
+            Err(CoreError::Unsupported(why)) => why,
+            other => panic!("{t:?} was not refused: {other:?}"),
+        };
+
+        let why = refused(Some("T2"));
+        assert!(
+            why.contains("FEAT-001 TL-001/T2 waits on FEAT-001/TL-001/T1"),
+            "{why}"
+        );
+        let why = refused(Some("T4"));
+        assert!(why.contains("FEAT-001 TL-001/T4 is Completed"), "{why}");
+        assert!(
+            load(&store, "demo").unwrap().is_empty(),
+            "a refusal records nothing"
+        );
+        assert!(
+            !coderepo::branch_exists(&repo, "feat/FEAT-001-cart--tl-001-t2"),
+            "nor makes a branch"
+        );
+
+        let first = go(Some("T1")).unwrap().scope.scope;
+        let why = refused(Some("T3"));
+        assert!(
+            why.contains(&format!(
+                "FEAT-001 TL-001/T3 writes src/a.rs, which FEAT-001/TL-001/T1 is writing under agent scope {}",
+                first.id
+            )),
+            "{why}"
+        );
+        let why = refused(Some("TL-001/T1"));
+        assert!(
+            why.contains(&format!("is already worked under agent scope {}", first.id)),
+            "{why}"
+        );
+        // An append-only file never conflicts.
+        go(Some("T5")).unwrap();
+        go(Some("T6")).unwrap();
+        // The whole item, while a task scope lives.
+        let why = refused(None);
+        assert!(
+            why.contains("a scope for the whole item is refused; revoke the task scopes first"),
+            "{why}"
+        );
+
+        for s in load(&store, "demo").unwrap() {
+            revoke(&store, "demo", &s.id, "me", "done", &now).unwrap();
+        }
+        let whole = go(None).unwrap().scope.scope;
+        assert_eq!(whole.task, None);
+        assert_eq!(whole.branch.as_deref(), Some("feat/FEAT-001-cart"));
+        let why = refused(Some("T3"));
+        assert!(
+            why.contains(&format!(
+                "agent scope {} is live for the whole of FEAT-001",
+                whole.id
+            )),
+            "{why}"
+        );
+        // A design scope covers no task.
+        let design = issue(
+            &store,
+            "demo",
+            &IssueRequest {
+                role: Role::Design,
+                ..issue_req(Some("T3"))
+            },
+            "me",
+            Some(&repo),
+            &now,
+        );
+        assert!(
+            matches!(design, Err(CoreError::Unsupported(_))),
+            "{design:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -311,6 +311,31 @@ pub fn code_from_branch(pattern: &str, branch: &str) -> Option<String> {
     (!code.is_empty()).then(|| code.to_string())
 }
 
+/// The branch a task scope works on (FTR-060): `<item-branch>--<todo>-<key>`, the suffix
+/// lower-cased (`feat/FTR-060-tasks-carry--tl-001-t3`). A `/` suffix is impossible: git cannot hold
+/// both `feat/x` and `feat/x/t3`.
+pub fn task_branch_for(item_branch: &str, todo: &str, key: &str) -> String {
+    format!(
+        "{item_branch}--{}-{}",
+        todo.to_ascii_lowercase(),
+        key.to_ascii_lowercase()
+    )
+}
+
+/// The task a task branch names, `("TL-001", "T3")` out of its `--tl-001-t3` suffix; `None` for
+/// any other branch. A slug never holds `--`, so an item branch is never read as a task branch.
+pub fn task_of_branch(branch: &str) -> Option<(String, String)> {
+    let (item, suffix) = branch.rsplit_once("--")?;
+    if item.is_empty() {
+        return None;
+    }
+    let rest = suffix.strip_prefix("tl-")?;
+    let (list, key) = rest.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    let n = key.strip_prefix('t')?;
+    (digits(list) && digits(n)).then(|| (format!("TL-{list}"), format!("T{n}")))
+}
+
 /// `FEAT-053` out of `FEAT-053-measurement-history`: letters, a dash, digits.
 fn code_prefix(rest: &str) -> Option<String> {
     let (prefix, tail) = rest.split_once('-')?;

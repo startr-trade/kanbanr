@@ -14957,3 +14957,97 @@ fn capture_says_when_a_wrapper_condensed_a_test_run() {
     assert!(run(&["feature", "show", "FEAT-001"]).contains("- [x] `a::b`"));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-060 R-5: two task scopes build one item at once, each in its own worktree on its own task
+/// branch: each records only its own task's state and commits only on its branch.
+#[test]
+fn two_task_scopes_build_one_item_on_separate_branches() {
+    let fx = ScopeFx::new("task-scopes");
+    let out = fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--task", "T1"],
+    );
+    assert!(
+        out.contains(
+            "issued SC-001 (build, FEAT-001 TL-001/T1) — created feat/FEAT-001-cart--tl-001-t1"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("This scope covers one task of FEAT-001, TL-001/T1: one"),
+        "{out}"
+    );
+    let out = fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--task", "TL-001/T2"],
+    );
+    assert!(
+        out.contains("issued SC-002 (build, FEAT-001 TL-001/T2)"),
+        "{out}"
+    );
+    let whole = fx.refused(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    assert!(
+        whole.contains("a scope for the whole item is refused"),
+        "{whole}"
+    );
+
+    let mut lanes = Vec::new();
+    for (id, key, other, name) in [
+        ("SC-001", "T1", "T2", "agent-t1"),
+        ("SC-002", "T2", "T1", "agent-t2"),
+    ] {
+        let wt = fx.worktree(name);
+        fx.ok(&wt, &["scope", "claim", id]);
+        let branch = format!("feat/FEAT-001-cart--tl-001-{}", key.to_ascii_lowercase());
+        assert_eq!(
+            fx.ok_git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"])
+                .trim(),
+            branch
+        );
+        let out = fx.ok(
+            &wt,
+            &["task", "state", "FEAT-001", "TL-001", key, "InProgress"],
+        );
+        assert!(out.contains(&format!("{key} -> InProgress")), "{out}");
+        let refused = fx.refused(
+            &wt,
+            &["task", "state", "FEAT-001", "TL-001", other, "InProgress"],
+        );
+        assert!(
+            refused.contains(&format!(
+                "is on FEAT-001 TL-001/{other}; this scope covers FEAT-001 TL-001/{key} only"
+            )),
+            "{refused}"
+        );
+        let file = format!("{}.rs", key.to_ascii_lowercase());
+        std::fs::write(wt.join(&file), "fn work() {}\n").unwrap();
+        fx.ok_git(&wt, &["add", &file]);
+        fx.ok(&wt, &["commit", "-m", &format!("work on {key}")]);
+        let msg = fx.ok_git(&wt, &["log", "-1", "--format=%B"]);
+        assert!(
+            msg.contains(&format!(
+                "Agent-Scope: {id} (build, by the agent for FEAT-001)"
+            )),
+            "{msg}"
+        );
+        lanes.push((branch, file));
+    }
+    // Each branch holds its own task's commit, and not the other's.
+    for (i, (branch, file)) in lanes.iter().enumerate() {
+        let (_, theirs) = &lanes[1 - i];
+        let files = fx.ok_git(&fx.work, &["ls-tree", "--name-only", branch]);
+        assert!(files.lines().any(|l| l == file), "{branch}: {files}");
+        assert!(!files.lines().any(|l| l == theirs), "{branch}: {files}");
+    }
+    // Each agent recorded its own task: both are in progress.
+    let v: serde_json::Value =
+        serde_json::from_str(&fx.ok(&fx.work, &["export", "FEAT-001", "--format", "json"]))
+            .unwrap();
+    let states: Vec<&str> = v["todo_lists"][0]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["state"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(states, ["InProgress", "InProgress"]);
+}

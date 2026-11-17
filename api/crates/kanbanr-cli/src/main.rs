@@ -663,6 +663,10 @@ enum ScopeCmd {
         /// Bind it to this worktree at once, when it already exists.
         #[arg(long)]
         worktree: Option<PathBuf>,
+        /// Cover one task of the item (`T3`, or `TL-001/T3`), on its own branch made from the
+        /// item's: the agent records only that task's state (FTR-060).
+        #[arg(long)]
+        task: Option<String>,
     },
     /// Bind a scope to this worktree: the agent's first command. A build agent is switched to its
     /// item's branch.
@@ -8568,6 +8572,7 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             duration,
             note,
             worktree,
+            task,
         } => {
             let root = code_repo();
             let hooks_ready = root
@@ -8591,6 +8596,9 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             if let Some(w) = worktree {
                 body["worktree"] = json!(project::normalize(w).to_string_lossy());
             }
+            if let Some(t) = task {
+                body["task"] = json!(t);
+            }
             let resp = client.write_in(Method::Post, &base, Some(body), root.as_deref())?;
             if cli.json {
                 println!("{}", pretty(&resp));
@@ -8603,8 +8611,13 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             } else {
                 String::new()
             };
+            let task = s["task"]
+                .as_str()
+                .map(|t| format!(" {t}"))
+                .unwrap_or_default();
             println!(
-                "issued {} ({}, {}){made}. Put this at the top of the agent's brief, verbatim:\n",
+                "issued {} ({}, {}{task}){made}. Put this at the top of the agent's brief, \
+                 verbatim:\n",
                 s["id"].as_str().unwrap_or_default(),
                 s["role"].as_str().unwrap_or_default(),
                 s["item"].as_str().unwrap_or_default()
@@ -13843,6 +13856,7 @@ Refs: kanbanr:FEAT-082/R-1""#;
             operations: kanbanr_core::agentscope::Role::Build.operations(),
             branch: Some("agent-1".into()),
             base: None,
+            task: None,
             issued_by: "V".into(),
             issued_at: "2099-01-01T00:00:00Z".into(),
             expires_at: "2099-01-02T00:00:00Z".into(),
