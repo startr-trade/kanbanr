@@ -534,6 +534,8 @@ fn the_summary_and_a_group_slice_meet_their_budgets() {
         slice_ms < std::time::Duration::from_millis(150),
         "the {largest} slice's median warm read is {slice_ms:?}"
     );
+    // The same budgets with the daemon started in a code repository, as the person's runs.
+    budgets_with_a_code_repository();
 }
 
 /// The monitor over `data` started in a code repository, as the person's daemon runs: `repo` is
@@ -580,13 +582,13 @@ fn serve_in_repo(s: &Scratch, data: &Path, project: &str, repo: &Path) -> String
     panic!("the monitor did not come up on {bind}");
 }
 
-/// DEF-106 R-9: with a code repository (20 commits), the summary and the largest group's slice are
-/// kept: the first read computes them, and the median of 20 further reads is under 50 ms and under
-/// 150 ms. The memo looks at the repository again every 30 seconds
+/// DEF-106 R-9, the second half of `the_summary_and_a_group_slice_meet_their_budgets`: with a code
+/// repository (20 commits), the summary and the largest group's slice are kept: the first read
+/// computes them, and the median of 20 further reads is under 50 ms and under 150 ms. The memo
+/// looks at the repository again every 30 seconds
 /// (`memo::tests::a_read_slower_than_the_recheck_is_served_from_the_memo_next_time` runs it across
 /// shorter rechecks); the reads here come inside one.
-#[test]
-fn the_summary_and_a_group_slice_meet_their_budgets_with_a_code_repository() {
+fn budgets_with_a_code_repository() {
     let s = Scratch::new("review-groups-budget-code");
     let (data, _) = generated_board(&s, 400, 2_000);
     let repo = s.0.join("code");
