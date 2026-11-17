@@ -3315,6 +3315,10 @@ fn dispatch_routes(
         }
 
         // ---- project charter (FEAT-046) ----
+        ("GET", ["projects", p, "charter", "progress"]) => {
+            only_params(query, &[])?;
+            ser(&crate::charterview::charter_progress(store, p)?)
+        }
         ("GET", ["projects", p, "charter"]) => {
             store.load_meta(p)?; // the project must exist; an absent charter is a valid default
             ser(&crate::charter::load(store, p)?)

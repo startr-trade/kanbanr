@@ -267,6 +267,13 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::charter::Charter>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/charter/progress",
+            summary: "The charter's progress: each goal's items and proven requirements, the \
+                      releases travelled, the lessons by theme and cycle, and recent wins",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::charterview::CharterProgress>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/facts",
             summary: "The project's facts (FTR-005): its languages, runtimes, where it runs, its \
                       parts and its data; `{}` when no facts record is set",

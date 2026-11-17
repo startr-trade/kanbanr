@@ -597,6 +597,95 @@ fn reads_on_a_board_this_size_stay_within_the_byte_budget() {
     eprintln!("index {raw} B raw, {gz} B gzip; {}", report.join("; "));
 }
 
+/// FTR-076 R-10: the Charter page reads `/charter` and `/charter/progress`; on the generated
+/// board plus 60 lessons and 12 shipped releases the two together stay within 32 KB gzipped and
+/// the progress read alone within 24 KB.
+#[test]
+fn the_charter_page_reads_stay_within_their_byte_budget() {
+    use kanbanr_core::releases::{Release, ReleaseState};
+    let scratch = Scratch::new("charter-budget");
+    let data = scratch.data();
+    let shape = Shape {
+        items: 400,
+        requirements: 4,
+        spec_bytes: 6_500,
+    };
+    let codes = generate(&data, "shop", shape);
+    let store = kanbanr_core::Store::new(data.clone());
+    kanbanr_core::dispatch::dispatch(
+        &store,
+        "PUT",
+        "/projects/shop/config/cadence",
+        Some(&json!({"releases": true})),
+    )
+    .unwrap();
+    let per = codes.len() / 12 + 1;
+    let releases: Vec<Release> = (0..12)
+        .map(|k| Release {
+            version: format!("v0.{k}.0"),
+            state: ReleaseState::Shipped,
+            shipped_at: format!("2026-{:02}-01T10:00:00Z", k + 1),
+            shipped: codes.iter().skip(per * k).take(per).cloned().collect(),
+            ..Default::default()
+        })
+        .collect();
+    std::fs::write(
+        data.join("projects/shop/releases.yaml"),
+        kanbanr_core::yaml::to_string(&releases).unwrap(),
+    )
+    .unwrap();
+    for (i, code) in codes.iter().enumerate() {
+        // One file edit each: `set_feature_release` loads all 400 items every time.
+        let version = format!("v0.{}.0", (i / per).min(11));
+        retitle(
+            &data,
+            "shop",
+            code,
+            &format!("code: {code}\n"),
+            &format!("code: {code}\nrelease: {version}\n"),
+        );
+    }
+    for n in 1..=60 {
+        kanbanr_core::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects/shop/lessons",
+            Some(&json!({
+                "lesson": format!("Lesson {n}: state the boundary first, then write the test that names it."),
+                "evidence": "It went wrong once, was found in review, and was fixed with a test.",
+                "tags": [format!("tag-{}", n % 12), "testing"],
+                "goals": [format!("G-{}", n % 3 + 1)],
+                "from_item": codes[n % codes.len()],
+                "confidence": 0.8,
+            })),
+        )
+        .unwrap();
+    }
+    commit_all(&data, "fixture");
+    let url = serve(&data);
+    let api = |path: &str| format!("{url}/api/projects/shop{path}");
+
+    let progress = get_gz(&api("/charter/progress"));
+    let progress_gz = progress.body.len();
+    let body = progress.json();
+    assert_eq!(body["lessons"]["total"], 60, "{}", body["lessons"]);
+    assert_eq!(body["route"].as_array().unwrap().len(), 12);
+    let charter_gz = get_gz(&api("/charter")).body.len();
+    eprintln!(
+        "charter/progress {} B raw, {progress_gz} B gzip; charter {charter_gz} B gzip",
+        progress.decoded().len()
+    );
+    assert!(
+        progress_gz <= 24 * 1024,
+        "/charter/progress is {progress_gz} bytes gzipped, over 24 KB"
+    );
+    assert!(
+        progress_gz + charter_gz <= 32 * 1024,
+        "the Charter page reads {} bytes gzipped, over 32 KB",
+        progress_gz + charter_gz
+    );
+}
+
 /// A code repository with one commit, made with `git` inside the scratch folder (under the system
 /// temporary directory, L-41).
 fn code_repo(scratch: &Scratch) -> PathBuf {
