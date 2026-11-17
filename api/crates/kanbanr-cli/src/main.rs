@@ -5878,6 +5878,10 @@ fn print_merge(cli: &Cli, resp: &str) {
             steps.join(", then ")
         );
     }
+    if let Some(path) = v["notes_redrafted"].as_str() {
+        let branch = m["into"].as_str().unwrap_or("the release branch");
+        println!("draft notes on {branch} drafted again ({path})");
+    }
     if let Some(next) = v["forward_next"].as_str() {
         println!("{next}");
     } else if let Some(version) = v["forward_needed"].as_str() {

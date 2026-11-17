@@ -1412,6 +1412,9 @@ fn dispatch_routes(
             if let Some(sent) = &moved.sent_back {
                 out["release_sent_back"] = json!(sent);
             }
+            if let Some(path) = &moved.notes_redrafted {
+                out["notes_redrafted"] = json!(path);
+            }
             if let Some(note) = &moved.note {
                 out["note"] = json!(note);
             }
