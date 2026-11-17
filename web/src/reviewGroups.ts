@@ -100,6 +100,26 @@ export function selectAll(
   return { group: sel.group, keys: new Set(rows.filter((r) => selectable(r, pending)).map((r) => r.key)) };
 }
 
+/** The pill text of a tests-only Approve row. It must equal `TESTS_ONLY_PILL` in the core's reviewgroups.rs. */
+export const TESTS_ONLY_PILL = "tests only";
+
+/** Is `row` an approval that changed only in its tests (DEF-111)? */
+export function isTestsOnly(row: ReviewRow): boolean {
+  return row.pills.includes(TESTS_ONLY_PILL);
+}
+
+/**
+ * The selection of exactly the tests-only rows that can be selected now, in the selection's
+ * group. Any earlier selection is replaced, as Select all replaces it.
+ */
+export function selectTestsOnly(
+  sel: Selection,
+  rows: ReviewRow[],
+  pending: ReadonlySet<string> = new Set(),
+): Selection {
+  return { group: sel.group, keys: new Set(rows.filter((r) => isTestsOnly(r) && selectable(r, pending)).map((r) => r.key)) };
+}
+
 /**
  * The selection a group opens with: the rows Claude prepared a record for that can be decided.
  * The person can untick any of it, so the selection is always the person's.

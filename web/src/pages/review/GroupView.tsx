@@ -29,9 +29,11 @@ import {
   batchOf,
   decisionBody,
   emptySelection,
+  isTestsOnly,
   preselected,
   select,
   selectAll,
+  selectTestsOnly,
   type Selection,
 } from "../../reviewGroups";
 import { Empty, ErrorState, LoadingState, WorkingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
@@ -259,6 +261,7 @@ export function GroupPanel(p: {
 
   const n = [...sel.keys].filter((k) => slice.rows.some((r) => r.key === k)).length;
   const selectable = shown.filter((r) => reasonFor(r) === "");
+  const testsOnlyN = shown.filter((r) => isTestsOnly(r) && !pending.has(r.key) && r.blocked === "").length;
   const allOn = selectable.length > 0 && selectable.every((r) => sel.keys.has(r.key));
   const preparedSel: Selection = {
     group: sel.group,
@@ -295,6 +298,16 @@ export function GroupPanel(p: {
               />{" "}
               Select all
             </label>
+          ) : null}
+          {p.writable && slice.key === "approve" && shown.some(isTestsOnly) ? (
+            <button
+              type="button"
+              className="btn"
+              disabled={testsOnlyN === 0}
+              onClick={() => setSel((s) => selectTestsOnly(s, shown, pending))}
+            >
+              Select tests only ({testsOnlyN})
+            </button>
           ) : null}
           <input
             className="review-reason review-group-filter"
