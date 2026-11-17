@@ -51,7 +51,7 @@ areas:
         fits_when: "Tools, static sites, or a product whose state is a few files"
         costs: "Concurrent writes, queries and format changes are the code's to handle if they ever arise"
         records:
-          - {kind: non_goal, text: "No database: state lives in files"}
+          - {kind: non_goal, text: "No database: state lives in files", excludes: [postgresql, sqlite, mysql-mariadb, document-store]}
 
   - id: migrations
     title: Migrations

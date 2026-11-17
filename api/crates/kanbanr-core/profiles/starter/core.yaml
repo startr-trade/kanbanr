@@ -171,7 +171,7 @@ areas:
         detect: [{fact: production, any: [developer-machine]}]
         records:
           - {kind: constraint, text: "The product runs on the user's machine"}
-          - {kind: non_goal, text: No server to operate}
+          - {kind: non_goal, text: No server to operate, excludes: [host, containers, kubernetes]}
 
   - id: iac
     title: Infrastructure as code
@@ -318,7 +318,7 @@ areas:
         fits_when: "Libraries, tools, or prototypes where the factors do not apply"
         costs: "Designs get no checklist of cross-cutting concerns beyond the other areas"
         records:
-          - {kind: non_goal, text: No practice baseline beyond this record}
+          - {kind: non_goal, text: No practice baseline beyond this record, excludes: [fifteen-factors, twelve-factors, house-rules]}
 
   - id: edge
     title: The edge
