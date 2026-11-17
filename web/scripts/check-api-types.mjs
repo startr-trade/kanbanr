@@ -43,7 +43,7 @@ let checked = 0;
 
 /** The documented path a template literal in api.ts names, e.g. `/projects/${…}/sprints/${…}`. */
 function docPath(template) {
-  const name = { projects: "{project}", features: "{code}", sprints: "{sprint}", releases: "{version}", groups: "{key}", rows: "{row}" };
+  const name = { projects: "{project}", features: "{code}", sprints: "{sprint}", releases: "{version}", groups: "{key}", rows: "{row}", planning: "{id}" };
   // A substitution glued to a segment (`activity${params}`) is a query string, not a segment.
   const segs = template
     .split("?")[0]
