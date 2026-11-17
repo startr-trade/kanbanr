@@ -1359,6 +1359,18 @@ enum FeatureCmd {
         #[arg(long, value_delimiter = ',')]
         depends_on: Option<Vec<String>>,
     },
+    /// Bring old items to their kinds' code prefixes (FTR-056): print the plan, one line per
+    /// rename, with its rev. Writes nothing. `--apply --rev <REV>` is the person's own decision,
+    /// refused to Claude in every mode: Claude shows the plan, then `kanbanr prepare recode`.
+    Recode {
+        /// Apply the plan named by `--rev`, as one board commit. Each item keeps its old code
+        /// as an alias.
+        #[arg(long, requires = "rev")]
+        apply: bool,
+        /// The plan's rev, as printed. A plan that changed since is refused.
+        #[arg(long, value_name = "REV", requires = "apply")]
+        rev: Option<String>,
+    },
     // (Feature items are permanent — there is intentionally no `feature delete`.)
 }
 
@@ -1953,6 +1965,18 @@ enum PrepareCmd {
         /// Where the evidence came from (see `prepare signoff --help`), such as
         /// `doc:architecture/context.md`. At least one.
         #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
+    },
+    /// Prepare the bulk recode of codes to their kinds' prefixes (FTR-056), for the person to
+    /// confirm on the Review page. Show them the plan first (`kanbanr feature recode`). Claude
+    /// never applies it itself.
+    Recode {
+        /// Where the plan was agreed (see `prepare signoff --help`). Defaults to the plan itself.
+        #[arg(long = "source", value_name = "S")]
         sources: Vec<String>,
         /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
         /// Review page confirms in one action. No slash or whitespace.
@@ -12875,6 +12899,35 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             }
             Ok(())
         }
+        FeatureCmd::Recode { apply, rev } => {
+            if *apply {
+                let rev = rev.clone().unwrap_or_default();
+                let by = verdict_author(cli, None)?;
+                let resp = client.write(
+                    Method::Post,
+                    &format!("/projects/{p}/recode"),
+                    Some(json!({"rev": rev, "by": by})),
+                )?;
+                let n = serde_json::from_str::<Value>(&resp)
+                    .ok()
+                    .and_then(|v| v["renames"].as_array().map(Vec::len))
+                    .unwrap_or(0);
+                print_write(
+                    cli,
+                    &resp,
+                    format!("recoded {n} item{}", if n == 1 { "" } else { "s" }),
+                );
+                return Ok(());
+            }
+            let resp = client.get(&format!("/projects/{p}/recode"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let plan: kanbanr_core::aliases::RecodePlan = serde_json::from_str(&resp)?;
+                print!("{}", plan.text());
+            }
+            Ok(())
+        }
         FeatureCmd::Show { code } => {
             // --json prints the item as `export --format json` does (DEF-009 R-1).
             let format = if cli.json { "json" } else { "md" };
@@ -15108,6 +15161,23 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             }),
             "the acceptance of the system baseline".to_string(),
         ),
+        PrepareCmd::Recode {
+            sources: s,
+            batch: _,
+        } => {
+            let mut given = sources(s)?;
+            if given.is_empty() {
+                given.push(json!({"label": "the plan from kanbanr feature recode", "url": ""}));
+            }
+            (
+                json!({
+                    "kind": "recode",
+                    "subject": {},
+                    "sources": given,
+                }),
+                "the recode of codes to their kinds' prefixes".to_string(),
+            )
+        }
         PrepareCmd::Ratify {
             code,
             reason,
@@ -15161,7 +15231,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
     Ok(())
 }
 
-/// The batch a prepare command names (FTR-037, FTR-055), for the six that take one: one place
+/// The batch a prepare command names (FTR-037, FTR-055), for the seven that take one: one place
 /// writes it to the record's body.
 fn batch_of(cmd: &PrepareCmd) -> Option<&String> {
     match cmd {
@@ -15170,6 +15240,7 @@ fn batch_of(cmd: &PrepareCmd) -> Option<&String> {
         | PrepareCmd::Gate { batch, .. }
         | PrepareCmd::Ratify { batch, .. }
         | PrepareCmd::SystemBaseline { batch, .. }
+        | PrepareCmd::Recode { batch, .. }
         | PrepareCmd::Test { batch, .. } => batch.as_ref(),
         PrepareCmd::Text { .. } | PrepareCmd::List { .. } => None,
     }

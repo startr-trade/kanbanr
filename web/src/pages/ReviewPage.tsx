@@ -18,6 +18,7 @@ import { DelegationEvidence } from "./review/DelegationEvidence";
 import { EntryEvidence } from "./review/EntryEvidence";
 import { GroupView, REVIEW_TAGS } from "./review/GroupView";
 import { ManualEvidence } from "./review/ManualEvidence";
+import { RecodeEvidence, planOf } from "./review/RecodeEvidence";
 import { SystemBaselineEvidence } from "./review/SystemBaselineEvidence";
 import { GROUP_KEY as SYSTEM_BASELINE_GROUP } from "../systemBaselineView";
 
@@ -298,6 +299,8 @@ export default function ReviewPage() {
         />
       );
     }
+    // The prepared bulk recode (FTR-056): its plan as a from → to table; Confirm is the group's.
+    if (e.prepared?.kind === "recode") return <RecodeEvidence plan={planOf(e.prepared)} />;
     if (e.delegation || e.delegated) {
       return (
         <DelegationEvidence

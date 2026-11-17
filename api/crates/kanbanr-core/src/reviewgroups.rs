@@ -31,6 +31,9 @@ const DELEGATED: &str = "delegated";
 const ADR: &str = "adr";
 /// The system baseline's acceptance (FTR-006): one project-level row, first in the order.
 const SYSTEM_BASELINE: &str = "system-baseline";
+/// The bulk recode of codes to their kinds' prefixes, prepared for the person to confirm
+/// (FTR-056): one row, last in the order.
+const RECODE: &str = "recode";
 /// The group key of the sign-off named `release`.
 const RELEASE_SIGNOFF: &str = "release-signoff";
 /// The prefix of a sign-off's group key other than the named ones.
@@ -173,6 +176,7 @@ fn label_and_action(key: &str) -> (String, &'static str) {
         DELEGATED => ("Delegated decisions".into(), "Keep"),
         ADR => ("Proposed ADRs".into(), "Accept"),
         SYSTEM_BASELINE => ("System baseline".into(), "Accept"),
+        RECODE => ("Recode".into(), "Confirm"),
         _ => match signoff_of_key(key) {
             Some(name) => (format!("Sign off {name}"), "Sign off"),
             None => (key.to_string(), ""),
@@ -184,7 +188,15 @@ fn label_and_action(key: &str) -> (String, &'static str) {
 fn is_known(key: &str) -> bool {
     matches!(
         key,
-        SYSTEM_BASELINE | APPROVE | RATIFY | WHICH_RELEASE | MANUAL | DELEGATION | DELEGATED | ADR
+        SYSTEM_BASELINE
+            | APPROVE
+            | RATIFY
+            | WHICH_RELEASE
+            | MANUAL
+            | DELEGATION
+            | DELEGATED
+            | ADR
+            | RECODE
     ) || signoff_of_key(key).is_some()
 }
 
@@ -271,7 +283,8 @@ impl Board {
     }
 
     /// Every group key in the fixed order: system-baseline, approve, ratify, the sign-offs in the
-    /// order the process's gates name them, which-release, manual, delegation, delegated, adr.
+    /// order the process's gates name them, which-release, manual, delegation, delegated, adr,
+    /// recode.
     fn keys(&self) -> Vec<String> {
         let config = &self.meta.config;
         let gates = config.effective_gates();
@@ -312,7 +325,7 @@ impl Board {
         ];
         keys.extend(signoffs);
         keys.extend(
-            [WHICH_RELEASE, MANUAL, DELEGATION, DELEGATED, ADR]
+            [WHICH_RELEASE, MANUAL, DELEGATION, DELEGATED, ADR, RECODE]
                 .into_iter()
                 .map(String::from),
         );
@@ -652,6 +665,58 @@ impl Board {
         }]
     }
 
+    /// The rows of the recode group: each open prepared `recode` record (only the newest is open;
+    /// a newer one supersedes). Not blocked in conversation mode: confirming it is the person's
+    /// own decision, not an item verdict (FTR-056).
+    fn recode_rows(&self) -> Vec<Built> {
+        self.prepared
+            .iter()
+            .filter(|v| v.state == crate::prepared::State::Open && v.record.kind == "recode")
+            .map(|v| {
+                let plan = v
+                    .record
+                    .fields
+                    .get("plan")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
+                let n = plan.lines().filter(|l| l.contains(" \u{2192} ")).count();
+                let mut pills = Vec::new();
+                push_record_pills(&mut pills, Some(v));
+                Built {
+                    row: ReviewRow {
+                        key: v.record.id.clone(),
+                        code: RECODE.to_string(),
+                        title: format!("Recode {}", count_of(n, "item", "items")),
+                        what: format!(
+                            "{} to their kinds' prefixes, prepared {}",
+                            count_of(n, "item", "items"),
+                            day(&v.record.at)
+                        ),
+                        records: format!(
+                            "Renames {} to their kinds' prefixes; each keeps its old code as an \
+                             alias (plan `{}`)",
+                            count_of(n, "item", "items"),
+                            v.record.rev.chars().take(7).collect::<String>()
+                        ),
+                        release: String::new(),
+                        sprint: String::new(),
+                        changed_at: v.record.at.clone(),
+                        blocked: String::new(),
+                        pills,
+                        prepared: v.record.id.clone(),
+                        batch: v.record.batch.clone().unwrap_or_default(),
+                        rev: v.record.rev.clone(),
+                        spec_rev: String::new(),
+                        signoff: String::new(),
+                        requirement: String::new(),
+                        test: String::new(),
+                    },
+                    counted: true,
+                }
+            })
+            .collect()
+    }
+
     fn adr_row(&self, a: &Adr) -> Built {
         let blocked = if a.missing.is_empty() {
             String::new()
@@ -701,6 +766,7 @@ impl Board {
                 .collect(),
             ADR => self.adrs.iter().map(|a| self.adr_row(a)).collect(),
             SYSTEM_BASELINE => self.baseline_rows(),
+            RECODE => self.recode_rows(),
             _ => self
                 .entries
                 .iter()
@@ -918,6 +984,18 @@ pub fn evidence(
                     .into_iter()
                     .find(|v| v.record.id == r.id)
             });
+        }
+        RECODE => {
+            out.prepared = Some(
+                crate::prepared::list(store, p, &crate::prepared::ListQuery::default(), repo)?
+                    .into_iter()
+                    .find(|v| {
+                        v.record.id == row
+                            && v.record.kind == "recode"
+                            && v.state == crate::prepared::State::Open
+                    })
+                    .ok_or_else(missing)?,
+            );
         }
         ADR => {
             out.adr = Some(
@@ -1165,6 +1243,13 @@ pub fn ops(
                 ),
                 // The person's acceptance as they saw it: `rev` is the pins' hash they were shown.
                 SYSTEM_BASELINE => (format!("/projects/{p}/catalog/baseline/accept"), pins(item)),
+                RECODE => {
+                    return Err(refuse(
+                        "a recode is confirmed from its prepared plan: ask Claude to prepare it \
+                         (`kanbanr prepare recode`)"
+                            .into(),
+                    ));
+                }
                 MANUAL => {
                     return Err(refuse(format!(
                         "{} cannot be decided here: {DO_THE_CHECK}",
@@ -1870,6 +1955,115 @@ mod tests {
         );
         assert!(!prepared.rows[0].prepared.is_empty());
         assert!(prepared.rows[0].pills.contains(&"prepared".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-056 R-7: a prepared `recode` record is its own group, last in the order, with one row
+    /// and the Confirm action. The group decision expands through the prepared record, so the
+    /// verdict is `Recode`, refused to Claude in every mode.
+    #[test]
+    fn a_prepared_recode_plan_is_its_own_group() {
+        let (store, dir) = board();
+        for t in ["one", "two"] {
+            store
+                .add_feature_of_kind("demo", t, "", "M", None, Some("bug"))
+                .unwrap();
+        }
+        store
+            .set_codes(
+                "demo",
+                crate::config::CodesChange {
+                    set: [("bug".to_string(), "DEF".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        define(&store, "Plain", statement("Never approved"));
+        let keys = |store: &Store| -> Vec<String> {
+            summary(store, "demo", None)
+                .unwrap()
+                .into_iter()
+                .map(|g| g.key)
+                .collect()
+        };
+        assert_eq!(keys(&store), ["approve"], "nothing prepared: no group");
+        let rec = crate::prepared::prepare(
+            &store,
+            "demo",
+            &serde_json::json!({
+                "kind": "recode",
+                "origin": "conversation",
+                "sources": [{"label": "the plan the person was shown", "url": ""}],
+            }),
+            None,
+        )
+        .unwrap();
+        let g = summary(&store, "demo", None).unwrap();
+        let last = g.last().unwrap();
+        assert_eq!(last.key, "recode", "{g:?}");
+        assert_eq!(
+            (last.label.as_str(), last.action.as_str(), last.count),
+            ("Recode", "Confirm", 1)
+        );
+        assert_eq!(last.prepared, 1);
+        let s = slice(&store, "demo", "recode", None).unwrap();
+        assert_eq!(s.rows.len(), 1);
+        assert_eq!(s.rows[0].prepared, rec.id);
+        assert!(s.rows[0].what.starts_with("2 items"), "{}", s.rows[0].what);
+        let ev = evidence(&store, "demo", "recode", &s.rows[0].key, None).unwrap();
+        let plan = ev.prepared.unwrap().record.fields["plan"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(plan.contains("FEAT-001 \u{2192} DEF-001"), "{plan}");
+        let decision = |by: &str| GroupDecision {
+            group: "recode".into(),
+            action: "Confirm".into(),
+            by: by.into(),
+            items: vec![DecisionItem {
+                key: s.rows[0].key.clone(),
+                code: s.rows[0].code.clone(),
+                prepared: rec.id.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let o = ops(
+            &store,
+            "demo",
+            &decision("Ada"),
+            crate::origin::Origin::Monitor,
+            None,
+        )
+        .unwrap();
+        assert_eq!(o.len(), 1);
+        assert_eq!(o[0].path, "/projects/demo/recode");
+        assert_eq!(
+            crate::origin::verdict_of_route(&o[0].method, &o[0].path),
+            Some(crate::origin::Verdict::Recode)
+        );
+        // Claude is refused, in every mode.
+        let ctx = crate::origin::DecisionContext::monitor_mode();
+        assert!(
+            crate::origin::verdict_refusal(
+                crate::origin::Verdict::Recode,
+                crate::origin::Taker::Claude,
+                &ctx
+            )
+            .is_some()
+        );
+        assert!(
+            ops(
+                &store,
+                "demo",
+                &decision("Claude"),
+                crate::origin::Origin::Conversation,
+                None
+            )
+            .is_err()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

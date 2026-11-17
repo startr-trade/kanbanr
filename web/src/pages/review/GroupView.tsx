@@ -81,6 +81,8 @@ function sentenceOf(slice: GroupSlice): string {
       return "Accepting needs every section answered. Rejecting needs a reason, so it is done in the row.";
     case "system-baseline":
       return ACCEPT_SENTENCE;
+    case "recode":
+      return "Confirming renames every item in the plan to its kind's prefix, in one board commit. Each keeps its old code as an alias, so nothing that names it stops resolving. A plan the board has changed since is refused.";
     default:
       return `Signing off records the ${slice.label.replace(/^Sign off /, "")} sign-off for each selected item, pinned to the definition and spec as shown.`;
   }
