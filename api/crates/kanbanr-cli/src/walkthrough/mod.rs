@@ -2451,4 +2451,36 @@ mod tests {
         assert_eq!(asked_in_span(&log, None, &here), [("", "Ready?")]);
         assert_eq!(asked_in_span(&log, Some("9.9"), &here), [("", "Ready?")]);
     }
+
+    /// DEF-087 R-5: three doc comments in the walkthrough say what the code does: a title
+    /// selector's several fits are ambiguous, a pick's policy can be `runbook-context`, and a text
+    /// question without a question mark can be a request sentence.
+    #[test]
+    fn the_walkthrough_doc_comments_match_the_code() {
+        let runbook = include_str!("runbook.rs");
+        let answer = include_str!("answer.rs");
+        let driver = include_str!("driver.rs");
+        let gone = ["the newest when", "several do."].concat();
+        assert!(
+            !runbook.contains(&gone),
+            "runbook.rs still says the newest wins"
+        );
+        assert_eq!(
+            runbook
+                .matches("several equal fits are\n    /// ambiguous (`ambiguous-selector`), never a guess.")
+                .count(),
+            2
+        );
+        let old_policy = ["`runbook`, `recommended`, ", "`first` or `free-text`."].concat();
+        assert!(
+            !answer.contains(&old_policy),
+            "answer.rs leaves out runbook-context"
+        );
+        assert!(
+            answer.contains("`runbook`, `recommended`, `runbook-context`, `first` or `free-text`.")
+        );
+        assert!(driver.contains(
+            "With no question mark, a request\n/// sentence (in bold, or the message's last sentence) is the question."
+        ));
+    }
 }

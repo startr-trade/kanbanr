@@ -713,8 +713,9 @@ fn request_sentence(text: &str) -> Option<String> {
 /// sentence ending in `?` anywhere in the message is the question, bold or not, with or without
 /// prose after it; its options are the numbered or bulleted lines that follow it. A message with
 /// no question mark still asks when it lists an option marked "(recommended)" or uses a phrase
-/// that asks for an answer: the question is then that sentence. Only a message that asks nothing
-/// at all is settled (None). `context` keeps the whole message for the policy.
+/// that asks for an answer: the question is then that sentence. With no question mark, a request
+/// sentence (in bold, or the message's last sentence) is the question. Only a message that asks
+/// nothing at all is settled (None). `context` keeps the whole message for the policy.
 pub fn parse_text_question(text: &str) -> Option<TextQuestion> {
     let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
     let options_after = |from: usize| -> Vec<String> {
