@@ -9,8 +9,20 @@
 //     empties the selection; actionLabel names the action and the count;
 //   web::check_review_prepared_rows_arrive_selected (R-5) — preselected takes the prepared,
 //     unblocked rows; unticking one keeps the rest;
-//   web::check_review_url_names_the_group_and_open_rows (R-6), the pure parts — ?group=docs-folded
-//     #DEF-066 opens that tab and row; a changed filter writes r.q.
+//   web::check_review_url_names_the_group_and_open_rows (R-6) — ?group=docs-folded#DEF-066 opens
+//     that tab and row; a changed filter writes r.q; rendered, the hash opens the row and r.q
+//     filters the rows;
+// and the page (T5), rendered through scripts/lib/render.mjs:
+//   web::check_review_group_action_asks_first_naming_the_items (R-3) — askText's wording with the
+//     five-names-and-more rule; the group button arms on the first press (AskFirst) and posts
+//     api.decideGroup only on the second;
+//   web::check_review_undecidable_row_says_why_and_cannot_be_selected (R-2) — a blocked row shows
+//     its sentence beside a disabled checkbox, and select refuses it;
+//   web::check_review_rows_are_single_line_and_the_action_bar_is_sticky (R-9) — the group's head is
+//     sticky at the top; a row is an AccordionRow whose only second line is its records line, with
+//     its properties as pills;
+//   web::check_review_rows_are_headed (R-10) — each row's title is inside an h3, and the page has
+//     one h1.
 //
 // Usage: npm run check:review-groups
 import {
@@ -28,6 +40,10 @@ import {
   selectAll,
 } from "../src/reviewGroups.ts";
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
+import { readFileSync } from "node:fs";
+import { closeRender, render } from "./lib/render.mjs";
+
+const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
 function report(name, problems) {
   if (problems.length) {
@@ -193,7 +209,150 @@ let ok = true;
   const tableDefaults = { sort: "", dir: "asc", q: "" };
   eq(problems, "a changed filter writes r.q and keeps the group", writeState(url, { q: "manual" }, tableDefaults, TABLE_STATE_KEY), "?group=docs-folded&r.q=manual");
   eq(problems, "the filter is read back from r.q", parseState("?group=docs-folded&r.q=manual&r.sort=release", tableDefaults, TABLE_STATE_KEY), { sort: "release", dir: "asc", q: "manual" });
+
+  // Rendered: the hash opens the row it names, and r.q filters the rows drawn.
+  try {
+    const rows = [row("DEF-066", { what: "waiting on docs-folded" }), row("FTR-041", { what: "waiting on docs-folded" })];
+    const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
+    const opened = await renderPanel(docs, { url: "/p/x/review?group=docs-folded#DEF-066" });
+    const toggle = (id) => opened.document.getElementById(`${id}-head`);
+    eq(problems, "#DEF-066 opens that row", toggle("DEF-066")?.getAttribute("aria-expanded"), "true");
+    eq(problems, "the other row stays closed", toggle("FTR-041")?.getAttribute("aria-expanded"), "false");
+    eq(problems, "the open row's body is its evidence", opened.document.getElementById("DEF-066-body")?.textContent, "evidence of DEF-066");
+    const filtered = await renderPanel(docs, { url: "/p/x/review?group=docs-folded&r.q=FTR-041" });
+    eq(problems, "r.q filters the rows drawn", [...filtered.document.querySelectorAll("section.ui-row")].map((s) => s.id), ["FTR-041"]);
+    eq(problems, "the filter box shows r.q", filtered.document.querySelector("input.review-group-filter")?.getAttribute("value"), "FTR-041");
+  } catch (e) {
+    problems.push(`rendering the group failed: ${e?.stack ?? e}`);
+  }
   ok = report("web::check_review_url_names_the_group_and_open_rows", problems) && ok;
+}
+
+/** GroupView's panel, rendered with a slice and a body that names the row. */
+async function renderPanel(s, { url = "/p/x/review", writable = true } = {}) {
+  return render(
+    "src/pages/review/GroupView.tsx",
+    "GroupPanel",
+    { project: "x", slice: s, writable, who: "Alice <a@example.invalid>", tick: 0, body: (r) => `evidence of ${r.key}` },
+    { url },
+  );
+}
+
+try {
+  // R-3: every group action asks first, naming the items; the second press posts.
+  {
+    const problems = [];
+    const many = Array.from({ length: 7 }, (_, i) => row(`FTR-${i + 1}`));
+    const approve = slice("approve", "Approve", "Approve", many);
+    const sel = (keys) => ({ group: "approve", keys: new Set(keys) });
+    eq(problems, "one item", askText(approve, sel(["FTR-1"]), many), "Approve FTR-1?");
+    eq(problems, "three items", askText(approve, sel(["FTR-1", "FTR-2", "FTR-3"]), many), "Approve FTR-1, FTR-2 and FTR-3?");
+    eq(problems, "seven: five named and how many more", askText(approve, sel(many.map((r) => r.key)), many), "Approve FTR-1, FTR-2, FTR-3, FTR-4, FTR-5 and 2 more?");
+
+    const prepared = [row("DEF-1", { prepared: "P-1" }), row("DEF-2", { prepared: "P-2" })];
+    const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", prepared);
+    const { document, html } = await renderPanel(docs);
+    const head = document.querySelector(".review-group-head");
+    if (!head) problems.push(`no .review-group-head: ${html}`);
+    const buttons = [...(head?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim());
+    if (!buttons.includes("Sign off docs-folded 2")) problems.push(`the group button does not read "Sign off docs-folded 2": ${JSON.stringify(buttons)}`);
+    if (document.querySelector(".ask-first")) problems.push("the question shows before the first press");
+
+    const src = read("../src/pages/review/GroupView.tsx");
+    if (!/import \{ AskFirst \} from "\.\.\/\.\.\/components\/AskFirst"/.test(src)) problems.push("GroupView.tsx does not use DEF-034's AskFirst");
+    const posts = src.match(/api\.decideGroup\(/g) ?? [];
+    if (posts.length !== 1) problems.push(`GroupView.tsx posts api.decideGroup ${posts.length} times, expected once`);
+    const sendAt = src.indexOf("const send = ");
+    const sendEnd = src.indexOf("\n  };\n", sendAt);
+    if (sendAt < 0 || sendEnd < 0 || !src.slice(sendAt, sendEnd).includes("api.decideGroup(")) problems.push("api.decideGroup is not posted from send");
+    if (!/<AskFirst[\s\S]*?onConfirm=\{\(\) => send\(/.test(src)) problems.push("send is not AskFirst's onConfirm (the second press)");
+    if (/onClick=\{[^}]*\bsend\(/.test(src)) problems.push("a button posts on its first press (onClick calls send)");
+    if (!/guardInFlight\(/.test(src)) problems.push("the send does not go through guardInFlight (DEF-090)");
+
+    const readOnly = await renderPanel(docs, { writable: false });
+    if (readOnly.document.querySelector('input[type="checkbox"]')) problems.push("a read-only monitor shows checkboxes");
+    if ([...readOnly.document.querySelectorAll(".review-group-head button")].some((b) => /Sign off/.test(b.textContent))) {
+      problems.push("a read-only monitor offers the group button");
+    }
+    ok = report("web::check_review_group_action_asks_first_naming_the_items", problems) && ok;
+  }
+
+  // R-2: a row that cannot be decided says why, and cannot be selected.
+  {
+    const problems = [];
+    const why = "Claude settles 1 text first: ask Claude to check them.";
+    const rows = [row("FTR-1"), row("FTR-3", { blocked: why })];
+    const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
+    eq(problems, "select refuses the blocked row", [...select(emptySelection("docs-folded"), "docs-folded", "FTR-3", true, rows).keys], []);
+    const { document, html } = await renderPanel(docs);
+    const box = (id) => document.getElementById(id)?.querySelector('.ui-row-select input[type="checkbox"]');
+    if (!box("FTR-3")) problems.push(`the blocked row has no checkbox: ${html}`);
+    else if (!box("FTR-3").hasAttribute("disabled")) problems.push("the blocked row's checkbox is not disabled");
+    eq(problems, "the blocked row says why", document.getElementById("FTR-3")?.querySelector(".ui-row-reason")?.textContent, why);
+    if (!box("FTR-1") || box("FTR-1").hasAttribute("disabled")) problems.push("a row that can be decided is not selectable");
+    const approve = await renderPanel(slice("approve", "Approve", "Approve", [row("FTR-1")]));
+    const checking = approve.document.getElementById("FTR-1");
+    if (!checking?.querySelector('.ui-row-select input[type="checkbox"]')?.hasAttribute("disabled")) {
+      problems.push("an approve row is selectable before its diagram check has finished");
+    }
+    eq(problems, "an approve row says it is checking diagrams", checking?.querySelector(".ui-row-reason")?.textContent, "checking diagrams…");
+    ok = report("web::check_review_undecidable_row_says_why_and_cannot_be_selected", problems) && ok;
+  }
+
+  // R-9: single-line rows with pills; the group's action bar is sticky at its top.
+  {
+    const problems = [];
+    const css = read("../src/styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rule = /\.review-group-head\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    if (!rule) problems.push("styles.css has no .review-group-head rule");
+    if (!/position:\s*sticky/.test(rule)) problems.push(".review-group-head is not position: sticky");
+    if (!/\btop:\s*0\b/.test(rule)) problems.push(".review-group-head is not at top: 0");
+    if (!/background:\s*var\(--surface\)/.test(rule)) problems.push(".review-group-head has no var(--surface) background, so rows would show through");
+    if (/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(rule)) problems.push(".review-group-head uses a raw colour, not a token");
+
+    const r = row("DEF-066", { pills: ["prepared", "batch agile-1"], release: "v0.8.0", sprint: "SP-004", records: "Records the docs-folded sign-off" });
+    const { document, html } = await render("src/pages/review/ReviewRow.tsx", "ReviewRow", {
+      project: "x",
+      row: r,
+      open: false,
+      onToggle: () => {},
+      children: () => "body",
+    });
+    const head = document.querySelector("section.ui-row > .ui-row-head");
+    if (!head) problems.push(`the row is not an AccordionRow: ${html}`);
+    else {
+      const records = head.querySelectorAll(".review-row-records");
+      eq(problems, "one records line in the header", records.length, 1);
+      eq(problems, "the records line's text", records[0]?.textContent, "Records the docs-folded sign-off");
+      if (head.querySelector("p, div, ul, table")) problems.push("the row's header holds a block beyond its records line");
+      const pills = [...head.querySelectorAll(".ui-pill")].map((e) => e.textContent);
+      eq(problems, "the properties are pills", pills, ["prepared", "batch agile-1", "v0.8.0", "SP-004"]);
+    }
+    ok = report("web::check_review_rows_are_single_line_and_the_action_bar_is_sticky", problems) && ok;
+  }
+
+  // R-10: every row's header is a heading; the page has one h1.
+  {
+    const problems = [];
+    const rows = [row("FTR-41"), row("FTR-43"), row("DEF-71")];
+    const { document, html } = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", rows));
+    const sections = [...document.querySelectorAll("section.ui-row")];
+    eq(problems, "three rows", sections.length, 3);
+    for (const s of sections) {
+      const h3 = s.querySelector(".ui-row-head h3");
+      if (!h3) problems.push(`${s.id}: no h3 in the row's header: ${html}`);
+      else if (!h3.textContent.includes(`Title of ${s.id}`)) problems.push(`${s.id}: the title is not inside the h3`);
+    }
+    if (document.querySelector("h1")) problems.push("the group view draws an h1 of its own");
+    const page = read("../src/pages/ReviewPage.tsx");
+    eq(problems, "the page has one h1", (page.match(/<h1[\s>]/g) ?? []).length, 1);
+    ok = report("web::check_review_rows_are_headed", problems) && ok;
+  }
+} catch (e) {
+  console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);
+  ok = false;
+} finally {
+  await closeRender();
 }
 
 if (!ok) process.exit(1);

@@ -1,19 +1,25 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { alreadySaid, api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
-import { ErrorBox, Loading, LiveDot } from "../components/bits";
+import { LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, DriftFlag, PendingReview, PlannedRelease, SettledText, SpecBrief } from "../types";
+import type { Adr, DriftFlag, GroupCount, GroupSlice, PendingReview, PlannedRelease, ReviewRow as Row, RowEvidence, SettledText, SpecBrief } from "../types";
 import { docsFoldedOffer } from "../textsToCheck";
-import { approveBlocker, blockedSentence, checkBlocks, type DiagramProblem } from "../diagramCheck";
+import { approveBlocker, blockedSentence, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { type Batch, batchChecks, batches, editedWhileFlagged, openFor } from "../prepared";
-import { lastResultLine, manualCommand, manualRows, notDueLine, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
+import { lastResultLine, manualCommand, notDueLine, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
 import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
+import { useQuery } from "../data/useQuery";
+import { urls } from "../data/urls";
+import { GROUP_PARAM, groupTabs } from "../reviewGroups";
+import { Empty, ErrorState, LoadingState, Tabs } from "../ui";
+import { GroupView, REVIEW_TAGS } from "./review/GroupView";
+import { useDiagramCheck } from "./review/ReviewRow";
 
 /**
  * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
@@ -56,18 +62,6 @@ function OutcomeChip({ outcome, onRetry }: { outcome: Outcome; onRetry: () => vo
   );
 }
 
-/**
- * What is waiting for agreement, and the one action that gives it (FEAT-067).
- *
- * The approval gate exists to stop work being built on reasoning nobody agreed to. Its own premise
- * is that agreeing has to be **cheap** — a gate that costs a page of terminal output per item gets
- * escaped instead of used, which is exactly what happened here. So this page is the brief, rendered
- * for a reader, with the button beside it.
- *
- * The daemon decides what is pending and what "agreed" means; this page only renders and posts. It
- * offers the button only when the daemon accepts writes, because a button that fails on click is
- * worse than no button.
- */
 /** "planned into v1", and, when a sprint runs that the item is not in, the command that plans it in (DEF-029). */
 function plannedText(version: string, code: string, planned: PlannedRelease): string {
   const out = planned.not_in_sprint?.find((o) => o.code === code);
@@ -76,34 +70,42 @@ function plannedText(version: string, code: string, planned: PlannedRelease): st
     : `planned into ${version}`;
 }
 
+/**
+ * The Review page (FEAT-067, regrouped by FTR-038): what waits on the person, grouped by the
+ * decision it needs, one group open at a time.
+ *
+ * The approval gate exists to stop work being built on reasoning nobody agreed to, and its premise
+ * is that agreeing has to be **cheap**. So the page is a shell: the groups as tabs with their counts
+ * (`?group=<key>`, the largest open when the URL names none), and the open group's rows, each
+ * selectable inside that group only, with one action that asks first and records one verdict per
+ * row. A row opens to its evidence, read for that row alone, with the single actions that need a
+ * reason or the person's own observation.
+ *
+ * The daemon decides what is pending and what "agreed" means; this page only renders and posts. It
+ * offers a decision only when the daemon accepts writes, because a button that fails on click is
+ * worse than no button.
+ */
 export default function ReviewPage() {
   const { project = "" } = useParams();
+  // The diagram checks and the briefs re-read on the live tick.
   const tick = useLiveTick(api.projectEvents(project), 400);
   // What each decision came to once its call returned (DEF-090); any outcome hides its form.
   const [done, setDone] = useState<Record<string, Outcome>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
-  const pending = useAsync(() => api.getPendingReviews(project), [project, tick]);
+  // The decision groups, counted (FTR-038): the tabs.
+  const summary = useQuery<GroupCount[]>(project, urls.reviewSummary(project), REVIEW_TAGS);
   // What Claude prepared for these decisions (FTR-034), shown filled in beside their buttons.
   const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
-  // Decisions waiting for their owner (FEAT-153): proposed, and nothing else.
-  const adrs = useAsync(() => api.getAdrs(project), [project, tick]);
   // Where this project's decisions are taken, and what was delegated (FTR-028).
   const decisions = useAsync(() => api.getDecisions(project), [project, tick]);
-  // Manual tests waiting for a person (DEF-040): recorded here, not in the terminal.
-  const manual = useAsync(() => api.getManualTests(project), [project, tick]);
 
-  if (pending.loading && !pending.data) return <Loading />;
-  if (pending.error) return <ErrorBox error={pending.error} />;
-  const items = pending.data ?? [];
-  const proposed = (adrs.data ?? []).filter((a) => a.status.toLowerCase() === "proposed");
-  const manualWaiting = manual.data ?? [];
   // Who a yes here is recorded as (FEAT-077). The board's commit identity, exactly as
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
   // the click happened and left twenty-eight approvals on this board attributable to nobody.
   const who = api.approver(meta.data ?? null);
   // A monitor configured read-only (the standalone bundle, FEAT-178) offers no decision at all; each
-  // brief shows the CLI command that records it instead.
+  // row shows the CLI command that records it instead.
   const writable = !isReadOnly() && meta.data?.writes === true && who != null;
   // In conversation mode core refuses the monitor's item verdicts, so none is offered (FTR-028).
   const inConversation = decisions.data?.mode === "conversation";
@@ -299,69 +301,13 @@ export default function ReviewPage() {
       return rest;
     });
 
-  return (
-    <div className="review-page">
-      <div className="page-head">
-        <h1>Review</h1>
-        <LiveDot />
-      </div>
-
-      <DecisionsHere project={project} view={decisions.data ?? null} error={decisions.error} writable={writable} who={who} />
-      {inConversation ? (
-        <p className="muted">Decisions are taken in the conversation in this project.</p>
-      ) : null}
-
-      {items.length === 0 && (proposed.length > 0 || manualWaiting.length > 0) ? (
-        <p className="muted">No definitions are waiting for agreement.</p>
-      ) : items.length === 0 ? (
-        <p className="muted">
-          Nothing is waiting for agreement. An item appears here when its definition has never been
-          approved, or when approved text was changed or removed, which lapses the approval, or when
-          text was added once the item is being built.
-        </p>
-      ) : (
-        <p className="muted">
-          {items.length} item{items.length === 1 ? "" : "s"} waiting. Approving records agreement
-          pinned to the definition below: change or remove approved text afterwards and the approval
-          lapses; added text is reviewed at the next decision.
-          {items.some((i) => i.approval === "unratified")
-            ? " Work already finished under a recorded bypass is listed first, to ratify."
-            : null}
-          {items.some((i) => i.finished)
-            ? " Finished work whose definition changed after approval is listed last."
-            : null}
-          {isReadOnly() ? (
-            <>
-              {" "}
-              This copy of the monitor is <strong>read-only</strong> — record a verdict in Claude
-              Code, or run <code>kanbanr approve &lt;CODE&gt;</code>.
-            </>
-          ) : meta.data?.writes !== true ? (
-            <>
-              {" "}
-              This monitor is <strong>read-only</strong> — restart it with{" "}
-              <code>kanbanr review --ui</code> to approve from here, or run{" "}
-              <code>kanbanr approve &lt;CODE&gt;</code>.
-            </>
-          ) : who == null ? (
-            <>
-              {" "}
-              This board has <strong>no commit identity</strong>, so an approval could not say who
-              gave it — and one that cannot is not evidence of agreement. Set one with{" "}
-              <code>kanbanr identity --name "You" --email you@example.com</code>, then reload.
-            </>
-          ) : (
-            <>
-              {" "}
-              A yes is recorded as <strong>{who}</strong>.
-            </>
-          )}
-        </p>
-      )}
-
-      {items.map((item, i) => (
+  // A row's evidence, once read (GET /review/groups/{key}/rows/{row}): the brief of an item, a
+  // manual check, a proposed ADR, or a delegation, with the single actions each keeps in its row.
+  const evidence = (row: Row, e: RowEvidence) => {
+    if (e.entry) {
+      const item = e.entry;
+      return (
         <Brief
-          key={item.code}
           project={project}
           item={item}
           tick={tick}
@@ -369,9 +315,7 @@ export default function ReviewPage() {
           busy={busy === item.code}
           outcome={done[item.code]}
           onRetry={() => retry(item.code)}
-          // The first is open so the page shows what a brief looks like; the rest are collapsed,
-          // because a queue of twelve read as one unbroken column (FEAT-076).
-          defaultOpen={i === 0}
+          defaultOpen
           onApprove={() => agree(item)}
           onSignoff={(name) => signoff(item, name)}
           prepared={prepared.data ?? []}
@@ -380,7 +324,83 @@ export default function ReviewPage() {
           onRelease={(version) => planRelease(item, version)}
           onNewRelease={(version, target) => newRelease(item, version, target)}
         />
-      ))}
+      );
+    }
+    if (e.manual) {
+      const m: ManualRow = { row: e.manual, prepared: e.prepared ?? undefined };
+      return (
+        <ManualCheck
+          project={project}
+          m={m}
+          writable={writable}
+          busy={busy === manualKey(m)}
+          outcome={done[manualKey(m)]}
+          onRetry={() => retry(manualKey(m))}
+          onRecord={(passed, note) => recordManual(m, passed, note)}
+          onConfirm={(view, edits) => confirmManual(m, view, edits)}
+          onReject={(view, reason) => rejectManual(m, view, reason)}
+        />
+      );
+    }
+    if (e.adr) {
+      const adr = e.adr;
+      return (
+        <DecisionBrief
+          project={project}
+          adr={adr}
+          writable={writable}
+          busy={busy === adr.id}
+          outcome={done[adr.id]}
+          onRetry={() => retry(adr.id)}
+          onDecide={(verdict, reason) => decide(adr, verdict, reason)}
+        />
+      );
+    }
+    return (
+      <p className="small">
+        {row.what}. {row.records}. Its full record, and the actions that take a reason, are under{" "}
+        <strong>Decisions here</strong> above.
+      </p>
+    );
+  };
+
+  const groups = summary.data ?? [];
+  return (
+    <div className="review-page">
+      <div className="page-head">
+        <h1>Review</h1>
+        <LiveDot />
+      </div>
+
+      <p className="muted">
+        {isReadOnly() ? (
+          <>
+            This copy of the monitor is <strong>read-only</strong> — record a verdict in Claude Code, or
+            run the command each row shows.
+          </>
+        ) : meta.data?.writes !== true ? (
+          <>
+            This monitor is <strong>read-only</strong> — restart it with <code>kanbanr review --ui</code> to
+            decide from here, or run the command each row shows.
+          </>
+        ) : who == null ? (
+          <>
+            This board has <strong>no commit identity</strong>, so an approval could not say who gave it —
+            and one that cannot is not evidence of agreement. Set one with{" "}
+            <code>kanbanr identity --name "You" --email you@example.com</code>, then reload.
+          </>
+        ) : (
+          <>
+            A yes is recorded as <strong>{who}</strong>.
+          </>
+        )}
+      </p>
+      {inConversation ? <p className="muted">Decisions are taken in the conversation in this project.</p> : null}
+
+      <details className="review-decisions-here">
+        <summary>Decisions here{decisions.data ? `: ${decisions.data.mode} mode` : ""}</summary>
+        <DecisionsHere project={project} view={decisions.data ?? null} error={decisions.error} writable={writable} who={who} />
+      </details>
 
       {batches(prepared.data).map((batch) => (
         <BatchBar
@@ -393,44 +413,54 @@ export default function ReviewPage() {
         />
       ))}
 
-      {manualWaiting.length > 0 && (
-        <ManualChecks
-          project={project}
-          rows={manualRows(manualWaiting, prepared.data)}
-          writable={writable}
-          busy={busy}
-          done={done}
-          onRetry={retry}
-          onRecord={recordManual}
-          onConfirm={confirmManual}
-          onReject={rejectManual}
-        />
-      )}
-
-      {proposed.length > 0 && (
-        <>
-          <h2>Decisions</h2>
-          <p className="muted">
-            {proposed.length} architecture decision{proposed.length === 1 ? "" : "s"} proposed and
-            waiting for a verdict. Accepting needs every section answered; rejecting needs a
-            reason, which stays on the record.
+      {summary.error && !summary.data ? (
+        <ErrorState error={`What is waiting could not be read: ${summary.error}`} retry={summary.reload} />
+      ) : !summary.data ? (
+        <LoadingState label="Reading what is waiting…" />
+      ) : groups.every((g) => g.count === 0) ? (
+        <Empty title="Nothing is waiting for a decision.">
+          <p className="muted small">
+            An item appears here when its definition has never been approved, when approved text was
+            changed or removed, which lapses the approval, or when text was added once the item is being
+            built; and so do sign-offs, manual checks, delegations and proposed decisions.
           </p>
-          {proposed.map((adr) => (
-            <DecisionBrief
-              key={adr.id}
+        </Empty>
+      ) : (
+        <Tabs tabs={groupTabs(groups)} param={GROUP_PARAM} label="Decisions waiting, by the decision">
+          {(key) => (
+            <GroupView
+              key={key}
               project={project}
-              adr={adr}
+              group={key}
               writable={writable}
-              busy={busy === adr.id}
-              outcome={done[adr.id]}
-              onRetry={() => retry(adr.id)}
-              onDecide={(verdict, reason) => decide(adr, verdict, reason)}
+              who={who}
+              tick={tick}
+              body={(row, slice: GroupSlice) => <RowBody project={project} group={slice.key} row={row} render={evidence} />}
+              onDecided={summary.reload}
             />
-          ))}
-        </>
+          )}
+        </Tabs>
       )}
     </div>
   );
+}
+
+/** A row's evidence, read for that row alone when it opens; an error says so and offers a retry. */
+function RowBody({
+  project,
+  group,
+  row,
+  render,
+}: {
+  project: string;
+  group: string;
+  row: Row;
+  render: (row: Row, e: RowEvidence) => JSX.Element;
+}) {
+  const ev = useQuery<RowEvidence>(project, urls.reviewRow(project, group, row.key), REVIEW_TAGS);
+  if (ev.error && !ev.data) return <ErrorState error={`${row.code}'s evidence could not be read: ${ev.error}`} retry={ev.reload} />;
+  if (!ev.data) return <LoadingState label="Reading the evidence…" />;
+  return render(row, ev.data);
 }
 
 /** Where a waiting decision is taken, in words. */
@@ -759,67 +789,6 @@ function BatchBar({
   );
 }
 
-/**
- * The manual tests waiting for a person (DEF-040): each with its requirement and the check to make,
- * and Passed / Failed for the person who did it. Nothing has to be typed; a note is behind a link.
- * Where the monitor cannot write, the command for the person's own terminal is shown instead.
- * A check whose item has not reached its build stage is not due (DEF-076): it is listed apart,
- * collapsed under "Not due yet", and offers no result.
- */
-function ManualChecks({
-  project,
-  rows,
-  writable,
-  busy,
-  done,
-  onRetry,
-  onRecord,
-  onConfirm,
-  onReject,
-}: {
-  project: string;
-  rows: ManualRow[];
-  writable: boolean;
-  busy: string | null;
-  done: Record<string, Outcome>;
-  onRetry: (key: string) => void;
-  onRecord: (m: ManualRow, passed: boolean, note: string) => void;
-  onConfirm: (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => Promise<void>;
-  onReject: (m: ManualRow, view: PreparedView, reason: string) => Promise<void>;
-}) {
-  const due = rows.filter((m) => notDueLine(m.row) === "");
-  const notDue = rows.filter((m) => notDueLine(m.row) !== "");
-  const check = (m: ManualRow) => (
-    <ManualCheck
-      key={manualKey(m)}
-      project={project}
-      m={m}
-      writable={writable}
-      busy={busy === manualKey(m)}
-      outcome={done[manualKey(m)]}
-      onRetry={() => onRetry(manualKey(m))}
-      onRecord={(passed, note) => onRecord(m, passed, note)}
-      onConfirm={(view, edits) => onConfirm(m, view, edits)}
-      onReject={(view, reason) => onReject(m, view, reason)}
-    />
-  );
-  return (
-    <>
-      <h2>Manual checks</h2>
-      <p className="muted">
-        {due.length} manual check{due.length === 1 ? "" : "s"} waiting for someone to do them. Do the
-        check, then record whether it passed.
-      </p>
-      {due.map(check)}
-      {notDue.length > 0 ? (
-        <details className="manual-not-due">
-          <summary>Not due yet ({notDue.length})</summary>
-          {notDue.map(check)}
-        </details>
-      ) : null}
-    </>
-  );
-}
 
 function ManualCheck({
   project,
@@ -1016,43 +985,6 @@ function DecisionBrief({
       </div>
     </details>
   );
-}
-
-/**
- * Pele's parse of every diagram an item's brief covers — its spec and each doc in `affects_docs`
- * (FEAT-200) — re-run on the live tick, so fixing the spec re-enables Approve without a reload.
- */
-function useDiagramCheck(project: string, code: string, tick: number) {
-  const diagrams = useAsync(() => api.getItemDiagrams(project, code), [project, code, tick]);
-  const [parsed, setParsed] = useState<{ problems: DiagramProblem[]; failed: string | null; done: boolean }>({
-    problems: [],
-    failed: null,
-    done: false,
-  });
-  useEffect(() => {
-    const d = diagrams.data;
-    if (diagrams.error) {
-      setParsed({ problems: [], failed: diagrams.error, done: true });
-      return;
-    }
-    if (!d) return;
-    setParsed((p) => ({ ...p, done: false }));
-    let cancelled = false;
-    import("pele")
-      .then(({ parse }) => {
-        if (!cancelled) setParsed({ problems: checkBlocks(d, parse), failed: null, done: true });
-      })
-      .catch((e) => {
-        if (!cancelled) setParsed({ problems: [], failed: String(e), done: true });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [diagrams.data, diagrams.error]);
-  // Fails closed: a refetch in flight counts as loading, so a spec broken since the last check is
-  // never approved on the strength of the check before it.
-  const loading = diagrams.loading || !parsed.done;
-  return { ...parsed, loading };
 }
 
 /** Where a diagram problem's source is: the item for its spec, the doc page for a doc. */

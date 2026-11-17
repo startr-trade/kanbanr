@@ -325,6 +325,22 @@ summary:focus-visible,
 .review-reason:focus { border-color: var(--accent); }
 .review-reason:focus:not(:focus-visible) { outline: none; }
 
+/* ---- review groups (FTR-038) ---- */
+/* The open group's header stays in view while its rows scroll (R-9): select-all, the filter and the
+   action button sit beside the selection they act on. */
+.review-group-head { position: sticky; top: 0; z-index: 1; background: var(--surface); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.review-group-sentence { margin: 0 0 var(--sp-2); }
+.review-group-tools { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+.review-group-tools .review-group-filter { min-width: 160px; flex: 0 1 220px; }
+.review-group-actions { display: inline-flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; margin-left: auto; }
+.review-group-outcome { margin-top: var(--sp-2); }
+.review-select-all { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-1); }
+/* A row is one line; what a yes records is the only second line, small and muted (R-9). */
+.review-row-title { display: block; overflow: hidden; text-overflow: ellipsis; }
+.review-row-records { display: block; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-1); font-weight: 400; color: var(--text-muted); }
+.review-row-what { color: var(--text-muted); font-size: var(--fs-1); }
+.review-decisions-here > summary { cursor: pointer; font-weight: 600; padding: var(--sp-2) 0; }
+
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }
 .status-group {

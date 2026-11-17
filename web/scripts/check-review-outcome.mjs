@@ -115,7 +115,7 @@ function checkOutcome() {
   };
   const parts = {
     ManualCheck: part("function ManualCheck(", "/** One proposed decision"),
-    DecisionBrief: part("function DecisionBrief(", "function useDiagramCheck("),
+    DecisionBrief: part("function DecisionBrief(", "function problemHref("),
     Brief: part("function Brief(", "function partText("),
   };
   const finishedBy = { ManualCheck: "finished", DecisionBrief: "decided", Brief: "approved" };
