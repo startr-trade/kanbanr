@@ -21,3 +21,16 @@ Testing is **two-layered**:
   the `docker` CLI (driven directly, no test-container crate) to confirm the real Docker **image** boots, scaffolds a project, and serves
   the read-only view (no auth). It does not re-test business logic (that's layer 1). `#[ignore]`d
   (needs Docker + image); run with `make itest`.
+- **Deployment** (`deploy/tests/`): the hosted site ([Hosting a read-only
+  monitor](../using/hosting.md)). Static checks: `check_tfvars.py` and its tests keep secrets and
+  state out of git; `test_sync_sh.py` and `test_serve_sh.py` run the sync and serve scripts against
+  bare remotes and a stub `kanbanr` in the temp dir; `validate.sh` validates the module, the example
+  root and the e2e root under both OpenTofu and Terraform (from pinned images, through `tf.sh`) and
+  runs the module's plan tests against a mock provider; `compose-config.sh` validates the compose
+  file in both modes. Heavy checks: `e2e-kind.sh` applies a two-board site to a throwaway kind
+  cluster, with the boards' remotes served inside it, and checks that both boards are served from a
+  read-only mount by a non-root user, that the host check holds, and that a pushed change is listed
+  and refreshes the page within one pull interval; `compose-smoke.sh` runs compose mode (b) over a
+  local board and waits for it to report healthy. Each script prints `ok: <name>` per case, the
+  names the item's tests are recorded under. The heavy checks need Docker, kind and kubectl, never
+  gate a pull request, and run in `make ci` before a release.

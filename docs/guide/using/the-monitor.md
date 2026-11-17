@@ -178,6 +178,10 @@ host in `KANBANR_ALLOWED_HOSTS`.
 The image's health check asks for `/healthz` as `localhost`, so a probe of your own should send
 `Host: localhost` too.
 
+To host the monitor itself for a team, read-only and kept current from each board's git remote,
+use the Kubernetes module or the compose file in `deploy/`; see
+[Hosting a read-only monitor](hosting.md).
+
 The monitor the binary serves reads the same `config.json`, with the defaults: `/api`, browser
 routing, and decisions offered when the daemon allows writes.
 
