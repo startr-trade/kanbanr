@@ -3401,7 +3401,7 @@ mod perf {
         );
         store.set_gates("demo", gates).unwrap();
         let docs_rel = "projects/demo/docs/architecture";
-        let docs = dir.join(&docs_rel);
+        let docs = dir.join(docs_rel);
         std::fs::create_dir_all(&docs).unwrap();
         for d in 0..DOCS {
             std::fs::write(docs.join(format!("d{d}.md")), "v0").unwrap();
