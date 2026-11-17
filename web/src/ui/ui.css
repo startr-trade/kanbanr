@@ -111,6 +111,16 @@
 }
 .ui-row-title > button::before { content: "▸ "; color: var(--text-muted); }
 .ui-row-title > button[aria-expanded="true"]::before { content: "▾ "; }
+/* A title of two lines (a Review row: code and name, then what a yes records) puts the arrow
+   in its own column beside the first line; every child sits in column 2, ellipsis on each line.
+   One-line titles (Releases, Board, Plan) keep the plain button above. */
+.ui-row-title > button:has(> .review-row-records) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-1);
+}
+.ui-row-title > button:has(> .review-row-records)::before { grid-column: 1; grid-row: 1; }
+.ui-row-title > button:has(> .review-row-records) > * { grid-column: 2; min-width: 0; }
 .ui-row-meta, .ui-row-actions { display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; }
 .ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; }
 
