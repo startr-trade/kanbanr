@@ -191,6 +191,9 @@ pub struct TaskReport {
 
 pub struct Store {
     root: PathBuf,
+    /// Project loads made through this store, for tests and the bench (DEF-106). Nothing reads it
+    /// to decide anything.
+    loads: std::sync::atomic::AtomicU64,
 }
 
 impl Store {
@@ -199,7 +202,21 @@ impl Store {
         // Every read and write of a board starts here: under test, one outside the temporary
         // directory stops the run before anything is touched (FEAT-195).
         crate::project::assert_inside_fence(&root);
-        Store { root }
+        Store {
+            root,
+            loads: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// How many times a project has been loaded (`load`, `load_meta`, and `load_for_gates` through
+    /// them) through this store.
+    pub fn loads(&self) -> u64 {
+        self.loads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn count_load(&self) {
+        self.loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The data folder this store owns. The activity and events logs live beside the projects
@@ -474,6 +491,7 @@ impl Store {
     /// relied on by dispatch (`GET project`), export, `feature show`, and the daemon, so it must
     /// not change. Cheap callers that never touch spec bodies should prefer `load_meta` (FEAT-033).
     pub fn load(&self, id: &str) -> Result<Project> {
+        self.count_load();
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }
@@ -512,6 +530,7 @@ impl Store {
     /// spec on demand. The shape (`Project`) is identical to `load` so callers are interchangeable;
     /// the only difference is that feature spec bodies are empty (FEAT-033).
     pub fn load_meta(&self, id: &str) -> Result<Project> {
+        self.count_load();
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }

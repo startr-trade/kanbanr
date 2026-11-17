@@ -418,6 +418,28 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
     Ok(live)
 }
 
+/// `dispatch::is_manual_test`'s predicate over a project already loaded: is `test` a manual test of
+/// `requirement` of item `code`? A test that is not there is not (DEF-106).
+pub(crate) fn is_manual_test_in(
+    project: &Project,
+    code: &str,
+    requirement: &str,
+    test: &str,
+) -> bool {
+    project
+        .feature(code)
+        .ok()
+        .and_then(|f| f.definition.as_ref())
+        .is_some_and(|d| {
+            d.requirements.iter().any(|r| {
+                r.id == requirement
+                    && r.tests
+                        .iter()
+                        .any(|t| t.name == test && t.kind.eq_ignore_ascii_case("manual"))
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,5 +748,62 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-6: the predicate over a loaded project answers as the one that loads it.
+    #[test]
+    fn is_manual_test_in_agrees_with_dispatch_is_manual_test() {
+        let (store, dir) = fixture();
+        let code = store
+            .add_feature("demo", "Cart", "", "MS-1", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "s".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![
+                            test("manual: looks right", "Manual"),
+                            test("cart::unit", "unit"),
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let project = store.load_meta("demo").unwrap();
+        let bare = store
+            .add_feature("demo", "Bare", "", "MS-1", None)
+            .unwrap()
+            .code;
+        let project2 = store.load_meta("demo").unwrap();
+        for (c, r, t) in [
+            (code.as_str(), "R-1", "manual: looks right"),
+            (code.as_str(), "R-1", "cart::unit"),
+            (code.as_str(), "R-1", "nope"),
+            (code.as_str(), "R-2", "manual: looks right"),
+            (bare.as_str(), "R-1", "manual: looks right"),
+            ("FEAT-999", "R-1", "manual: looks right"),
+        ] {
+            assert_eq!(
+                is_manual_test_in(&project2, c, r, t),
+                crate::dispatch::is_manual_test(&store, "demo", c, r, t),
+                "{c} {r} {t}"
+            );
+        }
+        assert!(is_manual_test_in(
+            &project,
+            &code,
+            "R-1",
+            "manual: looks right"
+        ));
+        assert!(!is_manual_test_in(&project, &code, "R-1", "cart::unit"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

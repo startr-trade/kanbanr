@@ -1477,9 +1477,8 @@ pub fn still_waiting(
             Ok(())
         }
         "manual-test" => {
-            if !crate::dispatch::is_manual_test(
-                store,
-                p,
+            if !crate::manual::is_manual_test_in(
+                project,
                 &r.subject.item,
                 &r.subject.requirement,
                 &r.subject.test,
@@ -4268,5 +4267,63 @@ mod tests {
             v.stale_why
         );
         assert_eq!(view_of(&store, &id, None).state, State::Open);
+    }
+
+    /// DEF-106 R-7: judging every record of a board loads the board once, however many manual
+    /// tests wait.
+    #[test]
+    fn judging_every_record_loads_the_board_once() {
+        use crate::models::{Requirement, TestRef};
+        let (store, dir, first) = board_with_item(false);
+        let mut subjects = vec![(first, "manual: check 1 reads clearly".to_string())];
+        for n in 2..=4 {
+            let code = store
+                .add_feature("demo", &format!("Cart {n}"), "spec", "M", None)
+                .unwrap()
+                .code;
+            subjects.push((code, format!("manual: check {n} reads clearly")));
+        }
+        for (code, name) in &subjects {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(crate::models::FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: "x".into(),
+                            tests: vec![TestRef {
+                                name: name.clone(),
+                                kind: "manual".into(),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            // A manual check opens at the build stage (DEF-076).
+            store.move_feature("demo", code, "Scheduled").unwrap();
+            prepare_as_claude(
+                &store,
+                serde_json::json!({"kind": "manual-test",
+                    "subject": {"item": code, "requirement": "R-1", "test": name},
+                    "fields": {"state": "green", "checked_rev": "abc1234"},
+                    "sources": [{"label": "what the person said"}]}),
+            );
+        }
+        let before = store.loads();
+        let views = standing(&store, "demo", None).unwrap();
+        assert_eq!(views.len(), subjects.len());
+        assert!(views.iter().all(|v| v.state == State::Open), "{views:?}");
+        assert_eq!(
+            store.loads() - before,
+            1,
+            "one load of the board for {} records",
+            subjects.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
