@@ -257,7 +257,7 @@ pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
                 .iter()
                 .filter(|f| {
                     f.release.as_deref() == Some(release.version.as_str())
-                        || release.shipped.contains(&f.code)
+                        || release.shipped.iter().any(|c| f.answers_to(c))
                 })
                 .collect();
             let finished = items
@@ -411,7 +411,7 @@ pub fn items_table_in(
         .iter()
         .filter(|f| {
             f.release.as_deref() == Some(release.version.as_str())
-                || release.shipped.contains(&f.code)
+                || release.shipped.iter().any(|c| f.answers_to(c))
         })
         .map(|f| f.code.clone())
         .collect();
@@ -523,7 +523,10 @@ pub fn release_line(project: &Project, releases: &[Release], item: &FeatureItem)
     if !project.config.cadence.releases {
         return None;
     }
-    if let Some(r) = releases.iter().find(|r| r.shipped.contains(&item.code)) {
+    if let Some(r) = releases
+        .iter()
+        .find(|r| r.shipped.iter().any(|c| item.answers_to(c)))
+    {
         return Some(format!("Released in {}", r.version));
     }
     match item

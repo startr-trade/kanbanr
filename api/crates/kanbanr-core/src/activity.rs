@@ -57,7 +57,19 @@ pub struct Filter {
 pub fn read_filtered(store: &crate::Store, id: &str, filter: &Filter) -> Vec<Activity> {
     let mut entries = read(store.data_dir(), id, 200);
     if let Some(item) = &filter.item {
-        entries.retain(|e| e.item.as_deref() == Some(item.as_str()));
+        // FTR-056: entries written under an earlier code of the item are the item's too.
+        let codes: Vec<String> = store
+            .load_meta(id)
+            .ok()
+            .and_then(|p| {
+                crate::aliases::find(&p, item).map(|f| f.codes().map(str::to_string).collect())
+            })
+            .unwrap_or_else(|| vec![item.clone()]);
+        entries.retain(|e| {
+            e.item
+                .as_deref()
+                .is_some_and(|c| codes.iter().any(|k| k == c))
+        });
     }
     if filter.ongoing {
         match store.load(id).ok() {
@@ -68,7 +80,7 @@ pub fn read_filtered(store: &crate::Store, id: &str, filter: &Filter) -> Vec<Act
                     .features
                     .iter()
                     .filter(|f| !displayed.contains(&f.status))
-                    .map(|f| f.code.as_str())
+                    .flat_map(|f| f.codes())
                     .collect();
                 entries.retain(|e| e.item.as_deref().is_some_and(|c| ongoing_codes.contains(c)));
             }

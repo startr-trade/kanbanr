@@ -213,7 +213,7 @@ pub fn refuse_before_build(
     if state == TestState::Planned {
         return Ok(());
     }
-    let Some(f) = project.features.iter().find(|f| f.code == code) else {
+    let Some(f) = crate::aliases::find(project, code) else {
         return Ok(());
     };
     let manual = f
@@ -307,6 +307,16 @@ pub fn results(store: &Store, id: &str, code: Option<&str>) -> Result<Vec<Manual
     let Ok(files) = std::fs::read_dir(dir(store, id)) else {
         return Ok(Vec::new());
     };
+    // FTR-056: a result kept under an earlier code of the item is the item's.
+    let codes: Option<Vec<String>> = code.map(|c| {
+        store
+            .load_meta(id)
+            .ok()
+            .and_then(|p| {
+                crate::aliases::find(&p, c).map(|f| f.codes().map(str::to_string).collect())
+            })
+            .unwrap_or_else(|| vec![c.to_string()])
+    });
     let mut found: Vec<((String, u32), ManualResult)> = Vec::new();
     for f in files.flatten() {
         let p = f.path();
@@ -319,7 +329,7 @@ pub fn results(store: &Store, id: &str, code: Option<&str>) -> Result<Vec<Manual
         let Ok(r) = crate::yaml::from_str::<ManualResult>(&text) else {
             continue;
         };
-        if code.is_some_and(|c| r.code != c) {
+        if codes.as_ref().is_some_and(|cs| !cs.contains(&r.code)) {
             continue;
         }
         // Oldest first: by the stamp in the name, then by the counter a same-second result gets
@@ -383,7 +393,9 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
                     last: kept
                         .iter()
                         .rev()
-                        .find(|k| k.code == f.code && k.requirement == r.id && k.test == t.name)
+                        .find(|k| {
+                            f.answers_to(&k.code) && k.requirement == r.id && k.test == t.name
+                        })
                         .cloned(),
                     opens_at: opens.clone(),
                     release: f.release.clone().unwrap_or_default(),
@@ -392,7 +404,7 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
                         .find(|h| {
                             f.release.as_deref() == Some(h.version.as_str())
                                 && h.due.iter().any(|(c, req, test)| {
-                                    *c == f.code && *req == r.id && *test == t.name
+                                    f.answers_to(c) && *req == r.id && *test == t.name
                                 })
                         })
                         .map(|h| h.button.clone())

@@ -120,4 +120,183 @@ mod tests {
         assert!(check_free(&p, "FEAT-001", Some("DEF-001")).is_ok());
         assert!(check_free(&p, "FEAT-001", Some("FTR-002")).is_err());
     }
+    /// R-4: what was written under an earlier code counts for the item, and is left as written.
+    #[test]
+    fn records_naming_an_earlier_code_count_for_the_item() {
+        use crate::store::Store;
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-aliases-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        store.add_feature("demo", "A", "", "M", None).unwrap();
+        store.add_feature("demo", "B", "", "M", None).unwrap();
+
+        // Records made under FEAT-001, before the rename.
+        crate::activity::append(&dir, "demo", "Ada", "did a thing", Some("FEAT-001"));
+        crate::activity::append(&dir, "demo", "Ada", "did another", Some("FEAT-002"));
+        let manual = crate::manual::ManualResult {
+            code: "FEAT-001".into(),
+            requirement: "R-1".into(),
+            test: "t".into(),
+            state: "green".into(),
+            by: "Ada".into(),
+            at: "2026-11-17T10:00:00Z".into(),
+            ..Default::default()
+        };
+        crate::manual::record(&store, "demo", &manual).unwrap();
+        let prepared = crate::prepared::Prepared {
+            kind: "signoff".into(),
+            subject: crate::prepared::Subject {
+                item: "FEAT-001".into(),
+                ..Default::default()
+            },
+            at: "2026-11-17T10:00:00Z".into(),
+            ..Default::default()
+        };
+        crate::prepared::write_record(&store, "demo", &prepared).unwrap();
+        let snapshot = |sub: &str| -> Vec<(String, Vec<u8>)> {
+            let mut out = Vec::new();
+            let mut stack = vec![dir.join("projects/demo").join(sub)];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else {
+                        out.push((p.display().to_string(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            out.sort();
+            out
+        };
+        let (a0, m0, p0) = (
+            snapshot("activity"),
+            snapshot("manual"),
+            snapshot("prepared"),
+        );
+        assert!(!a0.is_empty() && !m0.is_empty() && !p0.is_empty());
+
+        store
+            .edit_feature("demo", "FEAT-001", None, None, None, Some("DEF-001".into()))
+            .unwrap();
+        assert_eq!(snapshot("activity"), a0, "activity is kept as written");
+        assert_eq!(snapshot("manual"), m0);
+        assert_eq!(snapshot("prepared"), p0);
+
+        // Activity: either code asks for the item's entries, and not the other item's.
+        for code in ["DEF-001", "FEAT-001"] {
+            let got = crate::activity::read_filtered(
+                &store,
+                "demo",
+                &crate::activity::Filter {
+                    item: Some(code.into()),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(got.len(), 1, "{code}: {got:?}");
+            assert_eq!(got[0].message, "did a thing");
+        }
+        // Manual results.
+        for code in ["DEF-001", "FEAT-001"] {
+            assert_eq!(
+                crate::manual::results(&store, "demo", Some(code))
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(
+            crate::manual::results(&store, "demo", Some("FEAT-002"))
+                .unwrap()
+                .is_empty()
+        );
+        // Prepared records.
+        for code in ["DEF-001", "FEAT-001"] {
+            let q = crate::prepared::ListQuery {
+                all: true,
+                item: Some(code.into()),
+                release: None,
+            };
+            assert_eq!(
+                crate::prepared::list(&store, "demo", &q, None)
+                    .unwrap()
+                    .len(),
+                1,
+                "{code}"
+            );
+        }
+
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.releases = true;
+        store.set_cadence("demo", None, cadence).unwrap();
+        let project = store.load("demo").unwrap();
+        let item = project.feature("DEF-001").unwrap();
+        // A shipped list written under the old code.
+        let release = crate::releases::Release {
+            version: "v1.0.0".into(),
+            shipped: vec!["FEAT-001".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::releases::release_line(&project, &[release], item).as_deref(),
+            Some("Released in v1.0.0")
+        );
+        assert!(
+            item.answers_to("FEAT-001")
+                && !project.feature("FEAT-002").unwrap().answers_to("FEAT-001")
+        );
+        // A scope issued under FEAT-001 covers DEF-001.
+        let mut scope = crate::agentscope::Scope {
+            id: "SC-001".into(),
+            project: "demo".into(),
+            role: crate::agentscope::Role::Build,
+            item: "FEAT-001".into(),
+            operations: crate::agentscope::Role::Build.operations(),
+            branch: None,
+            base: None,
+            task: None,
+            issued_by: "Ada".into(),
+            issued_at: "2026-11-17T09:00:00Z".into(),
+            expires_at: "2026-11-17T17:00:00Z".into(),
+            note: String::new(),
+            worktree: None,
+            agent_branch: None,
+            claimed_at: None,
+            revoked_at: None,
+            revoked_by: None,
+            revoked_reason: None,
+            extra: Default::default(),
+        };
+        assert!(!scope.allows(crate::agentscope::Operation::TaskState, "DEF-001"));
+        scope = scope.resolved(&project);
+        assert_eq!(scope.item, "DEF-001");
+        assert!(scope.allows(crate::agentscope::Operation::TaskState, "DEF-001"));
+        // A delegation that names FEAT-001 covers DEF-001.
+        let d = crate::decisions::Delegation {
+            id: "DLG-001".into(),
+            verdicts: vec!["approve".into()],
+            items: vec!["FEAT-001".into()],
+            until: "2099-01-01T00:00:00Z".into(),
+            granted: Some(Default::default()),
+            ..Default::default()
+        };
+        let verdict = crate::decisions::Verdict {
+            kind: crate::decisions::VerdictKind::Approve,
+            code: "DEF-001".into(),
+            signoff: String::new(),
+        };
+        assert!(
+            d.covers(&verdict, item, "2026-11-17T10:00:00Z"),
+            "the grant's item list holds an earlier code of the item"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

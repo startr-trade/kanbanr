@@ -1121,9 +1121,13 @@ pub fn checked_of(r: &Prepared, flag: &crate::docdrift::Flag) -> crate::models::
 /// supersedes an older one; none is deleted, and the drift check is not run here.
 pub fn settlements(store: &Store, p: &str, item: &str) -> Result<Vec<Prepared>> {
     let (all, _) = read_all(store, p)?;
+    // FTR-056: a record made under an earlier code of the item is the item's.
+    let board = store.load_meta(p)?;
+    let item = crate::aliases::current(&board, item).unwrap_or(item);
     let mut out: Vec<Prepared> = Vec::new();
     for (r, answer) in all.into_iter().rev() {
-        if r.kind != "text-check" || r.subject.item != item || answer.is_some() {
+        let of = crate::aliases::current(&board, &r.subject.item).unwrap_or(&r.subject.item);
+        if r.kind != "text-check" || of != item || answer.is_some() {
             continue;
         }
         if out.iter().any(|n| n.subject.target == r.subject.target) {
@@ -1593,12 +1597,15 @@ pub fn list(
     repo: Option<&std::path::Path>,
 ) -> Result<Vec<PreparedView>> {
     let mut views = standing(store, p, repo)?;
+    // FTR-056: an item named by an earlier code is the item that carries it.
+    let board = store.load_meta(p)?;
+    let current = |c: &str| crate::aliases::current(&board, c).map(str::to_string);
     views.retain(|v| {
         (query.all || v.state == State::Open)
-            && query
-                .item
-                .as_ref()
-                .is_none_or(|i| &v.record.subject.item == i)
+            && query.item.as_ref().is_none_or(|i| {
+                current(&v.record.subject.item).unwrap_or_else(|| v.record.subject.item.clone())
+                    == current(i).unwrap_or_else(|| i.clone())
+            })
             && query
                 .release
                 .as_ref()

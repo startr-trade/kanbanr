@@ -235,7 +235,19 @@ pub fn apply_as(
                 }
                 ProcessScope::Scoped(s) => {
                     let now = crate::now_rfc3339();
-                    agentscope::check(s, &agentscope::requested(method, path, body), &now)
+                    // FTR-056: a scope or a write that names an earlier code means the item that
+                    // carries it.
+                    let (s_now, requested) = match store.load_meta(&s.project) {
+                        Ok(board) => (
+                            s.resolved(&board),
+                            agentscope::requested(method, path, body)
+                                .into_iter()
+                                .map(|r| r.resolved(&board))
+                                .collect::<Vec<_>>(),
+                        ),
+                        Err(_) => (s.clone(), agentscope::requested(method, path, body)),
+                    };
+                    agentscope::check(&s_now, &requested, &now)
                         .map_err(|r| WriteError::Refused(r.0))?;
                     if let Err(paths) = git::is_clean(data_dir) {
                         return Err(WriteError::Refused(format!(
