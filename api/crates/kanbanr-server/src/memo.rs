@@ -525,6 +525,7 @@ mod tests {
         // Which reads are which is `reads_code_repo`'s.
         assert!(crate::routes::reads_code_repo("/projects/p/readiness"));
         assert!(crate::routes::reads_code_repo("/projects/p/scopes/drift"));
+        assert!(crate::routes::reads_code_repo("/projects/p/doctor"));
         assert!(!crate::routes::reads_code_repo("/projects/p/index"));
     }
 

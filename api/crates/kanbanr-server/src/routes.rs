@@ -425,6 +425,7 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "features", _, "readiness"]
             | ["projects", _, "drift"]
             | ["projects", _, "features", _, "drift"]
+            | ["projects", _, "doctor"]
             | ["projects", _, "scopes", "drift"]
             | ["projects", _, "prepared"]
             | ["projects", _, "position"]

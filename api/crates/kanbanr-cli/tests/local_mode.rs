@@ -7873,7 +7873,16 @@ fn coverage_silent_without_rules() {
     let (out, _) = ok(&["--json", "move", "FEAT-001", "Planned"]);
     assert!(!out.contains("coverage_warnings"), "{out}");
     let (doctor, _) = ok(&["doctor"]);
-    assert!(!doctor.contains("coverage"), "{doctor}");
+    // FTR-059's hook findings name the scratch folder, whose name holds "coverage": judge only
+    // the lines that do not name it.
+    let scratch = base.to_string_lossy().to_string();
+    assert!(
+        !doctor
+            .lines()
+            .filter(|l| !l.contains(&scratch))
+            .any(|l| l.contains("coverage")),
+        "{doctor}"
+    );
     let (shown, _) = ok(&["config", "coverage"]);
     assert!(shown.contains("no coverage rules"), "{shown}");
     let _ = std::fs::remove_dir_all(&base);
