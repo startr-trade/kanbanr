@@ -4922,6 +4922,10 @@
             "description": "The code branch, set when promoted to the first stage (`release/<V>`).",
             "type": "string"
           },
+          "branch_adopted": {
+            "description": "The branch was adopted, not made: it existed already at the tip of the line kanbanr would\nhave made it from (DEF-071). `release undo` keeps an adopted branch.",
+            "type": "boolean"
+          },
           "carried": {
             "items": {
               "$ref": "#/components/schemas/ReleaseCarry"
