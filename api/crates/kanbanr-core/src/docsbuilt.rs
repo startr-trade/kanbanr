@@ -1530,12 +1530,12 @@ mod tests {
         crate::coderepo::git(repo, &["commit", "-q", "-m", "move"]).unwrap();
     }
 
-    /// The item lists `docs/src/x.md`, which main holds at `docs/guide/x.md` since a move; its
+    /// The item lists `docs/old/x.md`, which main holds at `docs/guide/x.md` since a move; its
     /// branch commits `file` (with the item's trailer), and is merged into main.
     fn moved_doc_item(tag: &str, file: &str) -> DocsBuilt {
-        let (store, dir, repo, code, branch) = doc_item(tag, &["docs/src/x.md"]);
-        commit_with(&repo, "docs/src/x.md", "v1\n", "add");
-        move_file(&repo, "docs/src/x.md", "docs/guide/x.md");
+        let (store, dir, repo, code, branch) = doc_item(tag, &["docs/old/x.md"]);
+        commit_with(&repo, "docs/old/x.md", "v1\n", "add");
+        move_file(&repo, "docs/old/x.md", "docs/guide/x.md");
         crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
         commit_with(&repo, file, "v2\n", &refs(&code));
         merge_branch(&repo, &branch);
@@ -1557,7 +1557,7 @@ mod tests {
         assert!(
             unbuilt[0]
                 .why
-                .starts_with("docs/guide/x.md (listed as docs/src/x.md) has not changed on"),
+                .starts_with("docs/guide/x.md (listed as docs/old/x.md) has not changed on"),
             "{got:?}"
         );
     }
@@ -1595,9 +1595,9 @@ mod tests {
     /// change there lapses it.
     #[test]
     fn a_signoff_pins_and_lapses_on_the_moved_path() {
-        let (store, dir, repo, code, branch) = doc_item("signoff-moved", &["docs/src/x.md"]);
-        commit_with(&repo, "docs/src/x.md", "v1\n", "add");
-        move_file(&repo, "docs/src/x.md", "docs/guide/x.md");
+        let (store, dir, repo, code, branch) = doc_item("signoff-moved", &["docs/old/x.md"]);
+        commit_with(&repo, "docs/old/x.md", "v1\n", "add");
+        move_file(&repo, "docs/old/x.md", "docs/guide/x.md");
         crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
         commit_with(&repo, "docs/guide/x.md", "v2\n", &refs(&code));
         sign(&store, &code, &repo, "");
@@ -1662,7 +1662,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
 
         // Three listed under old names: one more log, for the renames.
-        let old: Vec<String> = (0..3).map(|i| format!("docs/src/o{i}.md")).collect();
+        let old: Vec<String> = (0..3).map(|i| format!("docs/old/o{i}.md")).collect();
         let mut listed: Vec<&str> = names[..11].iter().map(String::as_str).collect();
         listed.extend(old.iter().map(String::as_str));
         let (store, dir, repo, code, branch) = doc_item("cost-moved", &listed);
