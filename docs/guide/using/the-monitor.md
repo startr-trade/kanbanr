@@ -523,8 +523,12 @@ same whichever you use. A read-only monitor shows the command instead.
   was. A prepared confirmation and a confirmation after the tag keep their one press. After a
   promotion the page names the way back: a stage taken by mistake is undone with
   `kanbanr release undo <VERSION> --reason …` while nothing is pushed or tagged. Until the plan is
-  ready the button is disabled and the page lists what is missing with its fix ("push main
-  (`git push origin main`), then wait for CI"), with **Check again** to read the plan once more.
+  ready the button is disabled and says why beside it, in the same words as its tooltip: the first
+  thing missing with its fix ("release/v0.2.0 already exists in … and is not main's tip: 2
+  commit(s) ahead, 0 behind. Delete it if it is a leftover …"). Below, the page lists everything
+  that is missing with its fix ("push main (`git push origin main`), then wait for CI"), with
+  **Check again** to read the plan once more. The **again** button says why it is disabled the same
+  way.
   A release with nothing planned into it shows no button, only how to plan into it. The steps act
   on the code repository, and the monitor uses the repository it was started in. Started anywhere
   else, it says "the monitor was not started in the project folder" and names the CLI command. A

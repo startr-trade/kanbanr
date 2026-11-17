@@ -114,6 +114,8 @@ All notable changes to kanbanr are documented here. The format follows
 - A release is not ready for the stage that moves main, or the cut, while a planned item's branch
   is not merged into it, and integrating a planned item into its own release needs no override
   (DEF-077).
+- A disabled release button says why beside it, and a promotion adopts an existing release branch
+  that is exactly the line it would make it from instead of refusing (DEF-071).
 
 ## [0.7.0] - 2026-11-16
 
