@@ -33,7 +33,10 @@
 //     "tests only" shows that pill beside its others, and a row without it does not;
 //   web::check_review_tests_only_rows_select_together (R-2) — isTestsOnly picks the rows;
 //     selectTestsOnly ticks exactly the selectable ones and replaces an earlier selection; the
-//     rendered Approve group shows "Select tests only (N)" only with such rows and never read-only.
+//     rendered Approve group shows "Select tests only (N)" only with such rows and never read-only;
+// and the Select all regression (T10):
+//   web::check_review_select_all_ticks_and_unticks_without_error (R-2) — in a live DOM, ticking
+//     Select all and then unticking it neither throws nor leaves a row selected.
 //
 // Usage: npm run check:review-groups
 import {
@@ -56,7 +59,7 @@ import {
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
 import { readFileSync, readdirSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { closeRender, render } from "./lib/render.mjs";
+import { closeRender, load, render } from "./lib/render.mjs";
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -353,6 +356,60 @@ try {
     eq(problems, "an Approve group with no such rows does not", label((await renderPanel(slice("approve", "Approve", "Approve", [rows[2]]))).document), []);
     eq(problems, "another group does not", label((await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", rows))).document), []);
     ok = report("web::check_review_tests_only_rows_select_together", problems) && ok;
+  }
+
+  // T10 R-2: Select all, then Select all again, must not throw (the updater read a cleared currentTarget).
+  {
+    const problems = [];
+    const dom = new JSDOM("<!DOCTYPE html><body><div id=root></div></body>", { url: "http://localhost/p/x/review" });
+    const saved = {};
+    for (const k of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) saved[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+    Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true });
+    Object.defineProperty(globalThis, "document", { value: dom.window.document, configurable: true });
+    Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      const mod = await load("src/pages/review/GroupView.tsx");
+      const React = await import("react");
+      const { createRoot } = await import("react-dom/client");
+      const { MemoryRouter } = await import("react-router-dom");
+      const act = React.act;
+      const rows = [row("DEF-1"), row("DEF-2")];
+      const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
+      const container = dom.window.document.getElementById("root");
+      const root = createRoot(container);
+      const el = React.createElement(
+        MemoryRouter,
+        { initialEntries: ["/p/x/review"] },
+        React.createElement(mod.GroupPanel, { project: "x", slice: docs, writable: true, who: "A <a@example.invalid>", body: (r) => `evidence of ${r.key}` }),
+      );
+      await act(async () => root.render(el));
+      const box = () => container.querySelector(".review-select-all input");
+      const ticked = () => [...container.querySelectorAll('.ui-row input[type="checkbox"]')].filter((c) => c.checked).length;
+      const click = () => act(async () => box().dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+      dom.window.addEventListener("error", (ev) => problems.push(`uncaught: ${ev.message}`));
+      if (!box()) problems.push("no Select all box");
+      else {
+        await click();
+        eq(problems, "Select all ticks its own box", box().checked, true);
+        await click();
+        eq(problems, "Select all again unticks its own box", box().checked, false);
+        eq(problems, "nothing is selected after unticking", ticked(), 0);
+        // Two presses before React renders: the second update is queued, so its updater runs after the handler returned.
+        await act(async () => {
+          box().dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+          box().dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+        });
+        eq(problems, "two quick presses end unticked", [box().checked, ticked()], [false, 0]);
+        if (!container.querySelector(".review-group-head")) problems.push("the page no longer renders");
+      }
+      await act(async () => root.unmount());
+    } catch (e) {
+      problems.push(`threw: ${e?.message ?? e}`);
+    } finally {
+      for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+    }
+    ok = report("web::check_review_select_all_ticks_and_unticks_without_error", problems) && ok;
   }
 
   // R-9: single-line rows with pills; the group's action bar is sticky at its top.

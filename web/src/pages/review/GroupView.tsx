@@ -294,7 +294,10 @@ export function GroupPanel(p: {
                 type="checkbox"
                 checked={allOn}
                 disabled={selectable.length === 0 ? true : undefined}
-                onChange={(e) => setSel((s) => selectAll(s, shown, e.currentTarget.checked, pending))}
+                onChange={(e) => {
+                  const on = e.currentTarget.checked;
+                  setSel((s) => selectAll(s, shown, on, pending));
+                }}
               />{" "}
               Select all
             </label>
