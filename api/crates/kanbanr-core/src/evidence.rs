@@ -694,6 +694,190 @@ pub fn is_unsearchable(kind: &str) -> bool {
 pub const WALKTHROUGH_HINT: &str =
     "proved by a walkthrough run: kanbanr walkthrough run <runbook doc>";
 
+/// What a tracked test's name says about where its definition sits (MNT-001 R-1). The kind
+/// decides how the test is looked for: a Rust test by `fn <name>` under its module path, a Python
+/// test by `def <name>` in its file, a monitor check by the name its script prints, a path by the
+/// file, and anything else only by its exact text. Never by substring (L-23).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub enum TestKind {
+    /// `a::b::name`: `modules` is every segment but the last. Empty for an integration test named
+    /// bare, as boards named them before the capture hook recorded `file::name` (MNT-007).
+    Rust { modules: Vec<String>, name: String },
+    /// `test_x.Class.name` (`file` is `test_x.py`), or `Class.name` with an empty `file`, which
+    /// is searched in every `scripts/tests/*.py`.
+    Python {
+        file: String,
+        class: String,
+        name: String,
+    },
+    /// A monitor check, `web::…` or `web check: …`, found by the exact name its script prints.
+    Web { name: String },
+    /// A path to a test file, found by the file itself.
+    File { path: String },
+    /// Any other text, a description with spaces included: found only when a script prints that
+    /// exact text. Never interpolated into a pattern.
+    Literal { text: String },
+    /// A person's check: never looked for in the code.
+    Manual,
+    /// A walkthrough run's check (FTR-037): never looked for in the code.
+    Walkthrough,
+}
+
+/// The extensions a `File` test name may end in.
+const SOURCE_EXTENSIONS: &[&str] = &["rs", "py", "ts", "tsx", "js", "jsx", "mjs", "cjs", "sh"];
+
+/// `[A-Za-z0-9_]+`: one `\w+` run as a regex would read it, ASCII only.
+fn is_word(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+/// Reads a tracked test's name (and its recorded `kind`) as the kind of test it names, so it can
+/// be looked for where such a test is defined (MNT-001 R-1). In order: `manual`/`walkthrough`
+/// (by kind or by prefix); a monitor check (`web::`, `web check:`); a name with a character
+/// outside `[A-Za-z0-9_:./ -]` is a `Literal`, so no such name is ever put in a pattern; a path
+/// (a `/`, no space, a source extension); `a::b` (every segment a word) is Rust;
+/// `test_x.Class.name` and `Class.name` are Python; a bare lower-case word is a Rust integration
+/// test; anything else is a `Literal`.
+pub fn classify(name: &str, kind: &str) -> TestKind {
+    let kind = kind.trim();
+    if kind.eq_ignore_ascii_case("manual") || name.starts_with("manual:") {
+        return TestKind::Manual;
+    }
+    if kind.eq_ignore_ascii_case("walkthrough") || name.starts_with("walkthrough:") {
+        return TestKind::Walkthrough;
+    }
+    if name.starts_with("web::") || name.starts_with("web check:") {
+        return TestKind::Web {
+            name: name.to_string(),
+        };
+    }
+    let literal = || TestKind::Literal {
+        text: name.to_string(),
+    };
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_:./ -".contains(c))
+    {
+        return literal();
+    }
+    if name.contains('/')
+        && !name.contains(' ')
+        && name
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| SOURCE_EXTENSIONS.contains(&ext))
+    {
+        return TestKind::File {
+            path: name.to_string(),
+        };
+    }
+    if name.contains("::") {
+        let segments: Vec<&str> = name.split("::").collect();
+        if !segments.iter().all(|s| is_word(s)) {
+            return literal();
+        }
+        let (last, modules) = segments.split_last().expect("split yields one segment");
+        return TestKind::Rust {
+            modules: modules.iter().map(|s| s.to_string()).collect(),
+            name: last.to_string(),
+        };
+    }
+    let dotted: Vec<&str> = name.split('.').collect();
+    if dotted.iter().all(|s| is_word(s)) {
+        // `^test_\w+(\.\w+){2}$`
+        if let [file, class, test] = dotted[..]
+            && file.len() > "test_".len()
+            && file.starts_with("test_")
+        {
+            return TestKind::Python {
+                file: format!("{file}.py"),
+                class: class.to_string(),
+                name: test.to_string(),
+            };
+        }
+        // `^[A-Z]\w*\.\w+$`
+        if let [class, test] = dotted[..]
+            && class.starts_with(|c: char| c.is_ascii_uppercase())
+        {
+            return TestKind::Python {
+                file: String::new(),
+                class: class.to_string(),
+                name: test.to_string(),
+            };
+        }
+    }
+    // `^[a-z_][a-z0-9_]*$`
+    if name.starts_with(|c: char| c == '_' || c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return TestKind::Rust {
+            modules: Vec::new(),
+            name: name.to_string(),
+        };
+    }
+    literal()
+}
+
+/// The path suffixes a test of this kind may be defined in (MNT-001 R-1): a definition found
+/// anywhere else is "defined under another path". `a::b::name` → `a/b.rs`, `a/b/mod.rs`; a
+/// trailing `tests` module is the file's own (`a::tests::name` → `a.rs`, `a/mod.rs`); a bare
+/// name → `tests/` (any integration file); Python → its file under `scripts/tests/` or anywhere
+/// (`Class.name` → `scripts/tests/`); a monitor check → `web/scripts/`; a path → itself. A
+/// `Literal`, manual or walkthrough test names no place.
+pub fn expected_paths(kind: &TestKind) -> Vec<String> {
+    match kind {
+        TestKind::Rust { modules, .. } => {
+            let mut modules: &[String] = modules;
+            if modules.len() > 1 && modules.last().is_some_and(|m| m == "tests") {
+                modules = &modules[..modules.len() - 1];
+            }
+            if modules.is_empty() {
+                return vec!["tests/".to_string()];
+            }
+            let base = modules.join("/");
+            vec![format!("{base}.rs"), format!("{base}/mod.rs")]
+        }
+        TestKind::Python { file, .. } if file.is_empty() => vec!["scripts/tests/".to_string()],
+        TestKind::Python { file, .. } => vec![format!("scripts/tests/{file}"), file.clone()],
+        TestKind::Web { .. } => vec!["web/scripts/".to_string()],
+        TestKind::File { path } => vec![path.clone()],
+        TestKind::Literal { .. } | TestKind::Manual | TestKind::Walkthrough => Vec::new(),
+    }
+}
+
+/// Where a test's definition was found: a repository-relative path and its 1-based line.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct Location {
+    pub path: String,
+    pub line: u32,
+}
+
+/// What the repository says about a recorded revision: whether it has the commit, whether the
+/// commit is an ancestor of HEAD, and how many commits behind HEAD it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct RevFacts {
+    pub known: bool,
+    pub on_head_line: bool,
+    pub behind: Option<u64>,
+}
+
+/// Finds test definitions and revision facts for the reconciliation planner (MNT-001). Core
+/// plans over this trait; `GitLocator` answers it from the repository, a test from a fixture.
+pub trait Locator {
+    /// Where a test of this kind is defined at `rev`; `None` is the working tree. Empty when it
+    /// is not defined there.
+    fn find(&self, kind: &TestKind, rev: Option<&str>) -> Vec<Location>;
+    /// What the repository knows about `rev`.
+    fn revision(&self, rev: &str) -> RevFacts;
+    /// The revision `find(_, None)` answers for.
+    fn head(&self) -> String;
+    /// Told every kind the planner will ask about at `rev` before it asks, so a locator can
+    /// answer them in one pass. A no-op by default.
+    fn prime(&self, _kinds: &[TestKind], _rev: Option<&str>) {}
+}
+
 /// One tracked test and whether its name is still in the repository.
 #[derive(Debug, Clone, Serialize)]
 pub struct TrackedTest {
@@ -1906,5 +2090,245 @@ test tests::fails ... FAILED
             .filter(|n| n.contains("xml"))
             .collect();
         assert!(xml.is_empty(), "the lockfile holds XML crates: {xml:?}");
+    }
+
+    /// A test locator over an in-memory tree, matching as `GitLocator`'s patterns do: a Rust or
+    /// Python test by `(^|[^A-Za-z0-9_])(fn|def)[[:space:]]+NAME[^A-Za-z0-9_]` on one line, a
+    /// monitor check or a `Literal` by its exact text in a script that prints it (under
+    /// `scripts/` or `web/scripts/`), a path by the file.
+    struct TreeLocator {
+        files: Vec<(&'static str, &'static str)>,
+    }
+
+    fn defines(line: &str, name: &str) -> bool {
+        let word = |c: char| c == '_' || c.is_ascii_alphanumeric();
+        line.match_indices(name).any(|(at, _)| {
+            let after = line[at + name.len()..].chars().next();
+            if !after.is_some_and(|c| !word(c)) {
+                return false;
+            }
+            let before = &line[..at];
+            let keyword = before.trim_end_matches(char::is_whitespace);
+            if keyword.len() == before.len() {
+                return false;
+            }
+            ["fn", "def"].iter().any(|k| {
+                keyword
+                    .strip_suffix(k)
+                    .is_some_and(|rest| !rest.ends_with(word))
+            })
+        })
+    }
+
+    impl Locator for TreeLocator {
+        fn find(&self, kind: &TestKind, _rev: Option<&str>) -> Vec<Location> {
+            let mut out = Vec::new();
+            for (path, text) in &self.files {
+                for (i, line) in text.lines().enumerate() {
+                    let hit = match kind {
+                        TestKind::Rust { name, .. } => defines(line, name),
+                        TestKind::Python { file, name, .. } => {
+                            (!file.is_empty() || path.starts_with("scripts/tests/"))
+                                && defines(line, name)
+                        }
+                        TestKind::Web { name } | TestKind::Literal { text: name } => {
+                            (path.starts_with("scripts/") || path.starts_with("web/scripts/"))
+                                && line.contains(name.as_str())
+                        }
+                        TestKind::File { path: p } => i == 0 && p == path,
+                        TestKind::Manual | TestKind::Walkthrough => false,
+                    };
+                    if hit {
+                        out.push(Location {
+                            path: path.to_string(),
+                            line: i as u32 + 1,
+                        });
+                    }
+                }
+            }
+            out
+        }
+        fn revision(&self, _rev: &str) -> RevFacts {
+            RevFacts::default()
+        }
+        fn head(&self) -> String {
+            "head".into()
+        }
+    }
+
+    #[test]
+    fn a_test_name_is_located_by_its_kind_and_never_by_substring() {
+        let rust = |modules: &[&str], name: &str| TestKind::Rust {
+            modules: modules.iter().map(|m| m.to_string()).collect(),
+            name: name.into(),
+        };
+        // One name of each kind.
+        assert_eq!(
+            classify("releases::tests::x", "unit"),
+            rust(&["releases", "tests"], "x")
+        );
+        assert_eq!(
+            classify("local_mode::b", "integration"),
+            rust(&["local_mode"], "b")
+        );
+        assert_eq!(
+            classify("tests_locates", "integration"),
+            rust(&[], "tests_locates")
+        );
+        assert_eq!(
+            classify("test_x.C.test_d", "unit"),
+            TestKind::Python {
+                file: "test_x.py".into(),
+                class: "C".into(),
+                name: "test_d".into()
+            }
+        );
+        assert_eq!(
+            classify("C.test_d", ""),
+            TestKind::Python {
+                file: String::new(),
+                class: "C".into(),
+                name: "test_d".into()
+            }
+        );
+        assert_eq!(
+            classify("web::y", ""),
+            TestKind::Web {
+                name: "web::y".into()
+            }
+        );
+        assert_eq!(
+            classify("web check: the board loads", ""),
+            TestKind::Web {
+                name: "web check: the board loads".into()
+            }
+        );
+        assert_eq!(
+            classify("src/z.test.ts", "unit"),
+            TestKind::File {
+                path: "src/z.test.ts".into()
+            }
+        );
+        assert_eq!(
+            classify("cargo deny check", "unit"),
+            TestKind::Literal {
+                text: "cargo deny check".into()
+            }
+        );
+        assert_eq!(
+            classify("manual: the person reads it", ""),
+            TestKind::Manual
+        );
+        assert_eq!(classify("reads clearly", "manual"), TestKind::Manual);
+        assert_eq!(classify("walkthrough: a run", ""), TestKind::Walkthrough);
+        assert_eq!(classify("a run", "walkthrough"), TestKind::Walkthrough);
+        // A character outside the safe set is never put in a pattern.
+        assert!(matches!(
+            classify("a::b(.*)", "unit"),
+            TestKind::Literal { .. }
+        ));
+        assert!(matches!(
+            classify("a::b c", "unit"),
+            TestKind::Literal { .. }
+        ));
+        assert!(matches!(
+            classify("Docs build", ""),
+            TestKind::Literal { .. }
+        ));
+
+        // Where each kind may be defined.
+        assert_eq!(
+            expected_paths(&rust(&["releases", "tests"], "x")),
+            ["releases.rs", "releases/mod.rs"]
+        );
+        assert_eq!(
+            expected_paths(&rust(&["a", "b"], "x")),
+            ["a/b.rs", "a/b/mod.rs"]
+        );
+        assert_eq!(
+            expected_paths(&rust(&["local_mode"], "b")),
+            ["local_mode.rs", "local_mode/mod.rs"]
+        );
+        assert_eq!(expected_paths(&rust(&[], "b")), ["tests/"]);
+        assert_eq!(
+            expected_paths(&classify("test_x.C.test_d", "")),
+            ["scripts/tests/test_x.py", "test_x.py"]
+        );
+        assert_eq!(
+            expected_paths(&classify("C.test_d", "")),
+            ["scripts/tests/"]
+        );
+        assert_eq!(expected_paths(&classify("web::y", "")), ["web/scripts/"]);
+        assert_eq!(
+            expected_paths(&classify("src/z.test.ts", "")),
+            ["src/z.test.ts"]
+        );
+        assert!(expected_paths(&classify("cargo deny check", "")).is_empty());
+        assert!(expected_paths(&TestKind::Manual).is_empty());
+
+        let tree = TreeLocator {
+            files: vec![
+                ("Makefile", "deny:\n\tcargo deny check\n"),
+                (
+                    "src/lib.rs",
+                    "// a_renamed_test_old_name was renamed to a_renamed_test_new_name\n\
+                     fn a_renamed_test_new_name() {}\n\
+                     fn a_renamed_test_old_name_too() {}\n\
+                     fn xa_renamed_test_old_name() {}\n",
+                ),
+                (
+                    "src/other.rs",
+                    "mod tests {\n    #[test]\n    fn x() {}\n}\n",
+                ),
+                (
+                    "scripts/tests/test_x.py",
+                    "class C:\n    def test_d(self):\n        pass\n",
+                ),
+                ("web/scripts/check-y.mjs", "console.log('ok web::y')\n"),
+                ("src/z.test.ts", "test('z', () => {})\n"),
+            ],
+        };
+        let at = |name: &str| tree.find(&classify(name, "unit"), None);
+
+        // A command in a Makefile is not a definition, though its text is there.
+        assert!(tree.files[0].1.contains("cargo deny check"));
+        assert!(at("cargo deny check").is_empty());
+        // The old name in a comment, or inside a longer name, is not the test.
+        assert!(at("lib::tests::a_renamed_test_old_name").is_empty());
+        assert_eq!(
+            at("lib::tests::a_renamed_test_new_name"),
+            [Location {
+                path: "src/lib.rs".into(),
+                line: 2
+            }]
+        );
+        // Found, but under another path than the name gives: elsewhere.
+        let kind = classify("releases::tests::x", "unit");
+        let found = tree.find(&kind, None);
+        assert_eq!(
+            found,
+            [Location {
+                path: "src/other.rs".into(),
+                line: 3
+            }]
+        );
+        let path_ok = found.iter().any(|l| {
+            expected_paths(&kind)
+                .iter()
+                .any(|p| l.path.ends_with(p.as_str()) || l.path.contains(p.as_str()))
+        });
+        assert!(
+            !path_ok,
+            "src/other.rs is not where releases::tests::x belongs"
+        );
+        // Python, a monitor check and a path are found where they belong.
+        assert_eq!(at("test_x.C.test_d")[0].path, "scripts/tests/test_x.py");
+        assert_eq!(at("C.test_d")[0].path, "scripts/tests/test_x.py");
+        assert_eq!(at("web::y")[0].path, "web/scripts/check-y.mjs");
+        assert_eq!(at("src/z.test.ts")[0].path, "src/z.test.ts");
+        assert!(at("src/missing.test.ts").is_empty());
+        // The default prime is a no-op.
+        tree.prime(&[kind], None);
+        assert_eq!(tree.head(), "head");
     }
 }
