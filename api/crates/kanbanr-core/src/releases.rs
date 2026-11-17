@@ -4148,7 +4148,11 @@ fn work_prepare(
             .iter()
             .find(|r| !release.parent.is_empty() && r.version == release.parent);
         let link = match parent {
-            Some(p) => parent_notes_link(Some(n), &path, p)?,
+            // From the template this patch's notes came from, so an old branch links its
+            // parent's notes beside them (MNT-002); today's when the path was recorded.
+            Some(p) => {
+                parent_notes_link(Some(paths.notes_template.as_deref().unwrap_or(n)), &path, p)?
+            }
             None => None,
         };
         let ships: Vec<String> = shipping.iter().map(|f| f.code.clone()).collect();
@@ -5376,6 +5380,9 @@ pub struct PreparePaths {
     pub changelog_copies: Vec<String>,
     /// The notes file, its placeholders filled; `None` when no notes are configured.
     pub notes: Option<String>,
+    /// The notes template `notes` was expanded from: today's, or the earlier one the branch has;
+    /// `None` when no notes are configured or the path is the one recorded on the release.
+    pub notes_template: Option<String>,
     /// Today's listings, each at the path chosen for it.
     pub listings: Vec<crate::releasegates::NotesListing>,
     /// What the plan says about each earlier path used, and each earlier path skipped.
@@ -5410,12 +5417,14 @@ fn prepare_paths(
                       earlier: &dyn Fn(&crate::releasegates::ReleasePrepare) -> Option<String>,
                       need: prep::Need,
                       said: &mut Vec<String>|
-     -> std::result::Result<String, String> {
+     -> std::result::Result<(String, String), String> {
         let now = prep::expand(today, ph);
         prep::check_repo_path(&now)?;
+        // Each candidate path with the template it was expanded from.
         let mut candidates = vec![now.clone()];
+        let mut templates = vec![today.to_string()];
         if prep::resolve_on_branch(repo, tip, &candidates, need).is_some() {
-            return Ok(now);
+            return Ok((now, today.to_string()));
         }
         let past = history.get_or_insert_with(|| past_prepare_configs(store, id, project));
         for c in past.iter().skip(1) {
@@ -5425,7 +5434,10 @@ fn prepare_paths(
                 continue;
             }
             match prep::check_repo_path(&path) {
-                Ok(()) => candidates.push(path),
+                Ok(()) => {
+                    candidates.push(path);
+                    templates.push(t);
+                }
                 Err(e) => {
                     let note = format!("`{setting}`: the earlier path {path} is skipped: {e}");
                     if !said.contains(&note) {
@@ -5436,38 +5448,39 @@ fn prepare_paths(
         }
         // Today's is not on the branch: the earlier ones, newest first.
         match prep::resolve_on_branch(repo, tip, &candidates[1..], need) {
-            Some((path, _)) => {
+            Some((path, i)) => {
                 said.push(format!(
                     "`{setting}` at `{path}`: the branch has the book at that path"
                 ));
-                Ok(path)
+                Ok((path, templates[i + 1].clone()))
             }
-            None => Ok(now),
+            None => Ok((now, today.to_string())),
         }
     };
     let mut changelog_copies = Vec::new();
     for (i, copy) in cfg.changelog_copies.iter().enumerate() {
-        changelog_copies.push(choose(
-            "changelog_copies",
-            copy,
-            &|c| c.changelog_copies.get(i).cloned(),
-            prep::Need::File,
-            &mut said,
-        )?);
+        changelog_copies.push(
+            choose(
+                "changelog_copies",
+                copy,
+                &|c| c.changelog_copies.get(i).cloned(),
+                prep::Need::File,
+                &mut said,
+            )?
+            .0,
+        );
     }
-    let notes = match &cfg.notes {
-        None => None,
+    let (notes, notes_template) = match &cfg.notes {
+        None => (None, None),
         Some(_) if !release.notes_path.is_empty() => {
             prep::check_repo_path(&release.notes_path)?;
-            Some(release.notes_path.clone())
+            (Some(release.notes_path.clone()), None)
         }
-        Some(n) => Some(choose(
-            "notes",
-            n,
-            &|c| c.notes.clone(),
-            prep::Need::Dir,
-            &mut said,
-        )?),
+        Some(n) => {
+            let (path, template) =
+                choose("notes", n, &|c| c.notes.clone(), prep::Need::Dir, &mut said)?;
+            (Some(path), Some(template))
+        }
     };
     let mut listings = Vec::new();
     for (i, l) in cfg.notes_listings.iter().enumerate() {
@@ -5477,12 +5490,14 @@ fn prepare_paths(
             &|c| c.notes_listings.get(i).map(|x| x.path.clone()),
             prep::Need::File,
             &mut said,
-        )?;
+        )?
+        .0;
         listings.push(crate::releasegates::NotesListing { path, ..l.clone() });
     }
     Ok(PreparePaths {
         changelog_copies,
         notes,
+        notes_template,
         listings,
         said,
     })
@@ -8660,6 +8675,43 @@ pub(crate) mod tests {
         ] {
             assert!(does.contains(said), "{does}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// MNT-002 R-3: a patch whose notes are drafted at an earlier configured path links its
+    /// parent's notes from that same template, beside them, when the parent has no notes path
+    /// recorded; never today's template, which the old branch does not have.
+    #[test]
+    fn a_patch_links_its_parent_notes_from_the_template_its_own_notes_came_from() {
+        let (store, dir, repo) = moved_book_board("mnt002-parent-link");
+        // A parent shipped before DEF-036 recorded where its notes were written.
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut()
+            .find(|r| r.version == "v0.2.0")
+            .unwrap()
+            .notes_path
+            .clear();
+        super::save(&store, "shop", &rs).unwrap();
+        super::add_patch(
+            &store,
+            "shop",
+            "v0.2.1",
+            "",
+            "",
+            "v0.2.0",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
+        let notes = coderepo::read_blob(&repo, &tip, &format!("{OLD_BOOK}/releases/v0.2.1.md"))
+            .unwrap()
+            .map(|(_, t)| t)
+            .expect("the notes where the book is");
+        assert!(notes.contains("[v0.2.0](v0.2.0.md)"), "{notes}");
+        assert!(!notes.contains("guide"), "{notes}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
