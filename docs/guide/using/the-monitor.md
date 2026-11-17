@@ -269,7 +269,7 @@ Records** (FTR-047). On a wide screen the top bar is one line: an area with seve
 menu button ("Work ▾", "Architecture ▾") that opens its list under it, and an area with one page
 is a plain link named for the area. Only one menu is open at a time; Escape, a click outside or
 following a link closes it. The area you are in is underlined, and the page you are on is marked
-in its menu. An area shows only once it has a page: Overview and Evidence have none yet, and
+in its menu. An area shows only once it has a page: Evidence has none yet, and
 **Releases** shows only on a project that works in releases.
 
 ```mermaid
@@ -293,7 +293,10 @@ flowchart LR
   Status["Status page"]
   Feature["Feature page"]
   MsOne["Milestone page"]
+  Over["Overview — what needs you, what is happening now"]
+  Bar --> Over
   Bar --> Work
+  Work --> Items["Items — filtered list"]
   Bar --> Plan
   Bar --> Arch
   Bar --> Rec
@@ -324,7 +327,9 @@ outside the menu, always visible.
 
 - **Home tile**: project name + description, an **Open dashboard** link, a link per **status**
   (with counts), and a **Documentation** link.
-- **Board**: one column per state in `displayed_states`; click a card → that feature's page.
+- **Overview**: the project's landing page, at `/p/<project>`; see
+  [The Overview and Needs you](#the-overview-and-needs-you).
+- **Board**: at `/p/<project>/board`: one column per state in `displayed_states`; click a card → that feature's page.
   A card names the one stage the item reaches next, with the same count `kanbanr check` gives for
   it, sign-offs included: "Migration needs 6, 1 yours" means six things stand between the item and
   Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
@@ -362,6 +367,34 @@ shows; each page has one h1, with cards, Board columns and rows as headings; and
 from screen readers while every input is labelled. Checks in CI hold this bar
 (`check:a11y-contrast`, `check:a11y-type`, `check:a11y-focus` and `check:a11y-structure`), and
 motion is reduced when your system asks for it.
+
+### The Overview and Needs you
+
+A project opens on its **Overview** at `/p/<project>` (FTR-048). The Board moved to
+`/p/<project>/board`; the Work menu still names it. When the monitor serves exactly one project,
+`/` goes straight to that project's Overview; with two or more, Home lists them as before. The
+Overview leads with what needs you, then what is happening, then how much the board holds:
+
+- **Needs you**: what waits on you, in four sections: Decisions (each Review group), Releases (a
+  release at a stage that waits for you), Health (red tests, doctor errors, a repository that has
+  drifted) and Records (a retrospective that is due). Each line has a count and links to the page
+  that takes it. Only your own decisions count toward the total; health is Claude's to fix, so
+  its line says "Ask Claude to fix the 22 doctor errors." instead of linking.
+- **Now**: the running sprint with its days left, each release in flight with the steps done,
+  current and next, and the open milestones.
+- **What the board holds**: items by kind (untyped counted apart), requirements, tests by state
+  and kind, requirement coverage, flow (completed, cycle time, rework, defects) and records. Every
+  count links to the list it counts; the flow numbers that have no list are tiles that say
+  "Ask Claude for the flow report."
+- **Goals**, **Recent decisions** (ADRs, approvals, sign-offs, release stages, shipped releases,
+  newest first, in words) and **Activity**.
+
+Every page also carries a **Needs you** badge in the top bar with the same total; it opens a
+drawer with the same lines. **Work → Items** (`/p/<project>/items`) lists items filtered by kind,
+status, milestone, goal, sprint, release or evidence (red, planned, stale, unproven, proven,
+untested); the filters are in the address, so a link from the Overview opens the list it counted.
+The data comes from `GET /api/projects/{project}/overview`, `…/attention` and `…/items`; see the
+[HTTP API](../reference/http-api.md).
 
 ## What the monitor shows
 

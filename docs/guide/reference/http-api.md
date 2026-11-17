@@ -113,6 +113,20 @@ The monitor reads four of these instead of the whole project (DEF-081):
 - `GET /api/projects/{project}/features` is every item without its specification, or only those in
   `status` or `milestone` when they are given. Any other query parameter is a `400`.
 
+The Overview reads three more (FTR-048), each cached and warmed like the four above:
+
+- `GET /api/projects/{project}/overview` is everything the Overview page draws in one answer: the
+  attention lines, the running sprint, releases in flight and open milestones, the counts the
+  board holds, each goal's facts, recent decisions in words and recent activity.
+- `GET /api/projects/{project}/attention` is what waits on the person: lines in the sections
+  `decisions`, `releases`, `health` and `records`, each with a count, a monitor path in `to` (or
+  an `ask` for Claude when no page shows it) and `yours` when it counts toward `total`. The
+  Review groups come from `reviewgroups::summary`, so a new group appears with no change here.
+- `GET /api/projects/{project}/items` is items as rows with their evidence, filtered by `kind`
+  (`none` for untyped), `status`, `milestone`, `goal`, `sprint`, `release` and `evidence` (`red`,
+  `planned`, `stale`, `unproven`, `proven` or `untested`). An unknown parameter or evidence value
+  is a `400`.
+
 ## Several boards
 
 A daemon started with `kanbanr serve --board A --board B` serves several boards read-only
