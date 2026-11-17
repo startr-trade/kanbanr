@@ -17,10 +17,7 @@ const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
  * Pages still on the whole board until the item named beside each rebuilds or removes them; that
  * item removes its entry.
  */
-const EXEMPT = new Map([
-  ["pages/SchedulePage.tsx", "removed by FTR-043"],
-  ["pages/GanttPage.tsx", "removed by FTR-043"],
-]);
+const EXEMPT = new Map([]);
 
 /** What a whole-board read looks like in source. */
 const PATTERNS = [

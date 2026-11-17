@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, createHashRouter, RouterProvider, type RouteObject } from "react-router-dom";
+import { createBrowserRouter, createHashRouter, Navigate, RouterProvider, type RouteObject } from "react-router-dom";
 import "./styles.css";
 import App from "./App";
 import HomePage from "./pages/HomePage";
@@ -10,8 +10,7 @@ import StatusPage from "./pages/StatusPage";
 import FeaturePage from "./pages/FeaturePage";
 import MilestonesPage from "./pages/MilestonesPage";
 import MilestonePage from "./pages/MilestonePage";
-import SchedulePage from "./pages/SchedulePage";
-import GanttPage from "./pages/GanttPage";
+import PlanPage from "./pages/PlanPage";
 import CharterPage from "./pages/CharterPage";
 import CatalogPage from "./pages/CatalogPage";
 import ReviewPage from "./pages/ReviewPage";
@@ -38,8 +37,10 @@ const routes: RouteObject[] = [
       { path: "p/:project/feature/:code", element: <FeaturePage /> },
       { path: "p/:project/milestones", element: <MilestonesPage /> },
       { path: "p/:project/milestone/:code", element: <MilestonePage /> },
-      { path: "p/:project/schedule", element: <SchedulePage /> },
-      { path: "p/:project/gantt", element: <GanttPage /> },
+      // One Plan page in place of the Schedule and the Gantt (FTR-043); their old URLs still land on it.
+      { path: "p/:project/plan", element: <PlanPage /> },
+      { path: "p/:project/schedule", element: <Navigate to="../plan?tab=planned" relative="path" replace /> },
+      { path: "p/:project/gantt", element: <Navigate to="../plan" relative="path" replace /> },
       { path: "p/:project/charter", element: <CharterPage /> },
       { path: "p/:project/catalog", element: <CatalogPage /> },
       { path: "p/:project/review", element: <ReviewPage /> },

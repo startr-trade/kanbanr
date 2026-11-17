@@ -18,11 +18,16 @@
 //     — toTimeline gives a sprint 3 of 6 done progress 0.5 and a release a lane of diamond and dot
 //     marks with no band; rendered, the bands are 24 px tall with a filled part half their width,
 //     and today is one solid line in --accent labelled "today".
+//   web::check_plan_replaces_the_gantt_and_schedule_pages (R-6) — main.tsx routes `p/:project/plan`
+//     to the Plan page and turns `schedule` and `gantt` into redirects (to Planned, and to the
+//     page); GanttPage.tsx and SchedulePage.tsx are gone; NAV's Plan area has one `plan` entry,
+//     active on the old paths too, and no Schedule or Gantt entry.
 //
 // Usage: npm run check:plan-page
 import { defaultTab, itemBands, legacyRedirect, openLanes, planTabs, toTimeline } from "../src/planTabs.ts";
 import { TAGS, urls } from "../src/data/urls.ts";
-import { readFileSync, readdirSync } from "node:fs";
+import { activeEntry, NAV } from "../src/nav.ts";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { closeRender, render } from "./lib/render.mjs";
 
 let failed = false;
@@ -320,6 +325,35 @@ await check(
     expect("labelled today", text(svg.querySelector(".ui-tl-today text")), "today");
     const css = readFileSync(new URL("../src/ui/ui.css", import.meta.url), "utf8");
     if (!/\.ui-tl-today line\s*\{[^}]*stroke:\s*var\(--accent\)/.test(css)) problems.push("the today line is not drawn in --accent");
+  },
+);
+
+await check(
+  "web::check_plan_replaces_the_gantt_and_schedule_pages",
+  "main.tsx routes the Plan page and redirects /schedule to Planned and /gantt to the page, the two old pages are gone, and the nav has one Plan entry that the old paths also mark.",
+  (expect, problems) => {
+    expect("/schedule goes to Planned", legacyRedirect("/p/kanbanr/schedule"), "/p/kanbanr/plan?tab=planned");
+    expect("/gantt goes to the Plan page", legacyRedirect("/p/kanbanr/gantt"), "/p/kanbanr/plan");
+
+    const main = src("main.tsx");
+    if (!/\{\s*path:\s*"p\/:project\/plan",\s*element:\s*<PlanPage\s*\/>\s*\}/.test(main)) problems.push("main.tsx does not route p/:project/plan to <PlanPage />");
+    // `..` is resolved against the path, not the route tree, so /p/x/schedule lands on /p/x/plan.
+    const redirect = (path, to) =>
+      new RegExp(`\\{\\s*path:\\s*"p\\/:project\\/${path}",\\s*element:\\s*<Navigate\\s+to="${to.replace(/[?.]/g, "\\$&")}"\\s+relative="path"\\s+replace\\s*\\/>\\s*\\}`).test(main);
+    if (!redirect("schedule", "../plan?tab=planned")) problems.push("main.tsx does not redirect p/:project/schedule to ../plan?tab=planned");
+    if (!redirect("gantt", "../plan")) problems.push("main.tsx does not redirect p/:project/gantt to ../plan");
+    if (/SchedulePage|GanttPage/.test(main)) problems.push("main.tsx still names SchedulePage or GanttPage");
+    for (const f of ["pages/GanttPage.tsx", "pages/SchedulePage.tsx"]) {
+      if (existsSync(new URL(`../src/${f}`, import.meta.url))) problems.push(`${f} still exists`);
+    }
+
+    const plan = NAV.find((a) => a.key === "plan");
+    expect("the Plan area's entries", plan?.entries.map((e) => e.key), ["plan", "releases"]);
+    const entry = plan?.entries.find((e) => e.key === "plan");
+    expect("the plan entry", [entry?.label, entry?.path("x"), entry?.match], ["Plan", "/p/x/plan", ["/schedule", "/gantt"]]);
+    for (const path of ["/p/x/plan", "/p/x/schedule", "/p/x/gantt"]) {
+      expect(`${path} marks Plan active`, activeEntry(NAV, "x", path), { area: "plan", entry: "plan" });
+    }
   },
 );
 

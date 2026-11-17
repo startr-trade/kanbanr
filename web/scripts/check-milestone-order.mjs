@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 //
 // web::milestone_order (FTR-031 R-3): the Milestones page lists milestones newest first, the
-// highest code first; the Schedule view and a milestone's page keep their dependency order.
+// highest code first; a milestone's page and its Plan row keep their dependency order (the Plan
+// row's order is core's graph::order_by_deps since FTR-043 removed the Schedule page).
 //
 // Usage: npm run check:milestone-order
 import { readFileSync } from "node:fs";
@@ -27,13 +28,12 @@ const src = (f) => readFileSync(new URL(`../src/pages/${f}`, import.meta.url), "
 if (!src("MilestonesPage.tsx").includes("newestFirst(data.milestones)")) {
   problems.push("MilestonesPage.tsx does not render newestFirst(data.milestones)");
 }
-for (const f of ["SchedulePage.tsx", "MilestonePage.tsx"]) {
+for (const f of ["plan/RowItems.tsx", "MilestonePage.tsx"]) {
   if (src(f).includes("newestFirst(")) problems.push(`${f} must keep its own order, not call newestFirst(`);
 }
-if (!src("SchedulePage.tsx").includes("orderByDeps")) problems.push("SchedulePage.tsx no longer defines orderByDeps");
 
 if (problems.length) {
   for (const p of problems) console.error(`web::milestone_order — ${p}`);
   process.exit(1);
 }
-console.log("web::milestone_order — the Milestones page lists newest first; Schedule and a milestone keep dependency order.");
+console.log("web::milestone_order — the Milestones page lists newest first; a milestone and its Plan row keep dependency order.");

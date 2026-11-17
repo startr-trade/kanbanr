@@ -46,9 +46,8 @@ export const NAV: NavArea[] = [
     key: "plan",
     label: "Plan",
     entries: [
-      // FTR-043 replaces Schedule and Gantt with `plan`.
-      { key: "schedule", label: "Schedule", path: (p) => `${base(p)}/schedule` },
-      { key: "gantt", label: "Gantt", path: (p) => `${base(p)}/gantt` },
+      // One Plan page in place of Schedule and Gantt; their old paths redirect to it (FTR-043).
+      { key: "plan", label: "Plan", path: (p) => `${base(p)}/plan`, match: ["/schedule", "/gantt"] },
       {
         key: "releases",
         label: "Releases",
