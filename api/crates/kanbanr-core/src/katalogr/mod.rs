@@ -5,6 +5,7 @@
 //! client found (`KatalogrState`). kanbanr checks capability names, never version numbers.
 
 pub mod client;
+pub mod docviews;
 #[doc(hidden)]
 pub mod fake;
 pub mod query;

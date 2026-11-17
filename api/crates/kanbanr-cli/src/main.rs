@@ -118,6 +118,11 @@ enum Command {
     /// `install`, and `self-update` keeps an installed copy in step.
     #[command(subcommand)]
     Skill(SkillCmd),
+    /// The optional link to katalogr (FTR-016): is a `katalogr api` running, does it know what a
+    /// doc's query blocks ask, and at which position would they be asked. kanbanr works fully
+    /// without it.
+    #[command(subcommand)]
+    Katalogr(KatalogrCmd),
     /// The VS Code extension in the editors on this machine (FEAT-158): install the one this
     /// release carries into VS Code, VSCodium, Cursor or Windsurf. The installers run it with
     /// `--vscode`; `self-update` keeps an installed copy in step.
@@ -187,6 +192,10 @@ enum Command {
         /// together. Replaces the data folder; refused with --data-dir and --allow-writes.
         #[arg(long = "board", value_name = "PATH")]
         board: Vec<PathBuf>,
+        /// Where the daemon asks katalogr for a doc's query blocks (default:
+        /// $KANBANR_KATALOGR_URL, else http://127.0.0.1:7878). (FTR-016)
+        #[arg(long, value_name = "URL")]
+        katalogr_url: Option<String>,
     },
     /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
@@ -926,6 +935,17 @@ enum EventsCmd {
     /// Emit a sample event to verify the log + any configured webhook delivery (FEAT-036). Writes a
     /// test event to the project's events log and POSTs it to every configured webhook.
     Test,
+}
+
+#[derive(Subcommand)]
+enum KatalogrCmd {
+    /// What a client finds at katalogr's address, in one sentence, and the position a doc's query
+    /// blocks would be asked at. Exits 0 whatever it finds: an absent katalogr is not an error.
+    Status {
+        /// Print the answer as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2728,6 +2748,7 @@ fn command_access(cmd: &Command) -> Access {
         Command::Init { .. } => Outside("`kanbanr init` changes kanbanr itself"),
         Command::SelfUpdate { check: true, .. } => Read,
         Command::SelfUpdate { .. } => Outside("`kanbanr self-update` changes kanbanr itself"),
+        Command::Katalogr(KatalogrCmd::Status { .. }) => Read,
         Command::Skill(cmd) => match cmd {
             SkillCmd::Status => Read,
             SkillCmd::Install { .. } => Outside("`kanbanr skill install` changes kanbanr itself"),
@@ -2990,6 +3011,7 @@ fn run_serve(
     allow_writes: bool,
     allow_remote_writes: bool,
     board: &[PathBuf],
+    katalogr_url: Option<String>,
 ) -> anyhow::Result<()> {
     if !board.is_empty() {
         // Several boards, read-only by construction (FTR-040). Each refusal comes before anything
@@ -3057,6 +3079,7 @@ fn run_serve(
         allow_writes,
         code_repo,
         allow_remote_writes,
+        katalogr_url,
     ))
 }
 
@@ -9432,6 +9455,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             allow_writes,
             allow_remote_writes,
             board,
+            katalogr_url,
         } => {
             return run_serve(
                 cli,
@@ -9440,6 +9464,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 *allow_writes,
                 *allow_remote_writes,
                 board,
+                katalogr_url.clone(),
             );
         }
         Command::Open { check } => return run_open(cli, *check),
@@ -9992,7 +10017,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false, &[]);
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false, &[], None);
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
@@ -10501,6 +10526,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Katalogr(KatalogrCmd::Status { json }) => run_katalogr_status(cli, &client, *json),
         Command::Drift { since, item } => {
             run_drift(cli, &client, since.as_deref(), item.as_deref())
         }
@@ -12003,6 +12029,47 @@ fn run_drift(
         for line in flag.lines() {
             println!("  {line}");
         }
+    }
+    Ok(())
+}
+
+/// `kanbanr katalogr status` (FTR-016): the link's state as one sentence, and the position a
+/// doc's query blocks would be asked at. Exits 0 whatever it finds.
+fn run_katalogr_status(cli: &Cli, client: &Backend, json: bool) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let resp = client.get_in(&format!("/projects/{p}/katalogr"), code_repo().as_deref())?;
+    let answer: Value = serde_json::from_str(&resp)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&answer)?);
+        return Ok(());
+    }
+    let state = &answer["state"];
+    let url = state["url"].as_str().unwrap_or_default();
+    let said = |key: &str| state[key].as_str().unwrap_or_default().to_string();
+    let sentence = match state["state"].as_str() {
+        Some("ready") => {
+            let who = match said("katalogr").as_str() {
+                "" => "katalogr".to_string(),
+                v => format!("katalogr {v}"),
+            };
+            format!(
+                "{who} is running at {url} (contract {})",
+                state["contract"].as_u64().unwrap_or(0)
+            )
+        }
+        Some("too_old") => format!("the katalogr at {url} is too old: {}", said("said")),
+        _ => format!("katalogr is not running at {url}"),
+    };
+    println!("{sentence}");
+    match answer["position"].as_str().filter(|s| !s.is_empty()) {
+        Some(position) => println!(
+            "position: {position} ({})",
+            answer["position_from"].as_str().unwrap_or_default()
+        ),
+        None => println!(
+            "position: none ({})",
+            answer["position_from"].as_str().unwrap_or_default()
+        ),
     }
     Ok(())
 }

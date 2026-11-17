@@ -562,6 +562,7 @@ mod tests {
             memo: Arc::new(Memo::new(MEMO_CAP_BYTES)),
             slices: tokio::sync::broadcast::channel(4).0,
             background: Arc::new(OnceLock::new()),
+            katalogr: kanbanr_core::katalogr::Settings::from_env(),
         };
         (st, dir)
     }
