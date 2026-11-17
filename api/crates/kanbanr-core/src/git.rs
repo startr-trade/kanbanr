@@ -256,6 +256,18 @@ pub fn head_commit(dir: &Path) -> Option<String> {
     Some(head.peel_to_commit().ok()?.id().to_string())
 }
 
+/// The HEAD commit's committer time as RFC 3339 UTC; None when `dir` is not a repository or has
+/// no commit yet (FTR-040: a board's "last changed" on the board list).
+pub fn head_time(dir: &Path) -> Option<String> {
+    let repo = Repository::open(dir).ok()?;
+    let head = repo.head().ok()?;
+    let secs = head.peel_to_commit().ok()?.time().seconds();
+    time::OffsetDateTime::from_unix_timestamp(secs)
+        .ok()?
+        .format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
 /// Set the repo-local commit identity (used by local mode: `kanbanr identity --name --email`).
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
     crate::project::assert_inside_fence(dir); // FEAT-195
