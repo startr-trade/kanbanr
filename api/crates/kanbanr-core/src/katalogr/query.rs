@@ -107,7 +107,7 @@ pub struct QueryProblem {
     pub reason: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Kind {
     Integer,
     Enum(&'static [&'static str]),

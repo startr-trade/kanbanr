@@ -4,6 +4,9 @@
 //! query-block grammar (`query`), where katalogr is and how long to wait (`Settings`) and what a
 //! client found (`KatalogrState`). kanbanr checks capability names, never version numbers.
 
+pub mod client;
+#[doc(hidden)]
+pub mod fake;
 pub mod query;
 
 use serde::Serialize;
