@@ -1,12 +1,11 @@
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
 import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { conditionText } from "../types";
-import type { Gate, GitModelView, ProcessStatus, ProjectConfig } from "../types";
+import type { Gate, GitDoctorIssue, GitModelView, Guards, ProcessStatus, ProjectConfig, Release, Sprint } from "../types";
 import { cadenceSection, doctorWarning, gitModelRows, guardRows, pathSections } from "../workflowSections";
 import type { CadenceSection, GuardRow, PathSection, Row, Tone } from "../workflowSections";
 
@@ -19,42 +18,30 @@ import type { CadenceSection, GuardRow, PathSection, Row, Tone } from "../workfl
  */
 export default function WorkflowPage() {
   const { project = "" } = useParams();
-  // The reads below without a slice of their own re-read on every change, as before.
-  const tick = useLiveTick(api.projectEvents(project));
   // The configuration alone, never the whole board (DEF-081).
   const { data: config, error, loading } = useQuery<ProjectConfig>(project, urls.config(project), TAGS.config);
-  const diagram = useAsync(() => api.getWorkflowDiagram(project), [project, tick]);
-  const process = useAsync(() => api.getProcess(project), [project, tick]);
+  const diagram = useQuery<string>(project, urls.workflowDiagram(project), TAGS.workflowDiagram, () =>
+    api.getWorkflowDiagram(project),
+  );
+  const process = useQuery<ProcessStatus>(project, urls.process(project), TAGS.process);
   // What each stage actually asks (FEAT-199): the raw config misses role-addressed gates.
-  const effective = useAsync(() => api.getGates(project), [project, tick]);
+  const effective = useQuery<Record<string, Gate>>(project, urls.gates(project), TAGS.gates);
   const usesSprints = config?.cadence?.sprints === true;
   const usesReleases = config?.cadence?.releases === true;
-  const sprints = useAsync(
-    () => (usesSprints ? api.getSprints(project) : Promise.resolve([])),
-    [project, tick, usesSprints],
-  );
-  const releases = useAsync(
-    () => (usesReleases ? api.getReleases(project) : Promise.resolve([])),
-    [project, tick, usesReleases],
-  );
+  const sprints = useQuery<Sprint[]>(project, usesSprints ? urls.sprints(project) : null, TAGS.sprints);
+  const releases = useQuery<Release[]>(project, usesReleases ? urls.releases(project) : null, TAGS.releases);
   // From the code repository when the daemon was started in it; otherwise the model the cadence
   // alone gives, with no branches read (FEAT-213).
-  const gitModel = useAsync(
-    () =>
-      api
-        .getGitModel(project)
-        .then((view) => ({ view, fromRepo: true }))
-        .catch(() =>
-          api.getGitModelPreview(project, usesSprints, usesReleases).then((view) => ({ view, fromRepo: false })),
-        ),
-    [project, tick, usesSprints, usesReleases],
+  const repoModel = useQuery<GitModelView>(project, urls.gitModel(project), TAGS.gitModel);
+  const preview = useQuery<GitModelView>(
+    project,
+    repoModel.error && config ? urls.gitModelPreview(project, usesSprints, usesReleases) : null,
+    TAGS.gitModelPreview,
   );
+  const gitModel = gitModelRead(repoModel, preview);
   const fromRepo = gitModel.data?.fromRepo === true;
-  const gitDoctor = useAsync(
-    () => (fromRepo ? api.getGitDoctor(project) : Promise.resolve([])),
-    [project, tick, fromRepo],
-  );
-  const guards = useAsync(() => api.getGuards(project), [project, tick]);
+  const gitDoctor = useQuery<GitDoctorIssue[]>(project, fromRepo ? urls.gitDoctor(project) : null, TAGS.gitDoctor);
+  const guards = useQuery<Guards>(project, urls.guards(project), TAGS.guards);
 
   if (loading && !config) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -376,6 +363,19 @@ function StageTile({ status, gate }: { status: string; gate: Gate }) {
  * The saved process this workflow came from, and whether it has moved on (FEAT-170). Told, never
  * applied: `kanbanr process update` brings the new version when the project's user decides to.
  */
+/**
+ * The git model to show: the code repository's when the daemon reads it, else the cadence's
+ * preview; the repository read's error only once the preview has failed too (FEAT-213).
+ */
+function gitModelRead(
+  repo: { data: GitModelView | null; error: string | null },
+  preview: { data: GitModelView | null; error: string | null },
+): { data: { view: GitModelView; fromRepo: boolean } | null; error: string | null } {
+  if (!repo.error) return { data: repo.data ? { view: repo.data, fromRepo: true } : null, error: null };
+  if (preview.data && !preview.error) return { data: { view: preview.data, fromRepo: false }, error: null };
+  return { data: null, error: preview.error };
+}
+
 function ProcessLine({ status }: { status: ProcessStatus }) {
   const source = status.source;
   if (!source) return null;
