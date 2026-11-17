@@ -56,7 +56,7 @@ export default function HomePage() {
                 </div>
               )}
               <div className="tile-foot">
-                <Link to={`${base}/docs`}>📄 Documentation</Link>
+                <Link to={`${base}/docs`}><span aria-hidden="true">📄</span> Documentation</Link>
                 <span className="muted small">{p.total_features} features</span>
               </div>
             </div>

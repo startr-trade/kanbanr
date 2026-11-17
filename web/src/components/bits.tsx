@@ -1,6 +1,7 @@
 import { nextStageHint, type NextStage } from "../cardText";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
+import { type Connection, useConnection } from "../data/live";
 import type { Feature, Task, TaskState } from "../types";
 import { featureProgress } from "../types";
 import type { Gap } from "../types";
@@ -13,14 +14,26 @@ export function ErrorBox({ error }: { error: string }) {
   return <div className="error pad" role="alert">{error}</div>;
 }
 
-export function LiveDot() {
+/**
+ * The live dot, with its state written beside it (DEF-082 R-9): "Live", or "Reconnecting…" with
+ * the dot grey while the event stream is down, so the state is never carried by colour alone. The
+ * text sits inside `role=status`, so a change is announced. Without `state` it reads the current
+ * project's stream itself, so a page writes `<LiveDot />`.
+ */
+export function LiveDot({ state }: { state?: Connection } = {}) {
+  const { project } = useParams();
+  const own = useConnection(state ? null : project);
+  const s = state ?? own;
+  const live = s === "live";
   return (
     <span
-      className="livedot"
+      className={`livedot-status${live ? "" : " reconnecting"}`}
       role="status"
-      aria-label="Live — updates as the CLI changes data"
-      title="Live — updates as the CLI changes data"
-    />
+      title={live ? "Live — updates as the CLI changes data" : "Reconnecting to the live updates…"}
+    >
+      <span className="livedot" aria-hidden="true" />
+      <span className="livedot-text">{live ? "Live" : "Reconnecting…"}</span>
+    </span>
   );
 }
 

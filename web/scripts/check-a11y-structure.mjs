@@ -8,6 +8,13 @@
 //     each page file, and DocPage draws a fallback h1 when its doc has none.
 //   web::check_cards_and_rows_have_headings (R-5) — FeatureCard's title is an h3, the Board's
 //     column header is an h2, and AccordionRow's header is a heading.
+//   web::check_text_alternatives_for_dot_icons_and_inputs (R-6) — LiveDot shows visible text, no
+//     emoji in a .tsx is read aloud (each sits in an aria-hidden span), and every <input>, <select>
+//     and <textarea> has an aria-label, an aria-labelledby, a wrapping <label> or a <label htmlFor>
+//     naming its id.
+//   web::check_live_dot_says_live_or_reconnecting (R-9) — LiveDot says "Live" or "Reconnecting…"
+//     inside role=status, and live.ts's connectionReducer goes live → reconnecting on `error` and
+//     back on `open`.
 //
 // Usage: npm run check:a11y-structure
 import { JSDOM } from "jsdom";
@@ -16,6 +23,28 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { markdownToSafeHtml } from "../src/markdownHtml.ts";
 import { closeRender, render } from "./lib/render.mjs";
+
+function walk(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
+  );
+}
+/** Blank out comments but keep line breaks, so an index's line number is the file's. */
+const stripComments = (text) =>
+  text.replace(/\/\*[\s\S]*?\*\/|(^|[^:"'`])\/\/[^\n]*/gm, (c) => c.replace(/[^\n]/g, " "));
+const lineOf = (text, index) => text.slice(0, index).split("\n").length;
+
+/** The JSX opening tag that starts at `start` (`<input …>` or `<input … />`), braces respected. */
+function openingTag(src, start) {
+  let depth = 0;
+  for (let i = start; i < src.length; i++) {
+    const c = src[i];
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (c === ">" && depth === 0) return src.slice(start, i + 1);
+  }
+  return src.slice(start);
+}
 
 const srcDir = new URL("../src", import.meta.url).pathname;
 const read = (rel) => readFileSync(join(srcDir, rel), "utf8");
@@ -90,6 +119,59 @@ try {
     const row = await render("src/ui/AccordionRow.tsx", "AccordionRow", { id: "r1", title: "A row", children: () => "body" });
     const head = row.document.querySelector("h1, h2, h3, h4, h5, h6");
     if (!head || !head.textContent.includes("A row")) problems.push(`AccordionRow's header is not a heading holding its title: ${row.html}`);
+    ok = report(name, problems) && ok;
+  }
+
+  // R-6: the dot, icons and inputs have text a screen reader can use.
+  {
+    const name = "web::check_text_alternatives_for_dot_icons_and_inputs";
+    const problems = [];
+    const dot = await render("src/components/bits.tsx", "LiveDot", { state: "live" });
+    if (!(dot.document.body.textContent ?? "").trim()) problems.push(`LiveDot draws no visible text: ${dot.html}`);
+    const tsx = walk(srcDir).filter((f) => f.endsWith(".tsx"));
+    for (const file of tsx) {
+      const rel = file.slice(srcDir.length + 1);
+      const src = stripComments(readFileSync(file, "utf8"));
+      for (const m of src.matchAll(/\p{Emoji_Presentation}/gu)) {
+        const before = src.slice(0, m.index);
+        const opens = [...before.matchAll(/<span\b[^>]*\baria-hidden="true"[^>]*>/g)];
+        const open = opens.length ? opens[opens.length - 1].index : -1;
+        const hidden = open >= 0 && before.lastIndexOf("</span>") < open;
+        if (!hidden) problems.push(`${rel}:${lineOf(src, m.index)}: emoji ${m[0]} is read aloud; wrap it in <span aria-hidden="true">`);
+      }
+      for (const m of src.matchAll(/<(input|select|textarea)\b/g)) {
+        const tag = openingTag(src, m.index);
+        if (/\baria-label(ledby)?=/.test(tag)) continue;
+        const before = src.slice(0, m.index);
+        if (before.lastIndexOf("<label") > before.lastIndexOf("</label>")) continue;
+        // A <label htmlFor> naming the control's id labels it as well as wrapping does.
+        const id = /\bid=(\{[^}]*\}|"[^"]*")/.exec(tag)?.[1];
+        if (id && src.includes(`htmlFor=${id}`)) continue;
+        problems.push(`${rel}:${lineOf(src, m.index)}: <${m[1]}> has no aria-label, aria-labelledby or wrapping <label>`);
+      }
+    }
+    ok = report(name, problems) && ok;
+  }
+
+  // R-9: the live dot says what the stream is doing.
+  {
+    const name = "web::check_live_dot_says_live_or_reconnecting";
+    const problems = [];
+    for (const [state, want] of [["live", "Live"], ["reconnecting", "Reconnecting…"]]) {
+      const { html, document } = await render("src/components/bits.tsx", "LiveDot", { state });
+      const status = document.querySelectorAll('[role="status"]');
+      if (status.length !== 1) problems.push(`state=${state}: ${status.length} role=status elements, expected 1: ${html}`);
+      else if ((status[0].textContent ?? "").trim() !== want) problems.push(`state=${state}: the status says "${status[0].textContent}", expected "${want}"`);
+    }
+    const live = await import("../src/data/live.ts").catch((e) => ({ error: e }));
+    if (typeof live.connectionReducer !== "function") problems.push("src/data/live.ts exports no connectionReducer");
+    else {
+      eq(problems, 'connectionReducer("live", "error")', live.connectionReducer("live", "error"), "reconnecting");
+      eq(problems, 'connectionReducer("reconnecting", "error")', live.connectionReducer("reconnecting", "error"), "reconnecting");
+      eq(problems, 'connectionReducer("reconnecting", "open")', live.connectionReducer("reconnecting", "open"), "live");
+      eq(problems, 'connectionReducer("live", "open")', live.connectionReducer("live", "open"), "live");
+    }
+    if (typeof live.useConnection !== "function") problems.push("src/data/live.ts exports no useConnection");
     ok = report(name, problems) && ok;
   }
 } finally {

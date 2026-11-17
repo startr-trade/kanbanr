@@ -113,6 +113,7 @@ export default function BoardPage() {
         </label>
         <input
           className="board-search"
+          aria-label="Filter items"
           placeholder="Filter… (text · kind · priority · label)"
           value={q}
           onChange={(e) => setQ(e.target.value)}

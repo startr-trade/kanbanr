@@ -151,6 +151,9 @@ summary:focus-visible,
 .spacer { flex: 1; }
 .build { font-size: var(--fs-1); color: var(--muted); white-space: nowrap; }
 
+/* The live dot writes its state beside it (DEF-082): "Live", or "Reconnecting…" with a grey dot. */
+.livedot-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--text-muted); }
+.livedot-status.reconnecting .livedot { background: var(--text-subtle); box-shadow: none; animation: none; }
 .livedot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--good); display: inline-block;
