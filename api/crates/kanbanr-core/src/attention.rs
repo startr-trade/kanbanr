@@ -32,7 +32,7 @@ pub struct Attention {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AttentionLine {
-    /// A review group's key, as the Review page names it, or `release`, `red-tests`,
+    /// A review group's key, as the Review page names it, or `planning`, `release`, `red-tests`,
     /// `doctor-errors`, `git-doctor`, `retro-due`, or `read-error` for a source that could not be
     /// read.
     pub kind: String,
@@ -97,6 +97,22 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
             )
         }
         Err(e) => health.push(could_not_read("review groups", &e)),
+    }
+
+    // The person's planning decisions wait for Claude, not the person: shown, not counted (FTR-049).
+    match crate::planning::list(store, p, Some("pending")) {
+        Ok(pending) if !pending.is_empty() => decisions.push(AttentionLine {
+            kind: "planning".into(),
+            section: Section::Decisions,
+            label: "Planning decisions waiting for Claude".into(),
+            count: pending.len(),
+            to: Some(format!("/p/{p}/plan")),
+            ask: None,
+            tone: INFO.into(),
+            yours: false,
+        }),
+        Ok(_) => {}
+        Err(e) => health.push(could_not_read("planning decisions", &e)),
     }
 
     match crate::releases::load(store, p) {
@@ -450,6 +466,48 @@ mod tests {
             assert_eq!(l.yours, counted, "{l:#?}");
         }
         assert!(a.lines.iter().any(|l| !l.yours && l.count > 0));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-049 R-3: a pending planning decision waits for Claude, not the person: it is a line in
+    /// Decisions, linked to the Plan page, and not counted in the badge.
+    #[test]
+    fn pending_planning_decisions_are_listed_but_not_counted() {
+        let (store, dir) = board();
+        let item = store.add_feature("demo", "Plan me", "", "M", None).unwrap();
+        release_at(&store, "v0.9.0", "");
+        let before = attention(&store, "demo", None).unwrap();
+        assert!(
+            before.lines.iter().all(|l| l.kind != "planning"),
+            "{before:#?}"
+        );
+
+        crate::planning::record(
+            &store,
+            "demo",
+            &serde_json::json!({
+                "action": "into-release",
+                "target": "v0.9.0",
+                "items": [item.code],
+                "by": "Ada",
+            }),
+            "monitor",
+        )
+        .unwrap();
+        let a = attention(&store, "demo", None).unwrap();
+        let line = a
+            .lines
+            .iter()
+            .find(|l| l.kind == "planning")
+            .unwrap_or_else(|| panic!("no planning line: {a:#?}"));
+        assert_eq!(line.section, Section::Decisions);
+        assert_eq!(line.label, "Planning decisions waiting for Claude");
+        assert_eq!(line.count, 1);
+        assert_eq!(line.to.as_deref(), Some("/p/demo/plan"));
+        assert_eq!(line.ask, None);
+        assert_eq!(line.tone, "info");
+        assert!(!line.yours);
+        assert_eq!(a.total, before.total, "not counted in the badge");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -10,7 +10,7 @@ import { pickTab, type TabDef } from "./ui/tabs.ts";
 import { parseOpen } from "./ui/urlState.ts";
 import type { Lane, Mark } from "./ui/timeline.ts";
 import type { Tone } from "./ui/tone.ts";
-import type { PlanBand, PlanScope, PlanSlice, PlanSummary, RowBody } from "./types";
+import type { IndexRelease, IndexSprint, PlanBand, PlanScope, PlanSlice, PlanSummary, PlanningView, RowBody } from "./types";
 
 /** The three tabs, in the page's order. */
 export const PLAN_SCOPES: PlanScope[] = ["current", "planned", "past"];
@@ -38,14 +38,17 @@ function tone(t: string): Tone {
   return (TONES as string[]).includes(t) ? (t as Tone) : "neutral";
 }
 
-/** A daemon band as a `Timeline` band: its tone and progress kept, never pending until FTR-049. */
-function band(b: PlanBand) {
+/**
+ * A daemon band as a `Timeline` band: its tone and progress kept, and `pending` when a planning
+ * decision waits to plan into its lane (FTR-049).
+ */
+function band(b: PlanBand, pending: boolean) {
   return {
     from: b.from,
     to: b.to,
     label: b.label,
     tone: tone(b.tone),
-    pending: false,
+    pending,
     ...(b.progress == null ? {} : { progress: b.progress }),
   };
 }
@@ -58,9 +61,13 @@ function mark(m: { at: string; label: string; kind: string }): Mark {
 /**
  * A tab's slice as `Timeline` props (R-10): its window and today as the daemon gave them, and one
  * lane per dated row (`key` is the row's key). A release keeps its own lane of diamonds and dots,
- * with no band. Undated rows are not drawn.
+ * with no band. Undated rows are not drawn. A lane that `pending` (planning.ts's `pendingByTarget`)
+ * holds has its bands marked pending: a decision waits for Claude to plan into it (FTR-049).
  */
-export function toTimeline(slice: PlanSlice): { from: string; to: string; today: string; lanes: Lane[] } {
+export function toTimeline(
+  slice: PlanSlice,
+  pending: ReadonlyMap<string, PlanningView[]> = new Map(),
+): { from: string; to: string; today: string; lanes: Lane[] } {
   return {
     from: slice.from,
     to: slice.to,
@@ -68,7 +75,7 @@ export function toTimeline(slice: PlanSlice): { from: string; to: string; today:
     lanes: slice.lanes.map((l) => ({
       key: l.key,
       label: l.label,
-      bands: l.bands.map(band),
+      bands: l.bands.map((b) => band(b, (pending.get(l.key)?.length ?? 0) > 0)),
       marks: l.marks.map(mark),
     })),
   };
@@ -106,4 +113,39 @@ export function legacyRedirect(path: string): string | null {
   const m = /^(.*\/)(schedule|gantt)\/?$/.exec(path);
   if (!m) return null;
   return m[2] === "schedule" ? `${m[1]}plan?tab=planned` : `${m[1]}plan`;
+}
+
+/** How long a declined planning decision stays on its items' rows (FTR-049). */
+export const DECLINED_DAYS = 14;
+
+/**
+ * The latest declined planning decision per item, declined within `DECLINED_DAYS` of `today`
+ * (`YYYY-MM-DD`), so the row can show the reason and offer the nearest move (FTR-049, R-5).
+ */
+export function declinedByItem(views: PlanningView[], today: string): Map<string, PlanningView> {
+  const out = new Map<string, PlanningView>();
+  const day = Date.parse(`${today}T00:00:00Z`);
+  for (const v of views) {
+    if (v.state !== "declined" || !v.outcome) continue;
+    const at = Date.parse(v.outcome.at);
+    if (Number.isFinite(day) && Number.isFinite(at) && day - at > DECLINED_DAYS * 86_400_000) continue;
+    for (const code of v.decision.items) {
+      const seen = out.get(code);
+      if (!seen || (seen.outcome?.at ?? "") <= v.outcome.at) out.set(code, v);
+    }
+  }
+  return out;
+}
+
+/**
+ * Where the Plan page offers to plan items (FTR-049), from the compact index: the sprints that have
+ * not closed, then the releases still planned (a release at a stage, shipped or superseded is
+ * frozen), each in the index's order. `PlanningAction`'s targets: key `sprint:SP-004` or
+ * `release:v0.9.0`, label the code or version.
+ */
+export function planTargets(sprints: IndexSprint[], releases: IndexRelease[]): { key: string; label: string }[] {
+  return [
+    ...sprints.filter((s) => s.state !== "closed").map((s) => ({ key: `sprint:${s.code}`, label: s.code })),
+    ...releases.filter((r) => r.state === "planned" && !r.stage).map((r) => ({ key: `release:${r.version}`, label: r.version })),
+  ];
 }
