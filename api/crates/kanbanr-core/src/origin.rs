@@ -145,6 +145,8 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
                 | ["projects", _, "decisions", "delegations", _, "revoke"]
                 | ["projects", _, "features", _, "move"]
                 | ["projects", _, "batch"]
+                // A manual check's retirement says where it was made (DEF-113).
+                | ["projects", _, "features", _, "tests", _, _, "retire"]
                 // A baseline proposal, a withdrawal and a pack added say where they came from
                 // (FTR-033).
                 | ["projects", _, "baseline", "revisions" | "packs"]
@@ -321,7 +323,9 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
                  (FTR-024). {PREPARE_INSTEAD} A manual test's result says a person checked it, \
                  so the person records it on the Review page (DEF-040). If they told you the \
                  result, prepare it: `kanbanr prepare test <CODE> <R-n> \"<test>\" --passed \
-                 --source \"conversation: …\"`."
+                 --source \"conversation: …\"`. To retire a check left on a shipped release that \
+                 the person will not judge, prepare it with `--retired --note \"<their \
+                 reason>\"`."
             )),
         };
     }
@@ -463,6 +467,21 @@ pub fn guarded_verdict(
                 && is_manual_test(store, p, code, &percent_decode(req), &percent_decode(test)))
             .then_some(Verdict::ManualTest)
         }
+        // A retirement closes a manual check without judging it: the person's own (DEF-113).
+        (
+            "POST",
+            [
+                "projects",
+                p,
+                "features",
+                code,
+                "tests",
+                req,
+                test,
+                "retire",
+            ],
+        ) => is_manual_test(store, p, code, &percent_decode(req), &percent_decode(test))
+            .then_some(Verdict::ManualTest),
         ("POST", ["projects", p, "batch"]) => {
             let ops = body?.get("operations")?.as_array()?;
             let text = |op: &Value, k: &str| op.get(k).and_then(|v| v.as_str()).map(String::from);
@@ -1972,5 +1991,98 @@ mod tests {
         assert_eq!(delegation_from_body(&b), "DLG-001");
         assert_eq!(delegation_from_body(&json!({})), "");
         assert_eq!(delegation_from_body(&json!({"delegation": 3})), "");
+    }
+
+    /// DEF-113 R-6: retiring a manual check is the person's own, as recording its result is.
+    #[test]
+    fn retiring_a_manual_check_is_the_persons_own() {
+        use crate::models::{Requirement, TestRef};
+        let (store, dir) = board();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "THE SYSTEM SHALL hold the cart.".into(),
+                        tests: vec![
+                            TestRef {
+                                name: "manual: looks right".into(),
+                                kind: "manual".into(),
+                                ..Default::default()
+                            },
+                            TestRef {
+                                name: "cart::holds".into(),
+                                kind: "unit".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let route = |t: &str| {
+            format!(
+                "/projects/demo/features/{}/tests/R-1/{}/retire",
+                f.code,
+                t.replace(' ', "%20").replace(':', "%3A")
+            )
+        };
+        let body = json!({"by": "Ada", "note": "shipped; not judged"});
+        let manual = route("manual: looks right");
+        let unit = route("cart::holds");
+        assert_eq!(
+            guarded_verdict(&store, "POST", &manual, Some(&body)),
+            Some(Verdict::ManualTest)
+        );
+        assert_eq!(guarded_verdict(&store, "POST", &unit, Some(&body)), None);
+        assert_eq!(guarded_verdict(&store, "GET", &manual, None), None);
+        // The origin is stamped on the retirement, but it is not a verdict route of its own: a
+        // group decision over prepared passed and retired results stays one kind of verdict.
+        assert!(stamps_origin("POST", &manual));
+        assert_eq!(verdict_of_route("POST", &manual), None);
+        assert!(!is_verdict_route("POST", &manual));
+        // Claude is refused in every mode, a delegation included; the person never is.
+        let claude = Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| "1".to_string()));
+        let project = store.load_meta("demo").unwrap();
+        for mode in ["monitor", "delegated", "conversation"] {
+            let d: crate::decisions::Decisions = crate::yaml::from_str(&format!(
+                "modes:\n- {{mode: {mode}, by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n\
+                 delegations:\n- id: DLG-001\n  verdicts: [approve, ratify]\n  all: true\n  \
+                 until: '2099-01-01T00:00:00Z'\n  \
+                 proposed: {{by: Claude, at: '2026-11-01T00:00:00Z', origin: conversation}}\n  \
+                 granted: {{by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n"
+            ))
+            .unwrap();
+            for (origin, taker) in [
+                (claude, Taker::Claude),
+                (Origin::Delegated, Taker::Claude),
+                (Origin::Monitor, Taker::Person),
+                (Origin::Terminal, Taker::Person),
+            ] {
+                let ctx = DecisionContext {
+                    decisions: Some(&d),
+                    project: Some(&project),
+                    method: "POST",
+                    path: &manual,
+                    body: Some(&body),
+                    origin: Some(origin),
+                    now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
+                };
+                let why = verdict_refusal(Verdict::ManualTest, taker, &ctx);
+                if taker == Taker::Claude {
+                    let why = why.unwrap_or_else(|| panic!("{mode}/{origin:?}: Claude retired"));
+                    assert!(why.contains("--retired --note"), "{mode}/{origin:?}: {why}");
+                } else {
+                    assert_eq!(why, None, "{mode}/{origin:?}");
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

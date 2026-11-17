@@ -1827,6 +1827,37 @@ fn dispatch_routes(
                 }
             }
         }
+        // A person's closing of a manual check left on a shipped release, without judging it
+        // (DEF-113). Never sets the test's state; the origin guard keeps it the person's.
+        (
+            "POST",
+            [
+                "projects",
+                p,
+                "features",
+                code,
+                "tests",
+                requirement,
+                test,
+                "retire",
+            ],
+        ) => {
+            let (requirement, test) = (&percent_decode(requirement), &percent_decode(test));
+            let result = crate::manual::ManualResult {
+                code: code.to_string(),
+                requirement: requirement.to_string(),
+                test: test.to_string(),
+                state: crate::manual::RETIRED.into(),
+                by: approver(b)?,
+                at: crate::now_rfc3339(),
+                origin: crate::origin::from_body(b),
+                note: str_field(b, "note").unwrap_or_default().trim().to_string(),
+                prepared: str_field(b, "prepared").unwrap_or_default(),
+                ..Default::default()
+            };
+            crate::manual::retire(store, p, &result)?;
+            ser(&result)
+        }
         ("GET", ["projects", p, "manual-tests"]) => ser(&crate::manual::waiting(store, p)?),
         ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store
             .unapprove_feature_as(
@@ -3874,6 +3905,11 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 str_field(body.unwrap_or(&Value::Null), "state").unwrap_or_default()
             )
         }
+        ["projects", _p, "features", c, "tests", r, t, "retire"] => format!(
+            "retire test {} of {c}/{}",
+            percent_decode(t),
+            percent_decode(r)
+        ),
         ["projects", _p, "features", c, "todos"] => format!("add todo-list to {c}"),
         ["projects", _p, "features", c, "todos", t, "tasks"] => format!("add task to {c}/{t}"),
         ["projects", _p, "features", c, "todos", t, "tasks", k]
