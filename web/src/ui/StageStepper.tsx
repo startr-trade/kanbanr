@@ -26,7 +26,7 @@ export function StageStepper(p: { stages: Step[]; label: string; words?: Partial
         <li key={s.key} className={`ui-step ui-step-${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
           <span className="ui-step-dot" aria-hidden="true" />
           <span className="ui-step-label">{s.label}</span>
-          <span className="ui-step-state">{p.words?.[s.state] ?? STEP_WORD[s.state]}</span>
+          <span className="ui-step-state">{s.word ?? p.words?.[s.state] ?? STEP_WORD[s.state]}</span>
           {s.state === "done" && (s.at || s.by) && (
             <span className="ui-step-when">{[s.at ? s.at.slice(0, 10) : null, s.by || null].filter(Boolean).join(" · ")}</span>
           )}

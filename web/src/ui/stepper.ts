@@ -21,6 +21,8 @@ export interface Step {
   key: string;
   label: string;
   state: "done" | "current" | "next" | "skipped";
+  /** Words for this step alone, instead of its state's (DEF-104: "Claude holds"). */
+  word?: string;
   at?: string;
   by?: string;
 }

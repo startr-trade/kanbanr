@@ -491,6 +491,20 @@ function makeBoard(n) {
   eq(problems, "without checks", checksLeftText(next({ missing: 18 })), "18 checks left before Completed");
   eq(problems, "nothing left", checksLeftText(next({ missing: 0 })), null);
   eq(problems, "older daemon draws no stepper", stepperSteps(next()), []);
+  // DEF-104 (decision 7): a step whose open gaps are all Claude's says so, in words.
+  const NOW = new Date("2026-11-17T12:00:00Z");
+  const dlg = (check, name, until = "2026-12-04T23:59:59Z") => ({ check, name, delegation: "DLG-001", until });
+  const heldNext = { ...next({ missing: 5 }), delegated: [dlg("signoff", "design-review"), dlg("signoff", "release")], checks: [
+    { family: "definition", asked: true, missing: 0 },
+    { family: "approval", asked: true, missing: 1 },
+    { family: "signoffs", asked: true, missing: 2 },
+    { family: "tests", asked: true, missing: 2 },
+    { family: "docs", asked: false, missing: 0 },
+  ] };
+  eq(problems, "a held family says Claude holds", stepperSteps(heldNext, NOW).map((s) => s.word ?? null), [null, null, "Claude holds", null, null]);
+  eq(problems, "a part-held family keeps its words", stepperSteps({ ...heldNext, delegated: [dlg("signoff", "release")] }, NOW).map((s) => s.word ?? null), [null, null, null, null, null]);
+  eq(problems, "an ended delegation is the person's again", stepperSteps({ ...heldNext, delegated: [dlg("signoff", "a", "2026-11-17T11:00:00Z"), dlg("signoff", "b", "2026-11-17T11:00:00Z")] }, NOW).map((s) => s.word ?? null), [null, null, null, null, null]);
+  eq(problems, "checks left names who holds", checksLeftText(heldNext, NOW), "5 checks left before Completed: 2 sign-offs (Claude, under DLG-001), 2 tests to turn green, 1 approval");
   report("web::check_board_model_helpers", problems);
 }
 

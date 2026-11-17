@@ -35,26 +35,50 @@ export interface CardHint {
   kind: "needs" | "waiting" | "ready";
 }
 
+/** "4 Dec": a day and a month in UTC, for "until 4 Dec" (DEF-104). */
+export function dayMonth(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+}
+
+/** The gaps a delegation still holds at `now`; one whose end has passed is the person's again (R-2). */
+export function liveDelegated(n: NextStage, now: Date): DelegatedGap[] {
+  return (n.delegated ?? []).filter((g) => Date.parse(g.until) > now.getTime());
+}
+
+const asWords = (g: DelegatedGap): string => (g.check === "approved" ? "approval" : g.name.replace(/-/g, " "));
+
 /** The hint for one next stage, or null when the card should say nothing about it. */
-export function nextStageHint(n: NextStage): CardHint | null {
+export function nextStageHint(n: NextStage, now: Date = new Date()): CardHint | null {
   if (n.immediate === false) return null;
   const signoffs = n.signoffs ?? [];
-  const yours = n.for_you ?? 0;
+  const held = liveDelegated(n, now);
+  // A delegation that ended since the read: its gaps are the person's again.
+  const lapsed = (n.delegated?.length ?? 0) - held.length;
+  const yours = (n.for_you ?? 0) + lapsed;
+  const rest = n.missing - yours - held.length;
   if (n.missing > 0) {
-    if (yours === 0 || n.missing > yours) {
+    if (rest > 0) {
       const mine = yours > 0 ? `, ${yours} yours` : "";
+      const ids = [...new Set(held.map((g) => g.delegation))].join(" and ");
+      const claudes = held.length > 0 ? `, and ${held.length} Claude holds under ${ids}` : "";
       return {
         text: `${n.status} needs ${n.missing}${mine}`,
         title:
-          yours > 0
-            ? `${n.status} needs ${n.missing} things: ${n.missing - yours} for Claude to do, and ${yours} for you (a sign-off or approval)`
+          yours > 0 || held.length > 0
+            ? `${n.status} needs ${n.missing} things: ${rest} for Claude to do, ${yours} for you (a sign-off or approval)${claudes}`
             : `${n.status} needs ${n.missing} thing(s) done by Claude`,
         kind: "needs",
       };
     }
+    // Only held gaps are left: the delegated hint speaks.
+    if (yours === 0) return null;
     // Only the user's part remains.
     if ((n.tasks_open ?? 0) > 0) return null;
-    const names = [...signoffs, ...(yours > signoffs.length ? ["approval"] : [])];
+    const heldNames = new Set(held.filter((g) => g.check === "signoff").map((g) => g.name));
+    const mine = signoffs.filter((s) => !heldNames.has(s));
+    const names = [...mine, ...(yours > mine.length ? ["approval"] : [])];
     return {
       text: `waiting on you: ${names.join(", ")}`,
       title: `${n.status} waits on you: ${names.join(", ")}`,
@@ -67,4 +91,25 @@ export function nextStageHint(n: NextStage): CardHint | null {
     title: `nothing stands between this item and ${n.status}`,
     kind: "ready",
   };
+}
+
+/** What Claude holds on a card, as a link to the delegation (DEF-104). */
+export interface DelegatedHint {
+  delegation: string;
+  text: string;
+  title: string;
+  kind: "delegated";
+}
+
+/** One hint per delegation that holds a gap of the immediate next stage, in first-seen order. */
+export function delegatedHints(n: NextStage, now: Date = new Date()): DelegatedHint[] {
+  if (n.immediate === false) return [];
+  const byId = new Map<string, DelegatedGap[]>();
+  for (const g of liveDelegated(n, now)) byId.set(g.delegation, [...(byId.get(g.delegation) ?? []), g]);
+  return [...byId].map(([delegation, gaps]) => ({
+    delegation,
+    text: `${[...new Set(gaps.map(asWords))].join(", ")}: Claude, under ${delegation}`,
+    title: `Claude may take these under ${delegation} until ${dayMonth(gaps[0].until)}; you can still take them on the Review page`,
+    kind: "delegated" as const,
+  }));
 }

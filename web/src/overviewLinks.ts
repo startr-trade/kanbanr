@@ -26,6 +26,8 @@ export const to = {
   },
   /** A board docs folder, e.g. "decisions" or "design/components"; its slashes stay path separators. */
   docsFolder: (p: string, f: string) => `/p/${enc(p)}/docs/folder/${f.split("/").map(enc).join("/")}`,
+  /** A delegation on the Review page's Decisions here (DEF-104). */
+  delegation: (p: string, id: string) => `/p/${enc(p)}/review#${enc(id)}`,
   lessons: (p: string) => `/p/${enc(p)}/charter#lessons`,
   releases: (p: string) => `/p/${enc(p)}/releases`,
   item: (p: string, c: string) => `/p/${enc(p)}/feature/${enc(c)}`,
