@@ -912,6 +912,30 @@ A sub-agent is not a way round the method: it works inside the same gates, on th
 and what it records is checked like anything else. Every write and commit it makes is recorded as
 the user, by the agent for its item (`Agent-Scope:` on the commit).
 
+### Builds: through `kanbanr build`
+
+Several agents building on one machine share its CPUs, memory and caches. kanbanr co-ordinates
+them (FTR-062); its state stays on the machine and in the git directory, never on the board.
+
+- **Run every cargo and npm command through `kanbanr build run --`** (`kanbanr build run --task
+  CODE/TL-001/T3 -- cargo test -p core`). It waits for one of the project's build slots (default:
+  2 vCPUs kept free, 5 jobs a slot), a task on the critical path first, runs the command with the
+  slot's job cap and the project's own compiler cache (sccache, with every worktree as a base
+  directory), and records the wait and run time in the build log. An agent's scope names its task,
+  so `--task` is only needed outside one.
+- **Check with `kanbanr build check` (the task tier) before marking a task done.** It runs only the
+  checks the change touches, cheapest first: fmt and clippy of the changed crates, a compile of
+  their dependents, the changed modules' tests, and the web or docs checks when those changed.
+  `kanbanr build affected` shows the list and why, without running it.
+- **Queue a finished branch with `kanbanr build queue add <CODE|CODE/TL-001/T3|branch>`** instead of
+  merging it by hand. As the coordinator, run `kanbanr build queue run` in the background with a
+  watch on its log: it merges each batch onto the target's tip in its own worktree, checks the
+  result, and moves the target only when green. A build scope may add to the queue, never run it.
+- **The release gate stays `make ci`,** once per release. `kanbanr build bench` measures cold, warm
+  and task builds before and after; run it alone.
+- `kanbanr build status` shows the slots, who holds them and who waits; `kanbanr build stats`
+  the wait and run times. Settings: `kanbanr config build`.
+
 ### At the integrate role
 
 Before the move:
@@ -1736,6 +1760,18 @@ kanbanr todo list FEAT-001
 kanbanr task add FEAT-001 TL-001 --text "Build the login form"
 kanbanr task state FEAT-001 TL-001 T1 InProgress        # NotStarted | InProgress | Completed
 kanbanr task list FEAT-001 [TL-001]
+```
+
+Builds shared across agents (FTR-062; state on the machine and in the git directory, never the board):
+```
+kanbanr build run [--task CODE/TL-001/T3] [--kind build|check|test] -- <cmd…>   # waits for a slot, records wait and run time
+kanbanr build status | log [--task …] [--since …] | stats [--since …]           # slots and waiters; the build log; wait/run p50, p90
+kanbanr build affected [--tier task|merge|line] [--base REV]                    # the checks a change needs, and why
+kanbanr build check [--tier task|merge|line] [--base REV]                       # run them, cheapest first
+kanbanr build web [--force]                                                     # the built monitor, kept per source key
+kanbanr build queue add <CODE|CODE/TL-001/T3|branch> | list | run [--once] | remove MQ-n   # the merge queue; never pushes
+kanbanr build bench [--scenario cold|warm|task|slots]                           # before/after timings, kept in the build log
+kanbanr config build [--slots N] [--jobs-per-slot N] [--sccache auto|off] [--linker default|mold] [--line-check "<cmd>"] …   # no flag: the effective values
 ```
 
 Milestones (dependency DAG; cycles rejected) and documentation:

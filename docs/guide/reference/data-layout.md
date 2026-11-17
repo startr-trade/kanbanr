@@ -78,6 +78,28 @@ git directory (`.git/worktrees/<name>/`): it cannot be committed, survives `git 
 with the worktree. A task records when its state last changed (`changed_at`), which agent drift is
 measured from.
 
+**Builds** (FTR-062). How agents' builds share the machine is the project's `build:` key in
+`config.yaml`, absent until something is set (`kanbanr config build`); every field is optional
+and falls back to its default: `slots`, `jobs_per_slot` (5), `reserve_cpus` (2), `reserve_mem_gib`
+(6), `max_load` (vCPUs less the reserve), `sccache` (`auto` or `off`), `sccache_port` (derived from
+the main checkout's path), `cache_gib` (10), `linker` (`default` or `mold`), `web_cache` (on),
+`queue_batch` (4) and `line_check` (a command). A kanbanr older than 0.8.0 keeps the key as it is.
+Everything else about builds stays off the board:
+
+```
+<machine>/                              # $KANBANR_BUILD_DIR, else $XDG_CACHE_HOME/kanbanr/build,
+│                                       # ~/.cache/kanbanr/build (Linux), ~/Library/Caches/kanbanr/build
+│                                       # (macOS), %LOCALAPPDATA%\kanbanr\build (Windows)
+├── slots/slot-<n>.lock, slot-<n>.json  # a held lock is a busy slot; the .json names its holder
+├── queue/<prio>-<arrival-ns>-<pid>.ticket   # a waiting build, locked by its owner (+ .json)
+├── web/<key>/dist/                     # a built monitor, kept under its sources' key
+└── sccache/<project>-<hash8>/          # the project's compiler cache
+<git-common-dir>/kanbanr/               # inside the git directory, never committed
+├── builds/<YYYY-MM-DD>.jsonl           # the build log: one row per run (wait, run, exit), never trimmed
+├── queue.yaml, queue.lock              # the merge queue and the lock its runner holds
+└── queue-logs/<MQ-n>.log               # each batch's check output, named by its first entry
+```
+
 **Where a verdict was taken** (DEF-028). Every approval event and standing approval, every
 sign-off entry (given or withdrawn) and every release stage change carries an optional `origin`:
 `monitor` for a click on the monitor, `conversation` for a command that ran inside a Claude Code

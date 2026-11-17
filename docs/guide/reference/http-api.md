@@ -270,6 +270,14 @@ Each write appends to the activity log and commits the data repo. The **batch** 
 `feature.move`, `milestone.add`, `todo.add`, `task.add`, `task.state`, `doc.folder`, `doc.write`;
 created items may carry a `ref` alias later ops reference; the first failure names its index.
 
+`PUT /projects/{p}/config/build` sets how agents' builds share the machine (FTR-062): a JSON
+object of the `build` settings (`slots`, `jobs_per_slot`, `reserve_cpus`, `reserve_mem_gib`,
+`max_load`, `sccache`, `sccache_port`, `cache_gib`, `linker`, `web_cache`, `queue_batch`,
+`line_check`). Each key named is set, or cleared by `null` or `""`; keys not named are kept; a bad
+value is refused, naming the key. It answers the project's `build` settings, which
+`GET /api/projects/{project}/config` also carries. The slots, the build log and the merge queue
+are the machine's and the repository's, not the board's, and have no route.
+
 A daemon started with `--allow-writes` takes the same writes over HTTP, under `/api/write/...`,
 for the monitor's approval and release actions. Those routes are not part of the read API.
 
