@@ -279,6 +279,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
 
 results: list[tuple[str, bool, str]] = []
 not_verified: list[str] = []
+kept_folders: list[Path] = []
 
 
 def say(name: str, ok: bool, detail: str = "") -> None:
@@ -544,6 +545,7 @@ def run_workflow_steps() -> None:
                     try:
                         kept = keep_run(out, TREE / "api/target/nextest/default/junit.xml", head,
                                         datetime.now(timezone.utc))
+                        kept_folders.append(kept)
                         print(f"    kept: {kept}", flush=True)
                     except OSError as err:
                         print(f"    not kept: {err}", flush=True)
@@ -828,7 +830,9 @@ def scoped_write(board: Path, sha: str, files: list[str], subject: str, body: st
     for f in files:
         rest = f[len(root):]
         own = rest.startswith("features/") and rest.count("/") == 2 and rest.endswith(f"/{item}.yaml")
-        if not (own or rest.startswith(("activity/", "events/")) or rest == "index.yaml"):
+        # A capture record also adds its run's `timings/` file (FTR-058).
+        timings = rest.startswith("timings/") and subject.startswith("record ")
+        if not (own or timings or rest.startswith(("activity/", "events/")) or rest == "index.yaml"):
             return None
     return scope_id
 
@@ -919,6 +923,40 @@ def record_gate(ok: bool, failed_steps: list[str]) -> None:
     print(f"gate local {'recorded' if rec_ok else 'not recorded'}" + (f": {last}" if last else ""))
 
 
+def capture_kept_run(folder: Path, head: str) -> list[str] | None:
+    """The `kanbanr` arguments that capture a kept run's JUnit report as test results and durations
+    at `head` (FTR-058); None when the folder holds no report (a cargo test run writes none)."""
+    junit = folder / "junit.xml"
+    if not junit.is_file():
+        return None
+    return ["capture", "--junit", str(junit), "--rev", head]
+
+
+def record_kept_run(folder: Path) -> None:
+    """Capture the kept run's report on the board at HEAD, on a clean tree only. It never changes the
+    exit code, and it is quiet when there is nothing to capture."""
+    exe = shutil.which("kanbanr")
+    if not exe:
+        print("test results not captured: kanbanr is not on PATH")
+        return
+    head_ok, head = sh(["git", "rev-parse", "HEAD"], ROOT)
+    status_ok, status = sh(["git", "status", "--porcelain"], ROOT)
+    if not (head_ok and status_ok):
+        print("test results not captured: could not read the repository's HEAD and status")
+        return
+    if status.strip():
+        print("test results not captured: uncommitted changes")
+        return
+    args = capture_kept_run(folder, head.strip())
+    if args is None:
+        print("test results not captured: the run kept no JUnit report")
+        return
+    env = {k: v for k, v in os.environ.items() if k not in ("KANBANR_BOARD_FENCE", "KANBANR_DATA_DIR")}
+    ok, out = sh([exe, *args], ROOT, env)
+    last = out.strip().splitlines()[-1] if out.strip() else ""
+    print(f"test results {'captured' if ok else 'not captured'}" + (f": {last}" if last else ""))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Read the command line before any work starts: `--help` and a mistyped flag run no check."""
     parser = argparse.ArgumentParser(
@@ -984,6 +1022,8 @@ def main(argv: list[str] | None = None) -> int:
             )
     failed = [name for name, ok, _ in results if not ok]
     record_gate(not failed, failed)
+    if kept_folders:
+        record_kept_run(kept_folders[-1])
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:
         print(f"  - {item}")
