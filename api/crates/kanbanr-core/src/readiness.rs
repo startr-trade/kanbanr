@@ -1086,22 +1086,25 @@ pub fn next_gates(
             }
             gaps.extend(signoffs);
             gaps.extend(signoffs_held.iter().cloned());
+            let mut warnings: Vec<Gap> = said
+                .into_iter()
+                .chain(evaluate_entering(
+                    feature,
+                    goal_ids.as_ref(),
+                    &gate.warns,
+                    ctx,
+                    to,
+                ))
+                .collect();
+            // Said before the move, never enforced (DEF-075).
+            warnings.extend(undeclared_docs_warning(&project.id, feature, to, &gate));
             Some(NextGate {
                 status: to.clone(),
                 purpose: gate.purpose.clone(),
                 enforce: gate.enforce,
                 gaps,
                 requires_gaps,
-                warnings: said
-                    .into_iter()
-                    .chain(evaluate_entering(
-                        feature,
-                        goal_ids.as_ref(),
-                        &gate.warns,
-                        ctx,
-                        to,
-                    ))
-                    .collect(),
+                warnings,
                 signoffs_needed,
                 signoffs_held,
                 docs_built,
@@ -1693,6 +1696,49 @@ pub(crate) fn docs_updated_gaps(
         "declared in affects_docs",
         window,
     )
+}
+
+/// The 'declares no docs' warning (DEF-075) for `feature` entering, or standing at, `stage` under
+/// `gate` (already stripped by the kind's path, `ProjectConfig::gate_for_kind`): Some when the gate
+/// lists `docs_updated` in `requires` or `warns`, and the item has a definition with no
+/// `affects_docs`, no `exempt`, no `affects_no_docs`, and no doc linked under its Design's Affects
+/// docs. A `Level::Warning` gap of `Check::DocsUpdated`, label "declares no docs". It is said,
+/// never enforced: a doc-free item is allowed, the person just has to say so.
+pub fn undeclared_docs_warning(
+    project_id: &str,
+    feature: &FeatureItem,
+    stage: &str,
+    gate: &crate::config::Gate,
+) -> Option<Gap> {
+    let asks = gate
+        .requires
+        .iter()
+        .chain(gate.warns.iter())
+        .any(|c| *c == Condition::Check(Check::DocsUpdated));
+    if !asks {
+        return None;
+    }
+    // A definition-less item is already asked for one (L-29).
+    let def = feature.definition.as_ref()?;
+    if !def.affects_docs.is_empty()
+        || !def.exempt.trim().is_empty()
+        || !def.affects_no_docs.trim().is_empty()
+        // The gate reads the docs the Design links (DEF-047).
+        || !crate::docsbuilt::docs_to_change(&feature.specification, project_id).is_empty()
+    {
+        return None;
+    }
+    let code = &feature.code;
+    Some(gap(
+        Check::DocsUpdated,
+        None,
+        "declares no docs",
+        format!(
+            "{code} declares no docs it affects, and {stage} asks for docs_updated — name them in \
+             affects_docs, or, if the person confirms it changes none, record why as \
+             affects_no_docs in its definition (kanbanr feature define {code})"
+        ),
+    ))
 }
 
 /// The board docs the Design links under `Affects docs` that the item must change and does not
@@ -4391,5 +4437,148 @@ mod tests {
             ..Context::default()
         };
         assert!(evaluate_in(&item, None, &conditions, &off).is_empty());
+    }
+
+    /// DEF-075 R-1: a gate asking `docs_updated` warns about an item that names no docs, and
+    /// `affects_no_docs`, `exempt` or an Affects docs link silences it; no definition, no warning.
+    #[test]
+    fn affects_no_docs_silences_the_undeclared_docs_warning() {
+        let gate = crate::config::Gate {
+            requires: vec![Condition::Check(Check::DocsUpdated)],
+            ..Default::default()
+        };
+        let def = FeatureDefinition {
+            statement: "Pin a version".into(),
+            ..Default::default()
+        };
+        let f = item(Some(def.clone()));
+        let warned = undeclared_docs_warning("demo", &f, "Migration", &gate).expect("a warning");
+        assert_eq!(warned.check, Check::DocsUpdated);
+        assert_eq!(warned.level, Level::Warning);
+        assert_eq!(warned.label, "declares no docs");
+        assert!(
+            warned.message.contains("affects_no_docs"),
+            "{}",
+            warned.message
+        );
+        assert!(warned.message.contains("Migration"), "{}", warned.message);
+        assert!(
+            warned.message.contains("kanbanr feature define FEAT-001"),
+            "{}",
+            warned.message
+        );
+        // Asked in `warns` too; not asked at all, nothing to say.
+        let warns = crate::config::Gate {
+            warns: vec![Condition::Check(Check::DocsUpdated)],
+            ..Default::default()
+        };
+        assert!(undeclared_docs_warning("demo", &f, "Migration", &warns).is_some());
+        let silent = crate::config::Gate::default();
+        assert_eq!(
+            undeclared_docs_warning("demo", &f, "Migration", &silent),
+            None
+        );
+
+        let mut none = def.clone();
+        none.affects_no_docs = "test-only".into();
+        assert_eq!(
+            undeclared_docs_warning("demo", &item(Some(none)), "Migration", &gate),
+            None
+        );
+        let mut exempt = def.clone();
+        exempt.exempt = "a spike".into();
+        assert_eq!(
+            undeclared_docs_warning("demo", &item(Some(exempt)), "Migration", &gate),
+            None
+        );
+        let mut named = def.clone();
+        named.affects_docs = vec!["architecture/data.md".into()];
+        assert_eq!(
+            undeclared_docs_warning("demo", &item(Some(named)), "Migration", &gate),
+            None
+        );
+        let mut linked = item(Some(def));
+        linked.specification = "## Design\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md)\n"
+            .into();
+        assert_eq!(
+            undeclared_docs_warning("demo", &linked, "Migration", &gate),
+            None
+        );
+        assert_eq!(
+            undeclared_docs_warning("demo", &item(None), "Migration", &gate),
+            None
+        );
+    }
+
+    /// DEF-075 R-2, R-5: on a TOGAF board, a chore at Implementation that names no docs is told
+    /// before the move that Migration asks for docs_updated, as a warning that never blocks.
+    #[test]
+    fn the_next_stage_warns_before_the_move_when_no_docs_are_declared() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-undeclared-next-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        let config = crate::config::preset("togaf").unwrap().into_config("demo");
+        store.init_project("demo", config).unwrap();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let chore = store
+            .add_feature_of_kind("demo", "Pin", "", "M", None, Some("chore"))
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &chore.code,
+                Some(FeatureDefinition {
+                    statement: "Pin a version".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let mut f = project.feature(&chore.code).unwrap().clone();
+        f.status = "Implementation".into();
+        let next = next_gates(&project, None, &f, &ctx);
+        let migration = next
+            .iter()
+            .find(|g| g.status == "Migration")
+            .unwrap_or_else(|| panic!("{next:?}"));
+        assert_eq!(migration.enforce, crate::config::Enforce::Block);
+        let warned: Vec<&Gap> = migration
+            .warnings
+            .iter()
+            .filter(|g| g.label == "declares no docs")
+            .collect();
+        assert_eq!(warned.len(), 1, "{:?}", migration.warnings);
+        assert_eq!(warned[0].level, Level::Warning);
+        assert!(
+            warned[0].message.contains("affects_no_docs"),
+            "{}",
+            warned[0].message
+        );
+        // Said, never a refusal.
+        assert!(
+            !migration
+                .gaps
+                .iter()
+                .chain(&migration.requires_gaps)
+                .any(|g| g.label == "declares no docs"),
+            "{migration:?}"
+        );
+        // Recorded as doc-free, it is quiet.
+        f.definition.as_mut().unwrap().affects_no_docs = "a version pin".into();
+        let next = next_gates(&project, None, &f, &ctx);
+        assert!(
+            next.iter()
+                .flat_map(|g| &g.warnings)
+                .all(|g| g.label != "declares no docs"),
+            "{next:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

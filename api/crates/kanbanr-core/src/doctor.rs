@@ -799,40 +799,49 @@ fn scan_declared_docs(
     ctx: &crate::readiness::Context,
     report: &mut Report,
 ) {
-    // Judged by the gate the item's kind meets, its path's parts left out (DEF-070, DEF-069).
-    let asks = |status: &str, kind: Option<&str>| {
-        project.config.gate_for_kind(status, kind).is_some_and(|g| {
-            g.requires.iter().chain(g.warns.iter()).any(|c| {
-                *c == crate::readiness::Condition::Check(crate::readiness::Check::DocsUpdated)
-            })
-        })
+    // Judged by the gate the item's kind meets, its path's parts left out (DEF-070, DEF-069), by
+    // the same rule `kanbanr check` and the move use (DEF-075).
+    let warning = |f: &crate::models::FeatureItem, status: &str| {
+        project
+            .config
+            .gate_for_kind(status, f.kind.as_deref())
+            .and_then(|g| crate::readiness::undeclared_docs_warning(&project.id, f, status, &g))
     };
     for f in &project.features {
         let Some(def) = f.definition.as_ref() else {
             continue;
         };
-        if !crate::graph::is_live_work(&project.config, &f.status)
-            || !def.affects_docs.is_empty()
-            || !def.exempt.trim().is_empty()
-            // The gate reads the docs the Design links (DEF-047).
-            || !crate::docsbuilt::docs_to_change(&f.specification, &project.id).is_empty()
-        {
-            continue;
-        }
-        if asks(&f.status, f.kind.as_deref()) {
+        // Named docs win over `affects_no_docs`; saying both is a contradiction to clear up.
+        if !def.affects_docs.is_empty() && !def.affects_no_docs.trim().is_empty() {
             report.issues.push(Issue {
                 severity: Severity::Warning,
                 project: project.id.clone(),
                 code: Some(f.code.clone()),
                 message: format!(
-                    "{} declares no docs it affects, and {} asks for docs_updated — name them in \
-                     affects_docs, or confirm it changes none",
-                    f.code, f.status
+                    "{} names docs and also records affects_no_docs; remove one",
+                    f.code
                 ),
+            });
+        }
+        if !crate::graph::is_live_work(&project.config, &f.status)
+            || !def.affects_docs.is_empty()
+            || !def.exempt.trim().is_empty()
+            || !def.affects_no_docs.trim().is_empty()
+            // The gate reads the docs the Design links (DEF-047).
+            || !crate::docsbuilt::docs_to_change(&f.specification, &project.id).is_empty()
+        {
+            continue;
+        }
+        if let Some(gap) = warning(f, &f.status) {
+            report.issues.push(Issue {
+                severity: Severity::Warning,
+                project: project.id.clone(),
+                code: Some(f.code.clone()),
+                message: gap.message,
             });
         } else if let Some(next) =
             crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
-            && asks(&next.status, f.kind.as_deref())
+            && warning(f, &next.status).is_some()
         {
             // Only the stage reached next asks: said as a count (DEF-021).
             report.count_ahead(project, &f.code, &next.status, 1);
@@ -2231,6 +2240,90 @@ mod tests {
             .collect();
         assert_eq!(warned.len(), 1, "{issues:?}");
         assert_eq!(warned[0].severity, Severity::Warning);
+    }
+
+    /// DEF-075 R-3: on the board `affects_docs_unknown_and_undeclared_reported` builds, doctor's
+    /// 'declares no docs' message names `affects_docs`, `affects_no_docs` and the command that
+    /// records it; `affects_no_docs` silences it; an item recording both docs and
+    /// `affects_no_docs` is told to remove one.
+    #[test]
+    fn undeclared_docs_warning_names_affects_no_docs() {
+        let (store, _dir) = fixture();
+        let both = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let silent = store
+            .add_feature("demo", "Checkout", "", "M", None)
+            .unwrap();
+        let quiet = store.add_feature("demo", "Pin", "", "M", None).unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data")
+            .unwrap();
+        for (code, docs, none) in [
+            (
+                &both.code,
+                vec!["architecture/data.md".to_string()],
+                "a pin",
+            ),
+            (&silent.code, vec![], ""),
+            (&quiet.code, vec![], "test-only"),
+        ] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        affects_docs: docs,
+                        affects_no_docs: none.into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        let gate = crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::DocsUpdated,
+            )],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        // The contradiction is said wherever the item stands; the others stand at Scheduled.
+        for code in [&silent.code, &quiet.code] {
+            store.move_feature("demo", code, "Scheduled").unwrap();
+        }
+
+        let issues = run_project(&store, "demo").unwrap().issues;
+        let about = |code: &str, needle: &str| {
+            issues
+                .iter()
+                .filter(|i| i.code.as_deref() == Some(code) && i.message.contains(needle))
+                .map(|i| (i.severity, i.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        let warned = about(&silent.code, "declares no docs");
+        assert_eq!(warned.len(), 1, "{issues:?}");
+        assert_eq!(warned[0].0, Severity::Warning);
+        let message = &warned[0].1;
+        assert!(message.contains("affects_docs"), "{message}");
+        assert!(message.contains("affects_no_docs"), "{message}");
+        assert!(
+            message.contains(&format!("kanbanr feature define {}", silent.code)),
+            "{message}"
+        );
+        assert_eq!(about(&quiet.code, "declares no docs"), vec![]);
+        assert_eq!(about(&both.code, "declares no docs"), vec![]);
+        assert_eq!(
+            about(&both.code, "also records affects_no_docs"),
+            vec![(
+                Severity::Warning,
+                format!(
+                    "{} names docs and also records affects_no_docs; remove one",
+                    both.code
+                )
+            )]
+        );
+        assert_eq!(about(&quiet.code, "also records"), vec![]);
     }
 
     /// DEF-047 R-1: an item that names no `affects_docs` but links board docs under its Design's
