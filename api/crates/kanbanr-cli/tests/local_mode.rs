@@ -9829,6 +9829,96 @@ fn release_notes_survive_a_notes_path_change() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// MNT-002 R-4: a release shipped with its notes in the book before the book moved still has
+/// them printed by `release notes` once main has the book at `docs/guide` and the config says so.
+#[test]
+fn release_notes_of_a_release_shipped_before_the_move_still_print() {
+    // The book's folder before the move, built from two parts so the tree names it only in
+    // records (MNT-002 R-2).
+    const OLD_BOOK: &str = concat!("docs/", "src");
+    let (base, work) = release_scratch("release-notes-before-move");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(
+        board.starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the test's own board: {}",
+        board.display()
+    );
+    let old_notes = format!("{OLD_BOOK}/releases/{{version}}.md");
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &["config", "release-prepare", "--notes", old_notes.as_str()],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let draft = base.join("notes.md");
+    std::fs::write(&draft, "# v1.0.0\n\nShipped before the book moved.\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            draft.to_str().unwrap(),
+        ],
+    ));
+    for to in ["staging", "production"] {
+        ok(run_in(&base, &work, &["release", "promote", "v1.0.0", to]));
+    }
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"].as_str(), Some("shipped"));
+    let recorded = format!("{OLD_BOOK}/releases/v1.0.0.md");
+    assert_eq!(r["notes_path"].as_str(), Some(recorded.as_str()));
+
+    // Main moves the book; the board's config follows.
+    std::fs::create_dir_all(work.join("docs")).unwrap();
+    let moved = git_in(&base, &work, &["mv", OLD_BOOK, "docs/guide"]);
+    assert!(
+        moved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&moved.stderr)
+    );
+    let committed = git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] the book moves"],
+    );
+    assert!(
+        committed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&committed.stderr)
+    );
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "release-prepare",
+            "--notes",
+            "docs/guide/releases/{version}.md",
+        ],
+    ));
+    let shown = ok(run_in(&base, &work, &["release", "notes", "v1.0.0"]));
+    assert!(
+        shown.contains(&format!("{recorded}\n"))
+            && shown.contains("Shipped before the book moved."),
+        "{shown}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-044 R-3: `release notes <V> --file F --changelog C` commits the notes and the version's
 /// changelog section in one commit on release/<V>; `--changelog` alone changes only the
 /// changelog; an empty section file is refused and nothing is committed; no item is opened.
