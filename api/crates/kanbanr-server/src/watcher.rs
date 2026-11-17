@@ -65,6 +65,7 @@ pub fn tags_for(rel: &str) -> Vec<String> {
         ["baseline.yaml"] | ["packs", _, ..] => one("baseline"),
         ["milestones", _, ..] => one("milestones"),
         ["timings", _, ..] => one("timings"),
+        ["tasklog", _, ..] => one("tasklog"),
         [
             folder
             @ ("prepared" | "manual" | "gates" | "pins" | "activity" | "events" | "planning"),
@@ -313,6 +314,7 @@ mod tests {
             ("planning/PD-1.yaml", &["planning"]),
             ("planning/PD-1.outcome.yaml", &["planning"]),
             ("timings/20261116T172031Z-0123456.yaml", &["timings"]),
+            ("tasklog/2026-11-17.yaml", &["tasklog"]),
             ("processes/p.yaml", &["*"]),
             ("", &["*"]),
             ("x/../y", &["*"]),
