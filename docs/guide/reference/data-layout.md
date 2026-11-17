@@ -28,6 +28,8 @@ sibling cannot be.
         │   └── PD-<n>.outcome.yaml      # {decision, outcome: carried|declined, by, origin, at, reason?, nearest?}
         ├── manual/                     # manual test results, one file per result, written once (DEF-040)
         │   └── <time>-<CODE>-<R-n>.yaml
+        ├── timings/                    # each captured run's test durations, one file per run, written once (FTR-058)
+        │   └── <time>-<sha7>.yaml       # {at, rev, tests: [{code, requirement, test, ms}]}; a last duration is derived on read
         ├── pins/<CODE>/<rev>.md        # a spec as a design sign-off saw it, written once (FTR-023)
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
         ├── baseline.yaml               # the engineering baseline: packs followed, areas, entries, revisions (FTR-033)

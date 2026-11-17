@@ -154,7 +154,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr decisions revoke DLG-n --reason "…"` | revokes a delegation, or discards a proposal; it stays on the record |
 | `kanbanr decisions review <decision> --keep\|--undo [--reason …]` | keeps or undoes a decision taken under a delegation (its reference is as `decisions show` lists it); an undo withdraws it. The person's own |
 | `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back, with a reason it refuses to go without; the record of having given it stays |
-| `kanbanr capture` | reads a test run's output — cargo test, Vitest (verbose), pytest `-v`, `python -m unittest -v`, Playwright (list) — and says when a test run printed nothing it reads (run by the hook; you never call it) |
+| `kanbanr capture [--junit FILE] [--rev REV]` | reads a test run's output — cargo test, cargo-nextest, Vitest (verbose), pytest `-v`, `python -m unittest -v`, Playwright (list) — and says when a test run printed nothing it reads (run by the hook; you never call it). It keeps each test's duration the run printed, in one `timings/` file beside the results. `--junit FILE` reads a cargo-nextest JUnit report instead of a hook payload, and `--rev REV` names the revision the run tested (the folder's HEAD when omitted); `make ci` captures its own kept report this way |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |
 | `kanbanr index` | rebuild the per-project cache from the source-of-truth files |
@@ -170,6 +170,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr adr accept / reject --reason` | the user's verdict on a proposed decision |
 | `kanbanr lessons [--for CODE]` / `kanbanr lesson add / affirm / contradict` | what the project has learned, and judging it |
 | `kanbanr retro <MS-…>` / `kanbanr report` | how a milestone went; flow and quality derived from the record |
+| `kanbanr report --tests [--top N] [--json]` | the slowest tests and those that slowed most since the last shipped release (ten each by default), from the kept test durations; with no shipped release it says so and compares nothing |
 
 **Code and Claude Code**
 

@@ -1284,22 +1284,24 @@ project revision it was observed at. So:
 - Name the test entry exactly as the runner prints it (`cart::retains_for_seven_days`,
   `src/cart.test.ts`), or the run cannot find it. Run tests so the hook can read them, and name
   tracked tests as the hook reads them: cargo `module::tests::name`; Vitest with
-  `--reporter=verbose`, `src/App.test.tsx > title shows the basket item count` (the duration is
-  dropped); pytest with `-v`, `tests/test_x.py::test_y`; unittest with `-v`
+  `--reporter=verbose`, `src/App.test.tsx > title shows the basket item count` (its duration is
+  kept as the test's last duration); pytest with `-v`, `tests/test_x.py::test_y`; unittest with `-v`
   (`python -m unittest -v`), `tests.test_basket.BasketTests.test_add` (module, class, method;
   pytest names the same test `tests/test_basket.py::BasketTests::test_add`, so name it as the
   runner the project uses prints it); Playwright with `--reporter=list`,
   `e2e/basket.spec.ts › kept basket › basket is kept after the browser is closed and reopened`
-  (project, location and duration dropped; the titles alone also match). Vitest's default
+  (project and location dropped, its duration kept; the titles alone also match). Vitest's default
   reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
   them records nothing. Settle that form before you ask for approval (below).
 - At Design, check each tracked test name against the runner the project uses and one of these
-  forms. A runner outside them (go test, Jest, Maven) records nothing; cargo nextest's lines are
-  read from kanbanr 0.8.0 (FTR-058), under the names cargo test prints. Say so in the Design and
-  ask before choosing it. When the hook says it read no test result from a
-  run, rerun in a form it reads; never set the test by hand.
-- `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`); until
-  the installed kanbanr reads nextest's lines (FTR-058, v0.8.0), run
+  forms. A runner outside them (go test, Jest, Maven) records nothing; cargo nextest's lines and
+  its JUnit reports are read from kanbanr 0.8.0 (FTR-058), under the names cargo test prints, with
+  each duration kept. Say so in the Design and ask before choosing it. When the hook says it read
+  no test result from a run, rerun in a form it reads; never set the test by hand.
+- `kanbanr report --tests` lists the slowest tests and those that slowed most since the last
+  shipped release, from the kept durations; a `cargo test` run keeps results and no durations.
+- `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`). On a
+  kanbanr older than 0.8.0, which does not read nextest's lines, run
   `KANBANR_TEST_RUNNER=cargo make test` when the run's results should be captured.
 - In kanbanr's own repository, `make ci` runs its heavy steps (cargo, the monitor build, the
   image build) under the machine's build lock (`flock ~/.cache/heavy-build.lock`) and a memory cap

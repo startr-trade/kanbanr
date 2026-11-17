@@ -398,6 +398,18 @@ more than one next stage is possible, Claude asks which. Each plan is headed wit
 So if you edit your process (say, to ask *when* a feature happens at your business-architecture
 stage), Claude starts asking "When does this happen?" there, with nothing else to change.
 
+## How results are captured
+
+A test run's output is read by the hook (or by `kanbanr capture --junit <report>` for a cargo-nextest
+JUnit report), and each tracked test's result goes onto the board. The same read keeps each test's
+duration when the runner prints one: Vitest (verbose), Playwright (list) and cargo-nextest do, and
+`cargo test` prints none per test, so a `cargo test` run keeps its results and no durations. The
+durations are kept in one `timings/` file per run, beside the results, and never rewritten.
+
+Nothing is asked for this. A test's last duration shows after its name on the item page, and
+`kanbanr check <CODE>` names the slowest tested test of the item. `kanbanr report --tests` lists the
+slowest tests and those that slowed most since the last shipped release (FTR-058).
+
 ## A worked example: one feature through TOGAF
 
 The [TOGAF preset](processes.md) runs Vision → Business Arch → System Design → Implementation →
