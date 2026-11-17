@@ -16,6 +16,8 @@ sibling cannot be.
         │   └── 2026-09-28.yaml          # {time, actor, message, item}, appended in order
         ├── events/                     # the notification event log, one file per day (FEAT-036, FEAT-066)
         │   └── 2026-09-28.yaml
+        ├── tasklog/                    # every task state change, one file per day, never trimmed (FTR-061)
+        │   └── 2026-11-17.yaml          # {at, item, todo, task, from, to, tokens?, cost_usd?, model?, build?}
         ├── gates/                      # recorded gate results, a new file per run, never rewritten (FTR-002)
         │   └── <name>/20261112T100000Z-<sha7>.yaml
         ├── prepared/                   # evidence prepared for a decision, each file written once (FTR-034)
@@ -101,6 +103,23 @@ Everything else about builds stays off the board:
 ├── queue.yaml, queue.lock              # the merge queue and the lock its runner holds
 └── queue-logs/<MQ-n>.log               # each batch's check output, named by its first entry
 ```
+
+**The task log and sprint capacity** (FTR-061). A task's own record keeps only its current `state`
+and `changed_at`; `tasklog/` keeps every change, appended in the same write as the task, so the
+change and its log entry land in one board commit. An entry is `at` (the `changed_at` written),
+`item`, `todo`, `task`, `from` and `to`, and, when the agent reported them on `kanbanr task state`,
+`tokens`, `cost_usd`, `model` and `build` (`{runs, red, run_ms, wait_ms}`, the task's rows of the
+machine-local build log since it last went in progress). Setting a task to the state it already
+has writes no entry. A task's time in progress, its rework (Completed back to an open state), its
+build time and its cost are derived from these entries on every read, never stored; a malformed
+day file is skipped. A kanbanr older than 0.8.0 ignores the folder (its `doctor` calls it stray,
+a warning only).
+
+A sprint in `sprints.yaml` can state its capacity for agent-built work as `lanes` (agents working
+at once) and `build_slots` (builds at once), beside or instead of the day or point `capacity`;
+both are absent when not set. A sprint also keeps keys it does not know. A kanbanr older than
+0.8.0 drops `lanes` and `build_slots` when it rewrites `sprints.yaml` (`sprint edit`, `start`,
+`close`), so set them with 0.8.0 installed.
 
 **Where a verdict was taken** (DEF-028). Every approval event and standing approval, every
 sign-off entry (given or withdrawn) and every release stage change carries an optional `origin`:

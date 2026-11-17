@@ -8,6 +8,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- `kanbanr plan` and the Plan page's Flow panel: remaining work and the critical path in
+  agent-hours, what runs, what is ready and what each blocked task waits on, and a forecast for 1,
+  4 and 8 lanes bounded by build slots; every task state change is kept in a task log, with the
+  tokens, cost and build time an agent reports; sprints can state their capacity as lanes and
+  build slots (FTR-061).
 - `kanbanr build`: build slots with a priority queue that serves critical-path tasks first, a
   per-project sccache server whose base directories make the vendored C build shareable across
   worktrees, an opt-in mold linker, a content-keyed cache of the built monitor, checks chosen by

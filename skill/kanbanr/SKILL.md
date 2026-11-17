@@ -295,7 +295,9 @@ known:
   under Scrum), then `kanbanr sprint add`. Work past the first stage waits for a started sprint.
   If the user wants to begin before a sprint's first day, ask whether to start it today;
   `kanbanr sprint start` then moves its dates to today and keeps its length. Never start a sprint
-  without asking. If a
+  without asking. For agent-built work, state the sprint's capacity as lanes and build slots
+  (`kanbanr sprint add … --lanes 4 --build-slots 2`, with kanbanr 0.8.0 or later installed), not
+  days. If a
   planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
@@ -855,6 +857,14 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
 - Subagents take one task at a time from the item's todo-list, with the approved definition and
   that task as their brief, under a build scope issued for the item (next section).
 - Never commit on main or on a line of integration (the hooks refuse), and never push.
+- **Plan agent work in agent-hours, never calendar days.** Size each task in agent-hours
+  (`kanbanr task add … --estimate 1.5h`), never an item in days. To say how long work takes, quote
+  `kanbanr plan`: the remaining agent-hours, the critical path (the least it can take however many
+  agents run) and the forecast for 1, 4 and 8 lanes bounded by build slots, in hours from now. The
+  only dates to quote are the ones a person set (a sprint's last day, a release's target).
+- When a task completes, report what it cost when you know it:
+  `kanbanr task state <CODE> <TL> <T> Completed --tokens N --cost-usd X --model M`. Its builds are
+  read from the build log for you.
 
 ### Sub-agents: what each may do
 
@@ -1697,7 +1707,7 @@ kanbanr config cadence --sprints on --releases on --unit points   # both off unl
 kanbanr config method [--off|--on] [design|design-review|docs|docs-folded|links]   # the method's gates; the user's choice, never yours
 kanbanr config coverage [--from-file rules.yaml | --clear]   # architecture coverage rules: what each view must reference
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
-kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
+kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20] [--lanes 4 --build-slots 2]
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
 kanbanr sprint unplan FEAT-001                    # back to no sprint (not for a closed sprint)
 kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-002|backlog
@@ -1797,6 +1807,8 @@ kanbanr todo add FEAT-001 --description "session 1"     # -> TL-001
 kanbanr todo list FEAT-001
 kanbanr task add FEAT-001 TL-001 --text "Build the login form"
 kanbanr task state FEAT-001 TL-001 T1 InProgress        # NotStarted | InProgress | Completed
+kanbanr task state FEAT-001 TL-001 T1 Completed --tokens 180000 --cost-usd 2.4 --model M   # what it cost, in the task log
+kanbanr plan [--sprint SP | --release V | --milestone MS | --open] [--lanes 1,4,8] [--slots N] [--actuals]   # agent-hours, critical path, forecast
 kanbanr task list FEAT-001 [TL-001]
 ```
 
