@@ -343,6 +343,7 @@ summary:focus-visible,
 /* ---- review groups (FTR-038) ---- */
 /* The open group's header stays in view while its rows scroll (R-9): select-all, the filter and the
    action button sit beside the selection they act on. */
+.review-group, .review-group-rows { min-width: 0; max-width: 100%; }
 .review-group-head { position: sticky; top: 0; z-index: 1; background: var(--surface); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 .review-group-sentence { margin: 0 0 var(--sp-2); }
 .review-group-tools { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
@@ -351,18 +352,19 @@ summary:focus-visible,
 .review-group-outcome { margin-top: var(--sp-2); }
 .review-select-all { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-1); }
 /* A row is one line; what a yes records is the only second line, small and muted (R-9). */
-.review-row-title { display: block; overflow: hidden; text-overflow: ellipsis; }
-.review-row-records { display: block; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-1); font-weight: 400; color: var(--text-muted); }
+.review-row-title { display: block; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.review-row-records { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--fs-1); font-weight: 400; color: var(--text-muted); }
 .review-row-what { color: var(--text-muted); font-size: var(--fs-1); }
 .review-decisions-here > summary { cursor: pointer; font-weight: 600; padding: var(--sp-2) 0; }
 /* The Manual group by item (FTR-057): a section per release being shipped, each item's checks
    indented under its heading. */
-.manual-groups { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-2); }
-.manual-section-items { display: flex; flex-direction: column; gap: var(--sp-1); }
+.manual-groups { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-2); min-width: 0; }
+.manual-section, .manual-item-wrap { min-width: 0; }
+.manual-section-items { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .manual-purpose { margin: 0 0 var(--sp-2); }
 .manual-retire { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
 .manual-item-title { display: block; overflow: hidden; text-overflow: ellipsis; }
-.manual-item-rows { display: flex; flex-direction: column; gap: var(--sp-1); padding-left: var(--sp-3); }
+.manual-item-rows { display: flex; flex-direction: column; gap: var(--sp-1); padding-left: var(--sp-3); min-width: 0; }
 
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }

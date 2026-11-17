@@ -734,6 +734,23 @@ try {
       problems.push("the grid is not limited to titles with a second line, so single-line rows would change");
     ok = report("web::check_row_arrow_sits_beside_the_title", problems) && ok;
   }
+
+  // T12 (1): a group action takes only the selected rows that are shown (selection ∩ shown).
+  {
+    const problems = [];
+    const hidden = Array.from({ length: 12 }, (_, i) => row(`SPK-002/R-${i + 1}`, { code: "SPK-002", prepared: `P-${i + 1}`, what: "manual check" }));
+    const mine = row("DEF-113", { what: "manual check" });
+    const group = slice("docs-folded", "Sign off docs-folded", "Sign off", [...hidden, mine]);
+    // Filtered to the one unprepared row: the twelve preselected rows are not shown.
+    const { document } = await renderPanel(group, { url: "/p/x/review?group=docs-folded&r.q=DEF-113" });
+    eq(problems, "only the matching row is drawn", [...document.querySelectorAll("section.ui-row")].map((s) => s.id), ["DEF-113"]);
+    const buttons = [...document.querySelectorAll(".review-group-actions button")].map((b) => [b.textContent.trim(), b.disabled]);
+    eq(problems, "the action counts no hidden row and is disabled", buttons, [["Sign off docs-folded 0", true]]);
+    // Unfiltered, the same group offers all twelve to confirm and reject.
+    const all = await renderPanel(group, { url: "/p/x/review?group=docs-folded" });
+    eq(problems, "unfiltered, the prepared rows are offered", [...all.document.querySelectorAll(".review-group-actions button")].map((b) => b.textContent.trim()), ["Sign off docs-folded 12", "Reject 12 prepared"]);
+    ok = report("web::check_group_action_takes_only_the_rows_shown", problems) && ok;
+  }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);
   ok = false;

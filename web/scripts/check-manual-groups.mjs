@@ -427,6 +427,47 @@ try {
     if (!/guard\.current\?\.run/.test(view)) problems.push("GroupView lost its guardInFlight");
     renderChecks.push(["web::check_manual_shipped_checks_retire_together", problems]);
   }
+  // FTR-038 T12 (2) and (3), the stylesheets as the browser reads them (jsdom draws no layout).
+  {
+    const sheet = (rel) => {
+      const css = readFileSync(new URL(rel, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+    };
+    const rules = [...sheet("../src/ui/ui.css"), ...sheet("../src/styles.css")];
+    const decl = (sel, re) => rules.some((r) => r.sel.split(",").map((x) => x.trim()).includes(sel) && re.test(r.body));
+    // (2) every row keeps its arrow and ellipsizes inside the page.
+    {
+      const problems = [];
+      const want = (sel, re, why) => {
+        if (!decl(sel, re)) problems.push(`${sel} lacks ${why}`);
+      };
+      want(".ui-row", /min-width:\s*0/, "min-width: 0");
+      want(".ui-row-head", /min-width:\s*0/, "min-width: 0");
+      want(".ui-row-meta", /min-width:\s*0/, "min-width: 0 (the pills give way, the title keeps its arrow)");
+      want(".ui-row-meta", /flex:\s*0\s+1\s+auto/, "flex: 0 1 auto (the pills shrink)");
+      want(".ui-row-title", /min-width:\s*(?:[3-9]|\d\d)(?:\.\d+)?rem/, "a minimum width that keeps the arrow and a few letters");
+      want(".review-row-title", /min-width:\s*0/, "min-width: 0");
+      want(".review-row-title", /text-overflow:\s*ellipsis/, "an ellipsis");
+      want(".review-row-records", /min-width:\s*0/, "min-width: 0");
+      for (const c of [".review-group", ".review-group-rows", ".manual-groups", ".manual-section", ".manual-section-items", ".manual-item-wrap", ".manual-item-rows"])
+        want(c, /min-width:\s*0/, "min-width: 0 (a flex item that cannot shrink widens the page)");
+      want(".ui-row-body", /overflow-wrap:\s*anywhere|overflow-x:\s*auto/, "overflow-wrap or overflow-x, so long evidence stays inside the row");
+      renderChecks.push(["web::check_manual_check_rows_fit_the_page_with_their_arrow", problems]);
+    }
+    // (3) the item heading's arrow sits on the heading's first line, like a Review row's.
+    {
+      const problems = [];
+      const has = (re, pred) => rules.some((r) => re.test(r.sel) && pred(r.body));
+      if (!has(/\.ui-row-title > button:has\(> \.manual-item-title\)$/, (b) => /display:\s*grid/.test(b) && /grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)/.test(b)))
+        problems.push("an item heading's button is not the two-column grid (auto, minmax(0, 1fr))");
+      if (!has(/\.ui-row-title > button:has\(> \.manual-item-title\)::before$/, (b) => /grid-column:\s*1/.test(b) && /grid-row:\s*1/.test(b)))
+        problems.push("the heading's arrow is not placed in column 1, row 1");
+      if (!has(/\.ui-row-title > button:has\(> \.manual-item-title\) > \*$/, (b) => /grid-column:\s*2/.test(b)))
+        problems.push("the heading's text is not placed in column 2");
+      if (!decl(".manual-item-title", /text-overflow:\s*ellipsis/)) problems.push(".manual-item-title lost its ellipsis");
+      renderChecks.push(["web::check_manual_item_arrow_sits_beside_its_heading", problems]);
+    }
+  }
 } catch (e) {
   renderChecks.push(["web::check_manual_groups_render", [`rendering the Manual group failed: ${e?.stack ?? e}`]]);
 } finally {
