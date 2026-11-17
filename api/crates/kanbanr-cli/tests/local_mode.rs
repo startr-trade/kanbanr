@@ -4182,7 +4182,7 @@ fn where_names_the_questions_setup_must_ask() {
     };
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
-    assert_eq!(questions.len(), 7, "{questions:?}");
+    assert_eq!(questions.len(), 9, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
         questions[1].starts_with("Which process")
@@ -4195,14 +4195,26 @@ fn where_names_the_questions_setup_must_ask() {
         .filter(|q| q.contains("identity"))
         .collect();
     assert_eq!(identity.len(), 1, "{questions:?}");
-    // FTR-033 R-1: the engineering baseline is asked after the charter.
+    // FTR-033 R-1, FTR-005 R-3: after the charter come the facts, then the engineering
+    // baseline, and the catalog last.
     let charter = questions
         .iter()
         .position(|q| q.starts_with("The charter"))
         .unwrap();
     assert!(
-        questions[charter + 1].starts_with("The engineering baseline")
-            && questions[charter + 1].contains("kanbanr profile ask --json"),
+        questions[charter + 1].starts_with("The project's facts")
+            && questions[charter + 1].contains("kanbanr facts set"),
+        "{questions:?}"
+    );
+    assert!(
+        questions[charter + 2].starts_with("The engineering baseline")
+            && questions[charter + 2].contains("kanbanr profile ask --json"),
+        "{questions:?}"
+    );
+    assert_eq!(charter + 3, questions.len() - 1, "{questions:?}");
+    assert!(
+        questions[charter + 3].starts_with("The catalog")
+            && questions[charter + 3].contains("kanbanr catalog init"),
         "{questions:?}"
     );
     assert!(
@@ -4216,7 +4228,7 @@ fn where_names_the_questions_setup_must_ask() {
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], "T");
-    assert_eq!(questions.len(), 6, "{questions:?}");
+    assert_eq!(questions.len(), 8, "{questions:?}");
     assert!(
         !questions.iter().any(|q| q.contains("identity")),
         "{questions:?}"
@@ -4268,7 +4280,8 @@ fn setup_asks_cadence_and_shows_git_model() {
 
     let asked = json(&["where", "--json"]);
     let questions = asked["ask_the_user"].as_array().unwrap();
-    assert_eq!(questions.len(), 7, "{questions:?}");
+    // FTR-005: the facts and the catalog questions make nine.
+    assert_eq!(questions.len(), 9, "{questions:?}");
     let cadence = questions[2].as_str().unwrap();
     assert!(
         cadence.contains("sprints and releases")
@@ -16400,5 +16413,63 @@ fn profile_update_is_reported_and_adopted_only_on_request_with_answers_kept() {
             .any(|a| a["id"] == "datastore"),
         "an answered area is asked again: {v}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-005 R-3: `where --json` in an untracked folder suggests the facts its manifests show and
+/// asks for them once, after the charter; a tracked folder asks nothing.
+#[test]
+fn where_suggests_the_facts_and_asks_for_them() {
+    let (base, work) = togaf_scratch("where-facts");
+    assert!(
+        work.starts_with(std::env::temp_dir()),
+        "the test's own folder"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    std::fs::write(work.join("Cargo.toml"), "[package]\nname = \"shop\"\n").unwrap();
+    std::fs::write(work.join("Dockerfile"), "FROM scratch\n").unwrap();
+    let where_json = || -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, &["where", "--json"])).stdout).unwrap()
+    };
+    let v = where_json();
+    let facts = &v["suggested_facts"];
+    assert_eq!(facts["languages"], serde_json::json!(["rust"]), "{v}");
+    assert_eq!(facts["runtimes"], serde_json::json!(["native"]), "{v}");
+    assert_eq!(facts["production"], serde_json::json!(["container"]), "{v}");
+    let asked: Vec<&str> = v["ask_the_user"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|q| q.as_str())
+        .filter(|q| q.starts_with("The project's facts"))
+        .collect();
+    assert_eq!(asked.len(), 1, "the facts are asked once: {v}");
+    for named in [
+        "suggested_facts",
+        "kanbanr facts vocabulary",
+        "kanbanr facts set",
+    ] {
+        assert!(asked[0].contains(named), "{named}: {}", asked[0]);
+    }
+
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let v = where_json();
+    assert_eq!(v["ask_the_user"], serde_json::json!([]), "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }

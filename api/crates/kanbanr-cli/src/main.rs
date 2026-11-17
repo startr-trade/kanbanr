@@ -6377,6 +6377,8 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string()),
         "suggested_description": project::suggested_description(&project::project_root(&cwd, home)),
+        // FTR-005 R-3: the facts record the folder's manifests suggest, for setup's facts question.
+        "suggested_facts": project::suggested_facts(&project::project_root(&cwd, home)),
         "suggested_data_dir": suggested.as_deref().map(show),
         "suggested_inside_git_repo": suggested
             .as_deref()

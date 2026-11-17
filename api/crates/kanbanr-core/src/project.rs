@@ -184,8 +184,14 @@ pub fn setup_questions(tracked: bool, git_identity: bool, has_remote: bool) -> V
          for the whole charter, not one per field; nothing is adopted before the confirmation."
             .into(),
     );
-    // FTR-033 R-1: after the charter (FTR-005 T4 later puts its facts entry before this one and
-    // its catalog entry after it).
+    // FTR-005 R-3: the facts, after the charter and before FTR-033's baseline, which reads them.
+    ask.push(
+        "The project's facts: languages, runtimes, where it runs, its parts and its data, \
+         recommending `suggested_facts` (`kanbanr facts vocabulary` lists the answers); apply \
+         with `kanbanr facts set …`."
+            .into(),
+    );
+    // FTR-033 R-1: after the charter and the facts; FTR-005's catalog entry comes after it.
     ask.push(
         "The engineering baseline: in the project folder run `kanbanr profile ask --json` (it \
          lists the setup areas the folder does not answer, with a detected answer first and the \
@@ -199,7 +205,178 @@ pub fn setup_questions(tracked: bool, git_identity: bool, has_remote: bool) -> V
          Never answer an area yourself: a detected answer is still confirmed."
             .into(),
     );
+    // FTR-005: the catalog last, once the facts and the baseline say which rows apply.
+    ask.push(
+        "The catalog: which rows the facts and the baseline make applicable the user wants to \
+         drop or add; apply with `kanbanr catalog init`, then `kanbanr catalog off <row> --why …` \
+         for each dropped row."
+            .into(),
+    );
     ask
+}
+
+/// The manifests `suggested_facts` reads (FTR-005 R-3): a file name (or `*.ext` pattern) and the
+/// facts key and value it suggests. Checked at the folder's root and one level down. The rules a
+/// file name alone cannot decide (TypeScript beside `package.json`, a Kubernetes `Deployment`, a
+/// web front end, a CLI binary, SQL files) are in [`suggested_facts`].
+pub const MANIFESTS: &[(&str, &str, &str)] = &[
+    ("Cargo.toml", "languages", "rust"),
+    ("Cargo.toml", "runtimes", "native"),
+    ("go.mod", "languages", "go"),
+    ("go.mod", "runtimes", "native"),
+    ("pyproject.toml", "languages", "python"),
+    ("pyproject.toml", "runtimes", "python"),
+    ("requirements.txt", "languages", "python"),
+    ("requirements.txt", "runtimes", "python"),
+    ("package.json", "languages", "javascript"),
+    ("package.json", "runtimes", "node"),
+    ("pom.xml", "languages", "java"),
+    ("pom.xml", "runtimes", "jvm"),
+    ("build.gradle", "languages", "java"),
+    ("build.gradle", "runtimes", "jvm"),
+    ("build.gradle.kts", "languages", "java"),
+    ("build.gradle.kts", "runtimes", "jvm"),
+    ("*.csproj", "languages", "csharp"),
+    ("*.csproj", "runtimes", "dotnet"),
+    ("Gemfile", "languages", "ruby"),
+    ("composer.json", "languages", "php"),
+    ("Dockerfile", "production", "container"),
+    ("compose.yaml", "production", "container"),
+    ("docker-compose.yml", "production", "container"),
+    ("Chart.yaml", "production", "kubernetes"),
+];
+
+/// At most this many bytes of a manifest are read.
+const MANIFEST_READ_LIMIT: u64 = 64 * 1024;
+
+/// The first `MANIFEST_READ_LIMIT` bytes of a regular file (never a symlink), lossily as text.
+fn read_manifest(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.file_type().is_file() {
+        return None;
+    }
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MANIFEST_READ_LIMIT)
+        .read_to_end(&mut buf)
+        .ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// The regular files and real folders directly in `dir`, by name, sorted; symlinks are skipped so
+/// nothing outside the folder is read.
+fn entries(dir: &Path) -> (Vec<String>, Vec<String>) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    if let Ok(read) = std::fs::read_dir(dir) {
+        for e in read.flatten() {
+            let Ok(kind) = e.file_type() else { continue };
+            let name = e.file_name().to_string_lossy().into_owned();
+            if kind.is_file() {
+                files.push(name);
+            } else if kind.is_dir() {
+                dirs.push(name);
+            }
+        }
+    }
+    files.sort();
+    dirs.sort();
+    (files, dirs)
+}
+
+fn manifest_matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_prefix('*') {
+        Some(ext) => name.len() > ext.len() && name.ends_with(ext),
+        None => name == pattern,
+    }
+}
+
+/// The facts record a folder's manifests suggest (FTR-005 R-3): read-only, from the fixed
+/// [`MANIFESTS`] table and the rules beside it, at the root and one level down. Reads at most 64 KB
+/// of a file and never follows a symlink. Nothing matched gives an empty record: the question is
+/// still asked.
+pub fn suggested_facts(dir: &Path) -> crate::facts::Facts {
+    fn add(facts: &mut crate::facts::Facts, key: &str, value: &str) {
+        let list = match key {
+            "languages" => &mut facts.languages,
+            "runtimes" => &mut facts.runtimes,
+            "production" => &mut facts.production,
+            "parts" => &mut facts.parts,
+            "data" => &mut facts.data,
+            _ => return,
+        };
+        if !list.iter().any(|v| v == value) {
+            list.push(value.to_string());
+        }
+    }
+    let mut facts = crate::facts::Facts::default();
+    let (root_files, root_dirs) = entries(dir);
+    let mut folders: Vec<(PathBuf, Vec<String>, Vec<String>)> =
+        vec![(dir.to_path_buf(), root_files.clone(), root_dirs.clone())];
+    for d in &root_dirs {
+        if d.starts_with('.') || d == "node_modules" || d == "target" {
+            continue;
+        }
+        let path = dir.join(d);
+        let (files, dirs) = entries(&path);
+        folders.push((path, files, dirs));
+    }
+    for (path, files, _) in &folders {
+        for name in files {
+            for (pattern, key, value) in MANIFESTS {
+                if manifest_matches(pattern, name) {
+                    add(&mut facts, key, value);
+                }
+            }
+        }
+        let has = |n: &str| files.iter().any(|f| f == n);
+        if has("package.json") && has("tsconfig.json") {
+            add(&mut facts, "languages", "typescript");
+        }
+        if has("Cargo.toml")
+            && read_manifest(&path.join("Cargo.toml"))
+                .is_some_and(|t| t.lines().any(|l| l.trim() == "[[bin]]"))
+        {
+            add(&mut facts, "parts", "cli");
+        }
+    }
+    // A Kubernetes deployment: a k8s/, deploy/ or manifests/ folder holding a `kind: Deployment`.
+    for folder in ["k8s", "deploy", "manifests"] {
+        if !root_dirs.iter().any(|d| d == folder) {
+            continue;
+        }
+        let path = dir.join(folder);
+        let deploys = entries(&path).0.iter().any(|f| {
+            read_manifest(&path.join(f))
+                .is_some_and(|t| t.lines().any(|l| l.trim() == "kind: Deployment"))
+        });
+        if deploys {
+            add(&mut facts, "production", "kubernetes");
+        }
+    }
+    if root_dirs.iter().any(|d| d == "migrations") || root_files.iter().any(|f| f.ends_with(".sql"))
+    {
+        add(&mut facts, "data", "sql");
+    }
+    for folder in ["web", "ui", "frontend"] {
+        if root_dirs.iter().any(|d| d == folder)
+            && std::fs::symlink_metadata(dir.join(folder).join("package.json"))
+                .is_ok_and(|m| m.file_type().is_file())
+        {
+            add(&mut facts, "parts", "web-ui");
+        }
+    }
+    let src_main = folders.iter().any(|(path, _, dirs)| {
+        dirs.iter().any(|d| d == "src")
+            && std::fs::symlink_metadata(path.join("src").join("main.rs"))
+                .is_ok_and(|m| m.file_type().is_file())
+    });
+    if src_main || root_dirs.iter().any(|d| d == "cmd") {
+        add(&mut facts, "parts", "cli");
+    }
+    facts.normalized()
 }
 
 /// A one-line description of the project at `dir`, read from what it already says (FTR-022): the
@@ -1016,6 +1193,42 @@ mod tests {
         assert!(why.contains("project shop, board <not recorded>"), "{why}");
     }
 
+    /// FTR-005 R-3: the folder's manifests suggest the facts, root and one level down; an empty
+    /// folder suggests an empty record (the question is still asked).
+    #[test]
+    fn manifests_suggest_the_facts() {
+        let base =
+            std::env::temp_dir().join(format!("kanbanr-facts-suggest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let shop = base.join("shop");
+        std::fs::create_dir_all(shop.join("src")).unwrap();
+        std::fs::create_dir_all(shop.join("web")).unwrap();
+        std::fs::write(shop.join("Cargo.toml"), "[package]\nname = \"shop\"\n").unwrap();
+        std::fs::write(shop.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(shop.join("web/package.json"), "{}\n").unwrap();
+        std::fs::write(shop.join("web/tsconfig.json"), "{}\n").unwrap();
+        std::fs::write(shop.join("Dockerfile"), "FROM scratch\n").unwrap();
+        let facts = suggested_facts(&shop);
+        for (key, value) in [
+            ("languages", "rust"),
+            ("languages", "typescript"),
+            ("runtimes", "native"),
+            ("runtimes", "node"),
+            ("production", "container"),
+            ("parts", "web-ui"),
+            ("parts", "cli"),
+        ] {
+            assert!(facts.has(key, value), "{key}: {value} in {facts:?}");
+        }
+        assert!(facts.data.is_empty(), "{facts:?}");
+        assert!(crate::facts::problems(&facts).is_empty(), "{facts:?}");
+
+        let empty = base.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(suggested_facts(&empty).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// DEF-053 R-2: the repository question is asked only for an untracked folder with a remote.
     #[test]
     fn the_repository_question_is_asked_only_when_the_folder_has_a_remote() {
@@ -1030,9 +1243,9 @@ mod tests {
     #[test]
     fn setup_asks_what_only_the_user_can_answer() {
         assert!(setup_questions(true, false, false).is_empty());
-        assert_eq!(setup_questions(false, true, false).len(), 6);
+        assert_eq!(setup_questions(false, true, false).len(), 8);
         let all = setup_questions(false, false, false);
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 9);
         assert!(all[2].contains("sprints and releases"));
         assert!(all[4].contains("commit identity"));
     }
@@ -1042,13 +1255,16 @@ mod tests {
     #[test]
     fn setup_questions_name_the_baseline_after_the_charter() {
         let q = setup_questions(false, true, false);
-        assert_eq!(q.len(), 6, "{q:?}");
+        assert_eq!(q.len(), 8, "{q:?}");
         let charter = q.iter().position(|x| x.starts_with("The charter")).unwrap();
         let baseline = q
             .iter()
             .position(|x| x.starts_with("The engineering baseline"))
             .expect("a baseline question");
-        assert_eq!(baseline, charter + 1, "{q:?}");
+        // FTR-005: the facts sit between the charter and the baseline, the catalog after it.
+        assert!(q[charter + 1].starts_with("The project's facts"), "{q:?}");
+        assert_eq!(baseline, charter + 2, "{q:?}");
+        assert!(q[baseline + 1].starts_with("The catalog"), "{q:?}");
         for named in [
             "kanbanr profile ask --json",
             "kanbanr profile add",
@@ -1069,7 +1285,7 @@ mod tests {
             .position(|x| x.starts_with("The charter"))
             .unwrap();
         assert!(repo < charter, "{with_remote:?}");
-        assert!(with_remote[charter + 1].starts_with("The engineering baseline"));
+        assert!(with_remote[charter + 2].starts_with("The engineering baseline"));
 
         assert!(setup_questions(true, false, false).is_empty());
         assert!(setup_questions(true, true, true).is_empty());
