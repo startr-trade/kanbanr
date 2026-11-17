@@ -13,6 +13,7 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { NAV } from "../src/nav.ts";
 
 const root = new URL("../src", import.meta.url).pathname;
 
@@ -127,8 +128,23 @@ function shellLinks(src) {
   return found;
 }
 
+/**
+ * The shell's project links are data in nav.ts since FTR-047, so App.tsx no longer spells them and
+ * the scanner above would see only the global nav and the crumb. Each NAV entry is one destination,
+ * labelled as the shell labels it: an area with one page shows the area's name (R-8), otherwise the
+ * page's. Project paths on both sides use one placeholder, so `/p/${…}` in App.tsx and an entry's
+ * `path(p)` compare equal when they lead to the same page.
+ */
+const PROJECT = "PROJECT";
+function navLinks(nav) {
+  return nav.flatMap((area) =>
+    area.entries.map((e) => ({ to: e.path(PROJECT), label: area.entries.length === 1 ? area.label : e.label })),
+  );
+}
+const literalLinks = shellLinks(shell).map(({ to, label }) => ({ to: to.replace(/\$\{[^}]*\}/g, PROJECT), label }));
+
 const seen = new Map();
-for (const { to, label } of shellLinks(shell)) {
+for (const { to, label } of [...navLinks(NAV), ...literalLinks]) {
   const key = `${to}\u0000${label}`;
   seen.set(key, (seen.get(key) ?? 0) + 1);
 }
@@ -136,7 +152,7 @@ for (const [key, count] of seen) {
   if (count > 1) {
     const [to, label] = key.split("\u0000");
     failures.push(
-      `App.tsx: "${label}" -> ${to} appears ${count} times in the app shell\n` +
+      `App.tsx + nav.ts: "${label}" -> ${to} appears ${count} times in the app shell\n` +
         `    Offer each destination once; two identical links invite a choice that does not exist (FEAT-083).`,
     );
   }
