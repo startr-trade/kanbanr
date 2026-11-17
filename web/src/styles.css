@@ -115,10 +115,15 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 }
 .theme-toggle:hover { color: var(--text); border-color: var(--accent); }
 
-/* Visible keyboard focus across all interactive elements (a11y). */
+/* Visible keyboard focus across all interactive elements (DEF-082 R-3). A rule may drop the
+   outline only for mouse focus, as `X:focus:not(:focus-visible)`; check:a11y-focus holds this. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
 .tab:focus-visible,
 .card:focus-visible {
   outline: 2px solid var(--accent);
@@ -271,7 +276,7 @@ input:focus-visible,
    (FEAT-076). */
 .btn-primary {
   background: var(--accent); border-color: var(--accent);
-  color: var(--bg); font-weight: 600;
+  color: var(--on-accent); font-weight: 600;
 }
 .btn-primary:hover { filter: brightness(1.12); background: var(--accent); }
 /* The action that takes something away — withdrawing an approval. Not the primary action on the
@@ -317,7 +322,8 @@ input:focus-visible,
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; min-width: 220px; flex: 1 1 220px;
 }
-.review-reason:focus { outline: none; border-color: var(--accent); }
+.review-reason:focus { border-color: var(--accent); }
+.review-reason:focus:not(:focus-visible) { outline: none; }
 
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }
@@ -479,7 +485,8 @@ input:focus-visible,
   padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; min-width: 280px;
 }
-.board-search:focus { outline: none; border-color: var(--accent); }
+.board-search:focus { border-color: var(--accent); }
+.board-search:focus:not(:focus-visible) { outline: none; }
 
 /* ---- per-page selector ---- */
 .per-page { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); }
@@ -487,7 +494,8 @@ input:focus-visible,
   padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border-strong);
   background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
 }
-.per-page select:focus { outline: none; border-color: var(--accent); }
+.per-page select:focus { border-color: var(--accent); }
+.per-page select:focus:not(:focus-visible) { outline: none; }
 
 /* ---- per-column pager ---- */
 .pager {
@@ -625,9 +633,9 @@ input:focus-visible,
   resize: vertical;
 }
 .reason:focus {
-  outline: none;
   border-color: var(--accent);
 }
+.reason:focus:not(:focus-visible) { outline: none; }
 
 /* A release's notes, read and edited on its branch (FEAT-216): collapsed until opened, the editor
    in the theme's own colours (it reuses `.reason`) and monospace, since the notes are markdown. */
