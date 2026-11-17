@@ -381,7 +381,30 @@ fn spec_brief(
 /// `repo` is the project's code repository when the caller has one: the repository docs an item
 /// lists are judged against it before `docs-folded` is offered (DEF-033).
 pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<ReviewEntry>> {
-    let inputs = Inputs::load(store, p, repo)?;
+    pending_with(store, p, repo, None)
+}
+
+/// [`pending`] over a project already loaded in full (DEF-106): the board is read once for the
+/// queue, its gates and its drift.
+pub fn pending_in(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    full: &crate::Project,
+) -> Result<Vec<ReviewEntry>> {
+    pending_with(store, p, repo, Some(full))
+}
+
+fn pending_with(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    full: Option<&crate::Project>,
+) -> Result<Vec<ReviewEntry>> {
+    let inputs = match full {
+        Some(full) => Inputs::load_from(store, p, repo, store.gates_view(p, full))?,
+        None => Inputs::load(store, p, repo)?,
+    };
     // Whether an approval is current or has lapsed depends on a hash of the definition's
     // content, so it is decided here rather than in each caller: the CLI, the monitor and
     // any future client all get the same answer to "is this agreed?".
@@ -396,7 +419,7 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
         let wanting: Vec<usize> = (0..pending.len())
             .filter(|i| inputs.needs_drift(&pending[*i]))
             .collect();
-        fill_drift(store, p, repo, &mut pending, &wanting);
+        fill_drift(store, p, repo, &mut pending, &wanting, full);
     }
     // Work already built without agreement comes first (FEAT-109), then work being built
     // without it, then work that has not started (FEAT-078 R-2). Finished work whose approval
@@ -428,7 +451,7 @@ pub fn entry(
     if let Some(repo) = repo
         && entries.first().is_some_and(|e| inputs.needs_drift(e))
     {
-        fill_drift(store, p, repo, &mut entries, &[0]);
+        fill_drift(store, p, repo, &mut entries, &[0], None);
     }
     Ok(entries.pop())
 }
@@ -441,13 +464,18 @@ fn fill_drift(
     repo: &std::path::Path,
     entries: &mut [ReviewEntry],
     which: &[usize],
+    full: Option<&crate::Project>,
 ) {
     if which.is_empty() {
         return;
     }
     let codes: Vec<String> = which.iter().map(|i| entries[*i].code.clone()).collect();
     let refs: Vec<&str> = codes.iter().map(String::as_str).collect();
-    let ctx = match crate::docdrift::drift_ctx(store, p, &refs, repo) {
+    let ctx = match full {
+        Some(full) => crate::docdrift::drift_ctx_in(store, p, &refs, repo, full.clone()),
+        None => crate::docdrift::drift_ctx(store, p, &refs, repo),
+    };
+    let ctx = match ctx {
         Ok(ctx) => ctx,
         Err(e) => {
             for i in which {
@@ -523,7 +551,16 @@ struct Inputs {
 
 impl Inputs {
     fn load(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Inputs> {
-        let project = store.load_for_gates(p)?;
+        Self::load_from(store, p, repo, store.load_for_gates(p)?)
+    }
+
+    /// The inputs over `project`, which is what `load_for_gates` answers.
+    fn load_from(
+        store: &Store,
+        p: &str,
+        repo: Option<&std::path::Path>,
+        project: crate::Project,
+    ) -> Result<Inputs> {
         let charter = crate::charter::load(store, p)?;
         let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
         // The planned releases, in file order: the choices of the which-release question

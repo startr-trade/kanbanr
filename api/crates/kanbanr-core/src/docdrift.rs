@@ -1459,6 +1459,18 @@ impl DriftCtx {
 /// records and one log of the code repository `repo`.
 pub fn drift_ctx(store: &Store, project: &str, codes: &[&str], repo: &Path) -> Result<DriftCtx> {
     let board = store.load(project)?;
+    drift_ctx_in(store, project, codes, repo, board)
+}
+
+/// [`drift_ctx`] over a project the caller already loaded in full (DEF-106), so the board is read
+/// once for the whole queue.
+pub fn drift_ctx_in(
+    store: &Store,
+    project: &str,
+    codes: &[&str],
+    repo: &Path,
+    board: crate::store::Project,
+) -> Result<DriftCtx> {
     let index = BoardIndex::of(store, &board)?;
     let adrs = crate::adr::list(store, project)?;
     let docs = read_docs(store, project)?;

@@ -357,9 +357,19 @@ pub fn results(store: &Store, id: &str, code: Option<&str>) -> Result<Vec<Manual
 /// `opens_at` set.
 pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
     let project = store.load_meta(id)?;
+    waiting_in(store, id, &project)
+}
+
+/// [`waiting`] over a project already loaded (DEF-106): it reads the results and the releases,
+/// not the items again.
+pub fn waiting_in(
+    store: &Store,
+    id: &str,
+    project: &crate::store::Project,
+) -> Result<Vec<ManualWaiting>> {
     let kept = results(store, id, None)?;
     let releases = crate::releases::load(store, id)?;
-    let held = held_by(&project, &releases, &holding_of(&project, &releases));
+    let held = held_by(project, &releases, &holding_of(project, &releases));
     let mut live = Vec::new();
     let mut done = Vec::new();
     let mut not_due = Vec::new();

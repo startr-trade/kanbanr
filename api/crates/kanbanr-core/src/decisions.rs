@@ -1205,9 +1205,25 @@ pub fn waiting(
     review_url: Option<&str>,
     now: &str,
 ) -> Result<Vec<Waiting>> {
+    let (queue, project) = crate::reviewgroups::queue_and_project(store, p, repo)?;
+    waiting_in(store, p, repo, d, review_url, now, queue, &project)
+}
+
+/// [`waiting`] over the queue and the project of one revision, already read (DEF-106): it reads
+/// nothing from the board.
+#[allow(clippy::too_many_arguments)]
+fn waiting_in(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    d: &Decisions,
+    review_url: Option<&str>,
+    now: &str,
+    queue: Vec<crate::review::ReviewEntry>,
+    project: &crate::store::Project,
+) -> Result<Vec<Waiting>> {
     use crate::review::ApprovalKind as K;
     let mode = d.mode();
-    let project = store.load(p)?;
     let releases_url = review_url.map(|u| match u.strip_suffix("/review") {
         Some(base) => format!("{base}/releases"),
         None => u.to_string(),
@@ -1235,7 +1251,7 @@ pub fn waiting(
             url,
         });
     };
-    for e in crate::reviewgroups::queue_shared(store, p, repo)? {
+    for e in queue {
         let of = |kind: VerdictKind, signoff: &str| Verdict {
             kind,
             code: e.code.clone(),
@@ -1313,7 +1329,7 @@ pub fn waiting(
             url: baseline_url.as_ref().map(|u| format!("{u}#{}", r.id)),
         });
     }
-    for x in to_review(&project, d) {
+    for x in to_review(project, d) {
         let what = match x.signoff.as_str() {
             "" => format!(
                 "keep or undo the {} taken under {}",
@@ -1438,7 +1454,21 @@ pub fn view_parts(
     now: &str,
 ) -> Result<DecisionsParts> {
     let d = load(store, p)?;
-    parts_of(store, p, repo, now, &d)
+    let project = store.load(p)?;
+    parts_of(store, p, repo, now, &d, &project)
+}
+
+/// [`view_parts`] over a project already loaded in full, which reads nothing more of the board's
+/// items (DEF-106).
+pub fn view_parts_in(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    now: &str,
+    project: &crate::store::Project,
+) -> Result<DecisionsParts> {
+    let d = load(store, p)?;
+    parts_of(store, p, repo, now, &d, project)
 }
 
 /// The project's decisions as the Review page and `kanbanr decisions show` read them.
@@ -1450,13 +1480,15 @@ pub fn view(
     now: &str,
 ) -> Result<DecisionsView> {
     let d = load(store, p)?;
-    let parts = parts_of(store, p, repo, now, &d)?;
+    // The queue and the project it was judged on come from one revision's shared read.
+    let (queue, project) = crate::reviewgroups::queue_and_project(store, p, repo)?;
+    let parts = parts_of(store, p, repo, now, &d, &project)?;
     Ok(DecisionsView {
         mode: parts.mode,
         modes: parts.modes,
         delegations: parts.delegations,
         to_review: parts.to_review,
-        waiting: waiting(store, p, repo, &d, review_url, now)?,
+        waiting: waiting_in(store, p, repo, &d, review_url, now, queue, &project)?,
     })
 }
 
@@ -1466,8 +1498,8 @@ fn parts_of(
     repo: Option<&std::path::Path>,
     now: &str,
     d: &Decisions,
+    project: &crate::store::Project,
 ) -> Result<DecisionsParts> {
-    let project = store.load(p)?;
     Ok(DecisionsParts {
         mode: d.mode(),
         modes: d.modes.clone(),
@@ -1512,7 +1544,7 @@ fn parts_of(
                 }
             })
             .collect(),
-        to_review: to_review(&project, d),
+        to_review: to_review(project, d),
     })
 }
 

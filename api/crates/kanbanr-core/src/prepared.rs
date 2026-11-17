@@ -1658,8 +1658,18 @@ fn gate_release(
 
 /// Every record with where it stands, oldest first.
 fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<PreparedView>> {
-    let (all, _) = read_all(store, p)?;
     let project = store.load(p)?;
+    standing_in(store, p, repo, &project)
+}
+
+/// [`standing`] over a project already loaded in full (DEF-106).
+fn standing_in(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    project: &crate::store::Project,
+) -> Result<Vec<PreparedView>> {
+    let (all, _) = read_all(store, p)?;
     let releases = crate::releases::load(store, p).unwrap_or_default();
     let cadence = &project.config.cadence;
     let mut out = Vec::with_capacity(all.len());
@@ -1669,7 +1679,7 @@ fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Ve
             .any(|(n, a)| a.is_none() && n.kind == r.kind && n.subject == r.subject);
         // Only an unanswered record of a known kind needs the decision looked up.
         let waiting = if answer.is_none() && !newer_open && kind(&r.kind).is_some() {
-            still_waiting(store, p, &project, r, repo)
+            still_waiting(store, p, project, r, repo)
         } else {
             Ok(())
         };
@@ -1710,10 +1720,22 @@ pub fn list(
     query: &ListQuery,
     repo: Option<&std::path::Path>,
 ) -> Result<Vec<PreparedView>> {
-    let mut views = standing(store, p, repo)?;
+    let project = store.load(p)?;
+    list_in(store, p, query, repo, &project)
+}
+
+/// [`list`] over a project already loaded in full: the board is not read again for each record or
+/// for the aliases (DEF-106).
+pub fn list_in(
+    store: &Store,
+    p: &str,
+    query: &ListQuery,
+    repo: Option<&std::path::Path>,
+    project: &crate::store::Project,
+) -> Result<Vec<PreparedView>> {
+    let mut views = standing_in(store, p, repo, project)?;
     // FTR-056: an item named by an earlier code is the item that carries it.
-    let board = store.load_meta(p)?;
-    let current = |c: &str| crate::aliases::current(&board, c).map(str::to_string);
+    let current = |c: &str| crate::aliases::current(project, c).map(str::to_string);
     views.retain(|v| {
         (query.all || v.state == State::Open)
             && query.item.as_ref().is_none_or(|i| {

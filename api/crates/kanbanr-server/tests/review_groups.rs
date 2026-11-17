@@ -535,3 +535,97 @@ fn the_summary_and_a_group_slice_meet_their_budgets() {
         "the {largest} slice's median warm read is {slice_ms:?}"
     );
 }
+
+/// The monitor over `data` started in a code repository, as the person's daemon runs: `repo` is
+/// the folder it was started in and `project` the project its marker names (FEAT-183).
+fn serve_in_repo(s: &Scratch, data: &Path, project: &str, repo: &Path) -> String {
+    let ui = s.0.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><title>t</title></head><body></body></html>",
+    )
+    .unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let bind = format!("127.0.0.1:{port}");
+    let (dir, addr, ui, project, repo) = (
+        data.to_path_buf(),
+        bind.clone(),
+        ui.to_str().unwrap().to_string(),
+        project.to_string(),
+        repo.to_path_buf(),
+    );
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(kanbanr_server::run(
+            dir,
+            addr,
+            Some(ui),
+            true,
+            Some((project, repo)),
+        ))
+        .unwrap();
+    });
+    let url = format!("http://{bind}");
+    for _ in 0..200 {
+        if ureq::get(&format!("{url}/healthz")).call().is_ok() {
+            return url;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("the monitor did not come up on {bind}");
+}
+
+/// DEF-106 R-9: with a code repository (20 commits), the summary and the largest group's slice are
+/// kept: the first read computes them, and the median of 20 further reads is under 50 ms and under
+/// 150 ms. The memo looks at the repository again every 30 seconds
+/// (`memo::tests::a_read_slower_than_the_recheck_is_served_from_the_memo_next_time` runs it across
+/// shorter rechecks); the reads here come inside one.
+#[test]
+fn the_summary_and_a_group_slice_meet_their_budgets_with_a_code_repository() {
+    let s = Scratch::new("review-groups-budget-code");
+    let (data, _) = generated_board(&s, 400, 2_000);
+    let repo = s.0.join("code");
+    std::fs::create_dir_all(&repo).unwrap();
+    common::git(&repo, &["init", "-q"]);
+    common::git(&repo, &["config", "user.name", "Tester"]);
+    common::git(&repo, &["config", "user.email", "t@example.com"]);
+    for i in 0..20 {
+        std::fs::write(repo.join(format!("f{i}.txt")), format!("{i}\n")).unwrap();
+        common::git(&repo, &["add", "-A"]);
+        common::git(&repo, &["commit", "-q", "-m", &format!("commit {i}")]);
+    }
+    let url = serve_in_repo(&s, &data, "shop", &repo);
+    let (code, summary) = read(&url, "shop", "/review/summary");
+    assert_eq!(code, 200, "{summary}");
+    let largest = summary
+        .as_array()
+        .unwrap()
+        .iter()
+        .max_by_key(|g| g["count"].as_u64().unwrap())
+        .unwrap()["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let slice_path = format!("/review/groups/{largest}");
+    let (code, slice) = read(&url, "shop", &slice_path);
+    assert_eq!(code, 200, "{slice}");
+    assert_eq!(slice["rows"].as_array().unwrap().len(), 400);
+    let summary_ms = median_read(&url, "shop", "/review/summary", 20);
+    let slice_ms = median_read(&url, "shop", &slice_path, 20);
+    eprintln!(
+        "with a code repository: summary median {summary_ms:?}; {largest} slice median {slice_ms:?}"
+    );
+    assert!(
+        summary_ms < std::time::Duration::from_millis(50),
+        "the summary's median warm read is {summary_ms:?}"
+    );
+    assert!(
+        slice_ms < std::time::Duration::from_millis(150),
+        "the {largest} slice's median warm read is {slice_ms:?}"
+    );
+}
