@@ -219,22 +219,59 @@ and notes become visible to anyone.
 
 ## The monitor (read-only) — navigation
 
+A project's pages are grouped into areas: **Overview, Work, Plan, Evidence, Architecture and
+Records** (FTR-047). On a wide screen the top bar is one line: an area with several pages is a
+menu button ("Work ▾") that opens its list under it, and an area with one page is a plain link
+named for the area ("Architecture"). Only one menu is open at a time; Escape, a click outside or
+following a link closes it. The area you are in is underlined, and the page you are on is marked
+in its menu. An area shows only once it has a page: Overview and Evidence have none yet, and
+**Releases** shows only on a project that works in releases.
+
 ```mermaid
-flowchart TD
-  Home["Home — one tile per project (Dashboard + per-status + Docs links)"]
+flowchart LR
+  Bar["Top bar — one item per area"]
+  Work["Work ▾"]
+  Plan["Plan ▾"]
+  Arch["Architecture"]
+  Rec["Records ▾"]
   Board["Board — a column per displayed status"]
-  Status["Status page — features in that status, with their OPEN todo-lists"]
-  Feature["Feature page — Specification + todo-list tiles (newest first) + export"]
+  Review["Review — what waits on you"]
   Ms["Milestones — list, newest first"]
-  MsOne["Milestone — its dependencies + its feature items as tiles"]
-  Sched["Schedule — milestones grouped by feature status (derived)"]
-  Docs["Documentation — folders as tiles, files as links"]
-  Home --> Board --> Status --> Feature
+  Sched["Schedule — milestones by feature status"]
+  Gantt["Gantt"]
+  Rel["Releases — on a project in releases"]
+  Wf["Workflow"]
+  Charter["Charter"]
+  Docs["Docs — folders as tiles, files as links"]
+  Status["Status page"]
+  Feature["Feature page"]
+  MsOne["Milestone page"]
+  Bar --> Work
+  Bar --> Plan
+  Bar --> Arch
+  Bar --> Rec
+  Work --> Board
+  Work --> Review
+  Work --> Ms
+  Plan --> Sched
+  Plan --> Gantt
+  Plan --> Rel
+  Arch --> Wf
+  Rec --> Charter
+  Rec --> Docs
+  Board --> Status --> Feature
   Board --> Feature
-  Board --> Ms --> MsOne --> Feature
-  Board --> Sched --> MsOne
-  Home --> Docs
+  Ms --> MsOne --> Feature
 ```
+
+An item, status or milestone page belongs to the area it is reached from: on an item's page, Work
+is underlined and Board is marked; on a document, Records and Docs.
+
+**On a phone** (720 px wide or less) the areas fold behind one **≡ Menu** button, with the page you
+are on named beside it ("kanbanr · Board"). The button opens a full-width panel that lists every
+area as a heading with all its pages under it, and **All projects** (Projects, Portfolio) with
+them. Nothing in the top bar is cut off, and every page can be reached. The theme toggle stays
+outside the menu, always visible.
 
 - **Home tile**: project name + description, an **Open dashboard** link, a link per **status**
   (with counts), and a **Documentation** link.
@@ -267,8 +304,8 @@ flowchart TD
 
 Everything is **view-only** and refreshes live (a green dot shows the live connection). A
 **light/dark theme toggle** sits in the top bar (it remembers your choice and follows your OS
-preference by default), and the layout is **responsive** (usable on a phone) with keyboard-focus and
-reduced-motion accessibility niceties.
+preference by default), and the layout is **responsive** (on a phone the navigation is one menu,
+as above) with keyboard-focus and reduced-motion accessibility niceties.
 
 ## What the monitor shows
 
