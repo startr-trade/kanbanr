@@ -771,8 +771,8 @@ same whichever you use. A read-only monitor shows the command instead.
 The Review page groups what waits for you by the decision it needs (FTR-038), one tab per group,
 each with its count: **Approve**, **Ratify**, a **Sign off** group per sign-off the process names
 (**Sign off design-review**, **Sign off docs-folded**, a release's sign-off), **Which release**,
-**Manual checks**, **Delegations**, **Delegated decisions** and **Proposed ADRs**. An empty group
-has no tab. The page opens on the largest group, or on the one its link names.
+**Manual checks**, **Delegations**, **Delegated decisions**, **Proposed ADRs** and, last, **Recode**.
+An empty group has no tab. The page opens on the largest group, or on the one its link names.
 
 - **Rows.** Each row is one item on one line: its code, its title, what is being decided, and pills
   for what needs your eye ("approval lapsed", "spec changed since sign-off", "added since
@@ -805,6 +805,19 @@ has no tab. The page opens on the largest group, or on the one its link names.
   it is asking for. Your selection is never in a link.
 - **Read-only.** A read-only monitor shows the same groups and rows with no checkboxes or
   buttons; each row's evidence gives the command that takes the decision in your own terminal.
+
+**The Recode group** (FTR-056) holds one row when Claude has prepared the bulk recode of old codes
+to their kinds' prefixes (`kanbanr prepare recode`). Its row opens to the plan as a table, **From**
+to **To**, with the count of renames in its heading ("Renames 129 items to their kinds' prefixes"),
+scrolling when the plan is long. **Confirm 1** asks first, then renames every item in one board
+commit; each keeps its old code as an alias, so no link, trailer or record stops resolving. A plan
+the board has changed since is shown stale and refused: ask Claude to prepare it again. Applying a
+recode is yours alone, in every decision mode. The same decision from your own terminal is
+`kanbanr feature recode --apply --rev <rev>`.
+
+**An earlier code in an address.** An item's page opened under a code it has since left, such as
+`/p/<project>/feature/FEAT-150` after the item became `DEF-095`, redirects to its current code and
+keeps the `#` part of the address, so old links in docs, specs and chats keep working.
 
 `kanbanr review` in the terminal is unchanged.
 

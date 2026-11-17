@@ -30,6 +30,18 @@ the generated block in `CLAUDE.md`, such as after the charter is agreed: only `C
 only between the kanbanr markers, with `[no-ref] <why>`. If kanbanr is not on PATH the hooks step aside rather
 than making the repository uncommittable for someone who never installed it.
 
+### A code that changed
+
+Renaming an item (`kanbanr feature edit <CODE> --code <NEW>`, or `kanbanr feature recode` for the
+whole board) keeps the old code on the item as an alias (FTR-056). A commit's `Refs: kanbanr:FEAT-150`
+trailer is append-only in git history and is never rewritten, so it resolves through the alias:
+`kanbanr why` names the item under its new code, drift reads commits naming either code, and a link
+to the old code in a spec or doc is not reported broken and points at the new address. Structured
+dependencies are rewritten in the rename; texts are left as written, since changing them would
+lapse a sign-off. Records made under the old code (manual and prepared results, activity, scopes,
+release lists) are kept as written and count for the item. A code is never given to another item.
+The format is in [the on-disk layout](../reference/data-layout.md).
+
 ### Commits made by an agent
 
 A commit made under an agent scope (FEAT-214) carries a second trailer beside `Refs:`, naming the

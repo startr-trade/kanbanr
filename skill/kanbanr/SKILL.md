@@ -527,7 +527,7 @@ organisation's own process file changes what you ask with nothing changed here:
 
 When you ask the person for a decision, link the group: `/p/<project>/review?group=<key>#<CODE>`;
 the keys are approve, ratify, design-review, docs-folded, release-signoff, which-release, manual,
-delegation, delegated, adr.
+delegation, delegated, adr, recode.
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
@@ -1603,8 +1603,13 @@ A "feature item" is really a generic **work item** — use ONE item type for eve
 Set `--kind` at minimum on every item; it's what lets the board separate features from chores/bugs.
 **Pass `--kind` when creating, not after:** where the project maps kinds to prefixes
 (`kanbanr config codes`), the kind chooses the code (`DEF-001` for a defect, `MNT-001` for a
-chore, a counter per prefix), and a later kind change never renames it. Don't propose codes in the
+chore, a counter per prefix), and a later kind change never renames it by itself. Don't propose codes in the
 setup interview: a new project keeps `FEAT-` unless the user asks for kind prefixes.
+Renaming keeps the old code as an alias (`kanbanr feature edit <CODE> --code <NEW>`); an alias keeps
+resolving everywhere and is never reused, so never hand an earlier code to another item. To bring old
+items to the kind prefixes, run `kanbanr feature recode`, show the person the plan, then
+`kanbanr prepare recode`; the person confirms it on the Review page (`?group=recode`). Never apply it
+yourself: `feature recode --apply` is refused to you in every decision mode.
 
 **Focus vs non-focus.** The dashboard is for **focus** (delivery) work. Recurring/ongoing and
 maintenance items are **non-focus background** — keep them OFF the board by putting them in a
