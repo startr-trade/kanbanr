@@ -4,7 +4,7 @@
  * its components and `scripts/check-board.mjs` use the same code; every rule and constant of the
  * Board lives here.
  */
-import { nextStageHint } from "./cardText.ts";
+import { liveDelegated, nextStageHint } from "./cardText.ts";
 import type { CardHint } from "./cardText.ts";
 import { ALL, UNSCHEDULED, inSprintFilter } from "./sprintFilter.ts";
 import { to } from "./overviewLinks.ts";
@@ -441,27 +441,44 @@ const FAMILY_NOUN: Record<CheckFamily, [string, string]> = {
 
 export const CHECK_WORDS: Record<Step["state"], string> = { done: "met", current: "now", next: "to do", skipped: "not asked" };
 
+/** How many of a family's missing gaps a delegation in force holds (DEF-104); only the two families a delegation can cover. */
+function heldIn(next: NextStageWire, family: CheckFamily, now: Date): { held: number; ids: string[] } {
+  if (family !== "approval" && family !== "signoffs") return { held: 0, ids: [] };
+  const gaps = liveDelegated(next, now).filter((g) =>
+    family === "approval" ? g.check === "approved" : g.check === "signoff" && g.name !== "docs-folded",
+  );
+  return { held: gaps.length, ids: [...new Set(gaps.map((g) => g.delegation))] };
+}
+
 /** The five check families as steps; empty without `checks` (an older daemon). */
-export function stepperSteps(next: NextStageWire): Step[] {
+export function stepperSteps(next: NextStageWire, now: Date = new Date()): Step[] {
   if (!next.checks || next.checks.length === 0) return [];
   return FAMILY_ORDER.map((family) => {
     const t = next.checks!.find((c) => c.family === family);
     const missing = t?.missing ?? 0;
     const asked = (t?.asked ?? false) || missing > 0;
     const state: Step["state"] = missing > 0 ? "next" : asked ? "done" : "skipped";
-    return { key: family, label: missing > 0 ? `${FAMILY_LABEL[family]} ${missing}` : FAMILY_LABEL[family], state };
+    const step: Step = { key: family, label: missing > 0 ? `${FAMILY_LABEL[family]} ${missing}` : FAMILY_LABEL[family], state };
+    // A step whose open gaps are all Claude's under a delegation says so, in words (decision 7).
+    if (missing > 0 && heldIn(next, family, now).held >= missing) step.word = "Claude holds";
+    return step;
   });
 }
 
 /** "18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs"; null when nothing is left. */
-export function checksLeftText(next: NextStageWire): string | null {
+export function checksLeftText(next: NextStageWire, now: Date = new Date()): string | null {
   if (next.missing === 0) return null;
   const head = `${plural(next.missing, "check")} left before ${next.status}`;
   const parts = (next.checks ?? [])
     .filter((c) => c.missing > 0)
     .map((c) => ({ c, order: FAMILY_ORDER.indexOf(c.family) }))
     .sort((a, b) => b.c.missing - a.c.missing || a.order - b.order)
-    .map(({ c }) => `${c.missing} ${FAMILY_NOUN[c.family][c.missing === 1 ? 0 : 1]}`);
+    .map(({ c }) => {
+      const words = `${c.missing} ${FAMILY_NOUN[c.family][c.missing === 1 ? 0 : 1]}`;
+      const { held, ids } = heldIn(next, c.family, now);
+      if (held === 0) return words;
+      return `${words} (${held >= c.missing ? "" : `${held} `}Claude, under ${ids.join(" and ")})`;
+    });
   return parts.length > 0 ? `${head}: ${parts.join(", ")}` : head;
 }
 

@@ -242,6 +242,13 @@ summary:focus-visible,
   color: var(--text);
 }
 .card:hover { border-color: var(--accent); text-decoration: none; }
+/* The title is the card's link and its ::after stretches over the whole card, so the card still
+   opens the item while a second link (a delegation) can sit above it (DEF-104). */
+.card { position: relative; }
+.card-link { color: inherit; }
+.card-link::after { content: ""; position: absolute; inset: 0; }
+.card-above { position: relative; z-index: 1; }
+.card:has(.card-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .card-code { font-size: var(--fs-1); color: var(--muted); font-family: ui-monospace, monospace; }
 /* A card's title is its h3, and a column's header its h2 (DEF-082); both keep the look they had
    as plain text, so the size and margins are set here, not by the heading's defaults. */
@@ -262,6 +269,8 @@ summary:focus-visible,
 .hint { font-size: var(--fs-1); font-style: italic; padding: 2px 2px; color: var(--muted); }
 .hint-needs, .hint-waiting { color: var(--warn); }
 .hint-ready { color: var(--done); }
+/* What Claude holds under a delegation (DEF-104): neutral, never the warning colour. */
+.hint-delegated { color: var(--text-muted); font-style: normal; }
 /* A control, and it must be one at a glance (FEAT-081). Its own raised surface and a shadow, so it
    is distinguishable from `.chip` sitting beside it without reading the class or hovering — which is
    what "style it as a button rather than as a label" was asking for, and what shipping `.btn` on the
@@ -840,6 +849,13 @@ summary:focus-visible,
 .needs-you-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; }
 .needs-you-link { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text); }
 .needs-you-note { color: var(--muted); font-size: var(--fs-1); }
+/* Delegated mode (DEF-104): the three parts are information, never styled as a warning. */
+.needs-you-part { margin: 0 0 var(--sp-2); }
+.needs-you-decided .needs-you-line, .needs-you-held .needs-you-line { color: var(--text); }
+.needs-you-decided .needs-you-note a { color: inherit; }
+.needs-you-held summary, .needs-you-seen summary { cursor: pointer; color: var(--text-muted); }
+.needs-you-ending .needs-you-label { font-weight: 600; }
+.needs-you-empty { margin: 0; color: var(--text-muted); }
 .needs-you-ask { flex-basis: 100%; color: var(--text); font-style: italic; }
 @media (max-width: 720px) {
   .needs-you { position: static; }

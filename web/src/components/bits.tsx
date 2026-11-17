@@ -1,4 +1,5 @@
-import { nextStageHint, type NextStage } from "../cardText";
+import { delegatedHints, nextStageHint, type NextStage } from "../cardText";
+import { to } from "../overviewLinks";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { type Connection, useConnection } from "../data/live";
@@ -173,9 +174,13 @@ export function FeatureCard({
   const p = { done: feature.done, total: feature.total };
   const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
   return (
-    <Link className="card" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>
+    <article className="card">
       <div className="card-code">{feature.code}</div>
-      <h3 className="card-title">{feature.title}</h3>
+      <h3 className="card-title">
+        <Link className="card-link" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>
+          {feature.title}
+        </Link>
+      </h3>
       <div className="card-meta">
         {gaps.length > 0 && (
           <span className="chip warn" title={`Not yet stated: ${gaps.map((g) => g.label).join(", ")}`}>
@@ -190,6 +195,13 @@ export function FeatureCard({
             </span>
           ) : null;
         })}
+        {next.flatMap((n) =>
+          delegatedHints(n).map((h) => (
+            <Link key={`${n.status}:${h.delegation}`} className="hint hint-delegated card-above" to={to.delegation(project, h.delegation)} title={h.title}>
+              <span aria-hidden="true">⚙</span> {h.text}
+            </Link>
+          )),
+        )}
         {blocked && <span className="chip blocked">blocked</span>}
         {feature.milestone && <span className="chip">{feature.milestone}</span>}
         {p.total > 0 && (
@@ -199,6 +211,6 @@ export function FeatureCard({
         )}
         <FeatureBadges feature={feature} />
       </div>
-    </Link>
+    </article>
   );
 }

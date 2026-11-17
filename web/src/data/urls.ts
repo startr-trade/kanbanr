@@ -132,7 +132,7 @@ export const TAGS = {
   config: ["config"],
   feature: (c: string) => [`item:${c}`, `spec:${c}`],
   features: ["items"],
-  readiness: ["items", "config", "gates", "prepared"],
+  readiness: ["items", "config", "gates", "prepared", "decisions"],
   activity: ["activity"],
   charter: ["charter"],
   /** The Charter page's progress read (FTR-076): charter, items, releases, lessons, sprints, milestones. */
