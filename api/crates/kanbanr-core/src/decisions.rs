@@ -927,7 +927,57 @@ pub fn grant_provenance(store: &Store, p: &str, id: &str) -> Provenance {
     {
         return Provenance::Elsewhere;
     }
-    let history = match crate::git::file_history(dir, &rel) {
+    #[cfg(test)]
+    if crate::git::shared_off() {
+        return grant_provenance_unshared(dir, &rel, id);
+    }
+    // One walk of the board's history, shared with every other reader (DEF-106).
+    let history = match crate::git::path_history(dir) {
+        Ok(h) => h,
+        Err(e) => return Provenance::Unverifiable(e.to_string()),
+    };
+    let granted = |blob: &str| {
+        history.blob_text(dir, blob).is_some_and(|text| {
+            crate::yaml::from_str::<Decisions>(&text)
+                .ok()
+                .is_some_and(|d| {
+                    d.delegations
+                        .iter()
+                        .any(|g| g.id == id && g.granted.is_some())
+                })
+        })
+    };
+    let versions = history.versions(&rel);
+    let Some(first) = versions
+        .iter()
+        .rev()
+        .find(|v| !v.blob.is_empty() && granted(&v.blob))
+    else {
+        return Provenance::Elsewhere;
+    };
+    let message = history.message(dir, &first.sha).unwrap_or_default();
+    if through_kanbanr(&message) {
+        Provenance::ThroughKanbanr
+    } else {
+        Provenance::Elsewhere
+    }
+}
+
+/// Does a commit message carry the trailer kanbanr's write recipe adds to a grant?
+fn through_kanbanr(message: &str) -> bool {
+    message.lines().any(|l| {
+        matches!(
+            l.trim(),
+            "Kanbanr-Origin: monitor" | "Kanbanr-Origin: terminal"
+        )
+    })
+}
+
+/// Today's reading of the grant's history, one `file_history` walk per call: the reference the
+/// shared history is checked against.
+#[cfg(test)]
+pub(crate) fn grant_provenance_unshared(dir: &std::path::Path, rel: &str, id: &str) -> Provenance {
+    let history = match crate::git::file_history(dir, rel) {
         Ok(h) => h,
         Err(e) => return Provenance::Unverifiable(e.to_string()),
     };
@@ -942,13 +992,7 @@ pub fn grant_provenance(store: &Store, p: &str, id: &str) -> Provenance {
     }) else {
         return Provenance::Elsewhere;
     };
-    let through = first.message.lines().any(|l| {
-        matches!(
-            l.trim(),
-            "Kanbanr-Origin: monitor" | "Kanbanr-Origin: terminal"
-        )
-    });
-    if through {
+    if through_kanbanr(&first.message) {
         Provenance::ThroughKanbanr
     } else {
         Provenance::Elsewhere
@@ -1191,7 +1235,7 @@ pub fn waiting(
             url,
         });
     };
-    for e in crate::review::pending(store, p, repo)? {
+    for e in crate::reviewgroups::queue_shared(store, p, repo)? {
         let of = |kind: VerdictKind, signoff: &str| Verdict {
             kind,
             code: e.code.clone(),
@@ -1364,6 +1408,27 @@ pub struct DecisionsView {
     pub waiting: Vec<Waiting>,
 }
 
+/// [`DecisionsView`] without what waits: the mode, the delegations and the decisions to review.
+/// Read when the queue is not needed, so the Review groups do not compute it twice (DEF-106).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionsParts {
+    pub mode: Mode,
+    pub modes: Vec<ModeChange>,
+    pub delegations: Vec<DelegationView>,
+    pub to_review: Vec<DelegatedDecision>,
+}
+
+/// [`view`] without `waiting`.
+pub fn view_parts(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    now: &str,
+) -> Result<DecisionsParts> {
+    let d = load(store, p)?;
+    parts_of(store, p, repo, now, &d)
+}
+
 /// The project's decisions as the Review page and `kanbanr decisions show` read them.
 pub fn view(
     store: &Store,
@@ -1373,8 +1438,25 @@ pub fn view(
     now: &str,
 ) -> Result<DecisionsView> {
     let d = load(store, p)?;
-    let project = store.load(p)?;
+    let parts = parts_of(store, p, repo, now, &d)?;
     Ok(DecisionsView {
+        mode: parts.mode,
+        modes: parts.modes,
+        delegations: parts.delegations,
+        to_review: parts.to_review,
+        waiting: waiting(store, p, repo, &d, review_url, now)?,
+    })
+}
+
+fn parts_of(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    now: &str,
+    d: &Decisions,
+) -> Result<DecisionsParts> {
+    let project = store.load(p)?;
+    Ok(DecisionsParts {
         mode: d.mode(),
         modes: d.modes.clone(),
         delegations: d
@@ -1418,8 +1500,7 @@ pub fn view(
                 }
             })
             .collect(),
-        to_review: to_review(&project, &d),
-        waiting: waiting(store, p, repo, &d, review_url, now)?,
+        to_review: to_review(&project, d),
     })
 }
 
@@ -3243,6 +3324,40 @@ mod tests {
             }
             other => panic!("not refused: {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-106 R-6: the provenance read from the shared history is the one `file_history` gave,
+    /// for a grant through kanbanr, one never granted, one written by hand and committed, and a
+    /// history that cannot be read.
+    #[test]
+    fn grant_provenance_from_shared_history_matches_file_history() {
+        let (store, dir, _) = granted_through_kanbanr_board();
+        let rel = format!("projects/demo/{DECISIONS_FILE}");
+        let both = |id: &str| {
+            let shared = grant_provenance(&store, "demo", id);
+            let again = grant_provenance_unshared(&dir, &rel, id);
+            assert_eq!(shared, again, "{id}");
+            shared
+        };
+        assert_eq!(both("DLG-002"), Provenance::ThroughKanbanr);
+        assert_eq!(both("DLG-001"), Provenance::Elsewhere, "never granted");
+        assert_eq!(both("DLG-099"), Provenance::Elsewhere, "no such delegation");
+
+        // DLG-001 granted by hand into the file and committed without kanbanr's trailer.
+        let mut d = load(&store, "demo").unwrap();
+        d.delegations[0].granted = d.delegations[1].granted.clone();
+        std::fs::write(dir.join(&rel), crate::yaml::to_string(&d).unwrap()).unwrap();
+        assert!(crate::git::commit_local(&dir, "by hand"));
+        assert_eq!(both("DLG-001"), Provenance::Elsewhere, "granted by hand");
+        assert_eq!(both("DLG-002"), Provenance::ThroughKanbanr);
+
+        // A history that cannot be read.
+        std::fs::rename(dir.join(".git"), dir.join(".git-away")).unwrap();
+        let shared = grant_provenance(&store, "demo", "DLG-002");
+        assert!(matches!(shared, Provenance::Unverifiable(_)), "{shared:?}");
+        assert_eq!(shared, grant_provenance_unshared(&dir, &rel, "DLG-002"));
+        std::fs::rename(dir.join(".git-away"), dir.join(".git")).unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 

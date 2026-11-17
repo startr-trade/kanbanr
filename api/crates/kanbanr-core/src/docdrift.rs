@@ -1463,6 +1463,13 @@ pub fn drift_ctx(store: &Store, project: &str, codes: &[&str], repo: &Path) -> R
     let adrs = crate::adr::list(store, project)?;
     let docs = read_docs(store, project)?;
     let data_dir = store.data_dir().to_path_buf();
+    #[cfg(test)]
+    let history = if git::shared_off() {
+        None
+    } else {
+        git::path_history(&data_dir).ok()
+    };
+    #[cfg(not(test))]
     let history = git::path_history(&data_dir).ok();
     let dirty = git::dirty_paths(&data_dir);
     let records = prepared::read_all(store, project).unwrap_or_default();

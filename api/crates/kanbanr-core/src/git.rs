@@ -1303,6 +1303,23 @@ pub fn path_history_walks() -> u64 {
     PATH_HISTORY_WALKS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+// A test switch: with it on, every shared read of the board's history is bypassed on this thread,
+// so the answers can be compared with the unshared ones (DEF-106).
+#[cfg(test)]
+thread_local! {
+    static SHARED_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_shared_off(off: bool) {
+    SHARED_OFF.with(|c| c.set(off));
+}
+
+#[cfg(test)]
+pub(crate) fn shared_off() -> bool {
+    SHARED_OFF.with(std::cell::Cell::get)
+}
+
 /// The walks run by this thread, so a test is not counted against by the others running beside it.
 #[cfg(test)]
 pub(crate) fn path_history_walks_here() -> u64 {
