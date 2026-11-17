@@ -113,6 +113,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
+  unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
+  the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
+  listed under a path that was moved is judged at its path today, and a name that is no file says so
+  (DEF-105).
 - The monitor meets WCAG 2.1 AA contrast in both themes, draws no text under 13 px, always shows
   the keyboard focus ring, has one h1 per page and headings on cards and columns, and writes 'Live'
   or 'Reconnecting…' beside its live dot (DEF-082).
