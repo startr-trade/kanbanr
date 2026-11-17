@@ -453,6 +453,45 @@ pub struct Status {
     pub skill_installed: bool,
     /// Per event: the registered kanbanr command, if any, and whether its script exists.
     pub hooks: Vec<Value>,
+    /// What a `PreToolUse` hook on `AskUserQuestion` in this settings file means for decisions
+    /// taken in the conversation (FTR-035): a warning for a hook that can answer for the person,
+    /// a note for the walkthrough's own. Empty when there is none.
+    pub ask_user_question: Vec<String>,
+}
+
+/// The command a walkthrough run project registers on `AskUserQuestion` (FTR-037).
+const WALKTHROUGH_ANSWER: &str = "kanbanr walkthrough answer";
+
+/// One line per `PreToolUse` hook on `AskUserQuestion` in `settings` (FTR-035): such a hook can
+/// answer the person's question through `updatedInput`, so a conversation decision made while one
+/// is registered gets no pass. The walkthrough's own hook is named, not warned of.
+fn ask_user_question_lines(settings: &Value) -> Vec<String> {
+    settings["hooks"]["PreToolUse"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|group| {
+            group["matcher"]
+                .as_str()
+                .is_some_and(|m| m.split('|').any(|t| t.trim() == "AskUserQuestion"))
+        })
+        .flat_map(|group| group["hooks"].as_array().into_iter().flatten())
+        .filter_map(|h| h["command"].as_str())
+        .map(|command| {
+            if command.trim() == WALKTHROUGH_ANSWER {
+                format!(
+                    "AskUserQuestion is answered by `{WALKTHROUGH_ANSWER}` (a walkthrough run \
+                     project); no pass is made here"
+                )
+            } else {
+                format!(
+                    "a PreToolUse hook on AskUserQuestion (`{}`) can answer questions for the \
+                     person; a conversation decision made while it is registered gets no pass",
+                    command.trim()
+                )
+            }
+        })
+        .collect()
 }
 
 /// What is registered in `settings_dir`, checked against the scripts in `scripts`.
@@ -487,6 +526,7 @@ pub fn status_in(settings_dir: &Path, scripts: &Path) -> anyhow::Result<Status> 
                 })
             }))
             .collect(),
+        ask_user_question: ask_user_question_lines(&settings),
     })
 }
 
@@ -738,6 +778,43 @@ mod tests {
             .collect();
         assert_eq!(starts.len(), 1, "stale entry replaced, not kept: {v}");
         assert!(!starts[0].starts_with("/old/place"));
+    }
+
+    /// FTR-035 R-2: `hooks status` warns of a `PreToolUse` hook on AskUserQuestion that could
+    /// answer for the person, names the walkthrough's own without warning, and says nothing for a
+    /// settings file with neither.
+    #[test]
+    fn status_warns_of_a_pre_tool_use_hook_on_ask_user_question_but_not_the_walkthroughs() {
+        let status = |settings: &Value| {
+            let dir = temp_claude_dir(true);
+            std::fs::write(settings_path(&dir), settings.to_string()).unwrap();
+            status_in(&dir, &scripts_dir(&dir))
+                .unwrap()
+                .ask_user_question
+        };
+        let other = json!({"hooks": {"PreToolUse": [
+            {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "auto-answer --yes"}]},
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "kanbanr git guard"}]}
+        ]}});
+        let lines = status(&other);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("`auto-answer --yes`"), "{lines:?}");
+        assert!(lines[0].contains("can answer questions for the person"));
+        assert!(lines[0].contains("gets no pass"));
+
+        let lines = status(&walkthrough_project_settings());
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("answered by `kanbanr walkthrough answer`"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].contains("can answer questions for the person"));
+
+        let neither = json!({"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "kanbanr git guard"}]}
+        ]}});
+        assert!(status(&neither).is_empty());
+        assert!(status(&json!({})).is_empty());
     }
 
     /// FTR-035 R-1: install registers the AskUserQuestion hook that makes a pass from the person's

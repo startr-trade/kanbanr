@@ -3436,6 +3436,9 @@ fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
                     None => println!("{event}: not registered"),
                 }
             }
+            for line in &st.ask_user_question {
+                println!("AskUserQuestion: {line}");
+            }
         }
     }
     Ok(())
@@ -4291,6 +4294,44 @@ fn run_claude_permissions(cli: &Cli, client: &Backend, write: bool) -> anyhow::R
 /// The decision is **mechanical**: a path, and whether a board is active. It never reads the file
 /// and never weighs the charter's prose. A guard that has to interpret is a guard that misfires,
 /// and one that misfires gets turned off (ADR-0004).
+/// Why a Write or Edit of `target` is refused to every caller, or `None` (FTR-035): a file in the
+/// board's pass folder (`passes`), which only kanbanr's hook writes, and a Claude Code settings
+/// file (`.claude/settings.json` or `.claude/settings.local.json` of any project, or
+/// `settings.json` in the user's Claude config dir `config_dir`), where a registered PreToolUse
+/// hook could answer a question for the person. A mechanical test of the path, never of content.
+fn protected_file_refusal(
+    target: &Path,
+    passes: &Path,
+    config_dir: Option<&Path>,
+) -> Option<String> {
+    let target = project::normalize(target);
+    if target.starts_with(project::normalize(passes)) {
+        return Some(
+            "refused: a pass is the person's answer, written only by kanbanr's hook from the \
+             question the person answered; a verdict is recorded with `--pass`, never by writing \
+             one."
+                .to_string(),
+        );
+    }
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let parent = target.parent();
+    let project_settings = matches!(name, "settings.json" | "settings.local.json")
+        && parent
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == ".claude");
+    let user_settings = name == "settings.json"
+        && config_dir.is_some_and(|c| parent.is_some_and(|p| p == project::normalize(c)));
+    if project_settings || user_settings {
+        return Some(
+            "refused: Claude Code's settings decide which hooks answer questions for the person, \
+             so the person edits them by hand. To add an allow rule for a kanbanr command, run \
+             `kanbanr claude permissions --write`."
+                .to_string(),
+        );
+    }
+    None
+}
+
 fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     let path = payload["tool_input"]["file_path"]
@@ -4376,6 +4417,22 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             );
             return Ok(());
         }
+    }
+    // A pass and Claude Code's settings are kanbanr's and the person's, whoever edits (FTR-035).
+    if let Some(why) = protected_file_refusal(
+        &here.join(path),
+        &kanbanr_core::passes::dir(client.store()),
+        kanbanr_core::claude::claude_config_dir().as_deref(),
+    ) {
+        println!(
+            "{}",
+            json!({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": why,
+            }})
+        );
+        return Ok(());
     }
     // A scope governs the agent it was issued to, never the coordinator (DEF-027).
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
@@ -5441,7 +5498,11 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
             monitor_url(),
             urlencode_segment(project.as_deref().unwrap_or("<project>"))
         );
-        if let Some(why) = verdict_refusal(command, &review_url, caller) {
+        let mode = client
+            .zip(project.as_deref())
+            .and_then(|(c, p)| kanbanr_core::decisions::load(c.store(), p).ok())
+            .map(|d| d.mode());
+        if let Some(why) = verdict_refusal(command, &review_url, caller, mode) {
             deny(why);
             return Ok(());
         }
@@ -5541,6 +5602,10 @@ fn names_baseline_file(word: &str) -> bool {
     }
 }
 
+/// Why Claude may not write a pass (FTR-035).
+const PASS_REFUSAL: &str = "refused: a pass is the person's answer, written only by kanbanr's \
+                            hook: read the folder, never change it.";
+
 /// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
 /// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
 /// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
@@ -5552,6 +5617,7 @@ fn verdict_refusal(
     command: &str,
     review_url: &str,
     caller: kanbanr_core::agentscope::Caller,
+    mode: Option<kanbanr_core::decisions::Mode>,
 ) -> Option<String> {
     let commands = simple_commands(command);
     let refused = |why: &str| {
@@ -5590,6 +5656,17 @@ fn verdict_refusal(
             "decisions.yaml is the person's choice of where decisions are taken, written only by \
              kanbanr: read it, never change it.",
         );
+    }
+    // A pass is the person's answer, made by the hook alone: reading the folder is fine, anything
+    // else is not (FTR-035).
+    if commands.iter().any(|(env, words)| {
+        env.iter()
+            .chain(words)
+            .any(|w| w.replace('\\', "/").contains("kanbanr/passes"))
+            && !reader(words)
+            && words.first().map(|f| f.rsplit('/').next().unwrap_or(f)) != Some("ls")
+    }) {
+        return Some(PASS_REFUSAL.to_string());
     }
     // The baseline and the packs a project follows likewise (FTR-033).
     if commands.iter().any(|(env, words)| {
@@ -5647,6 +5724,13 @@ fn verdict_refusal(
             }
         }
         let rest = &words[1..];
+        if matches!(path.as_slice(), ["decisions", "heard"]) {
+            return Some((
+                "refused: a pass is made by Claude Code's hook from the person's answer, never by \
+                 Claude: ask with `kanbanr decisions question <approve|ratify|signoff> <CODE>` and \
+                 let the hook answer."
+            ).to_string());
+        }
         if matches!(path.as_slice(), ["decisions", "mode" | "grant" | "review"]) {
             return refused(
                 "the decision mode, granting a delegation and reviewing a delegated decision are \
@@ -5656,10 +5740,15 @@ fn verdict_refusal(
         let Some(verdict) = kanbanr_core::origin::verdict_of_command(&path, rest) else {
             continue;
         };
-        // Under a delegation, core decides; only the coordinator acts under one (FTR-028).
-        if rest
+        // Under a delegation or a pass, core decides; only the coordinator acts under one
+        // (FTR-028, FTR-035).
+        let passed = rest
             .iter()
-            .any(|w| w == "--under" || w.starts_with("--under="))
+            .any(|w| w == "--pass" || w.starts_with("--pass="));
+        if (passed
+            || rest
+                .iter()
+                .any(|w| w == "--under" || w.starts_with("--under=")))
             && matches!(
                 verdict,
                 kanbanr_core::origin::Verdict::Approve
@@ -5668,10 +5757,13 @@ fn verdict_refusal(
             )
         {
             if caller == kanbanr_core::agentscope::Caller::Agent {
-                return refused(
+                return refused(if passed {
+                    "only the coordinator records the person's answer, never a sub-agent: report \
+                     it to the coordinator."
+                } else {
                     "only the coordinator acts under a delegation, never a sub-agent: report it \
-                     to the coordinator.",
-                );
+                     to the coordinator."
+                });
             }
             continue;
         }
@@ -5682,6 +5774,21 @@ fn verdict_refusal(
         ) else {
             continue;
         };
+        // In conversation mode an item verdict is asked in the conversation, not on the page.
+        let item_verb = match verdict {
+            kanbanr_core::origin::Verdict::Approve => Some("approve <CODE>"),
+            kanbanr_core::origin::Verdict::Ratify => Some("ratify <CODE>"),
+            kanbanr_core::origin::Verdict::Signoff => Some("signoff <CODE> <NAME>"),
+            _ => None,
+        };
+        if mode == Some(kanbanr_core::decisions::Mode::Conversation)
+            && let Some(verb) = item_verb
+        {
+            return Some(format!(
+                "refused: {why} This project takes decisions in the conversation: ask with \
+                 `kanbanr decisions question {verb}`, then record the answer with `--pass`."
+            ));
+        }
         let page = if verdict.on_releases_page() {
             match review_url.strip_suffix("/review") {
                 Some(base) => format!("{base}/releases"),
@@ -17313,15 +17420,21 @@ mod tests {
             "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
             "kanbanr gate record v1 smoke --result pass",
         ] {
-            let why = verdict_refusal(refused, url, kanbanr_core::agentscope::Caller::Coordinator)
-                .unwrap_or_else(|| panic!("passed: {refused}"));
+            let why = verdict_refusal(
+                refused,
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator,
+                None,
+            )
+            .unwrap_or_else(|| panic!("passed: {refused}"));
             assert!(why.contains("http://h:1/p/p/"), "{why}");
         }
         assert!(
             verdict_refusal(
                 "kanbanr release cut v1",
                 url,
-                kanbanr_core::agentscope::Caller::Coordinator
+                kanbanr_core::agentscope::Caller::Coordinator,
+                None
             )
             .unwrap()
             .contains("/p/p/releases")
@@ -17330,7 +17443,8 @@ mod tests {
             verdict_refusal(
                 "kanbanr gate record v1 smoke",
                 url,
-                kanbanr_core::agentscope::Caller::Coordinator
+                kanbanr_core::agentscope::Caller::Coordinator,
+                None
             )
             .unwrap()
             .contains("/p/p/releases")
@@ -17350,14 +17464,25 @@ mod tests {
             "git commit -m \"kanbanr approve\"",
         ] {
             assert!(
-                verdict_refusal(allowed, url, kanbanr_core::agentscope::Caller::Coordinator)
-                    .is_none(),
+                verdict_refusal(
+                    allowed,
+                    url,
+                    kanbanr_core::agentscope::Caller::Coordinator,
+                    None
+                )
+                .is_none(),
                 "refused: {allowed}"
             );
         }
         let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
         assert!(
-            verdict_refusal(&heredoc, url, kanbanr_core::agentscope::Caller::Coordinator).is_none()
+            verdict_refusal(
+                &heredoc,
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator,
+                None
+            )
+            .is_none()
         );
     }
 
@@ -17370,7 +17495,7 @@ mod tests {
         let url = "http://h:1/p/p/review";
         let c = Caller::Coordinator;
         assert!(
-            verdict_refusal("kanbanr baseline accept REV-001", url, c)
+            verdict_refusal("kanbanr baseline accept REV-001", url, c, None)
                 .unwrap()
                 .contains("/p/p/baseline")
         );
@@ -17382,7 +17507,7 @@ mod tests {
             "cp mine.yaml projects/p/packs/core.yaml",
         ] {
             assert!(
-                verdict_refusal(refused, url, c).is_some(),
+                verdict_refusal(refused, url, c, None).is_some(),
                 "passed: {refused}"
             );
         }
@@ -17396,7 +17521,7 @@ mod tests {
             "echo x > my-baseline.yaml.bak",
         ] {
             assert!(
-                verdict_refusal(allowed, url, c).is_none(),
+                verdict_refusal(allowed, url, c, None).is_none(),
                 "refused: {allowed}"
             );
         }
@@ -17416,7 +17541,7 @@ mod tests {
         let url = "http://h:1/p/p/review";
         let c = Caller::Coordinator;
         assert!(
-            verdict_refusal("kanbanr catalog baseline accept", url, c)
+            verdict_refusal("kanbanr catalog baseline accept", url, c, None)
                 .unwrap()
                 .contains("/p/p/review?group=system-baseline")
         );
@@ -17427,7 +17552,7 @@ mod tests {
             "echo x > projects/p/system-baseline.yaml",
         ] {
             assert!(
-                verdict_refusal(refused, url, c).is_some(),
+                verdict_refusal(refused, url, c, None).is_some(),
                 "passed: {refused}"
             );
         }
@@ -17441,7 +17566,7 @@ mod tests {
             "echo x > my-system-baseline.yaml.bak",
         ] {
             assert!(
-                verdict_refusal(allowed, url, c).is_none(),
+                verdict_refusal(allowed, url, c, None).is_none(),
                 "refused: {allowed}"
             );
         }
@@ -17478,7 +17603,7 @@ mod tests {
             "kanbanr approve FTR-1",
         ] {
             assert!(
-                verdict_refusal(refused, url, c).is_some(),
+                verdict_refusal(refused, url, c, None).is_some(),
                 "passed: {refused}"
             );
         }
@@ -17493,7 +17618,7 @@ mod tests {
             "kanbanr signoff FTR-1 design-review --under DLG-001",
         ] {
             assert!(
-                verdict_refusal(allowed, url, c).is_none(),
+                verdict_refusal(allowed, url, c, None).is_none(),
                 "refused: {allowed}"
             );
         }
@@ -17501,11 +17626,156 @@ mod tests {
             "kanbanr signoff FTR-1 design-review --under DLG-001",
             url,
             Caller::Agent,
+            None,
         )
         .unwrap();
         assert!(why.contains("only the coordinator"), "{why}");
         // A delegation never covers a release verdict, so `--under` does not let it through.
-        assert!(verdict_refusal("kanbanr release cut v1 --under DLG-001", url, c).is_some());
+        assert!(verdict_refusal("kanbanr release cut v1 --under DLG-001", url, c, None).is_some());
+    }
+
+    /// FTR-035 R-2: a pass is made by the hook alone. The guard refuses `decisions heard` and any
+    /// write to the pass folder to every caller, `--pass` to a sub-agent, and in conversation mode
+    /// answers a bare verdict with the question to ask instead of the Review page.
+    #[test]
+    fn the_guard_refuses_claude_making_a_pass() {
+        use kanbanr_core::agentscope::Caller;
+        use kanbanr_core::decisions::Mode;
+        let url = "http://h:1/p/p/review";
+        for caller in [Caller::Coordinator, Caller::Agent] {
+            for refused in [
+                "kanbanr decisions heard",
+                "rtk kanbanr decisions heard",
+                "kanbanr --project p decisions heard",
+                "echo x > ../board/.git/kanbanr/passes/P-1.json",
+                "cp p.json ../board/.git/kanbanr/passes/P-2.json",
+                "rm ../board/.git/kanbanr/passes/P-2.json",
+            ] {
+                assert!(
+                    verdict_refusal(refused, url, caller, None).is_some(),
+                    "passed: {refused}"
+                );
+            }
+            for allowed in [
+                "kanbanr decisions question approve F-1",
+                "ls ../board/.git/kanbanr/passes",
+                "cat ../board/.git/kanbanr/passes/P-1.json",
+            ] {
+                assert!(
+                    verdict_refusal(allowed, url, caller, None).is_none(),
+                    "refused: {allowed}"
+                );
+            }
+        }
+        let why =
+            verdict_refusal("kanbanr decisions heard", url, Caller::Coordinator, None).unwrap();
+        assert!(why.contains("kanbanr decisions question"), "{why}");
+        // `--pass` is `--under`: the coordinator's, never an agent's.
+        let pass = "kanbanr approve F-1 --rev r --pass P-1";
+        assert!(verdict_refusal(pass, url, Caller::Coordinator, None).is_none());
+        let why = verdict_refusal(pass, url, Caller::Agent, None).unwrap();
+        assert!(why.contains("only the coordinator"), "{why}");
+        assert!(
+            verdict_refusal(
+                "kanbanr release cut v1 --pass P-1",
+                url,
+                Caller::Coordinator,
+                None
+            )
+            .is_some()
+        );
+        // In conversation mode a bare verdict is answered with the question, not the page.
+        let why = verdict_refusal(
+            "kanbanr approve F-1",
+            url,
+            Caller::Coordinator,
+            Some(Mode::Conversation),
+        )
+        .unwrap();
+        assert!(
+            why.contains("ask with `kanbanr decisions question approve"),
+            "{why}"
+        );
+        assert!(why.contains("--pass"), "{why}");
+        assert!(!why.contains("/p/p/review"), "{why}");
+        let why = verdict_refusal(
+            "kanbanr approve F-1",
+            url,
+            Caller::Coordinator,
+            Some(Mode::Monitor),
+        )
+        .unwrap();
+        assert!(why.contains("/p/p/review"), "{why}");
+        // A release verdict stays on its page in every mode.
+        let why = verdict_refusal(
+            "kanbanr release cut v1",
+            url,
+            Caller::Coordinator,
+            Some(Mode::Conversation),
+        )
+        .unwrap();
+        assert!(why.contains("/p/p/releases"), "{why}");
+    }
+
+    /// FTR-035 R-2: the Write|Edit guard refuses a file under the board's pass folder, whoever
+    /// writes; a path beside it is not touched.
+    #[test]
+    fn the_docs_guard_refuses_writing_a_pass() {
+        let base = std::env::temp_dir().join(format!("kanbanr-passguard-{}", std::process::id()));
+        let passes = base.join("board/.git/kanbanr/passes");
+        std::fs::create_dir_all(&passes).unwrap();
+        for file in [
+            passes.join("P-1.json"),
+            passes.join("../passes/P-2.json"),
+            passes.join("sub/P-3.json"),
+        ] {
+            let why = protected_file_refusal(&file, &passes, None)
+                .unwrap_or_else(|| panic!("passed: {}", file.display()));
+            assert!(why.contains("a pass is the person's answer"), "{why}");
+        }
+        for file in [
+            base.join("board/.git/kanbanr/other.json"),
+            base.join("board/.git/kanbanr/passes-note.txt"),
+            base.join("board/projects/p/notes.md"),
+        ] {
+            assert!(
+                protected_file_refusal(&file, &passes, None).is_none(),
+                "refused: {}",
+                file.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FTR-035 R-2 (Q4): the Write|Edit guard refuses Claude an edit to a Claude Code settings
+    /// file, project or user, and names `kanbanr claude permissions --write` as the way to add an
+    /// allow rule.
+    #[test]
+    fn the_docs_guard_refuses_claude_editing_claude_code_settings() {
+        let base = std::env::temp_dir().join(format!("kanbanr-setguard-{}", std::process::id()));
+        let passes = base.join("board/.git/kanbanr/passes");
+        let user = base.join("home/.claude");
+        for file in [
+            base.join("code/shop/.claude/settings.json"),
+            base.join("code/shop/.claude/settings.local.json"),
+            user.join("settings.json"),
+        ] {
+            let why = protected_file_refusal(&file, &passes, Some(&user))
+                .unwrap_or_else(|| panic!("passed: {}", file.display()));
+            assert!(why.contains("kanbanr claude permissions --write"), "{why}");
+        }
+        for file in [
+            base.join("code/shop/.claude/skills/x/SKILL.md"),
+            base.join("code/shop/settings.json"),
+            user.join("projects/x/settings.json"),
+            base.join("code/shop/src/main.rs"),
+        ] {
+            assert!(
+                protected_file_refusal(&file, &passes, Some(&user)).is_none(),
+                "refused: {}",
+                file.display()
+            );
+        }
     }
 
     /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only
@@ -17708,7 +17978,7 @@ mod tests {
         );
         assert!(skips_hooks(bare_commands[2]));
         assert!(!is_git_commit(bare_commands[3]));
-        assert!(verdict_refusal(bare_commands[3], url, Caller::Coordinator).is_some());
+        assert!(verdict_refusal(bare_commands[3], url, Caller::Coordinator, None).is_some());
         for bare in bare_commands {
             for wrapper in ["rtk ", "rtk proxy ", "env A=1 ", "sudo ", "time "] {
                 let wrapped = format!("{wrapper}{bare}");
@@ -17726,8 +17996,8 @@ mod tests {
                     "inline_message: {w}"
                 );
                 assert_eq!(
-                    verdict_refusal(w, url, Caller::Coordinator),
-                    verdict_refusal(bare, url, Caller::Coordinator),
+                    verdict_refusal(w, url, Caller::Coordinator, None),
+                    verdict_refusal(bare, url, Caller::Coordinator, None),
                     "verdict_refusal: {w}"
                 );
             }
@@ -17742,7 +18012,8 @@ mod tests {
             verdict_refusal(
                 "rtk proxy env A=1 kanbanr approve FTR-1",
                 url,
-                Caller::Coordinator
+                Caller::Coordinator,
+                None
             )
             .is_some()
         );
@@ -17759,7 +18030,8 @@ mod tests {
             verdict_refusal(
                 "env -u CLAUDECODE kanbanr approve FTR-1",
                 url,
-                Caller::Coordinator
+                Caller::Coordinator,
+                None
             )
             .is_some()
         );

@@ -19823,7 +19823,7 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
     let passes = data.join(".git/kanbanr/passes");
     assert!(
-        std::fs::read_dir(&passes).is_none_or_empty(),
+        is_empty_or_missing(&passes),
         "a declined answer wrote a pass"
     );
 
@@ -19883,14 +19883,9 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     assert!(why.contains("unknown, already used or expired"), "{why}");
 }
 
-trait EmptyDir {
-    fn is_none_or_empty(self) -> bool;
-}
-
-impl EmptyDir for std::io::Result<std::fs::ReadDir> {
-    fn is_none_or_empty(self) -> bool {
-        self.map(|mut d| d.next().is_none()).unwrap_or(true)
-    }
+/// Does the folder hold nothing, or not exist?
+fn is_empty_or_missing(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).map_or(true, |mut d| d.next().is_none())
 }
 
 /// FTR-035 R-2: `decisions question` is the board's one question, and only in conversation mode.
