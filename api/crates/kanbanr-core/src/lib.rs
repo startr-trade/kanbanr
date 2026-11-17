@@ -70,6 +70,7 @@ pub mod openapi;
 pub mod origin;
 pub mod overview;
 pub mod passes;
+pub mod picks;
 pub mod portfolio;
 pub mod position;
 pub mod prepared;
