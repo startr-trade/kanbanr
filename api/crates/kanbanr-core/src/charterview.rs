@@ -219,12 +219,14 @@ pub fn charter_progress(store: &Store, p: &str) -> Result<CharterProgress> {
     let charter = crate::charter::load(store, p)?;
     let releases = crate::releases::load(store, p)?;
     let lessons = crate::lessons::load(store, p)?;
+    let sprints = crate::sprints::load(store, p).unwrap_or_default();
     let board_rev = crate::git::head_commit(store.data_dir()).unwrap_or_default();
     Ok(charter_progress_on(
         &project,
         &charter,
         &releases,
         &lessons,
+        &sprints,
         &board_rev,
         &crate::now_rfc3339(),
     ))
@@ -235,24 +237,31 @@ pub(crate) fn charter_progress_on(
     project: &Project,
     charter: &Charter,
     releases: &[Release],
-    _lessons: &[Lesson],
+    lessons: &[Lesson],
+    sprints: &[crate::sprints::Sprint],
     board_rev: &str,
     now: &str,
 ) -> CharterProgress {
     let releases_on = project.config.cadence.releases;
-    let goals: Vec<GoalProgress> = charter
-        .goals
-        .iter()
-        .map(|g| GoalProgress {
-            facts: crate::overview::goal_facts(project, &g.id, &g.statement),
-            lessons: Vec::new(),
-        })
-        .collect();
     let route = if releases_on {
         route(project, releases)
     } else {
         Vec::new()
     };
+    let lesson_growth = lesson_growth(project, lessons, sprints, &route);
+    let goals: Vec<GoalProgress> = charter
+        .goals
+        .iter()
+        .map(|g| GoalProgress {
+            facts: crate::overview::goal_facts(project, &g.id, &g.statement),
+            lessons: lesson_growth
+                .rows
+                .iter()
+                .filter(|r| r.goals.contains(&g.id))
+                .map(|r| r.id.clone())
+                .collect(),
+        })
+        .collect();
     let marks = marks(project, charter, &route);
     let series = series(project, charter, &route);
     let finished = finished(project);
@@ -279,7 +288,7 @@ pub(crate) fn charter_progress_on(
         route,
         marks,
         series,
-        lessons: LessonGrowth::default(),
+        lessons: lesson_growth,
         wins,
         finished,
     }
@@ -443,9 +452,233 @@ fn finished(project: &Project) -> Vec<Finished> {
 
 /// True when `id` (`L-23`) occurs in `text` as a whole token: the byte before is not ASCII
 /// alphanumeric, `-` or `_`, and the byte after is not an ASCII digit.
-#[allow(dead_code)] // T2 uses it
-pub(crate) fn cites(_text: &str, _id: &str) -> bool {
-    todo!()
+pub(crate) fn cites(text: &str, id: &str) -> bool {
+    if id.is_empty() {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    text.match_indices(id).any(|(at, _)| {
+        let before_ok = at == 0 || {
+            let b = bytes[at - 1];
+            !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        };
+        let after_ok = bytes.get(at + id.len()).is_none_or(|b| !b.is_ascii_digit());
+        before_ok && after_ok
+    })
+}
+
+/// The lessons, counted, grouped by tag and by release cycle, each with where it was learned and
+/// cited.
+fn lesson_growth(
+    project: &Project,
+    lessons: &[Lesson],
+    sprints: &[crate::sprints::Sprint],
+    route: &[RouteStop],
+) -> LessonGrowth {
+    let mut rows: Vec<LessonRow> = lessons
+        .iter()
+        .map(|l| {
+            let retro_kind = if l.from_retro.is_empty() {
+                ""
+            } else if sprints.iter().any(|s| s.code == l.from_retro) {
+                "sprint"
+            } else if project.milestones.iter().any(|m| m.code == l.from_retro) {
+                "milestone"
+            } else {
+                ""
+            };
+            let verdicts = |v: &str| l.history.iter().filter(|j| j.verdict == v).count();
+            let mut cited_by: Vec<String> = project
+                .features
+                .iter()
+                .filter(|f| f.code != l.from_item && item_cites(f, &l.id))
+                .map(|f| f.code.clone())
+                .collect();
+            cited_by.sort();
+            LessonRow {
+                id: l.id.clone(),
+                lesson: l.lesson.clone(),
+                kind: l.kind,
+                status: l.status,
+                at: l.at.clone(),
+                confidence_now: l.confidence_now(),
+                in_force: l.surfaced(),
+                from_item: l.from_item.clone(),
+                from_retro: l.from_retro.clone(),
+                retro_kind: retro_kind.into(),
+                evidence: l.evidence.clone(),
+                tags: l.tags.clone(),
+                goals: l.goals.clone(),
+                affirmed: verdicts("affirmed"),
+                contradicted: verdicts("contradicted"),
+                cited_by,
+            }
+        })
+        .collect();
+    // The `kanbanr lessons` order: in force first, most believed first; ties by id.
+    rows.sort_by(|a, b| {
+        b.in_force
+            .cmp(&a.in_force)
+            .then(
+                b.confidence_now
+                    .partial_cmp(&a.confidence_now)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let in_force = rows.iter().filter(|r| r.in_force).count();
+    LessonGrowth {
+        in_force,
+        total: rows.len(),
+        retired: rows.len() - in_force,
+        themes: themes(&rows),
+        cycles: cycles(&rows, route),
+        rows,
+    }
+}
+
+/// Whether an item's specification or definition (statement and requirement texts) cites `id`.
+fn item_cites(f: &FeatureItem, id: &str) -> bool {
+    cites(&f.specification, id)
+        || f.definition.as_ref().is_some_and(|d| {
+            cites(&d.statement, id) || d.requirements.iter().any(|r| cites(&r.text, id))
+        })
+}
+
+/// One theme per tag (case folded, labelled as first written), largest first; the eight largest
+/// are kept, the rest join "other tags", and lessons without a tag form "untagged".
+fn themes(rows: &[LessonRow]) -> Vec<Theme> {
+    let mut by_tag: Vec<Theme> = Vec::new();
+    let mut untagged = Vec::new();
+    for r in rows {
+        if r.tags.is_empty() {
+            untagged.push(r.id.clone());
+        }
+        for tag in &r.tags {
+            let key = tag.to_lowercase();
+            match by_tag.iter_mut().find(|t| t.key == key) {
+                Some(t) => {
+                    if !t.lessons.contains(&r.id) {
+                        t.lessons.push(r.id.clone());
+                    }
+                }
+                None => by_tag.push(Theme {
+                    key,
+                    label: tag.clone(),
+                    lessons: vec![r.id.clone()],
+                }),
+            }
+        }
+    }
+    by_tag.sort_by(|a, b| {
+        b.lessons
+            .len()
+            .cmp(&a.lessons.len())
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    let mut out: Vec<Theme> = by_tag.drain(..by_tag.len().min(THEMES_KEPT)).collect();
+    if !by_tag.is_empty() {
+        let mut lessons: Vec<String> = Vec::new();
+        for t in by_tag {
+            for id in t.lessons {
+                if !lessons.contains(&id) {
+                    lessons.push(id);
+                }
+            }
+        }
+        // Keep the lessons in the table's order.
+        lessons.sort_by_key(|id| rows.iter().position(|r| &r.id == id));
+        out.push(Theme {
+            key: "other".into(),
+            label: "other tags".into(),
+            lessons,
+        });
+    }
+    if !untagged.is_empty() {
+        out.push(Theme {
+            key: "untagged".into(),
+            label: "untagged".into(),
+            lessons: untagged,
+        });
+    }
+    out
+}
+
+/// Lessons recorded per release cycle, or per calendar month without releases, cumulative.
+/// Retired lessons count: the learning happened.
+fn cycles(rows: &[LessonRow], route: &[RouteStop]) -> Vec<Cycle> {
+    let time = |s: &str| crate::report::parse_time(s);
+    let shipped: Vec<&RouteStop> = route
+        .iter()
+        .filter(|s| s.state == StopState::Shipped)
+        .collect();
+    let mut cycles: Vec<(String, String, usize)> = Vec::new();
+    if let Some(first) = shipped.first() {
+        cycles.push(("before".into(), format!("before {}", first.version), 0));
+        for s in shipped.iter().skip(1) {
+            cycles.push((s.version.clone(), s.version.clone(), 0));
+        }
+        let last = shipped.last().map_or("", |s| s.version.as_str());
+        cycles.push(("since".into(), format!("since {last}"), 0));
+        let ends: Vec<Option<f64>> = shipped.iter().map(|s| time(&s.shipped_at)).collect();
+        for r in rows {
+            // The first shipped stop on or after the lesson; none (or an unparsable date) is the
+            // last cycle.
+            let slot = time(&r.at)
+                .and_then(|at| ends.iter().position(|e| e.is_some_and(|e| e >= at)))
+                .unwrap_or(cycles.len() - 1);
+            cycles[slot].2 += 1;
+        }
+        // The trailing cycle is shown only when it holds something.
+        if cycles.last().is_some_and(|c| c.2 == 0) {
+            cycles.pop();
+        }
+    } else {
+        let months: Vec<Option<i32>> = rows.iter().map(|r| month_index(&r.at)).collect();
+        let (Some(lo), Some(hi)) = (
+            months.iter().flatten().min().copied(),
+            months.iter().flatten().max().copied(),
+        ) else {
+            if rows.is_empty() {
+                return Vec::new();
+            }
+            return vec![Cycle {
+                key: "undated".into(),
+                label: "undated".into(),
+                recorded: rows.len(),
+                cumulative: rows.len(),
+            }];
+        };
+        for m in lo..=hi {
+            let key = format!("{:04}-{:02}", m.div_euclid(12), m.rem_euclid(12) + 1);
+            cycles.push((key.clone(), key, 0));
+        }
+        for m in &months {
+            // An unparsable date falls in the last cycle.
+            let slot = m.map_or(cycles.len() - 1, |m| (m - lo) as usize);
+            cycles[slot].2 += 1;
+        }
+    }
+    let mut running = 0;
+    cycles
+        .into_iter()
+        .map(|(key, label, recorded)| {
+            running += recorded;
+            Cycle {
+                key,
+                label,
+                recorded,
+                cumulative: running,
+            }
+        })
+        .collect()
+}
+
+/// `year * 12 + month - 1` for the `YYYY-MM` that starts an RFC 3339 time.
+fn month_index(at: &str) -> Option<i32> {
+    let year: i32 = at.get(0..4)?.parse().ok()?;
+    let month: i32 = at.get(5..7)?.parse().ok()?;
+    ((1..=12).contains(&month) && at.get(4..5) == Some("-")).then_some(year * 12 + month - 1)
 }
 
 #[cfg(test)]
@@ -579,6 +812,35 @@ mod tests {
             charter,
             &releases,
             &[],
+            &[],
+            "abc1234",
+            "2026-11-17T10:00:00Z",
+        )
+    }
+
+    fn lesson(id: &str, at: &str, edit: impl FnOnce(&mut Lesson)) -> Lesson {
+        let mut l = Lesson {
+            id: id.into(),
+            lesson: format!("Lesson {id}"),
+            at: at.into(),
+            confidence: 0.9,
+            last_affirmed: crate::now_rfc3339(),
+            ..Default::default()
+        };
+        edit(&mut l);
+        l
+    }
+
+    fn read_with(store: &Store, charter: &Charter, lessons: &[Lesson]) -> CharterProgress {
+        let project = store.load("demo").unwrap();
+        let releases = crate::releases::load(store, "demo").unwrap();
+        let sprints = crate::sprints::load(store, "demo").unwrap();
+        charter_progress_on(
+            &project,
+            charter,
+            &releases,
+            lessons,
+            &sprints,
             "abc1234",
             "2026-11-17T10:00:00Z",
         )
@@ -871,5 +1133,209 @@ mod tests {
         assert!(charter_progress(&store, "nope").is_err());
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    /// FTR-076 R-6: the counts are the lessons list's: `kanbanr lessons` for in force and
+    /// `--all` for the total, with one retired and one decayed lesson.
+    #[test]
+    fn lesson_counts_match_the_lessons_list() {
+        let (store, dir) = board(false);
+        let all = vec![
+            lesson("L-1", "2026-10-01T00:00:00Z", |_| {}),
+            lesson("L-2", "2026-10-02T00:00:00Z", |l| {
+                l.status = LessonStatus::Retired;
+            }),
+            lesson("L-3", "2025-01-01T00:00:00Z", |l| {
+                l.last_affirmed = "2025-01-01T00:00:00Z".into();
+            }),
+            lesson("L-4", "2026-10-04T00:00:00Z", |l| l.confidence = 0.5),
+        ];
+        std::fs::write(
+            store.project_dir("demo").join("lessons.yaml"),
+            crate::yaml::to_string(&all).unwrap(),
+        )
+        .unwrap();
+        let p = charter_progress(&store, "demo").unwrap();
+        let surfaced = crate::lessons::surfaced(&store, "demo", None).unwrap();
+        let every = crate::lessons::load(&store, "demo").unwrap();
+        assert_eq!(p.lessons.in_force, surfaced.len());
+        assert_eq!(p.lessons.total, every.len());
+        assert_eq!(
+            (p.lessons.in_force, p.lessons.total, p.lessons.retired),
+            (2, 4, 2)
+        );
+        // In force first, most believed first; the retired and the decayed after.
+        let ids: Vec<&str> = p.lessons.rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids[..2], ["L-1", "L-4"]);
+        assert!(p.lessons.rows[..2].iter().all(|r| r.in_force));
+        assert!(p.lessons.rows[2..].iter().all(|r| !r.in_force));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-076 R-6: an id counts only as a whole token.
+    #[test]
+    fn a_citation_is_a_whole_token_never_a_substring() {
+        for no in ["L-23", "FL-2", "XL-2x", "a_L-2", "x-L-2"] {
+            assert!(!cites(no, "L-2"), "{no}");
+        }
+        for yes in [
+            "(L-2)",
+            "L-2.",
+            "L-2,",
+            "L-2",
+            "see L-2 here",
+            "lesson L-2: x",
+            "[L-2]",
+        ] {
+            assert!(cites(yes, "L-2"), "{yes}");
+        }
+        assert!(
+            cites("L-23 and L-2", "L-2"),
+            "a later whole token still counts"
+        );
+
+        let (store, dir) = board(false);
+        let source = item(&store, "Source", &["G-1"], &[None], None);
+        let citing = item(&store, "Cites", &["G-1"], &[None], None);
+        let near = item(&store, "Near miss", &["G-1"], &[None], None);
+        for (code, spec) in [
+            (&source, "applied L-2 itself"),
+            (&citing, "We follow L-2."),
+            (&near, "We follow L-23 only."),
+        ] {
+            let mut f = store.load("demo").unwrap().feature(code).unwrap().clone();
+            f.specification = spec.into();
+            store.persist_feature_for_test("demo", &f).unwrap();
+        }
+        let l = lesson("L-2", "2026-10-01T00:00:00Z", |l| {
+            l.from_item = source.clone()
+        });
+        let p = read_with(&store, &goals(&["G-1"]), &[l]);
+        assert_eq!(p.lessons.rows[0].cited_by, [citing]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-076 R-6: a lesson lands in the cycle of the first release shipped on or after it, and
+    /// the counts are cumulative.
+    #[test]
+    fn lessons_fall_into_the_release_cycle_they_were_learned_in() {
+        let (store, dir) = board(true);
+        write_releases(
+            &store,
+            &[
+                shipped("v0.1.0", "2026-10-01T09:00:00Z"),
+                shipped("v0.2.0", "2026-10-10T09:00:00Z"),
+            ],
+        );
+        let lessons = [
+            lesson("L-1", "2026-09-20T00:00:00Z", |_| {}),
+            lesson("L-2", "2026-10-05T00:00:00Z", |_| {}),
+            lesson("L-3", "2026-10-06T00:00:00Z", |_| {}),
+            lesson("L-4", "2026-10-20T00:00:00Z", |_| {}),
+            lesson("L-5", "not a time", |l| l.status = LessonStatus::Retired),
+        ];
+        let p = read_with(&store, &goals(&[]), &lessons);
+        let cycles: Vec<(&str, &str, usize, usize)> = p
+            .lessons
+            .cycles
+            .iter()
+            .map(|c| (c.key.as_str(), c.label.as_str(), c.recorded, c.cumulative))
+            .collect();
+        assert_eq!(
+            cycles,
+            [
+                ("before", "before v0.1.0", 1, 1),
+                ("v0.2.0", "v0.2.0", 2, 3),
+                ("since", "since v0.2.0", 2, 5),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        // Without releases: one cycle per month that holds a lesson, and the gaps between.
+        let (store, dir) = board(false);
+        let lessons = [
+            lesson("L-1", "2026-08-03T00:00:00Z", |_| {}),
+            lesson("L-2", "2026-10-09T00:00:00Z", |_| {}),
+            lesson("L-3", "2026-10-30T00:00:00Z", |_| {}),
+        ];
+        let p = read_with(&store, &goals(&[]), &lessons);
+        let months: Vec<(&str, usize, usize)> = p
+            .lessons
+            .cycles
+            .iter()
+            .map(|c| (c.key.as_str(), c.recorded, c.cumulative))
+            .collect();
+        assert_eq!(
+            months,
+            [("2026-08", 1, 1), ("2026-09", 0, 1), ("2026-10", 2, 3)]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-076 R-7: a goal carries the lessons that name it, and each row its goals, retro kind and
+    /// themes; the largest tags are kept, the rest fold, the untagged have their own theme.
+    #[test]
+    fn each_goal_carries_the_lessons_that_name_it() {
+        let (store, dir) = board(false);
+        store
+            .add_milestone("demo", "Wave", "", vec![], Some("MS-9".into()))
+            .unwrap();
+        std::fs::write(
+            store.project_dir("demo").join("sprints.yaml"),
+            crate::yaml::to_string(&vec![crate::sprints::Sprint {
+                code: "SP-1".into(),
+                start: "2026-10-01".into(),
+                end: "2026-10-10".into(),
+                ..Default::default()
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+        let mut lessons = vec![
+            lesson("L-1", "2026-10-01T00:00:00Z", |l| {
+                l.goals = vec!["G-1".into(), "G-2".into()];
+                l.tags = vec!["Testing".into(), "board".into()];
+                l.from_retro = "SP-1".into();
+            }),
+            lesson("L-2", "2026-10-02T00:00:00Z", |l| {
+                l.goals = vec!["G-1".into()];
+                l.tags = vec!["testing".into()];
+                l.from_retro = "MS-9".into();
+            }),
+            lesson("L-3", "2026-10-03T00:00:00Z", |_| {}),
+        ];
+        // Ten more distinct single-tag lessons push the smallest tags past the eight kept.
+        for n in 0..10 {
+            lessons.push(lesson(
+                &format!("L-{}", 10 + n),
+                "2026-10-04T00:00:00Z",
+                |l| {
+                    l.tags = vec![format!("tag{n:02}")];
+                },
+            ));
+        }
+        let p = read_with(&store, &goals(&["G-1", "G-2", "G-3"]), &lessons);
+        let of = |id: &str| p.goals.iter().find(|g| g.facts.id == id).unwrap();
+        assert_eq!(of("G-1").lessons, ["L-1", "L-2"]);
+        assert_eq!(of("G-2").lessons, ["L-1"]);
+        assert!(of("G-3").lessons.is_empty());
+        let row = |id: &str| p.lessons.rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row("L-1").goals, ["G-1", "G-2"]);
+        assert_eq!(row("L-1").retro_kind, "sprint");
+        assert_eq!(row("L-2").retro_kind, "milestone");
+        assert_eq!(row("L-3").retro_kind, "");
+
+        let keys: Vec<&str> = p.lessons.themes.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(keys.len(), THEMES_KEPT + 2, "{keys:?}");
+        assert_eq!(keys[0], "testing");
+        assert_eq!(
+            p.lessons.themes[0].label, "Testing",
+            "label as first written"
+        );
+        assert_eq!(p.lessons.themes[0].lessons, ["L-1", "L-2"]);
+        assert_eq!(keys[keys.len() - 2], "other");
+        assert_eq!(keys[keys.len() - 1], "untagged");
+        assert_eq!(p.lessons.themes[keys.len() - 1].lessons, ["L-3"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
