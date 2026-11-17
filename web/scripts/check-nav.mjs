@@ -44,8 +44,9 @@ const entries = NAV.flatMap((a) => a.entries.map((e) => ({ area: a.key, ...e, at
 {
   const problems = [];
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
-  // Detail pages are reached from an entry, not listed in the nav.
-  const detail = [/^feature\/:/, /^milestone\/:/, /^state\/:/, /^docs\/file\//, /^docs\/folder\//, /^ui(\/|$)/];
+  // Detail pages are reached from an entry, not listed in the nav. The repository docs pages
+  // (FTR-004) are reached from Docs, whose entry matches /repo.
+  const detail = [/^feature\/:/, /^milestone\/:/, /^state\/:/, /^docs\/file\//, /^docs\/folder\//, /^ui(\/|$)/, /^repo(\/|$)/];
   // An old URL kept as a redirect (`element: <Navigate …/>`, FTR-043's /schedule and /gantt) is not a page.
   const routes = [...main.matchAll(/path:\s*"p\/:project(?:\/([^"]*))?"(?:,\s*element:\s*<(\w+))?/g)]
     .filter((m) => m[2] !== "Navigate")
