@@ -276,6 +276,34 @@ write carries its agent and a trailer, so an unattributed change stands out in t
 A board that holds scopes is governed wherever it is, so setting `TMPDIR` does not make it look
 like a test board; only a board in the temporary directory that holds no scopes is exempt.
 
+## Agents per task
+
+An item's Design ends with its implementation tasks, and each task line says what it waits on,
+the files it writes (and reads, when that matters) and an estimate in agent-hours (FTR-060):
+
+```
+- **T3** `store.rs`: the task fields on add and edit. Depends on T2. Writes: `api/src/store.rs`, `api/src/batch.rs`. [sonnet, 2.5 h]
+```
+
+Once you approve the Design, Claude mirrors it into the item's todo-list with `kanbanr todo
+from-design <CODE> --apply`: new tasks are added and changed ones edited, in one commit; no task's
+state changes, and a task the Design no longer names stays on the list. Ask Claude what can run
+next, and it reads `kanbanr ready --tasks`: the tasks free to start, across items, and why each
+other one waits (a task it waits on, a file a running task is writing, its item not yet at its
+build stage). Ask for several agents at once and it takes `kanbanr ready --tasks --lanes 4`: up
+to four tasks that write no file in common, the critical path first. A file every item appends to,
+`CHANGELOG.md` by default, never holds two tasks apart.
+
+Each of those agents gets a scope for its one task, `kanbanr scope issue build <CODE> --task T3`,
+so several agents can build one item at once: each works on its own branch, made from the item
+branch (`feat/FTR-060-…--tl-001-t3`), and may set only its own task's state. kanbanr refuses the
+scope while the task waits on another, while a live task scope writes one of its files, or while
+an agent holds the whole item. A task with no files recorded runs alone within its item.
+
+The files a task records are kept true: `kanbanr scope drift`, `kanbanr git doctor` and the Stop
+hook name a task whose commits touched a file it did not record, and a finished task that never
+touched one it did. Claude corrects the task (`kanbanr task edit … --writes …`) or the work.
+
 ## Running several agents
 
 When Claude runs several build agents at once, each in its own worktree, their builds share one

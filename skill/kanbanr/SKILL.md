@@ -840,9 +840,20 @@ names:
 - the tests that prove it, by name, and the requirement each serves;
 - the tasks it depends on.
 
+Write each task in the form kanbanr reads (FTR-060), under a heading `Implementation tasks`: a
+top-level bullet `- **T<n>** …` whose line ends with `Depends on …` (`T2`, or `FTR-041 T1` for
+another item's task; `Depends on —` for none), `Writes: …` with every file it creates or changes
+(and `Reads: …` when a file it only reads matters), and the estimate in agent-hours in the trailing
+tag (`[sonnet, 2 h]`):
+
+    - **T3** `store.rs`: the task fields on add and edit. Test `store::tests::…` (R-1). Depends on T2. Writes: `api/src/store.rs`, `api/src/batch.rs`. [sonnet, 2.5 h]
+
 Leave nothing open inside a task. A question still undecided goes to the user before the design is
 signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
-handed out and tracked.
+handed out and tracked: once the Design is approved, `kanbanr todo from-design <CODE>` shows each
+task as new, changed or unchanged, and `--apply` writes them in one commit. It never changes a
+task's state and never deletes a task the Design no longer names; rerun it whenever the Design's
+task list changes.
 
 A project makes the section a condition of moving on with
 `spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
@@ -856,6 +867,17 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
 - Commit with `kanbanr commit`: it fills in `Refs:` from the branch.
 - Subagents take one task at a time from the item's todo-list, with the approved definition and
   that task as their brief, under a build scope issued for the item (next section).
+- **Run tasks in parallel where their files allow.** `kanbanr ready --tasks` lists the tasks free
+  to start across items (their dependencies Completed, their item at its build stage, no file in
+  common with a running task) and why each other one waits; `kanbanr ready --tasks --lanes N`
+  proposes up to N to start together, critical path first. Issue one task scope per lane,
+  `kanbanr scope issue build <CODE> --task T<n>`: each agent works on its own task branch from the
+  item branch and may set only its own task's state. Install kanbanr 0.8.0 before issuing task
+  scopes: an older binary reads one as covering the whole item. A task with no `writes` runs alone
+  within its item, so record them.
+- **Keep footprints true.** `kanbanr scope drift` (and `git doctor`, the Stop hook) names a task
+  whose commits touched a file it does not record, and a Completed task that never touched one it
+  does. Correct the task (`kanbanr task edit <CODE> <TL> <T> --writes …`) or the work, at once.
 - Never commit on main or on a line of integration (the hooks refuse), and never push.
 - **Plan agent work in agent-hours, never calendar days.** Size each task in agent-hours
   (`kanbanr task add … --estimate 1.5h`), never an item in days. To say how long work takes, quote
@@ -890,6 +912,7 @@ To walk a process through, an agent runs `kanbanr --data-dir $TMPDIR/walk init �
 and prints its brief:
 
     kanbanr scope issue <design|build> <CODE>      # --for 8h by default, 72h at most; --note "T1–T4"
+    kanbanr scope issue build <CODE> --task T3     # one task, on its own branch (FTR-060)
 
 Then:
 - start the agent with `isolation: worktree`, design agents included: a scope binds to the agent's
