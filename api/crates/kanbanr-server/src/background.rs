@@ -938,6 +938,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&code);
     }
 
+    /// A runner that, when it runs, records its place in a sequence and whether the memo already
+    /// held each warm route at its current stamp.
+    struct Witness {
+        st: AppState,
+        seq: AtomicUsize,
+        /// For each run: (its sequence number, every warm route hit in the memo).
+        seen: Mutex<Vec<(usize, bool)>>,
+    }
+
+    impl DriftRunner for Witness {
+        fn run(&self, _: &Store, project: &str, _: &Path) -> kanbanr_core::Result<Report> {
+            let n = self.seq.fetch_add(1, Ordering::SeqCst);
+            let warmed = warm_routes(project).iter().all(|path| {
+                let key = memo::canonical(path);
+                let stamp = memo::stamp_for(&self.st, &key);
+                self.st.memo.get(&key, &stamp).is_some()
+            });
+            self.seen.lock().unwrap().push((n, warmed));
+            Ok(report(0))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_pass_warms_the_summary_routes_before_drift() {
+        let (st, dir) = board("warm");
+        let code = code_repo("warm-code");
+        assert_eq!(
+            warm_routes("demo"),
+            vec!["/projects/demo/index".to_string()]
+        );
+        let key = memo::canonical("/projects/demo/index");
+        assert!(
+            st.memo.get(&key, &memo::stamp_for(&st, &key)).is_none(),
+            "the memo starts empty"
+        );
+        let witness = Arc::new(Witness {
+            st: st.clone(),
+            seq: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+        });
+        let bg = start(&st, witness.clone(), &code);
+        until("fresh", || {
+            bg.latest("demo", false).state == LatestState::Fresh
+        })
+        .await;
+        drop(bg);
+        assert!(
+            st.memo.get(&key, &memo::stamp_for(&st, &key)).is_some(),
+            "after a pass the memo holds the index at its current stamp"
+        );
+        let seen = witness.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.first(),
+            Some(&(0, true)),
+            "the first drift run started after the index was put in the memo: {seen:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&code);
+    }
+
     /// Every file under `dir`, relative.
     fn files(dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();

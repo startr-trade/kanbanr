@@ -30,6 +30,7 @@ jobs:
   fs:
     name: filesystem (dependencies, secrets, Dockerfile)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write

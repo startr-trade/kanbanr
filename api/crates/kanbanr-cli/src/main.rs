@@ -3680,6 +3680,33 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             );
             return Ok(());
         }
+        // The baseline and the packs a project follows are written by kanbanr only (FTR-033):
+        // `projects/<id>/baseline.yaml` and `projects/<id>/packs/<name>.yaml`.
+        let parent_is = |levels: usize, name: &str| {
+            let mut at = target.parent();
+            for _ in 1..levels {
+                at = at.and_then(Path::parent);
+            }
+            at.and_then(Path::file_name).is_some_and(|n| n == name)
+        };
+        let baseline_file = in_projects
+            && target
+                .file_name()
+                .is_some_and(|n| n == kanbanr_core::baseline::BASELINE_FILE);
+        let pack_file = parent_is(1, kanbanr_core::profile::APPLIED_DIR)
+            && parent_is(3, "projects")
+            && target.extension().is_some_and(|e| e == "yaml");
+        if target.starts_with(&board) && (baseline_file || pack_file) {
+            println!(
+                "{}",
+                json!({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": BASELINE_FILES_REFUSAL,
+                }})
+            );
+            return Ok(());
+        }
     }
     // A scope governs the agent it was issued to, never the coordinator (DEF-027).
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
@@ -4806,6 +4833,30 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Why the hook refuses an edit of a project's baseline or applied pack files (FTR-033).
+const BASELINE_FILES_REFUSAL: &str = "refused: baseline.yaml and packs/*.yaml are the project's \
+    engineering baseline and the packs it follows, written only by kanbanr: read them, never \
+    change them. Propose a revision with `kanbanr baseline propose`; the person accepts it on the \
+    Baseline page.";
+
+/// Does a shell word name a project's baseline file (`…/baseline.yaml`) or an applied pack
+/// (`…/packs/<name>.yaml`)? By path components, never a substring (L-46).
+fn names_baseline_file(word: &str) -> bool {
+    let parts: Vec<&str> = word
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty() && *s != ".")
+        .collect();
+    match parts.as_slice() {
+        [.., last] if *last == kanbanr_core::baseline::BASELINE_FILE => true,
+        [.., dir, last] => {
+            *dir == kanbanr_core::profile::APPLIED_DIR
+                && last.ends_with(".yaml")
+                && last.len() > ".yaml".len()
+        }
+        _ => false,
+    }
+}
+
 /// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
 /// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
 /// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
@@ -4856,6 +4907,12 @@ fn verdict_refusal(
              kanbanr: read it, never change it.",
         );
     }
+    // The baseline and the packs a project follows likewise (FTR-033).
+    if commands.iter().any(|(env, words)| {
+        env.iter().chain(words).any(|w| names_baseline_file(w)) && !reader(words)
+    }) {
+        return refused(BASELINE_FILES_REFUSAL.trim_start_matches("refused: "));
+    }
     // Who is calling is how core tells the person's terminal from Claude: a kanbanr command that
     // changes it is refused to the coordinator too (FTR-028).
     let runs_kanbanr = commands.iter().any(|(_, words)| {
@@ -4883,7 +4940,9 @@ fn verdict_refusal(
                 _ if w.starts_with('-') => {}
                 _ => {
                     path.push(w);
-                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate" | "decisions") {
+                    if path.len() == 2
+                        || !matches!(w, "adr" | "release" | "gate" | "decisions" | "baseline")
+                    {
                         break;
                     }
                 }
@@ -4928,6 +4987,12 @@ fn verdict_refusal(
         let page = if verdict.on_releases_page() {
             match review_url.strip_suffix("/review") {
                 Some(base) => format!("{base}/releases"),
+                None => review_url.to_string(),
+            }
+        } else if verdict == kanbanr_core::origin::Verdict::AcceptBaseline {
+            // A baseline revision waits on the Baseline page (FTR-033).
+            match review_url.strip_suffix("/review") {
+                Some(base) => format!("{base}/baseline"),
                 None => review_url.to_string(),
             }
         } else {
@@ -12076,6 +12141,10 @@ fn undo_release(
     if cli.json {
         return Ok(());
     }
+    // An adopted branch is kept (DEF-071).
+    if let Some(kept) = v["branch_kept"].as_str().filter(|k| !k.is_empty()) {
+        println!("{kept}");
+    }
     if let Some(branch) = v["branch_deleted"].as_str().filter(|b| !b.is_empty()) {
         let subjects: Vec<&str> = v["commits_removed"]
             .as_array()
@@ -12140,6 +12209,21 @@ fn promote_release(
     };
     if let Some(b) = v["branch_created"].as_str() {
         said.push_str(&format!("; created {b}"));
+    }
+    // An existing branch already at the base line's tip is recorded, not made (DEF-071).
+    if let Some(b) = v["branch_adopted"].as_str().filter(|b| !b.is_empty()) {
+        let line = v["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["does"].as_str())
+            .find_map(|d| {
+                d.strip_prefix(&format!("adopts {b}: it is at "))?
+                    .split_once("'s tip")
+            })
+            .map(|(line, _)| line.to_string())
+            .unwrap_or_else(|| "the base line".to_string());
+        said.push_str(&format!("; adopted {b} (it was already at {line}'s tip)"));
     }
     let main_moved = v["main_branch"].as_str();
     match (v["tagged"].as_str(), main_moved) {
@@ -13216,6 +13300,52 @@ mod tests {
         assert!(
             verdict_refusal(&heredoc, url, kanbanr_core::agentscope::Caller::Coordinator).is_none()
         );
+    }
+
+    /// FTR-033 R-3: the hook refuses `kanbanr baseline accept` and any write to a project's
+    /// baseline.yaml or packs/<name>.yaml, by path components; reading them, proposing and
+    /// withdrawing pass.
+    #[test]
+    fn the_guard_refuses_claude_accepting_or_editing_the_baseline() {
+        use kanbanr_core::agentscope::Caller;
+        let url = "http://h:1/p/p/review";
+        let c = Caller::Coordinator;
+        assert!(
+            verdict_refusal("kanbanr baseline accept REV-001", url, c)
+                .unwrap()
+                .contains("/p/p/baseline")
+        );
+        for refused in [
+            "kanbanr baseline accept REV-001",
+            "kanbanr --project p baseline accept REV-002 --rev abc",
+            "sed -i s/x/y/ ../board/projects/p/baseline.yaml",
+            "echo x > projects/p/packs/data.yaml",
+            "cp mine.yaml projects/p/packs/core.yaml",
+        ] {
+            assert!(
+                verdict_refusal(refused, url, c).is_some(),
+                "passed: {refused}"
+            );
+        }
+        for allowed in [
+            "kanbanr baseline show",
+            "kanbanr baseline propose --answers answers.yaml --item FTR-1",
+            "kanbanr baseline withdraw REV-001 --reason wrong",
+            "cat ../board/projects/p/baseline.yaml",
+            "git log -p -- projects/p/packs/data.yaml",
+            "sed -i s/x/y/ api/crates/kanbanr-core/profiles/starter/core.yaml",
+            "echo x > my-baseline.yaml.bak",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url, c).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        assert!(names_baseline_file("./projects/p/baseline.yaml"));
+        assert!(names_baseline_file("projects\\p\\packs\\web.yaml"));
+        assert!(!names_baseline_file("packs/.yaml"));
+        assert!(!names_baseline_file("system-baseline.yaml"));
+        assert!(!names_baseline_file("profiles/starter/web.yaml"));
     }
 
     /// FTR-028 R-2: the hook refuses Claude the decisions that are the person's own (the mode, a

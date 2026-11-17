@@ -312,6 +312,12 @@ const expectWhy = (name, cond, got) => {
     a.disabledWhy === `${NO_REPO} — run \`kanbanr release promote v0.3.0 production\` from the project folder`,
     a,
   );
+  a = releaseAction({ ...cut, ready: false, conditions: [...cut.conditions, untested], missing: [untested.fix] }, true);
+  expectWhy(
+    "an untested-only cut: how to accept, before the first missing thing",
+    !a.enabled && a.disabledWhy === "Tick 'Ship these unverified' below to cut",
+    a,
+  );
   a = releaseAction(base, true);
   expectWhy("a ready plan: nothing", a.enabled && a.disabledWhy === "", a);
   a = releaseAction(branchBlocked, false);
