@@ -116,6 +116,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The Review page says a grant cannot be checked and why": LOCAL,
             "The UI kit's accordion rows open on demand under a heading": LOCAL,
             "The UI kit's table sorts, filters and exports correctly": LOCAL,
+            "The UI kit's matrix, timeline and stepper draw their data correctly": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {
