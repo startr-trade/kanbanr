@@ -98,6 +98,10 @@ pub struct Release {
     /// stays in git; the release never ships.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_by: String,
+    /// What the cut saved of katalogr's views of the docs, or why it saved nothing (FTR-016). Empty
+    /// on a release cut before this existed, or one never tagged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<crate::katalogr::snapshot::ReleaseSnapshot>,
     /// Who cut the release, and from where (DEF-028). Empty on a release cut before origin existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shipped_by: String,
@@ -1133,6 +1137,35 @@ pub fn cut_as(
     origin: &str,
     accept_untested: &[String],
 ) -> Result<Cut> {
+    let mut cut = ship_by_cut(store, id, version, by, origin, accept_untested)?;
+    // The plain cut never tags, so there is no commit to snapshot: the release says so (FTR-016).
+    if cut.release.snapshot.is_none() && cut.release.tag_commit.is_empty() {
+        let record = crate::katalogr::snapshot::snapshot_at_tag(
+            store,
+            id,
+            version,
+            None,
+            "",
+            &crate::katalogr::snapshot::current_settings(),
+        );
+        let mut releases = load(store, id)?;
+        if let Some(r) = releases.iter_mut().find(|r| r.version == version) {
+            r.snapshot = Some(record);
+            cut.release = r.clone();
+            save(store, id, &releases)?;
+        }
+    }
+    Ok(cut)
+}
+
+fn ship_by_cut(
+    store: &Store,
+    id: &str,
+    version: &str,
+    by: &str,
+    origin: &str,
+    accept_untested: &[String],
+) -> Result<Cut> {
     let project = cadence_on(store, id)?;
     let shipping: Vec<String> = cut_preview(store, id, version)?
         .into_iter()
@@ -1588,6 +1621,9 @@ pub struct Promoted {
     /// What `pushed` was judged against, when a stage required it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<OriginState>,
+    /// At the tag: what katalogr's snapshot saved, or why it did not (FTR-016).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<crate::katalogr::snapshot::ReleaseSnapshot>,
 }
 
 /// The release preparation commit a promotion made (FEAT-212).
@@ -3708,6 +3744,15 @@ fn work_out(
         _ => None,
     };
     warnings.extend(delegated_waiting(store, id, version));
+    // At the tag: whether katalogr's views of the docs will be saved (FTR-016). Read-only.
+    if cut {
+        warnings.push(crate::katalogr::snapshot::cut_warning(
+            store,
+            id,
+            version,
+            &crate::katalogr::snapshot::current_settings(),
+        ));
+    }
     let plan = ReleasePlan {
         version: version.to_string(),
         from,
@@ -4526,6 +4571,7 @@ pub fn promote_with(
         main_moved: None,
         next: String::new(),
         origin: w.plan.origin.clone(),
+        snapshot: None,
     };
 
     // Back a stage: a decision someone made, so the reason is required (FEAT-183, Q2). Board only.
@@ -4672,6 +4718,27 @@ pub fn promote_with(
                 return Err(err);
             }
             saved = true;
+            // katalogr's views of the docs at the tagged commit, stored in this same board write
+            // (FTR-016). Whatever happens to it, the tag stands and the promotion goes on.
+            let mut tagged_now = load(store, id)?;
+            if let Some(r) = tagged_now.iter_mut().find(|r| r.version == version) {
+                let record = crate::katalogr::snapshot::snapshot_at_tag(
+                    store,
+                    id,
+                    version,
+                    repo,
+                    &r.tag_commit.clone(),
+                    &crate::katalogr::snapshot::current_settings(),
+                );
+                r.snapshot = Some(record.clone());
+                done.snapshot = Some(record);
+                if let Err(e) = save(store, id, &tagged_now) {
+                    crate::katalogr::snapshot::remove_snapshot_folder(store, id, version);
+                    let err = undo_all(repo, undo, e);
+                    let _ = save(store, id, &original);
+                    return Err(err);
+                }
+            }
             if !w.plan.ships {
                 done.release = load(store, id)?
                     .into_iter()
@@ -4710,7 +4777,14 @@ pub fn promote_with(
                 // What shipped unverified, as the person accepted at the cut (DEF-043).
                 let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
                 notes.push_str(&unverified);
-                if wrote || (w.patch && !forward.is_empty()) || !unverified.is_empty() {
+                // Where katalogr's views of the docs were saved at the cut (FTR-016).
+                let system_views = crate::katalogr::snapshot::system_views_section(&cut.release);
+                notes.push_str(&system_views);
+                if wrote
+                    || (w.patch && !forward.is_empty())
+                    || !unverified.is_empty()
+                    || !system_views.is_empty()
+                {
                     store.write_doc(id, &cut.release.notes_doc, &notes)?;
                 }
                 done.release = cut.release;
@@ -4718,6 +4792,9 @@ pub fn promote_with(
                 done.preview = w.plan.preview.clone();
             }
             Err(e) => {
+                if done.snapshot.as_ref().is_some_and(|s| s.is_saved()) {
+                    crate::katalogr::snapshot::remove_snapshot_folder(store, id, version);
+                }
                 let err = undo_all(repo, undo, e);
                 if saved {
                     let _ = save(store, id, &original);
@@ -5070,7 +5147,10 @@ pub fn settle_tagged(
     }
     let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
     cut.notes.push_str(&unverified);
-    if wrote || !unverified.is_empty() {
+    // The snapshot the cut saved is named in the notes wherever the release ships (FTR-016).
+    let system_views = crate::katalogr::snapshot::system_views_section(&cut.release);
+    cut.notes.push_str(&system_views);
+    if wrote || !unverified.is_empty() || !system_views.is_empty() {
         store.write_doc(id, &cut.release.notes_doc, &cut.notes)?;
     }
     Ok(Some(cut))
@@ -9409,13 +9489,25 @@ pub(crate) mod tests {
             )
             .unwrap()
         };
-        assert!(plan(None).warnings.is_empty(), "dated today");
+        // The cut also says whether katalogr's views will be saved (FTR-016); this test is about dates.
+        let about_dates = |p: &super::ReleasePlan| -> Vec<String> {
+            p.warnings
+                .iter()
+                .filter(|w| !w.contains("katalogr") && !w.contains("query block"))
+                .cloned()
+                .collect()
+        };
+        assert!(about_dates(&plan(None)).is_empty(), "dated today");
         let old = date_candidate(&repo, "2026-01-01");
         // Main held the release; it follows the stale commit, as it would have in time.
         coderepo::fast_forward(&repo, "main", &old).unwrap();
         let cut = plan(None);
-        assert!(cut.cut && cut.warnings.len() == 1, "{:?}", cut.warnings);
-        let said = &cut.warnings[0];
+        assert!(
+            cut.cut && about_dates(&cut).len() == 1,
+            "{:?}",
+            cut.warnings
+        );
+        let said = &about_dates(&cut)[0];
         assert!(
             said.contains("2026-01-01")
                 && said.contains(&today)
@@ -9436,7 +9528,7 @@ pub(crate) mod tests {
             saved.main_moved
         );
         assert!(saved.notes.text.contains(&format!("_Released {today}._")));
-        assert!(plan(None).warnings.is_empty(), "no longer stale");
+        assert!(about_dates(&plan(None)).is_empty(), "no longer stale");
         let again = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada").unwrap();
         assert_eq!(again.sha, saved.sha, "nothing to date");
 
@@ -11939,5 +12031,363 @@ pub(crate) mod tests {
         assert_eq!(done.branch_kept, "");
         assert!(!coderepo::branch_exists(&repo, "release/v1"));
         clean(&dir, &repo);
+    }
+    // ---- FTR-016: katalogr's snapshot at the tag ----
+
+    /// What a stub `katalogr` does, as a POSIX `sh` body: it gets `view snapshot --docs D --at A
+    /// --out O --json` and, like the real one, writes `O/index.json` and the view files.
+    #[cfg(unix)]
+    const STUB_GOOD: &str = r##"echo run >> "$(dirname "$0")/runs"
+cat > "$out/index.json" <<EOF
+{"schema":1,"positions":[{"repo":"shop","commit":"$at","dirty":null}],"repos":["shop","lib"],"blocks":[{"doc":"views.md","line":3,"source":"structure","view_id":"v1-aaaa"},{"doc":"views.md","line":9,"source":"cycles","view_id":"v1-bbbb"}]}
+EOF
+echo "# structure" > "$out/v1-aaaa.md"
+echo "# cycles" > "$out/v1-bbbb.md"
+"##;
+
+    /// Writes the code repository's own absolute path into a view.
+    #[cfg(unix)]
+    const STUB_LEAKS: &str = r##"cat > "$out/index.json" <<EOF
+{"schema":1,"repos":["shop"],"blocks":[{"doc":"views.md","line":3,"source":"structure","view_id":"v1-aaaa"}]}
+EOF
+echo "# structure of $PWD" > "$out/v1-aaaa.md"
+"##;
+
+    #[cfg(unix)]
+    const STUB_FAILS: &str = "echo 'katalogr: warming up' >&2\necho 'position unavailable: no context holds it (available: none)' >&2\nexit 6\n";
+
+    #[cfg(unix)]
+    const STUB_SLOW: &str = "exec sleep 30\n";
+
+    /// A stub `katalogr` in a private folder; the settings that find it.
+    #[cfg(unix)]
+    fn stub_settings(
+        tag: &str,
+        body: &str,
+        snapshot_secs: u64,
+    ) -> (PathBuf, crate::katalogr::Settings) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("kanbanr-stub-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("katalogr");
+        let script = format!(
+            "#!/bin/sh\nout=''\nat=''\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --out) out=\"$2\"; shift;;\n    --at) at=\"$2\"; shift;;\n  esac\n  shift\ndone\nmkdir -p \"$out\"\n{body}"
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let settings = crate::katalogr::Settings {
+            bin: bin.to_string_lossy().to_string(),
+            snapshot_secs,
+            ..crate::katalogr::Settings::from_env()
+        };
+        (dir, settings)
+    }
+
+    fn views_dir(store: &Store) -> PathBuf {
+        store
+            .project_dir("shop")
+            .join("docs")
+            .join("releases")
+            .join("v1")
+            .join("views")
+    }
+
+    /// FTR-016 R-7: the stage that tags saves katalogr's views into the board's docs and records
+    /// them on the release, whether or not the same promotion ships; a later ship appends the
+    /// "System views" section to the notes and runs katalogr no second time.
+    #[cfg(unix)]
+    #[test]
+    fn the_cut_stores_a_katalogr_snapshot_in_the_cut_commit() {
+        let (stub, settings) = stub_settings("cut", STUB_GOOD, 120);
+        // The tag stage ships too: one promotion tags, snapshots and ships.
+        let (store, dir, repo) = board_and_repo("ftr016-cut-ships");
+        go(&store, &repo, "candidate");
+        let cut = crate::katalogr::snapshot::with_test_settings(settings.clone(), || {
+            go(&store, &repo, "production")
+        });
+        let snap = cut.snapshot.clone().expect("a snapshot record");
+        assert_eq!(snap.state, "saved", "{snap:?}");
+        assert_eq!(snap.at, cut.release.tag_commit);
+        assert_eq!(snap.dir, "releases/v1/views");
+        assert_eq!(snap.repos, vec!["shop".to_string(), "lib".to_string()]);
+        assert_eq!((snap.blocks, snap.views), (2, 2));
+        assert_eq!(cut.release.snapshot.as_ref(), Some(&snap));
+        assert_eq!(
+            v1(&store).snapshot.as_ref(),
+            Some(&snap),
+            "saved on the board"
+        );
+        for f in ["index.json", "v1-aaaa.md", "v1-bbbb.md"] {
+            assert!(views_dir(&store).join(f).is_file(), "{f}");
+        }
+        let notes = store.read_doc("shop", &cut.release.notes_doc).unwrap();
+        assert!(notes.contains("## System views"), "{notes}");
+        assert!(
+            notes.contains("docs/releases/v1/views") && notes.contains("shop, lib"),
+            "{notes}"
+        );
+        clean(&dir, &repo);
+
+        // A stage follows the tag: the snapshot is taken at the tag; the ship appends the section.
+        let (store, dir, repo) = staged("ftr016-cut-then-ship", STAGED);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let tagged = crate::katalogr::snapshot::with_test_settings(settings.clone(), || {
+            go(&store, &repo, "tag")
+        });
+        assert_eq!(
+            tagged.snapshot.as_ref().map(|s| s.state.as_str()),
+            Some("saved")
+        );
+        assert_eq!(tagged.release.state, super::ReleaseState::Planned);
+        assert!(views_dir(&store).join("index.json").is_file());
+        let sha = v1(&store).tag_commit;
+        now_result(&store, &sha, true);
+        let shipped = crate::katalogr::snapshot::with_test_settings(settings, || {
+            super::promote(&store, "shop", "v1", None, "Ada", "all good", Some(&repo)).unwrap()
+        });
+        assert_eq!(shipped.release.state, super::ReleaseState::Shipped);
+        assert!(shipped.snapshot.is_none(), "no second snapshot");
+        let runs = std::fs::read_to_string(stub.join("runs")).unwrap();
+        assert_eq!(
+            runs.lines().count(),
+            2,
+            "one run per cut (two cuts here): {runs:?}"
+        );
+        let notes = store.read_doc("shop", &shipped.release.notes_doc).unwrap();
+        assert!(notes.contains("## System views"), "{notes}");
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(stub);
+    }
+
+    /// FTR-016 R-7: a release that waits on its tag workflow and is shipped by the recorded result
+    /// (`settle_tagged`) gets the section too.
+    #[cfg(unix)]
+    #[test]
+    fn a_release_shipped_by_a_passed_tag_workflow_names_its_system_views() {
+        let (stub, settings) = stub_settings("settle", STUB_GOOD, 120);
+        let (store, dir, repo) = staged("ftr016-settle", TAG_LAST);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        crate::katalogr::snapshot::with_test_settings(settings, || go(&store, &repo, "tag"));
+        let sha = v1(&store).tag_commit;
+        assert!(v1(&store).waits_on_tag());
+        let cut = record_and_settle(&store, &repo, "ci", &sha, true, &crate::now_rfc3339())
+            .expect("the pass ships it");
+        let notes = store.read_doc("shop", &cut.release.notes_doc).unwrap();
+        assert!(notes.contains("## System views"), "{notes}");
+        assert_eq!(
+            cut.release.snapshot.as_ref().map(|s| s.state.as_str()),
+            Some("saved")
+        );
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(stub);
+    }
+
+    /// FTR-016 R-8: with no katalogr the release is tagged and ships and says why there is no
+    /// snapshot; the plain cut, which never tags, says so too.
+    #[test]
+    fn a_cut_without_katalogr_ships_and_records_why_there_is_no_snapshot() {
+        let (store, dir, repo) = board_and_repo("ftr016-no-katalogr");
+        go(&store, &repo, "candidate");
+        let plan = plan_to(&store, &repo, "production");
+        assert!(
+            plan.warnings
+                .iter()
+                .any(|w| w == "katalogr is not installed: no system views are saved"),
+            "{:?}",
+            plan.warnings
+        );
+        let cut = go(&store, &repo, "production");
+        assert_eq!(cut.release.state, super::ReleaseState::Shipped);
+        assert_eq!(cut.tagged, "v1");
+        let snap = cut.snapshot.expect("a record, even when skipped");
+        assert_eq!(snap.state, "skipped");
+        assert!(
+            snap.reason.contains("katalogr is not installed"),
+            "{}",
+            snap.reason
+        );
+        assert_eq!(
+            snap.sentence(),
+            format!("no system views saved: {}", snap.reason)
+        );
+        assert_eq!(v1(&store).snapshot, Some(snap));
+        assert!(!views_dir(&store).exists());
+        let notes = store.read_doc("shop", &cut.release.notes_doc).unwrap();
+        assert!(!notes.contains("System views"), "{notes}");
+        clean(&dir, &repo);
+
+        // The plain cut never tags: nothing to snapshot, and the release says why.
+        let (store, dir, repo) = board_and_repo("ftr016-plain-cut");
+        let cut = super::cut(&store, "shop", "v1").unwrap();
+        let snap = cut.release.snapshot.expect("a record");
+        assert_eq!(snap.state, "skipped");
+        assert!(
+            snap.reason.contains("tag") && snap.reason.contains("project folder"),
+            "{}",
+            snap.reason
+        );
+        clean(&dir, &repo);
+
+        // And with no project folder at the tag step itself.
+        let (store, dir, repo) = board_and_repo("ftr016-no-repo");
+        let snap = crate::katalogr::snapshot::snapshot_at_tag(
+            &store,
+            "shop",
+            "v1",
+            None,
+            "",
+            &crate::katalogr::snapshot::current_settings(),
+        );
+        assert_eq!(snap.state, "skipped");
+        assert!(snap.reason.contains("tag") && snap.reason.contains("project folder"));
+        clean(&dir, &repo);
+    }
+
+    /// FTR-016 R-8: a snapshot that fails or runs past its time leaves the cut whole: the tag and
+    /// the shipment stand, the reason is recorded, and no partial folder is left in the docs.
+    #[cfg(unix)]
+    #[test]
+    fn a_snapshot_that_fails_or_times_out_leaves_the_cut_whole() {
+        for (name, body, secs, wants) in [
+            (
+                "fails",
+                STUB_FAILS,
+                120,
+                "position unavailable: no context holds it",
+            ),
+            ("slow", STUB_SLOW, 1, "timed out after 1 s"),
+        ] {
+            let (stub, settings) = stub_settings(name, body, secs);
+            let (store, dir, repo) = board_and_repo(&format!("ftr016-{name}"));
+            go(&store, &repo, "candidate");
+            let started = std::time::Instant::now();
+            let cut = crate::katalogr::snapshot::with_test_settings(settings, || {
+                go(&store, &repo, "production")
+            });
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(20),
+                "{name}"
+            );
+            assert_eq!(cut.release.state, super::ReleaseState::Shipped, "{name}");
+            assert!(
+                !cut.release.tag_commit.is_empty() && coderepo::tag_exists(&repo, "v1"),
+                "{name}"
+            );
+            let snap = cut.snapshot.expect("a record");
+            assert_eq!(snap.state, "skipped", "{name}");
+            assert!(snap.reason.contains(wants), "{name}: {}", snap.reason);
+            assert!(!views_dir(&store).exists(), "{name}: no partial folder");
+            assert!(
+                !std::env::temp_dir()
+                    .join(format!("kanbanr-snapshot-{}-v1", std::process::id()))
+                    .exists(),
+                "{name}: the temp folder is removed"
+            );
+            clean(&dir, &repo);
+            let _ = std::fs::remove_dir_all(stub);
+        }
+    }
+
+    /// FTR-016 R-9: a view that names an absolute path of this machine is never stored; a clean
+    /// snapshot lists the repos it names and holds no path of the code, docs or temp folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_stored_snapshot_holds_no_absolute_path_and_lists_its_repos() {
+        let (stub, settings) = stub_settings("leaks", STUB_LEAKS, 120);
+        let (store, dir, repo) = board_and_repo("ftr016-leak");
+        go(&store, &repo, "candidate");
+        let cut = crate::katalogr::snapshot::with_test_settings(settings, || {
+            go(&store, &repo, "production")
+        });
+        let snap = cut.snapshot.expect("a record");
+        assert_eq!(snap.state, "skipped");
+        assert!(snap.reason.contains("absolute path"), "{}", snap.reason);
+        assert!(!views_dir(&store).exists(), "nothing stored");
+        assert_eq!(cut.release.state, super::ReleaseState::Shipped);
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(stub);
+
+        let (stub, settings) = stub_settings("clean", STUB_GOOD, 120);
+        let (store, dir, repo) = board_and_repo("ftr016-clean");
+        go(&store, &repo, "candidate");
+        let cut = crate::katalogr::snapshot::with_test_settings(settings, || {
+            go(&store, &repo, "production")
+        });
+        let snap = cut.snapshot.expect("a record");
+        assert_eq!(snap.state, "saved", "{snap:?}");
+        assert_eq!(snap.repos, vec!["shop".to_string(), "lib".to_string()]);
+        let forbidden: Vec<String> = [
+            repo.clone(),
+            store.project_dir("shop").join("docs"),
+            std::env::temp_dir().join(format!("kanbanr-snapshot-{}-v1", std::process::id())),
+        ]
+        .iter()
+        .flat_map(|p| {
+            [
+                p.to_string_lossy().to_string(),
+                std::fs::canonicalize(p)
+                    .map(|r| r.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            ]
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+        let mut files = 0;
+        for entry in std::fs::read_dir(views_dir(&store)).unwrap() {
+            let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+            for f in &forbidden {
+                assert!(!text.contains(f.as_str()), "{f} in {text}");
+            }
+            files += 1;
+        }
+        assert_eq!(files, 3);
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(stub);
+    }
+
+    /// FTR-016: the plan at the cut says whether tagging saves system views, and says nothing at
+    /// a stage that does not tag.
+    #[cfg(unix)]
+    #[test]
+    fn the_cut_plan_says_whether_the_tag_saves_system_views() {
+        let (stub, settings) = stub_settings("warn", STUB_GOOD, 120);
+        let (store, dir, repo) = board_and_repo("ftr016-warn");
+        go(&store, &repo, "candidate");
+        let early = plan_to(&store, &repo, "test");
+        assert!(
+            !early.cut && !early.warnings.iter().any(|w| w.contains("katalogr")),
+            "{:?}",
+            early.warnings
+        );
+        let warnings = || {
+            crate::katalogr::snapshot::with_test_settings(settings.clone(), || {
+                plan_to(&store, &repo, "production").warnings
+            })
+        };
+        let none = warnings();
+        assert!(
+            none.iter()
+                .any(|w| w.starts_with("no query blocks in this project's docs")),
+            "{none:?}"
+        );
+        store
+            .write_doc(
+                "shop",
+                "views.md",
+                "# V\n\n```katalogr-query\nstructure\n```\n",
+            )
+            .unwrap();
+        let some = warnings();
+        assert!(
+            some.iter().any(|w| w.starts_with("katalogr found at ")
+                && w.contains("1 query block(s)")
+                && w.contains("docs/releases/v1/views")),
+            "{some:?}"
+        );
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(stub);
     }
 }

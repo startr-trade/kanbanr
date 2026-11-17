@@ -1139,6 +1139,51 @@ pub fn read_media_type(path: &str) -> &'static str {
     }
 }
 
+/// The two katalogr reads (FTR-016): `GET /projects/{p}/docs/views?path=` (a doc's query blocks
+/// asked of katalogr at the checkout's live position) and `GET /projects/{p}/katalogr` (what a
+/// client finds, and the position a doc would be asked at). `None` for any other path. Both only
+/// make outbound GETs to `settings.url` and write nothing; every failure on katalogr's side is a
+/// value in the answer, never an error. The daemon calls this with the settings its
+/// `--katalogr-url` names; `dispatch` with the environment's.
+pub fn katalogr_read(
+    store: &Store,
+    path: &str,
+    repo: Option<&std::path::Path>,
+    settings: &crate::katalogr::Settings,
+) -> Option<Result<String>> {
+    let (path_only, query) = match path.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (path, None),
+    };
+    let segs: Vec<&str> = path_only.split('/').filter(|s| !s.is_empty()).collect();
+    let run = |p: &str, docs: bool| -> Result<String> {
+        store.load_meta(p)?;
+        let client = crate::katalogr::client::Client::new(settings.clone());
+        if docs {
+            only_params(query, &["path"])?;
+            let doc = query_param(query, "path").unwrap_or_default();
+            let (position, _) = crate::katalogr::docviews::live_position(repo, p);
+            ser(&crate::katalogr::docviews::DocViews::load(
+                store,
+                p,
+                &doc,
+                position.as_deref(),
+                &client,
+            )?)
+        } else {
+            only_params(query, &[])?;
+            ser(&crate::katalogr::docviews::KatalogrStatus::load(
+                repo, p, &client,
+            ))
+        }
+    };
+    match segs.as_slice() {
+        ["projects", p, "docs", "views"] => Some(run(p, true)),
+        ["projects", p, "katalogr"] => Some(run(p, false)),
+        _ => None,
+    }
+}
+
 /// Apply a data operation against the store, returning the response body string. Reads and writes
 /// alike — the caller (e.g. the CLI's local backend) decides whether to commit afterwards based on
 /// the HTTP method.
@@ -1219,6 +1264,12 @@ fn dispatch_routes(
         ("GET", ["projects", p, "position"]) => {
             only_params(query, &[])?;
             ser(&crate::position::position_answer(position_repo(repo)?, p)?)
+        }
+        // A doc's katalogr query blocks asked at the live position, and the link's state
+        // (FTR-016): the same reads the daemon answers with its `--katalogr-url`.
+        ("GET", ["projects", _, "docs", "views"]) | ("GET", ["projects", _, "katalogr"]) => {
+            katalogr_read(store, path, repo, &crate::katalogr::Settings::from_env())
+                .unwrap_or_else(|| Err(CoreError::Unsupported("no such route".into())))
         }
         // The docs view at the live position or `at` (FTR-003): the answer's own bytes.
         ("GET", ["projects", p, "views", "docs"]) => {

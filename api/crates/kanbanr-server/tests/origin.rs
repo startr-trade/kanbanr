@@ -204,6 +204,7 @@ fn writes_on_a_non_local_bind_refuse_to_start() {
         true,
         None,
         false,
+        None,
     ));
     let text = format!(
         "{:#}",
@@ -232,6 +233,7 @@ fn a_read_only_monitor_binds_anywhere() {
             false,
             None,
             false,
+            None,
         ))
         .unwrap();
     });

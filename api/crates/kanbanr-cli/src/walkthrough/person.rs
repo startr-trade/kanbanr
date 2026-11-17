@@ -1661,6 +1661,7 @@ pub(crate) mod tests {
                 true,
                 None,
                 false,
+                None,
             ));
         });
         let url = format!("http://127.0.0.1:{port}");

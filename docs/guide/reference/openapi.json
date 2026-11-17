@@ -7794,6 +7794,10 @@
           "shipped_origin": {
             "type": "string"
           },
+          "snapshot": {
+            "$ref": "#/components/schemas/ReleaseSnapshot",
+            "description": "What the cut saved of katalogr's views of the docs, or why it saved nothing (FTR-016). Empty\non a release cut before this existed, or one never tagged."
+          },
           "stage": {
             "description": "Where the release is now, from `cadence.release_stages` (FEAT-183). Empty until first\npromoted: a release added before stages existed reads as \"not yet a candidate\".",
             "type": "string"
@@ -7834,6 +7838,61 @@
           "state",
           "items",
           "finished"
+        ],
+        "type": "object"
+      },
+      "ReleaseSnapshot": {
+        "description": "What a release's cut saved, or why it saved nothing. Kept in `releases.yaml` beside the tag.",
+        "properties": {
+          "at": {
+            "default": "",
+            "description": "The position the views were taken at: the tag's commit.",
+            "type": "string"
+          },
+          "blocks": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dir": {
+            "default": "",
+            "description": "The docs folder holding the views, e.g. `releases/v0.8.0/views`.",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "description": "Why it was skipped; empty when saved.",
+            "type": "string"
+          },
+          "repos": {
+            "default": [],
+            "description": "The repos the snapshot names, for the person to check before pushing a public board.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "default": "",
+            "description": "`saved` or `skipped`.",
+            "type": "string"
+          },
+          "views": {
+            "default": 0,
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "dir",
+          "at",
+          "repos",
+          "blocks",
+          "views",
+          "reason"
         ],
         "type": "object"
       },

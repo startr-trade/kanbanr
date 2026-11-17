@@ -78,6 +78,14 @@ pub async fn read_passthrough(
         },
     };
     let dpath = global_path.as_deref().unwrap_or(dpath);
+    // The katalogr reads ask the URL this daemon was given (`--katalogr-url`), not the
+    // environment's (FTR-016).
+    if let Some(answer) = dispatch::katalogr_read(store, dpath, repo, &st.katalogr) {
+        return match answer {
+            Ok(body) => ([("content-type", "application/json")], body).into_response(),
+            Err(e) => core_err(e).into_response(),
+        };
+    }
     // Labelled with what the route renders (FEAT-177): a diagram or a document is not JSON.
     match dispatch::dispatch_in(store, "GET", dpath, None, repo) {
         Ok(body) => ([("content-type", dispatch::read_media_type(dpath))], body).into_response(),
@@ -426,7 +434,8 @@ pub(crate) fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a 
 /// (FTR-048), and the Review page's group decision, which judges a row's
 /// blocks as the page does, and the page's group reads that judge them (FTR-038), query string
 /// aside, the position picker and the repository doc reads (FTR-004), and the project's doctor,
-/// which checks repository doc links at each item's position (FTR-004). (A write gets the repository from
+/// which checks repository doc links at each item's position (FTR-004), and the two katalogr
+/// reads, which ask at the checkout's live position (FTR-016). (A write gets the repository from
 /// `run_write` either way; the decide route is listed so the set says which routes read it.)
 pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
@@ -455,6 +464,8 @@ pub(crate) fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "repo-docs", "content"]
             | ["projects", _, "repo-docs", "raw"]
             | ["projects", _, "views", _]
+            | ["projects", _, "docs", "views"]
+            | ["projects", _, "katalogr"]
             | ["projects", _, "items"]
             | ["projects", _, "attention"]
             | ["projects", _, "overview"]

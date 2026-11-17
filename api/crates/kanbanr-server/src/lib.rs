@@ -77,6 +77,9 @@ pub struct AppState {
     /// The background worker (FTR-045): drift computed after each change, and warm summary reads.
     /// Set once the state is built, since the worker needs the state.
     pub background: Arc<OnceLock<Arc<background::Background>>>,
+    /// Where katalogr is asked for a doc's query blocks (FTR-016): the environment's settings,
+    /// with `--katalogr-url` over the URL. Nothing here is board config (ADR-0007).
+    pub katalogr: kanbanr_core::katalogr::Settings,
 }
 
 /// Run the view daemon until the process is stopped. `bind` like `127.0.0.1:8080`; `ui_dir` is the
@@ -91,12 +94,13 @@ pub async fn run(
     allow_writes: bool,
     code_repo: Option<(String, PathBuf)>,
 ) -> anyhow::Result<()> {
-    run_with(data_dir, bind, ui_dir, allow_writes, code_repo, false).await
+    run_with(data_dir, bind, ui_dir, allow_writes, code_repo, false, None).await
 }
 
 /// `run`, with `remote_writes`: the person passed `--allow-remote-writes`. With writes on, a bind
 /// other machines can reach is refused before anything starts unless that flag or
-/// `KANBANR_ALLOW_REMOTE_WRITES` accepts it (DEF-026).
+/// `KANBANR_ALLOW_REMOTE_WRITES` accepts it (DEF-026). `katalogr_url` is `--katalogr-url`: where
+/// the daemon asks katalogr, over `KANBANR_KATALOGR_URL` (FTR-016).
 pub async fn run_with(
     data_dir: PathBuf,
     bind: String,
@@ -104,9 +108,11 @@ pub async fn run_with(
     allow_writes: bool,
     code_repo: Option<(String, PathBuf)>,
     remote_writes: bool,
+    katalogr_url: Option<String>,
 ) -> anyhow::Result<()> {
     let checked = check_settings(&bind, allow_writes, remote_writes)?;
     std::fs::create_dir_all(data_dir.join("projects"))?;
+    let katalogr = katalogr_settings(katalogr_url.as_deref());
     serve(
         Boards::single(data_dir),
         bind,
@@ -116,8 +122,18 @@ pub async fn run_with(
         remote_writes,
         checked,
         false,
+        katalogr,
     )
     .await
+}
+
+/// The environment's katalogr settings, with the daemon's `--katalogr-url` over the URL.
+fn katalogr_settings(url: Option<&str>) -> kanbanr_core::katalogr::Settings {
+    let settings = kanbanr_core::katalogr::Settings::from_env();
+    match url.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(url) => settings.with_url(url),
+        None => settings,
+    }
 }
 
 /// Run one read-only daemon over the boards at `paths`, in order (FTR-040, `kanbanr serve --board
@@ -130,7 +146,11 @@ pub async fn run_boards(
 ) -> anyhow::Result<()> {
     let boards = Boards::open(&paths)?;
     let checked = check_settings(&bind, false, false)?;
-    serve(boards, bind, ui_dir, false, None, false, checked, true).await
+    let katalogr = katalogr_settings(None);
+    serve(
+        boards, bind, ui_dir, false, None, false, checked, true, katalogr,
+    )
+    .await
 }
 
 /// The settings read from the environment and checked before anything starts.
@@ -171,6 +191,7 @@ async fn serve(
     remote_writes: bool,
     checked: Checked,
     listed: bool,
+    katalogr: kanbanr_core::katalogr::Settings,
 ) -> anyhow::Result<()> {
     let Checked { accepted, origins } = checked;
     let boards = Arc::new(boards);
@@ -191,6 +212,7 @@ async fn serve(
         memo: Arc::new(memo::Memo::new(memo::MEMO_CAP_BYTES)),
         slices: slices.clone(),
         background: Arc::new(OnceLock::new()),
+        katalogr,
     };
     // Drift in the background, for the project whose code repository the daemon was started in
     // (FTR-045). Without one, nothing runs and the route answers `unavailable`. A list of boards

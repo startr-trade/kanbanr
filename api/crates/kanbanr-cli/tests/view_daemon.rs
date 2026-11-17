@@ -3507,3 +3507,145 @@ fn repo_doc_routes_answer_at_a_position_and_say_what_they_read() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-016 R-3: `kanbanr serve --katalogr-url <fake>` started in a repository with a `.kanbanr`
+/// marker answers `GET /api/projects/{p}/docs/views?path=` with the position of that repository
+/// and a view per block; a daemon started elsewhere asks without a position and says so.
+#[test]
+fn the_doc_views_route_answers_through_a_fake_katalogr() {
+    use kanbanr_core::katalogr::fake;
+    let base = std::env::temp_dir().join(format!("kanbanr-view-katalogr-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kanbanr = |args: &[&str]| release_cli(&home, &work, args);
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["config", "core.autocrlf", "false"]);
+    std::fs::write(work.join("a.txt"), "a\n").unwrap();
+    kanbanr(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = kanbanr(&["where"]);
+    assert!(
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {board}"
+    );
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "--no-verify", "-m", "[no-ref] base"]);
+    kanbanr(&[
+        "doc",
+        "add",
+        "views.md",
+        "--content",
+        "# Views\n\n```katalogr-query\nstructure\n```\n\n```katalogr-query\ncallers main\n```\n",
+    ]);
+    let head = git(&["rev-parse", "HEAD"]);
+
+    let fake = fake::serve(&["views"], &[], Duration::ZERO);
+    let start = |dir: &std::path::Path| {
+        let port = free_port();
+        let child = cli_cmd()
+            .args([
+                "serve",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+                "--katalogr-url",
+                &fake.url,
+            ])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &board)
+            .env("KANBANR_KATALOGR_URL", fake::closed_port_url())
+            .spawn()
+            .expect("spawn kanbanr serve");
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while ureq::get(&format!("{url}/api/projects")).call().is_err() {
+            assert!(Instant::now() < deadline, "daemon did not become ready");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        (Daemon(child), url)
+    };
+    let get = |url: &str, path: &str| -> (u16, serde_json::Value) {
+        let (code, body) = match ureq::get(&format!("{url}/api{path}")).call() {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap()),
+            Err(e) => panic!("no answer: {e}"),
+        };
+        (
+            code,
+            serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body)),
+        )
+    };
+
+    let (_daemon, url) = start(&work);
+    let (status, v) = get(&url, "/projects/shop/docs/views?path=views.md");
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["position"], head.as_str(), "{v}");
+    assert_eq!(v["katalogr"]["state"], "ready", "{v}");
+    let blocks = v["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2, "{v}");
+    for b in blocks {
+        assert!(
+            b["view"]["mermaid"].as_str().is_some_and(|m| !m.is_empty()),
+            "{b}"
+        );
+    }
+    let seen: Vec<String> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.contains("/views/"))
+        .collect();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    assert!(
+        seen.iter().all(|r| r.contains(&format!("at={head}"))),
+        "{seen:?}"
+    );
+    let (status, s) = get(&url, "/projects/shop/katalogr");
+    assert_eq!(status, 200, "{s}");
+    assert_eq!(s["state"]["state"], "ready");
+    assert_eq!(s["position"], head.as_str());
+    assert_eq!(s["url"], fake.url.as_str());
+    assert_eq!(
+        get(&url, "/projects/shop/docs/views?path=views.md&x=1").0,
+        400
+    );
+    assert_eq!(get(&url, "/projects/shop/docs/views?path=nope.md").0, 404);
+
+    // Started outside any repository: asked without a position, and the answer says why.
+    let (_daemon2, url2) = start(&base);
+    let (status, v) = get(&url2, "/projects/shop/docs/views?path=views.md");
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["position"], "", "{v}");
+    assert!(
+        v["position_from"]
+            .as_str()
+            .unwrap()
+            .contains("no code repository"),
+        "{v}"
+    );
+    assert!(v["blocks"][0]["view"]["mermaid"].is_string(), "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}
