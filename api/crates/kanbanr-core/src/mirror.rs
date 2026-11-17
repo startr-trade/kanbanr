@@ -491,6 +491,7 @@ mod tests {
         FeatureItem {
             extra: Default::default(),
             code: code.into(),
+            aliases: Vec::new(),
             title: format!("Title {code}"),
             specification: "# Spec\nDo it.".into(),
             status: Status::from(status),

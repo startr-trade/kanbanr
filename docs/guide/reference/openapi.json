@@ -2649,6 +2649,13 @@
         "additionalProperties": true,
         "description": "An item as `GET /projects/{p}/features/{code}/export?format=json` gives it: the item, and its\nmilestone resolved.",
         "properties": {
+          "aliases": {
+            "description": "The item's earlier codes, oldest first (FTR-056): a reference to one of them means this\nitem, and no other item is ever given one. Absent when the item was never renamed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "assignee": {
             "default": null,
             "description": "Optional assignee (the person/agent owning this feature); free text.",
@@ -2826,6 +2833,13 @@
         "additionalProperties": true,
         "description": "A feature item: the unit Claude develops. Holds the spec and its todo list.",
         "properties": {
+          "aliases": {
+            "description": "The item's earlier codes, oldest first (FTR-056): a reference to one of them means this\nitem, and no other item is ever given one. Absent when the item was never renamed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "assignee": {
             "default": null,
             "description": "Optional assignee (the person/agent owning this feature); free text.",
@@ -3811,6 +3825,13 @@
       "IndexItem": {
         "description": "One item as a card.",
         "properties": {
+          "aliases": {
+            "description": "Its earlier codes (FTR-056), for links and the redirect from an old address.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "assignee": {
             "type": "string"
           },

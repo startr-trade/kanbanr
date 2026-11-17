@@ -13,6 +13,7 @@ unsafe extern "system" {}
 pub mod activity;
 pub mod adr;
 pub mod agentscope;
+pub mod aliases;
 mod architecture;
 pub mod atomic;
 pub mod attention;

@@ -63,6 +63,9 @@ pub struct IndexCadence {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IndexItem {
     pub code: String,
+    /// Its earlier codes (FTR-056), for links and the redirect from an old address.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -196,6 +199,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
         .iter()
         .map(|f| IndexItem {
             code: f.code.clone(),
+            aliases: f.aliases.clone(),
             title: f.title.clone(),
             kind: nonempty(&f.kind),
             status: f.status.clone(),
