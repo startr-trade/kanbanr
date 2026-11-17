@@ -18,11 +18,20 @@
 //     — toTimeline gives a sprint 3 of 6 done progress 0.5 and a release a lane of diamond and dot
 //     marks with no band; rendered, the bands are 24 px tall with a filled part half their width,
 //     and today is one solid line in --accent labelled "today".
+//   web::check_plan_replaces_the_gantt_and_schedule_pages (R-6) — main.tsx routes `p/:project/plan`
+//     to the Plan page and turns `schedule` and `gantt` into redirects (to Planned, and to the
+//     page); GanttPage.tsx and SchedulePage.tsx are gone; NAV's Plan area has one `plan` entry,
+//     active on the old paths too, and no Schedule or Gantt entry.
+//   web::check_portfolio_timeline_has_one_row_per_project (R-7) — the portfolio page reads
+//     `GET /portfolio/plan` through the shared cache, and its "Now" timeline, rendered, has one lane
+//     per project, in the daemon's order: a project running a sprint has its band, its release in
+//     flight a diamond, a project with no cadence a lane with nothing on it; today is drawn once.
 //
 // Usage: npm run check:plan-page
 import { defaultTab, itemBands, legacyRedirect, openLanes, planTabs, toTimeline } from "../src/planTabs.ts";
 import { TAGS, urls } from "../src/data/urls.ts";
-import { readFileSync, readdirSync } from "node:fs";
+import { activeEntry, NAV } from "../src/nav.ts";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { closeRender, render } from "./lib/render.mjs";
 
 let failed = false;
@@ -320,6 +329,71 @@ await check(
     expect("labelled today", text(svg.querySelector(".ui-tl-today text")), "today");
     const css = readFileSync(new URL("../src/ui/ui.css", import.meta.url), "utf8");
     if (!/\.ui-tl-today line\s*\{[^}]*stroke:\s*var\(--accent\)/.test(css)) problems.push("the today line is not drawn in --accent");
+  },
+);
+
+await check(
+  "web::check_plan_replaces_the_gantt_and_schedule_pages",
+  "main.tsx routes the Plan page and redirects /schedule to Planned and /gantt to the page, the two old pages are gone, and the nav has one Plan entry that the old paths also mark.",
+  (expect, problems) => {
+    expect("/schedule goes to Planned", legacyRedirect("/p/kanbanr/schedule"), "/p/kanbanr/plan?tab=planned");
+    expect("/gantt goes to the Plan page", legacyRedirect("/p/kanbanr/gantt"), "/p/kanbanr/plan");
+
+    const main = src("main.tsx");
+    if (!/\{\s*path:\s*"p\/:project\/plan",\s*element:\s*<PlanPage\s*\/>\s*\}/.test(main)) problems.push("main.tsx does not route p/:project/plan to <PlanPage />");
+    // `..` is resolved against the path, not the route tree, so /p/x/schedule lands on /p/x/plan.
+    const redirect = (path, to) =>
+      new RegExp(`\\{\\s*path:\\s*"p\\/:project\\/${path}",\\s*element:\\s*<Navigate\\s+to="${to.replace(/[?.]/g, "\\$&")}"\\s+relative="path"\\s+replace\\s*\\/>\\s*\\}`).test(main);
+    if (!redirect("schedule", "../plan?tab=planned")) problems.push("main.tsx does not redirect p/:project/schedule to ../plan?tab=planned");
+    if (!redirect("gantt", "../plan")) problems.push("main.tsx does not redirect p/:project/gantt to ../plan");
+    if (/SchedulePage|GanttPage/.test(main)) problems.push("main.tsx still names SchedulePage or GanttPage");
+    for (const f of ["pages/GanttPage.tsx", "pages/SchedulePage.tsx"]) {
+      if (existsSync(new URL(`../src/${f}`, import.meta.url))) problems.push(`${f} still exists`);
+    }
+
+    const plan = NAV.find((a) => a.key === "plan");
+    expect("the Plan area's entries", plan?.entries.map((e) => e.key), ["plan", "releases"]);
+    const entry = plan?.entries.find((e) => e.key === "plan");
+    expect("the plan entry", [entry?.label, entry?.path("x"), entry?.match], ["Plan", "/p/x/plan", ["/schedule", "/gantt"]]);
+    for (const path of ["/p/x/plan", "/p/x/schedule", "/p/x/gantt"]) {
+      expect(`${path} marks Plan active`, activeEntry(NAV, "x", path), { area: "plan", entry: "plan" });
+    }
+  },
+);
+
+await check(
+  "web::check_portfolio_timeline_has_one_row_per_project",
+  "the portfolio reads /portfolio/plan through the shared cache, and its Now timeline draws one lane per project: a running sprint's band, a release's diamond, an empty lane for a project with no cadence, and one today line.",
+  async (expect, problems) => {
+    const page = src("pages/PortfolioPage.tsx");
+    if (!/useQuery<PortfolioPlan>\(\s*null\s*,\s*urls\.portfolioPlan\(\)\s*,\s*\[\s*"\*"\s*\]\s*\)/.test(page)) problems.push('PortfolioPage.tsx does not read urls.portfolioPlan() with useQuery(null, …, ["*"])');
+    if (/\bgetGantt\b|portfolio\/gantt/.test(page)) problems.push("PortfolioPage.tsx reads the Mermaid Gantt");
+
+    const plan = {
+      from: "2026-11-03",
+      to: "2026-12-01",
+      today: "2026-11-17",
+      lanes: [
+        {
+          project: "shop",
+          label: "Shop",
+          bands: [{ from: "2026-11-15", to: "2026-11-28", label: "SP-004", tone: "info", progress: 0.5 }],
+          marks: [{ at: "2026-11-24", label: "v0.8.0", kind: "diamond" }],
+        },
+        { project: "notes", label: "Notes", bands: [], marks: [] },
+      ],
+    };
+    const { document } = await render("src/pages/PortfolioPage.tsx", "PortfolioNow", { plan }, { url: "/portfolio" });
+    const svg = document.querySelector(".ui-timeline svg");
+    if (!svg) return problems.push("the Now section draws no timeline");
+    expect("one lane per project, in order", [...svg.querySelectorAll(".ui-tl-lane-label")].map(text), ["Shop", "Notes"]);
+    expect("the running sprint's band", [...svg.querySelectorAll(".ui-tl-band")].length, 1);
+    expect("the release in flight", svg.querySelectorAll(".ui-tl-diamond").length, 1);
+    expect("one today line", svg.querySelectorAll(".ui-tl-today line").length, 1);
+
+    const none = await render("src/pages/PortfolioPage.tsx", "PortfolioNow", { plan: { ...plan, lanes: [] } }, { url: "/portfolio" });
+    if (none.document.querySelector(".ui-timeline")) problems.push("an empty portfolio still draws a timeline");
+    if (!none.document.querySelector(".ui-empty-title")) problems.push("an empty portfolio says nothing");
   },
 );
 

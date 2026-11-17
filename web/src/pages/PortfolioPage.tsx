@@ -3,7 +3,11 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
-import type { BoardLane, Counts, Disposition } from "../types";
+import { useQuery } from "../data/useQuery";
+import { urls } from "../data/urls";
+import { Empty, ErrorState, LoadingState, Timeline } from "../ui";
+import { toTimeline } from "../planTabs";
+import type { BoardLane, Counts, Disposition, PortfolioPlan } from "../types";
 
 /** The same page sizes the project board offers, and the same remembered choice. */
 const PAGE_SIZES = [10, 25, 50, 100];
@@ -36,6 +40,14 @@ export default function PortfolioPage() {
   }, [pageSize]);
   const rollups = useAsync(() => api.getPortfolioRollups(), [tick]);
   const board = useAsync(() => api.getPortfolioBoard(), [tick]);
+  // What runs now in every project, one timeline row each (FTR-043 R-7).
+  const now = useQuery<PortfolioPlan>(null, urls.portfolioPlan(), ["*"]);
+  // A portfolio read belongs to no project, so no project's live change marks it stale: it is read
+  // again on the page's own live tick, as the rollups and the board are.
+  const reloadNow = now.reload;
+  useEffect(() => {
+    if (tick > 0) reloadNow();
+  }, [tick, reloadNow]);
 
   if (rollups.loading && !rollups.data) return <Loading />;
   if (rollups.error) return <ErrorBox error={rollups.error} />;
@@ -98,6 +110,11 @@ export default function PortfolioPage() {
         </section>
       )}
 
+      <section className="portfolio-now">
+        <h2>Now</h2>
+        {now.data ? <PortfolioNow plan={now.data} /> : now.error ? <ErrorState error={now.error} retry={now.reload} /> : <LoadingState />}
+      </section>
+
       <section className="portfolio-board">
         <h2>Cross-project board</h2>
         {board.error && <ErrorBox error={board.error} />}
@@ -116,6 +133,44 @@ export default function PortfolioPage() {
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * The portfolio's "Now" timeline (FTR-043 R-7): one lane per project with sprints or releases on,
+ * its running sprint a band and its releases in flight diamonds, over the window the daemon gives.
+ * A project with nothing running keeps its lane, empty. Exported so the checks render it.
+ */
+export function PortfolioNow({ plan }: { plan: PortfolioPlan }): JSX.Element {
+  if (plan.lanes.length === 0) return <Empty title="No project runs sprints or releases." />;
+  const timeline = toTimeline({
+    scope: "current",
+    today: plan.today,
+    from: plan.from,
+    to: plan.to,
+    lanes: plan.lanes.map((l) => ({
+      key: l.project,
+      kind: "project",
+      label: l.label,
+      state: "",
+      from: "",
+      to: "",
+      bands: l.bands,
+      marks: l.marks,
+      done: 0,
+      total: 0,
+      carried: 0,
+    })),
+    undated: [],
+  });
+  return (
+    <Timeline
+      from={timeline.from}
+      to={timeline.to}
+      today={timeline.today}
+      lanes={timeline.lanes}
+      caption={`What runs now in each project: ${timeline.from} to ${timeline.to}`}
+    />
   );
 }
 
