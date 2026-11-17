@@ -181,8 +181,9 @@ pub struct TestCounts {
 pub struct CoverageCounts {
     pub proven: usize,
     pub total: usize,
-    /// The report's stale evidence entries (one per requirement whose green predates the code
-    /// repository's HEAD); 0 without a code repository.
+    /// The distinct items among the report's stale evidence (its entries are `CODE/R-n`, one per
+    /// requirement whose green predates the code repository's HEAD), as `?evidence=stale` lists
+    /// them; 0 without a code repository.
     pub stale_items: usize,
 }
 
@@ -530,7 +531,12 @@ fn holds(
             CoverageCounts {
                 proven: r.requirement_coverage.proven,
                 total: r.requirement_coverage.total,
-                stale_items: r.stale_evidence.len(),
+                stale_items: r
+                    .stale_evidence
+                    .iter()
+                    .map(|e| e.split_once('/').map_or(e.as_str(), |(code, _)| code))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len(),
             },
             FlowCounts {
                 completed: r.completed,
@@ -992,7 +998,7 @@ mod tests {
             (
                 r.requirement_coverage.proven,
                 r.requirement_coverage.total,
-                r.stale_evidence.len()
+                0
             )
         );
         assert_eq!((c.proven, c.total), (1, 3));
@@ -1011,6 +1017,41 @@ mod tests {
         assert_eq!(o.holds.tests.total, 2);
         assert_eq!(o.holds.tests.by_state.get("green"), Some(&1));
         assert_eq!(o.holds.tests.by_state.get("red"), Some(&1));
+
+        // Stale evidence is counted by item, as its name and the ?evidence=stale tile read: one
+        // item whose two greens both predate the code repository's HEAD is one stale item.
+        let old_green = || TestRef {
+            checked_rev: "0000000".into(),
+            ..test_in(TestState::Green)
+        };
+        item(&store, "M", "Stale twice", |f| {
+            f.definition = Some(FeatureDefinition {
+                requirements: vec![
+                    requirement("R-1", vec![old_green()]),
+                    requirement("R-2", vec![old_green()]),
+                ],
+                ..Default::default()
+            });
+        });
+        let repo = crate::coderepo::tests::scratch_repo("overview-stale");
+        let head = crate::coderepo::rev_parse(&repo, "HEAD").unwrap();
+        let o = overview(&store, "demo", Some(&repo)).unwrap();
+        let r = crate::report::run(
+            &store,
+            "demo",
+            &crate::report::Window::default(),
+            Some(&head),
+        )
+        .unwrap();
+        assert_eq!(r.stale_evidence.len(), 2, "{:?}", r.stale_evidence);
+        let items: std::collections::BTreeSet<&str> = r
+            .stale_evidence
+            .iter()
+            .map(|e| e.split('/').next().unwrap())
+            .collect();
+        assert_eq!(o.holds.coverage.stale_items, items.len());
+        assert_eq!(o.holds.coverage.stale_items, 1);
+        let _ = std::fs::remove_dir_all(repo);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1,6 +1,7 @@
 // Every URL the shared cache keys a read by, spelled once (DEF-081), and the slice tags each read
 // depends on, so a live change re-reads only what it touched.
 import { apiUrl } from "../runtimeConfig.ts";
+import type { ItemFilter } from "../types";
 
 const enc = encodeURIComponent;
 const project = (p: string) => `/projects/${enc(p)}`;
@@ -40,7 +41,27 @@ export const urls = {
   /** The latest background drift result, with the flags unless `flags` is false (FTR-045). */
   driftLatest: (p: string, flags = true) =>
     apiUrl(`${project(p)}/drift/latest${flags ? "" : "?flags=false"}`),
+  /** What needs the person: review groups, releases at a stage, health and records (FTR-048). */
+  attention: (p: string) => apiUrl(`${project(p)}/attention`),
+  /** The project's Overview (FTR-048). */
+  overview: (p: string) => apiUrl(`${project(p)}/overview`),
+  /** Items as rows, filtered by every filter that is set (FTR-048). */
+  items: (p: string, f: ItemFilter) =>
+    apiUrl(
+      `${project(p)}/items${query([
+        ["kind", f.kind],
+        ["status", f.status],
+        ["milestone", f.milestone],
+        ["goal", f.goal],
+        ["sprint", f.sprint],
+        ["release", f.release],
+        ["evidence", f.evidence],
+      ])}`,
+    ),
 };
+
+/** What `/attention` reads (FTR-048): items, releases, prepared records, manual tests, decisions, gates, docs, ADRs and config. */
+const ATTENTION = ["items", "releases", "prepared", "manual", "decisions", "gates", "docs", "adrs", "config"] as const;
 
 /** The slice tags each read depends on (A1 shared API §2). */
 export const TAGS = {
@@ -55,4 +76,10 @@ export const TAGS = {
   docTree: ["docs"],
   /** Sent only by the daemon's background worker, after a drift run (FTR-045). */
   driftLatest: ["drift"],
+  /** The Needs-you badge and drawer (FTR-048). */
+  attention: ATTENTION,
+  /** The Overview: what attention reads, plus sprints, milestones, the charter, lessons and activity (FTR-048). */
+  overview: [...ATTENTION, "sprints", "milestones", "charter", "lessons", "activity"],
+  /** The Items list (FTR-048). */
+  items: ["items"],
 } as const;
