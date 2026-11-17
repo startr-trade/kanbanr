@@ -118,6 +118,9 @@ All notable changes to kanbanr are documented here. The format follows
   (DEF-077).
 - A disabled release button says why beside it, and a promotion adopts an existing release branch
   that is exactly the line it would make it from instead of refusing (DEF-071).
+- A patch's notes list only its own items, with one line that names its parent and links the
+  parent's notes; its draft is written again when its fix merges, and the plan says when a draft
+  no longer matches what ships (DEF-078).
 
 ## [0.7.0] - 2026-11-16
 
