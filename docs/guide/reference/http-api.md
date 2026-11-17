@@ -72,12 +72,16 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/drift/latest` | `flags` (optional) | JSON `Latest` | The latest background drift result, with its revisions and age |
 | `GET /api/projects/{project}/attention` | — | JSON `Attention` | What needs the person, each kind counted, the person's own decisions totalled |
 | `GET /api/projects/{project}/overview` | — | JSON `Overview` | The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity |
+| `GET /api/projects/{project}/plan/summary` | — | JSON `PlanSummary` | The Plan page's counts per tab (current, planned, past) and the tab it opens on |
+| `GET /api/projects/{project}/plan` | `scope=current\|planned\|past` | JSON `PlanSlice` | One Plan tab: its timeline's span and its rows of sprints, releases and milestones |
+| `GET /api/projects/{project}/plan/rows/{key}` | — | JSON `RowBody` | One Plan row's items, each placed on the timeline and marked on the critical path |
 | `GET /api/projects/{project}/items` | `kind` (optional), `status` (optional), `milestone` (optional), `goal` (optional), `sprint` (optional), `release` (optional), `evidence=red\|planned\|stale\|unproven\|proven\|untested` (optional) | JSON `ItemRow[]` | Items, filtered |
 | `GET /api/projects/{project}/activity` | `ref` (optional), `ongoing` (optional), `limit` (optional) | JSON `Activity[]` | Recent changes to the project, newest first |
 | `GET /api/projects/{project}/features/{code}/export` | `format=md\|json` (optional) | JSON `FeatureExport`, or `text/markdown` | One item, as Markdown, or as JSON with `?format=json` |
 | `GET /api/portfolio` | — | JSON `PortfolioView` | The workspace: its programs and their projects |
 | `GET /api/portfolio/rollups` | — | JSON `RollupReport` | Progress rolled up by program and project |
 | `GET /api/portfolio/board` | — | JSON `BoardReport` | Every project's items on one board, in normalized lanes |
+| `GET /api/portfolio/plan` | — | JSON `PortfolioLane[]` | The portfolio's timeline: one row per project with sprints or releases on |
 | `GET /api/projects/{project}/events` | — | `text/event-stream` | Server-sent events: `changed` whenever this project changes |
 | `GET /api/events` | — | `text/event-stream` | Server-sent events: `changed` whenever anything on the board changes |
 

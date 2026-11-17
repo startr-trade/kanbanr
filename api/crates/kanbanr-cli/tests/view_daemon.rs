@@ -2355,3 +2355,280 @@ fn serve_with_board_and_data_dir_is_refused() {
     );
     let _ = std::fs::remove_dir_all(data.parent().unwrap());
 }
+
+/// A board for the Plan view (FTR-043) under the temp dir, dated around the real today, since the
+/// daemon reads the clock: `closed` closed sprints, one running (today − 3 .. today + 10) and one
+/// planned after it; `shipped` shipped releases, one candidate, one planned 60 days out and one with
+/// no target; `items` items spread over `milestones` milestones, every fifth needing the one
+/// before it. The first ten items of each sprint are planned into it, and half of those in a
+/// closed sprint are finished. Returns the scratch folder and its data folder.
+fn plan_board(
+    name: &str,
+    items: usize,
+    closed: usize,
+    milestones: usize,
+    shipped: usize,
+) -> (PathBuf, PathBuf) {
+    use kanbanr_core::releases::{Release, ReleaseState, StageChange};
+    use kanbanr_core::sprints::{Sprint, SprintState};
+    use serde_json::json;
+    let base = scratch(name);
+    let data = base.join("data");
+    // The board is this test's own, under the system temp folder (L-41).
+    assert!(
+        std::fs::canonicalize(&data)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "a test board lives in the temp dir: {}",
+        data.display()
+    );
+    let store = kanbanr_core::Store::new(data.clone());
+    store
+        .init_project(
+            "shop",
+            kanbanr_core::config::ProjectConfig::default_for("shop"),
+        )
+        .unwrap();
+    kanbanr_core::dispatch::dispatch(
+        &store,
+        "PUT",
+        "/projects/shop/config/cadence",
+        Some(&json!({"sprints": true, "releases": true, "estimate_unit": "points"})),
+    )
+    .unwrap();
+    let mut ops = Vec::new();
+    for m in 1..=milestones {
+        ops.push(json!({"op": "milestone.add", "name": format!("Milestone {m}"), "code": format!("M{m}")}));
+    }
+    let codes: Vec<String> = (1..=items).map(|i| format!("FEAT-{i:03}")).collect();
+    for (i, code) in codes.iter().enumerate() {
+        let mut op = json!({
+            "op": "feature.add",
+            "code": code,
+            "title": format!("Item {i}"),
+            "milestone": format!("M{}", i % milestones + 1),
+        });
+        if i % 5 == 4 {
+            op["depends_on"] = json!([codes[i - 1]]);
+        }
+        ops.push(op);
+    }
+    let ops: Vec<kanbanr_core::batch::BatchOp> = ops
+        .into_iter()
+        .map(|op| serde_json::from_value(op).unwrap())
+        .collect();
+    store.apply_batch("shop", ops).unwrap();
+
+    let today = kanbanr_core::sprints::today();
+    let day = |n: i64| {
+        time::Date::from_julian_day(today.to_julian_day() + n as i32)
+            .unwrap()
+            .to_string()
+    };
+    let sprint = |n: usize, from: i64, to: i64, state: SprintState| Sprint {
+        code: format!("SP-{n:03}"),
+        start: day(from),
+        end: day(to),
+        state,
+        ..Default::default()
+    };
+    let mut sprints: Vec<Sprint> = (0..closed)
+        .map(|k| {
+            let end = -4 - 14 * (closed - 1 - k) as i64;
+            sprint(k + 1, end - 13, end, SprintState::Closed)
+        })
+        .collect();
+    sprints.push(sprint(closed + 1, -3, 10, SprintState::Active));
+    sprints.push(sprint(closed + 2, 11, 24, SprintState::Planned));
+    let mut releases: Vec<Release> = (0..shipped)
+        .map(|k| Release {
+            version: format!("v0.{k}.0"),
+            state: ReleaseState::Shipped,
+            shipped_at: format!("{}T12:00:00Z", day(-60 + 5 * k as i64)),
+            ..Default::default()
+        })
+        .collect();
+    releases.push(Release {
+        version: format!("v0.{shipped}.0"),
+        stage: "candidate".into(),
+        target: day(5),
+        stages: vec![StageChange {
+            stage: "candidate".into(),
+            at: format!("{}T10:00:00Z", day(-1)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    releases.push(Release {
+        version: format!("v0.{}.0", shipped + 1),
+        target: day(60),
+        ..Default::default()
+    });
+    releases.push(Release {
+        version: format!("v0.{}.0", shipped + 2),
+        ..Default::default()
+    });
+    let pdir = data.join("projects").join("shop");
+    std::fs::write(
+        pdir.join("sprints.yaml"),
+        kanbanr_core::yaml::to_string(&sprints).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        pdir.join("releases.yaml"),
+        kanbanr_core::yaml::to_string(&releases).unwrap(),
+    )
+    .unwrap();
+    for (k, s) in sprints.iter().enumerate() {
+        for (j, code) in codes.iter().skip(10 * k).take(10).enumerate() {
+            store
+                .set_feature_sprint("shop", code, Some(s.code.clone()))
+                .unwrap();
+            store.set_feature_points("shop", code, 2.0).unwrap();
+            if s.state == SprintState::Closed && j % 2 == 0 {
+                store.move_feature("shop", code, "Scheduled").unwrap();
+                store.move_feature("shop", code, "Completed").unwrap();
+            }
+        }
+    }
+    (base, data)
+}
+
+/// GET `path` under the daemon's API: the status and the body as JSON (or a string).
+fn plan_get(url: &str, path: &str) -> (u16, serde_json::Value) {
+    let (code, text) = match ureq::get(&format!("{url}/api{path}")).call() {
+        Ok(r) => (r.status(), r.into_string().unwrap()),
+        Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap()),
+        Err(e) => panic!("no answer for {path}: {e}"),
+    };
+    let body = serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));
+    (code, body)
+}
+
+/// FTR-043 R-1: through the daemon, the Plan summary counts each tab — sprints, releases and
+/// milestones each in one — and opens on Current when something runs; each tab's slice holds what
+/// its count says; a row opens to its items; the portfolio has one row for the project.
+#[test]
+fn the_plan_summary_counts_each_tab() {
+    let (base, data) = plan_board("plan-counts", 30, 1, 1, 1);
+    let (_daemon, url) = serve_ui(&base, None);
+    let (code, s) = plan_get(&url, "/projects/shop/plan/summary");
+    assert_eq!(code, 200, "{s}");
+    // Current: the running sprint and the candidate. Planned: the next sprint, the release 60
+    // days out, the one with no target and the open milestone. Past: the closed sprint and the
+    // shipped release.
+    assert_eq!(
+        (&s["current"], &s["planned"], &s["past"], &s["open"]),
+        (
+            &serde_json::json!(2),
+            &serde_json::json!(4),
+            &serde_json::json!(2),
+            &serde_json::json!("current")
+        ),
+        "{s}"
+    );
+    assert_eq!(
+        s["today"],
+        serde_json::json!(kanbanr_core::sprints::today().to_string())
+    );
+    // The same as the core computes.
+    let store = kanbanr_core::Store::new(data.clone());
+    let core =
+        kanbanr_core::planview::summary(&store, "shop", kanbanr_core::sprints::today()).unwrap();
+    assert_eq!(s, serde_json::to_value(&core).unwrap());
+
+    for scope in ["current", "planned", "past"] {
+        let (code, tab) = plan_get(&url, &format!("/projects/shop/plan?scope={scope}"));
+        assert_eq!(code, 200, "{tab}");
+        let rows =
+            tab["lanes"].as_array().unwrap().len() + tab["undated"].as_array().unwrap().len();
+        assert_eq!(serde_json::json!(rows), s[scope], "{scope}: {tab}");
+    }
+    let (code, current) = plan_get(&url, "/projects/shop/plan?scope=current");
+    assert_eq!(code, 200);
+    let running = current["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["kind"] == "sprint")
+        .expect("the running sprint's row");
+    assert_eq!(running["key"], "sprint:SP-002");
+    assert!(running["burndown"].is_object(), "{running}");
+    // The Past sprint counts items: 5 delivered of 10.
+    let (_, past) = plan_get(&url, "/projects/shop/plan?scope=past");
+    let sp1 = past["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["key"] == "sprint:SP-001")
+        .unwrap();
+    assert_eq!(
+        (&sp1["done"], &sp1["total"]),
+        (&serde_json::json!(5), &serde_json::json!(10))
+    );
+    for bad in ["?scope=later", ""] {
+        let (code, body) = plan_get(&url, &format!("/projects/shop/plan{bad}"));
+        assert_eq!(code, 400, "{bad}: {body}");
+    }
+
+    let (code, row) = plan_get(&url, "/projects/shop/plan/rows/sprint:SP-002");
+    assert_eq!(code, 200, "{row}");
+    assert_eq!(row["items"].as_array().unwrap().len(), 10, "{row}");
+    assert!(
+        row["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["placed"] == "sprint"),
+        "{row}"
+    );
+    let (code, _) = plan_get(&url, "/projects/shop/plan/rows/sprint:SP-404");
+    assert_eq!(code, 404);
+    let (code, _) = plan_get(&url, "/projects/nowhere/plan/summary");
+    assert_eq!(code, 404);
+
+    let (code, lanes) = plan_get(&url, "/portfolio/plan");
+    assert_eq!(code, 200, "{lanes}");
+    let lanes = lanes.as_array().unwrap();
+    assert_eq!(lanes.len(), 1, "{lanes:?}");
+    assert_eq!(lanes[0]["project"], "shop");
+    assert_eq!(lanes[0]["bands"].as_array().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-043 R-9: on a generated board the size of this project's, the Plan summary answers under
+/// 50 ms and each tab's slice under 150 ms — the median of 20 warm reads through the daemon.
+#[test]
+fn the_plan_summary_and_a_tab_slice_meet_their_budgets() {
+    let (base, _data) = plan_board("plan-budget", 400, 12, 12, 10);
+    let (_daemon, url) = serve_ui(&base, None);
+    let median = |path: &str| {
+        let started = Instant::now();
+        let (code, body) = plan_get(&url, path);
+        let cold = started.elapsed();
+        assert_eq!(code, 200, "{path}: {body}");
+        let mut times: Vec<Duration> = (0..20)
+            .map(|_| {
+                let started = Instant::now();
+                let (code, _) = plan_get(&url, path);
+                assert_eq!(code, 200);
+                started.elapsed()
+            })
+            .collect();
+        times.sort();
+        let m = times[times.len() / 2];
+        eprintln!("{path}: cold {cold:?}, warm median {m:?}");
+        m
+    };
+    let summary = median("/projects/shop/plan/summary");
+    assert!(
+        summary < Duration::from_millis(50),
+        "the summary took {summary:?}"
+    );
+    for scope in ["current", "planned", "past"] {
+        let path = format!("/projects/shop/plan?scope={scope}");
+        let slice = median(&path);
+        assert!(slice < Duration::from_millis(150), "{path} took {slice:?}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

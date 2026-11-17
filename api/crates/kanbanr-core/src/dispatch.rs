@@ -1225,6 +1225,44 @@ fn dispatch_routes(
             Ok(view.schedule(None).to_json_value().to_string())
         }
         ("GET", ["gantt"]) => Ok(crate::gantt::portfolio_gantt(store)?),
+        // ---- the Plan view (FTR-043): counts, one tab's rows, one row's items ----
+        ("GET", ["projects", p, "plan", "summary"]) => {
+            only_params(query, &[])?;
+            ser(&crate::planview::summary(
+                store,
+                p,
+                crate::sprints::today(),
+            )?)
+        }
+        ("GET", ["projects", p, "plan"]) => {
+            only_params(query, &["scope"])?;
+            let scope = match query_param(query, "scope").as_deref() {
+                Some("current") => crate::planview::Scope::Current,
+                Some("planned") => crate::planview::Scope::Planned,
+                Some("past") => crate::planview::Scope::Past,
+                other => {
+                    return Err(CoreError::Unsupported(format!(
+                        "scope must be current, planned or past, not {}",
+                        other.unwrap_or("nothing")
+                    )));
+                }
+            };
+            ser(&crate::planview::slice(
+                store,
+                p,
+                scope,
+                crate::sprints::today(),
+            )?)
+        }
+        ("GET", ["projects", p, "plan", "rows", key]) => ser(&crate::planview::row(
+            store,
+            p,
+            &percent_decode(key),
+            crate::sprints::today(),
+        )?),
+        ("GET", ["portfolio", "plan"]) => {
+            ser(&crate::planview::portfolio(store, crate::sprints::today())?)
+        }
         ("GET", ["projects", p, "features", code, "impact"]) => {
             let project = store.load(p)?;
             project.feature(code)?; // 404 on unknown feature

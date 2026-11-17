@@ -4944,6 +4944,87 @@
         ],
         "type": "string"
       },
+      "PlacedItem": {
+        "description": "One item in an opened row, placed on the row's timeline by [`place`].",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "critical": {
+            "description": "On the project's dependency critical path.",
+            "type": "boolean"
+          },
+          "from": {
+            "description": "The item's first and last day; empty when undated.",
+            "type": "string"
+          },
+          "pending": {
+            "description": "The planning decisions waiting on the item (FTR-049); empty until then.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "placed": {
+            "description": "`sprint`, `moves`, `start` or `undated`: the rule that placed it.",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "from",
+          "to",
+          "placed",
+          "critical",
+          "pending"
+        ],
+        "type": "object"
+      },
+      "PlanBand": {
+        "description": "A span drawn on a lane: a sprint's dates, or a milestone's reach.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "progress": {
+            "description": "The finished part, 0..1: a sprint's done of committed, a release's finished of its items, a\nmilestone's done of its items. `None` when there is nothing to count.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string"
+          },
+          "tone": {
+            "description": "`ok`, `info`, `warn`, `error` or `neutral`: the monitor's tones.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "label",
+          "tone",
+          "progress"
+        ],
+        "type": "object"
+      },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
         "properties": {
@@ -4985,6 +5066,165 @@
         ],
         "type": "object"
       },
+      "PlanLane": {
+        "description": "One row of the Plan page: a sprint, a release or a milestone.",
+        "properties": {
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/PlanBand"
+            },
+            "type": "array"
+          },
+          "burndown": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SprintReport"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The running sprint's burndown; `None` on every other lane."
+          },
+          "carried": {
+            "description": "How many items it carried out.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "done": {
+            "description": "Delivered and planned: a sprint's done and committed estimate (rounded) — on the Past tab,\nits delivered items of its committed items (\"9 of 11 delivered\") — a release's finished\n(shipped, once shipped) and items, a milestone's done and items.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "description": "The lane's first and last day; empty on an undated lane.",
+            "type": "string"
+          },
+          "key": {
+            "description": "`sprint:SP-004`, `release:v0.8.0` or `milestone:MS-004`: the row's id in the URL.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`sprint`, `release` or `milestone`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "marks": {
+            "items": {
+              "$ref": "#/components/schemas/PlanMark"
+            },
+            "type": "array"
+          },
+          "points_done": {
+            "description": "A sprint's done and committed estimate in the project's unit, beside the counts; `None` on\nevery other lane and where the sprint has no report.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "points_total": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "A sprint's `planned`/`active`/`closed`; a release's stage, else `planned`, `shipped` or\n`superseded`; a milestone's `open`.",
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "label",
+          "state",
+          "from",
+          "to",
+          "bands",
+          "marks",
+          "done",
+          "total",
+          "points_done",
+          "points_total",
+          "carried",
+          "burndown"
+        ],
+        "type": "object"
+      },
+      "PlanMark": {
+        "description": "A point on a lane: a release's target or ship date (`diamond`), or one of its stage changes\n(`dot`).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`diamond` or `dot`.",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "label",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PlanSlice": {
+        "description": "One tab of the Plan page: its timeline's span and its rows.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/PlanLane"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "to": {
+            "type": "string"
+          },
+          "today": {
+            "type": "string"
+          },
+          "undated": {
+            "description": "Rows with no date to place them by, by key.",
+            "items": {
+              "$ref": "#/components/schemas/PlanLane"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope",
+          "today",
+          "from",
+          "to",
+          "lanes",
+          "undated"
+        ],
+        "type": "object"
+      },
       "PlanStep": {
         "description": "One step a promotion takes, and what it will do (FEAT-212).",
         "properties": {
@@ -5013,6 +5253,75 @@
           "stage",
           "does",
           "noop"
+        ],
+        "type": "object"
+      },
+      "PlanSummary": {
+        "description": "The counts per tab and the tab the page opens on (FTR-043 R-1).",
+        "properties": {
+          "current": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "description": "`current` when anything runs today, else `planned`.",
+            "type": "string"
+          },
+          "past": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "planned": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "today": {
+            "description": "The day the counts are for, `YYYY-MM-DD` (UTC).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current",
+          "planned",
+          "past",
+          "open",
+          "today"
+        ],
+        "type": "object"
+      },
+      "PortfolioLane": {
+        "description": "One project's row on the portfolio's timeline (FTR-043 R-7).",
+        "properties": {
+          "bands": {
+            "description": "Its running sprint's band.",
+            "items": {
+              "$ref": "#/components/schemas/PlanBand"
+            },
+            "type": "array"
+          },
+          "label": {
+            "description": "The project's name, else its id.",
+            "type": "string"
+          },
+          "marks": {
+            "description": "Its releases in flight, as diamonds at their targets.",
+            "items": {
+              "$ref": "#/components/schemas/PlanMark"
+            },
+            "type": "array"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "label",
+          "bands",
+          "marks"
         ],
         "type": "object"
       },
@@ -6895,6 +7204,54 @@
         ],
         "type": "object"
       },
+      "RowBody": {
+        "description": "An opened row's body: its items placed, a milestone's items by status, and what it carried out.",
+        "properties": {
+          "by_status": {
+            "description": "A milestone's item codes per displayed status, in the workflow's order and dependencies\nfirst; a status none of them is in is left out. Empty for a sprint or a release.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "carried": {
+            "description": "What a sprint or a release carried out, and where to (a sprint's carries have no `why`).",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseCarry"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlacedItem"
+            },
+            "type": "array"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "items",
+          "by_status",
+          "carried"
+        ],
+        "type": "object"
+      },
       "RowEvidence": {
         "description": "One row's full evidence: what the row's body shows when it is opened.",
         "properties": {
@@ -7027,6 +7384,26 @@
           "protections"
         ],
         "type": "object"
+      },
+      "Scope": {
+        "description": "The Releases page's tab a release falls in (FTR-041). The route names them `current`,\n`planned` and `past`; the page labels `past` as Released.",
+        "oneOf": [
+          {
+            "const": "current",
+            "description": "At a stage and not yet shipped: a candidate, on main, tagged and waiting for its workflow\n(DEF-049), or a patch in progress.",
+            "type": "string"
+          },
+          {
+            "const": "planned",
+            "description": "Not yet at a stage.",
+            "type": "string"
+          },
+          {
+            "const": "past",
+            "description": "Shipped, or superseded by a patch.",
+            "type": "string"
+          }
+        ]
       },
       "Section": {
         "description": "Where a line is shown in the drawer.",
@@ -8583,6 +8960,39 @@
         "summary": "Every project's items on one board, in normalized lanes"
       }
     },
+    "/api/portfolio/plan": {
+      "get": {
+        "operationId": "getPortfolioPlan",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PortfolioLane"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The portfolio's timeline: one row per project with sprints or releases on"
+      }
+    },
     "/api/portfolio/rollups": {
       "get": {
         "operationId": "getPortfolioRollups",
@@ -10048,6 +10458,152 @@
           }
         },
         "summary": "The project Overview: what needs the person, what is happening now, what the board holds, goals, recent decisions and activity"
+      }
+    },
+    "/api/projects/{project}/plan": {
+      "get": {
+        "operationId": "getProjectsPlan",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The tab: current (today's window), planned (a quarter ahead) or past (closed sprints and shipped releases).",
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "enum": [
+                "current",
+                "planned",
+                "past"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSlice"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One Plan tab: its timeline's span and its rows of sprints, releases and milestones"
+      }
+    },
+    "/api/projects/{project}/plan/rows/{key}": {
+      "get": {
+        "operationId": "getProjectsPlanRowsOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The Plan row's key: sprint:<code>, release:<version> or milestone:<code>.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One Plan row's items, each placed on the timeline and marked on the critical path"
+      }
+    },
+    "/api/projects/{project}/plan/summary": {
+      "get": {
+        "operationId": "getProjectsPlanSummary",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSummary"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The Plan page's counts per tab (current, planned, past) and the tab it opens on"
       }
     },
     "/api/projects/{project}/position": {

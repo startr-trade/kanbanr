@@ -143,6 +143,13 @@ const ROW: Param = Param {
     description: "The row's key, percent-encoded: an item's code, or for a manual check \
                   <CODE>/<R-n>/<test>.",
 };
+const PLAN_ROW: Param = Param {
+    name: "key",
+    location: In::Path,
+    required: true,
+    kind: Kind::String,
+    description: "The Plan row's key: sprint:<code>, release:<version> or milestone:<code>.",
+};
 const DOC_PATH: Param = Param {
     name: "path",
     location: In::Query,
@@ -661,6 +668,35 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::overview::Overview>),
         },
+        // ---- the Plan view (FTR-043) ----
+        RouteDoc {
+            path: "/api/projects/{project}/plan/summary",
+            summary: "The Plan page's counts per tab (current, planned, past) and the tab it opens on",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::planview::PlanSummary>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/plan",
+            summary: "One Plan tab: its timeline's span and its rows of sprints, releases and milestones",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "scope",
+                    location: In::Query,
+                    required: true,
+                    kind: Kind::OneOf(&["current", "planned", "past"]),
+                    description: "The tab: current (today's window), planned (a quarter ahead) or \
+                                  past (closed sprints and shipped releases).",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::planview::PlanSlice>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/plan/rows/{key}",
+            summary: "One Plan row's items, each placed on the timeline and marked on the critical path",
+            params: &[PROJECT, PLAN_ROW],
+            response: Response::Json(schema_of::<crate::planview::RowBody>),
+        },
         // ---- items, filtered (FTR-048) ----
         RouteDoc {
             path: "/api/projects/{project}/items",
@@ -790,6 +826,12 @@ pub fn public_routes() -> Vec<RouteDoc> {
             summary: "Every project's items on one board, in normalized lanes",
             params: &[],
             response: Response::Json(schema_of::<crate::portfolio::BoardReport>),
+        },
+        RouteDoc {
+            path: "/api/portfolio/plan",
+            summary: "The portfolio's timeline: one row per project with sprints or releases on",
+            params: &[],
+            response: Response::Json(schema_of::<Vec<crate::planview::PortfolioLane>>),
         },
         // ---- live updates ----
         RouteDoc {
