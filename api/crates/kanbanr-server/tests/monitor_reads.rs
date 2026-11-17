@@ -597,6 +597,51 @@ fn reads_on_a_board_this_size_stay_within_the_byte_budget() {
     eprintln!("index {raw} B raw, {gz} B gzip; {}", report.join("; "));
 }
 
+/// FTR-078 R-18: the Board reads `/index`, `/readiness`, `/scopes` and `/critical-path`; on the
+/// generated 400-item board the four together stay within 64 KB gzipped, `/readiness` within 32 KB
+/// and `/index` within 25 KB. Each size is printed.
+#[test]
+fn the_board_page_reads_stay_within_their_byte_budget() {
+    let scratch = Scratch::new("board-budget");
+    let data = scratch.data();
+    let shape = Shape {
+        items: 400,
+        requirements: 4,
+        spec_bytes: 6_500,
+    };
+    generate(&data, "shop", shape);
+    commit_all(&data, "fixture");
+    let url = serve(&data);
+    let api = |path: &str| format!("{url}/api/projects/shop{path}");
+    let size = |path: &str| {
+        let r = get_gz(&api(path));
+        assert_eq!(r.status, 200, "{path}");
+        r.body.len()
+    };
+    let (index, readiness, scopes, critical) = (
+        size("/index"),
+        size("/readiness"),
+        size("/scopes"),
+        size("/critical-path"),
+    );
+    let together = index + readiness + scopes + critical;
+    eprintln!(
+        "board reads gzipped: index {index} B, readiness {readiness} B, scopes {scopes} B, critical-path {critical} B; together {together} B"
+    );
+    assert!(
+        index <= 25 * 1024,
+        "/index is {index} B gzipped, over 25 KB"
+    );
+    assert!(
+        readiness <= 32 * 1024,
+        "/readiness is {readiness} B gzipped, over 32 KB"
+    );
+    assert!(
+        together <= 64 * 1024,
+        "the four reads are {together} B gzipped, over 64 KB"
+    );
+}
+
 /// FTR-076 R-10: the Charter page reads `/charter` and `/charter/progress`; on the generated
 /// board plus 60 lessons and 12 shipped releases the two together stay within 32 KB gzipped and
 /// the progress read alone within 24 KB.

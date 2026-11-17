@@ -3171,6 +3171,41 @@ fn the_releases_summary_and_a_tab_slice_meet_their_budgets() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-078 R-18: on a generated board of 400 items, the Board's `/readiness` answers under 50 ms,
+/// the median of 20 warm reads through the daemon (a memo hit). The cold reads of `/readiness`
+/// and `/critical-path` are printed, not asserted.
+#[test]
+fn the_board_reads_meet_their_budget() {
+    let (base, _data) = releases_board("board-reads-budget", 400, &[]);
+    let (_daemon, url) = serve_ui(&base, None);
+    let median = |path: &str| {
+        let started = Instant::now();
+        let (code, body) = plan_get(&url, path);
+        let cold = started.elapsed();
+        assert_eq!(code, 200, "{path}: {body}");
+        let mut times: Vec<Duration> = (0..20)
+            .map(|_| {
+                let started = Instant::now();
+                let (code, _) = plan_get(&url, path);
+                assert_eq!(code, 200);
+                started.elapsed()
+            })
+            .collect();
+        times.sort();
+        let m = times[times.len() / 2];
+        eprintln!("{path}: cold {cold:?}, warm median {m:?}");
+        m
+    };
+    let readiness = median("/projects/shop/readiness");
+    assert!(
+        readiness < Duration::from_millis(50),
+        "the readiness read took {readiness:?}"
+    );
+    // Printed for the record; the critical path's warm read is a memo hit as well.
+    let _ = median("/projects/shop/critical-path");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-076 R-10: on a generated board of 12 shipped releases, 60 lessons and 400 items serving
 /// three goals, the Charter page's progress read answers under 50 ms, the median of 20 warm reads
 /// through the daemon. The cold read is printed, not asserted.

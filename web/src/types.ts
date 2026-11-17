@@ -555,11 +555,47 @@ export interface ItemDiagrams {
   findings: DiagramFinding[];
 }
 
+/** The five kinds of check a stage can ask of an item (FTR-078). */
+export type CheckFamily = "definition" | "approval" | "signoffs" | "tests" | "docs";
+
+/** One family's share of what a stage lacks (FTR-078). */
+export interface CheckTally {
+  family: CheckFamily;
+  /** The gate asks for something of this family (or lacks something of it). */
+  asked: boolean;
+  missing: number;
+}
+
+/** The task an item has in progress (FTR-078); `task` is `<list code>/<task key>`, e.g. `TL-001/T3`. */
+export interface Doing {
+  task: string;
+  text: string;
+}
+
+/** One next stage as the readiness read sends it; `checks` is absent from an older daemon (FTR-078). */
+export interface NextStageWire {
+  status: string;
+  missing: number;
+  signoffs: string[];
+  tasks_open: number;
+  ends: boolean;
+  immediate?: boolean;
+  for_you?: number;
+  checks?: CheckTally[];
+}
+
+/** One card's readiness; the fields after `next` are absent from an older daemon (FTR-078). */
+export interface CardReadiness {
+  gaps: Gap[];
+  next: NextStageWire[];
+  updated_at?: string;
+  req_proven?: number;
+  req_total?: number;
+  doing?: Doing;
+}
+
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
-export type Readiness = Record<
-  string,
-  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean; immediate?: boolean; for_you?: number }[] }
->;
+export type Readiness = Record<string, CardReadiness>;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
 export interface IssueLink {
@@ -1563,6 +1599,8 @@ export interface IndexItem {
   total: number;
   /** When it was created, to the whole second: the board's newest-first order. */
   created_at: string;
+  /** The day (`YYYY-MM-DD`) it entered its current status; absent from an older daemon (FTR-078). */
+  entered_on?: string;
 }
 
 export interface IndexMilestone {
@@ -1608,6 +1646,26 @@ export interface CompactIndex {
   adrs?: IndexAdr[];
   docs: string[];
   goals: IndexGoal[];
+  /** Each displayed lane's moves by day over the last 28 days; absent from an older daemon (FTR-078). */
+  flow?: LaneFlow[];
+}
+
+/** One lane's moves by day (FTR-078). */
+export interface LaneFlow {
+  status: string;
+  days: FlowDay[];
+}
+
+/** The moves into and out of a lane on one day (FTR-078). */
+export interface FlowDay {
+  day: string;
+  entered: number;
+  left: number;
+}
+
+/** `GET /projects/{p}/critical-path`: the ids on the longest chain, as `project:CODE` (FTR-078). Internal. */
+export interface CriticalPath {
+  critical_path: string[];
 }
 
 /** The `slices` SSE event: what changed on a project's board, by tag. */

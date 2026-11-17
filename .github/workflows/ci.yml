@@ -261,6 +261,9 @@ jobs:
       # A card never reads as a status, and never says ready while work is open (FEAT-205).
       - name: Board cards say what is next in plain words
         run: npm run check:card-text
+      # The Board groups each lane by what its items need next, with no paging (FTR-078).
+      - name: The Board groups its lanes by what the items need next
+        run: npm run check:board
       # Each release has one button named for its next step, enabled only when its plan is ready,
       # and none when nothing is planned into it (FEAT-212).
       - name: Each release's button says what it does

@@ -13,6 +13,7 @@
     "check:api-base": "node scripts/check-api-base.mjs",
     "check:read-only": "node scripts/check-read-only.mjs",
     "check:card-text": "node scripts/check-card-text.mjs",
+    "check:board": "node scripts/check-board.mjs",
     "check:release-action": "node scripts/check-release-action.mjs",
     "check:release-again": "node scripts/check-release-again.mjs",
     "check:release-confirm": "node scripts/check-release-confirm.mjs",

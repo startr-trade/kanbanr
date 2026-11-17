@@ -86,6 +86,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Every request goes to the configured API base": LOCAL,
             "The standalone monitor is read-only": LOCAL,
             "Board cards say what is next in plain words": LOCAL,
+            "The Board groups its lanes by what the items need next": LOCAL,
             "Each release's button says what it does": LOCAL,
             "A candidate whose preparation changed offers Promote to candidate again": LOCAL,
             "A release button names the release and asks first": LOCAL,
