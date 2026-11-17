@@ -97,6 +97,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A prepared record shows filled in beside its button": LOCAL,
             "The Baseline page shows the areas and accepts a revision": LOCAL,
             "The Catalog page lists the rows, gaps first, under Records": LOCAL,
+            "The system baseline is accepted in its own Review group": LOCAL,
             "The Releases page lists prepared records no form shows": LOCAL,
             "A disabled Approve or Ratify button says what is missing and who provides it": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,

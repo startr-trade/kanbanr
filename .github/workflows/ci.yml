@@ -303,6 +303,10 @@ jobs:
       # after Docs (FTR-005 R-10, R-13).
       - name: The Catalog page lists the rows, gaps first, under Records
         run: npm run check:catalog
+      # The system baseline is accepted in its own Review group, never a page-level panel; a
+      # read-only monitor shows the command (FTR-006 R-10, R-12).
+      - name: The system baseline is accepted in its own Review group
+        run: npm run check:system-baseline
       # An open prepared record no form on a release's entry shows is listed there under Prepared,
       # not required, with Confirm and Reject (DEF-095).
       - name: The Releases page lists prepared records no form shows

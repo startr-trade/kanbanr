@@ -371,6 +371,8 @@ pub enum BoardClaim {
     ReleasePrepareConfigured,
     /// A sprint is running.
     SprintActive,
+    /// The project's system baseline has been accepted and still reads as it did (FTR-006).
+    SystemBaselineAccepted,
 }
 
 /// What must be so outside the board: the remote and CI.
@@ -886,6 +888,7 @@ struct RawBoardClaim {
     item: Option<RawItemClaim>,
     config: Option<RawConfigClaim>,
     sprint: Option<String>,
+    system_baseline: Option<String>,
 }
 
 impl RawBoardClaim {
@@ -939,6 +942,14 @@ impl RawBoardClaim {
                 ));
             }
             out.push(BoardClaim::SprintActive);
+        }
+        if let Some(b) = self.system_baseline {
+            if b != "accepted" {
+                return Err(anyhow!(
+                    "step {step}: a system_baseline claim is `accepted`, not '{b}'"
+                ));
+            }
+            out.push(BoardClaim::SystemBaselineAccepted);
         }
         match out.len() {
             1 => Ok(out.remove(0)),
@@ -2057,6 +2068,8 @@ steps:
     expect: {truth: {tag: {release: v0.1.0}}}
   - id: "6"
     expect: {talk: {asked: "style|look", not_asked: "push order", said: "stage.*cach"}}
+  - id: "7"
+    expect: {board: {system_baseline: accepted}}
 ```"#;
         let rb = Runbook::parse(text).unwrap();
         let board = |i: usize| rb.steps[i].expect.as_ref().unwrap().board.clone().unwrap();
@@ -2070,6 +2083,7 @@ steps:
             }
         );
         assert_eq!(board(3), BoardClaim::SprintActive);
+        assert_eq!(board(6), BoardClaim::SystemBaselineAccepted);
         assert_eq!(
             rb.steps[4].expect.as_ref().unwrap().truth,
             Some(TruthClaim::Tag {

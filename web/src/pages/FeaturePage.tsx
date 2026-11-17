@@ -19,6 +19,7 @@ import {
 } from "../types";
 import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef, TestTiming } from "../types";
 import { signoffDocs } from "../position";
+import { catalogRowHref, viewsChanged } from "../systemBaselineView";
 import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
@@ -257,6 +258,12 @@ function Definition({ feature, project }: { feature: Feature; project: string })
   const [error, setError] = useState<string | null>(null);
   const meta = useQuery<Meta>(null, urls.meta(), TAGS.meta, () => api.getMeta());
   const who = api.approver(meta.data ?? null);
+  // The catalog rows the design changes (FTR-006): the review queue derives them from its docs.
+  const queue = useQuery<PendingReview[]>(project, urls.pendingReviews(project), TAGS.pendingReviews);
+  const views = viewsChanged(
+    (queue.data ?? []).find((e) => e.code === feature.code)?.views_changed,
+    def?.affects_views,
+  );
   if (!def) return null;
   const approval =
     def.approval == null
@@ -327,6 +334,17 @@ function Definition({ feature, project }: { feature: Feature; project: string })
         {/* Why the item changes no doc, as the person confirmed it (DEF-075): a plain line, not a chip. */}
         {def.affects_no_docs?.trim() ? (
           <p>Changes no docs: {def.affects_no_docs.trim()}</p>
+        ) : null}
+        {views.length ? (
+          // The catalog rows this design changes (FTR-006), each linking its row on the Catalog page.
+          <div className="provenance">
+            <span className="muted">Views changed</span>
+            {views.map((v) => (
+              <Link key={v} className="chip" to={catalogRowHref(project, v)}>
+                {v}
+              </Link>
+            ))}
+          </div>
         ) : null}
         {/* Read-only copy of the monitor (FEAT-178): the command that withdraws, not a button. */}
         {def.approval != null && isReadOnly() ? (

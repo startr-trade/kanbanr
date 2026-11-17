@@ -2,7 +2,7 @@ import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
 import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
-import type { CatalogStatus, FactsOrEmpty, TestTiming } from "./types";
+import type { CatalogStatus, FactsOrEmpty, SystemBaselineReview, TestTiming } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
@@ -475,6 +475,20 @@ export const api = {
   // The project's facts and its content catalog (FTR-005): read by the Catalog page only.
   /** The catalog's derived status: every row with its source state and protections, and the gaps. */
   getCatalog: (id: string) => getJson<CatalogStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/catalog`)),
+  /** The system baseline's state and the open prepared acceptance (FTR-006). */
+  systemBaseline: (id: string) => getJson<SystemBaselineReview>(urls.systemBaseline(id)),
+  /**
+   * The person accepts the system baseline as they saw it (FTR-006): `rev` is the pins' hash the page
+   * showed, so a source that changed since is refused rather than accepted unread. `prepared` is the
+   * record being confirmed, when there is one. Theirs alone; there is no `init` here, the CLI does it.
+   */
+  acceptSystemBaseline: (id: string, by: string, note: string, prepared = "", rev = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/catalog/baseline/accept`,
+      { by, note, ...(prepared ? { prepared } : {}), ...(rev ? { rev } : {}) },
+      "accept the system baseline",
+      note ? `kanbanr catalog baseline accept --note ${JSON.stringify(note)}` : "kanbanr catalog baseline accept",
+    ) as Promise<SystemBaselineReview>,
   /** The project's facts record, or `{}` when none is set. */
   getFacts: (id: string) => getJson<FactsOrEmpty>(apiUrl(`/projects/${encodeURIComponent(id)}/facts`)),
   /** Every architecture decision on the board, newest first (FEAT-057). */
