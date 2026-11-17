@@ -417,8 +417,20 @@ impl Store {
             .effective_gates()
             .values()
             .any(|g| g.signoffs.iter().any(|s| s == crate::method::DOCS_FOLDED));
+        // `design-review` is held while the Design touches an unanswered baseline area
+        // (FTR-033 R-2), which reads the spec.
+        let design_review = self
+            .project_dir(id)
+            .join(crate::baseline::BASELINE_FILE)
+            .exists()
+            && project
+                .config
+                .effective_gates()
+                .values()
+                .any(|g| g.signoffs.iter().any(|s| s == crate::method::DESIGN_REVIEW));
         if pinned
             || docs_folded
+            || design_review
             || project
                 .config
                 .effective_gates()
@@ -3834,6 +3846,15 @@ impl Store {
         }
         crate::config::Cadence::validate_stages(&cadence.release_stages)
             .map_err(CoreError::Unsupported)?;
+        // FTR-033 P4 Q3: turning releases on writes the stage gates the accepted baseline promised
+        // while they were off, by the function acceptance uses, so the waiting gates land now.
+        if cadence.releases && !previous.releases {
+            let b = crate::baseline::load(self, id)?;
+            crate::baseline::apply_stage_gates(
+                &mut cadence,
+                &crate::baseline::followed_in_force(&b),
+            )?;
+        }
         // FEAT-212: the gates must fit the stages, so a stage with a gate is not renamed away.
         cadence
             .validate_release_gates()

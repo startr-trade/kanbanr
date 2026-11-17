@@ -1088,6 +1088,11 @@
             "const": "design_sections",
             "description": "The spec's Design holds the subsections the item's kind asks for (FTR-006,\n[`crate::design`]). Judged too wherever a gate asks for the Design section.",
             "type": "string"
+          },
+          {
+            "const": "baseline",
+            "description": "Every accepted engineering-baseline entry the Design touches is named under its\n`### Baseline` with a test or a reason, and the Design names no other option of an\nanswered area without one (FTR-033). Judged too wherever a gate asks for the Design.",
+            "type": "string"
           }
         ]
       },
@@ -5936,6 +5941,10 @@
         "additionalProperties": true,
         "description": "One revision with what accepting it does.",
         "properties": {
+          "acceptance_unverifiable": {
+            "description": "Accepted, but the board's history cannot be read, so whether the acceptance came through\nkanbanr cannot be checked: why, naming the repository (FTR-033 P4 Q4, as DEF-080's\n`grant_unverifiable`). The rest of the view still reads.",
+            "type": "string"
+          },
           "accepted": {
             "$ref": "#/components/schemas/Stamp"
           },

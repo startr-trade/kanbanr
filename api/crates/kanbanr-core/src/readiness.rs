@@ -76,13 +76,17 @@ pub enum Check {
     /// The spec's Design holds the subsections the item's kind asks for (FTR-006,
     /// [`crate::design`]). Judged too wherever a gate asks for the Design section.
     DesignSections,
+    /// Every accepted engineering-baseline entry the Design touches is named under its
+    /// `### Baseline` with a test or a reason, and the Design names no other option of an
+    /// answered area without one (FTR-033). Judged too wherever a gate asks for the Design.
+    Baseline,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 22] = [
+    pub const GATEABLE: [Check; 23] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -105,6 +109,7 @@ impl Check {
         Check::DocsCover,
         Check::SystemBaselineAccepted,
         Check::DesignSections,
+        Check::Baseline,
     ];
 
     /// The name a gate uses for this check.
@@ -170,6 +175,11 @@ impl Check {
             Check::DesignSections => {
                 "the spec's Design holds the subsections the item's kind asks for (`kanbanr \
                  feature design --template --kind <kind>` lists them)"
+            }
+            Check::Baseline => {
+                "every accepted baseline entry the design touches is named under `### Baseline` \
+                 with a test or a reason, and the design names no other option of an answered \
+                 area without one"
             }
         }
     }
@@ -279,6 +289,7 @@ impl Condition {
                 | Condition::Check(Check::SpecSections)
                 | Condition::Check(Check::DiagramsValid)
                 | Condition::Check(Check::DesignSections)
+                | Condition::Check(Check::Baseline)
         )
     }
 }
@@ -425,7 +436,19 @@ pub struct Context {
     /// The project's system baseline as it stands (FTR-006), loaded only when some effective gate
     /// names `system_baseline_accepted`; `None` asks nothing. Not FTR-033's engineering baseline.
     pub system_baseline: Option<std::sync::Arc<crate::systembaseline::State>>,
+    /// The project's engineering baseline and the packs it follows, each with its applied copy
+    /// (FTR-033); `None` when the project has no `baseline.yaml`.
+    pub baseline: Option<BaselineContext>,
+    /// Why `baseline.yaml` or a followed pack's copy could not be read: every check that reads
+    /// the baseline reports it, rather than passing (ADR-0005).
+    pub baseline_unreadable: Option<String>,
 }
+
+/// The engineering baseline as the checks read it: the record, and the followed packs.
+pub type BaselineContext = std::sync::Arc<(
+    crate::baseline::Baseline,
+    Vec<(crate::profile::ProfileSource, crate::profile::ProfileFile)>,
+)>;
 
 impl Context {
     /// The code repository's branches, read once; `None` without a repository or when it cannot
@@ -469,6 +492,7 @@ impl Context {
         } else {
             Vec::new()
         };
+        let baseline = Self::baseline(store, id);
         Context {
             project: id.to_string(),
             sprints_off: !config.cadence.sprints,
@@ -499,6 +523,8 @@ impl Context {
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
             system_baseline: Self::system_baseline(store, id, config, repo),
+            baseline: baseline.as_ref().ok().cloned().flatten(),
+            baseline_unreadable: baseline.err(),
             build_onward: crate::manual::build_onward(config),
             unshipped_releases: if config.cadence.releases {
                 crate::releases::load(store, id)
@@ -514,6 +540,26 @@ impl Context {
             },
             history: Default::default(),
         }
+    }
+
+    /// The engineering baseline and its followed packs (FTR-033): `Ok(None)` without a
+    /// `baseline.yaml`; why, when the file or a followed pack's copy does not read.
+    fn baseline(store: &crate::Store, id: &str) -> Result<Option<BaselineContext>, String> {
+        let path = store.project_dir(id).join(crate::baseline::BASELINE_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let read = || -> crate::Result<BaselineContext> {
+            let b = crate::baseline::load(store, id)?;
+            let packs = crate::baseline::followed_packs(store, id, &b)?;
+            Ok(std::sync::Arc::new((b, packs)))
+        };
+        read().map(Some).map_err(|e| {
+            format!(
+                "projects/{id}/{} cannot be read: {e}",
+                crate::baseline::BASELINE_FILE
+            )
+        })
     }
 
     /// The system baseline's state, when a gate will ask for it (FTR-006). One that cannot be read
@@ -685,6 +731,14 @@ fn evaluate_entering_window(
     {
         gaps.extend(design_sections_gaps(feature, true));
     }
+    // So is the engineering baseline (FTR-033): the stage that asks for the Design asks that it
+    // names the entries it touches, with no change to any preset or gate.
+    if !checks.contains(&Check::Baseline)
+        && crate::method::asks_design(conditions)
+        && !is_exempt(feature)
+    {
+        gaps.extend(baseline_gaps(feature, ctx));
+    }
     let columns: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
@@ -834,16 +888,13 @@ impl ReadinessView {
         let feature = project.feature(code)?;
         let charter = crate::charter::load(store, p)?;
         let goal_ids = charter.goal_ids();
+        let ctx = Context::load_in(store, p, &project.config, repo);
         Ok(Self {
             code: feature.code.clone(),
             rev: feature.definition.as_ref().map(|d| d.content_rev()),
-            gaps: evaluate(feature, Some(&goal_ids), CHECK),
-            next: next_gates(
-                &project,
-                Some(&charter),
-                feature,
-                &Context::load_in(store, p, &project.config, repo),
-            ),
+            // With the context, so the engineering baseline is judged too (FTR-033).
+            gaps: evaluate_in(feature, Some(&goal_ids), CHECK, &ctx),
+            next: next_gates(&project, Some(&charter), feature, &ctx),
         })
     }
 }
@@ -1084,6 +1135,20 @@ pub fn next_gates(
                 }
                 docs_built = Some(built);
             }
+            // `design-review` is held while the Design touches an area the baseline has not
+            // answered (FTR-033 R-2): asking is what the review needs; accepting is R-3's.
+            if signoffs_needed
+                .iter()
+                .any(|n| n == crate::method::DESIGN_REVIEW)
+            {
+                let held = design_review_held(feature, ctx);
+                if !held.is_empty() {
+                    signoffs_needed.retain(|n| n != crate::method::DESIGN_REVIEW);
+                    let named = format!("'{}'", crate::method::DESIGN_REVIEW);
+                    signoffs.retain(|g| !(g.check == Check::Signoff && g.label.contains(&named)));
+                    signoffs_held.extend(held);
+                }
+            }
             gaps.extend(signoffs);
             gaps.extend(signoffs_held.iter().cloned());
             let mut warnings: Vec<Gap> = said
@@ -1115,29 +1180,39 @@ pub fn next_gates(
 
 /// Why `name` is held back from the person, if it is (DEF-033): `Some(sentence)` naming the
 /// unbuilt documents when `name` is `docs-folded`, the item's immediate next gate asks for it and
-/// the item's documents are not built. Any other name, a gate that does not ask for it and an
-/// item not at such a stage are never refused.
+/// the item's documents are not built; naming the unanswered baseline areas when `name` is
+/// `design-review` and its Design touches one (FTR-033 R-2). Any other name, a gate that does not
+/// ask for it and an item not at such a stage are never refused.
 pub fn signoff_hold(
     project: &crate::store::Project,
     feature: &FeatureItem,
     ctx: &Context,
     name: &str,
 ) -> Option<String> {
-    if name != crate::method::DOCS_FOLDED {
+    let review = name == crate::method::DESIGN_REVIEW;
+    if name != crate::method::DOCS_FOLDED && !review {
         return None;
     }
     let next = immediate_next_gate(project, None, feature, ctx)?;
-    if next.signoffs_held.is_empty() {
+    // The design-review hold's gaps are the baseline's (FTR-033); docs-folded's are the rest.
+    let held: Vec<&str> = next
+        .signoffs_held
+        .iter()
+        .filter(|g| (g.check == Check::Baseline) == review)
+        .map(|g| g.message.as_str())
+        .collect();
+    if held.is_empty() {
         return None;
     }
+    let why = if review {
+        "the design touches areas the baseline has not answered"
+    } else {
+        "it is not built and folded"
+    };
     Some(format!(
-        "{} cannot be signed off '{name}' yet: it is not built and folded ({})",
+        "{} cannot be signed off '{name}' yet: {why} ({})",
         feature.code,
-        next.signoffs_held
-            .iter()
-            .map(|g| g.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ")
+        held.join("; ")
     ))
 }
 
@@ -1204,6 +1279,7 @@ pub const CHECK: &[Check] = &[
     Check::Ears,
     Check::TestsNamed,
     Check::TestsGreen,
+    Check::Baseline,
 ];
 
 /// What `doctor` warns about on live work. Agreement is the review queue's question, and a green
@@ -1354,6 +1430,9 @@ fn evaluate_in_window(
     if checks.contains(&Check::SystemBaselineAccepted) && !exempt {
         gaps.extend(system_baseline_gaps(feature, ctx));
     }
+    if checks.contains(&Check::Baseline) && !exempt {
+        gaps.extend(baseline_gaps(feature, ctx));
+    }
     if checks.contains(&Check::DocsUpdated)
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
@@ -1471,6 +1550,7 @@ pub fn evaluate_definition(
                     | Check::DocsCover
                     | Check::SystemBaselineAccepted
                     | Check::DesignSections
+                    | Check::Baseline
             )
         });
         if reads_definition {
@@ -1660,7 +1740,8 @@ fn item_level(
         | Check::DiagramsValid
         | Check::DocsCover
         | Check::SystemBaselineAccepted
-        | Check::DesignSections => {}
+        | Check::DesignSections
+        | Check::Baseline => {}
     }
 }
 
@@ -1825,6 +1906,133 @@ fn diagram_gaps(feature: &FeatureItem, docs: Option<&std::path::Path>) -> Vec<Ga
                 None,
                 &format!("diagram #{} in {}", f.block, f.file),
                 f.describe(),
+            )
+        })
+        .collect()
+}
+
+/// What the engineering baseline asks of a Design (FTR-033 R-4): each accepted entry of a followed
+/// pack the Design touches and does not name under `### Baseline`, and each other option of an
+/// answered area the Design names while the entry it may contradict is not named with a reason.
+/// A spec with no Design touches nothing. Lines are counted in the whole spec.
+fn baseline_gaps(feature: &FeatureItem, ctx: &Context) -> Vec<Gap> {
+    if let Some(why) = &ctx.baseline_unreadable {
+        return vec![gap(
+            Check::Baseline,
+            None,
+            "baseline unreadable",
+            format!("{why}: the design cannot be judged against the baseline until it reads"),
+        )];
+    }
+    let Some(bc) = ctx.baseline.as_deref() else {
+        return Vec::new();
+    };
+    let (b, packs) = bc;
+    let spec = &feature.specification;
+    let design = crate::baseline::design_text(spec);
+    if design.trim().is_empty() {
+        return Vec::new();
+    }
+    // `design_text` is a slice of the spec: its first line's number in the spec.
+    let offset = (design.as_ptr() as usize).saturating_sub(spec.as_ptr() as usize);
+    let first_line = spec.get(..offset).map_or(0, |s| s.matches('\n').count());
+    let named = crate::baseline::baseline_section(spec);
+    let label_of = |area: &str, option: &str| -> String {
+        packs
+            .iter()
+            .find_map(|(_, f)| f.area(area))
+            .and_then(|a| a.option(option))
+            .map_or_else(|| option.to_string(), |o| o.label.clone())
+    };
+    let mut gaps = Vec::new();
+    for (e, tokens) in crate::baseline::touched(b, design) {
+        if named.contains_key(&e.id) {
+            continue;
+        }
+        let id = &e.id;
+        gaps.push(Gap {
+            level: Level::Error,
+            ..gap(
+                Check::Baseline,
+                None,
+                &format!("{id} not named"),
+                format!(
+                    "the design touches {id} ({}: it says `{}`) and does not name it: add \
+                     `- {id}: <test name or reason>` under `### Baseline`",
+                    e.text,
+                    tokens.join("`, `")
+                ),
+            )
+        });
+    }
+    for c in crate::baseline::contradictions(b, design) {
+        if named.contains_key(&c.entry) {
+            continue;
+        }
+        let Some(e) = b.entries.iter().find(|e| e.id == c.entry) else {
+            continue;
+        };
+        let id = &e.id;
+        gaps.push(Gap {
+            level: Level::Error,
+            ..gap(
+                Check::Baseline,
+                None,
+                &format!("may contradict {id}"),
+                format!(
+                    "the design says '{}' (line {}), another option of area '{}', whose accepted \
+                     answer is {id} ({}): name {id} under `### Baseline` with the reason, or \
+                     propose a revision (kanbanr baseline propose)",
+                    c.word,
+                    first_line + c.line,
+                    e.area,
+                    label_of(&e.area, &e.option)
+                ),
+            )
+        });
+    }
+    gaps
+}
+
+/// The areas a Design touches that the baseline has not answered (FTR-033 R-2): open or decided
+/// later, in a followed pack, their `when` holding. Empty without a baseline or a Design.
+pub fn open_baseline_areas(feature: &FeatureItem, ctx: &Context) -> Vec<crate::baseline::OpenArea> {
+    let Some((b, packs)) = ctx.baseline.as_deref() else {
+        return Vec::new();
+    };
+    if packs.is_empty() || is_exempt(feature) {
+        return Vec::new();
+    }
+    let design = crate::baseline::design_text(&feature.specification);
+    if design.trim().is_empty() {
+        return Vec::new();
+    }
+    crate::baseline::open_areas(packs, b, design)
+}
+
+/// The `design-review` hold (FTR-033 R-2): one Warning per area the Design touches that the
+/// baseline has not answered and nothing proposes. An area decided later holds nothing.
+fn design_review_held(feature: &FeatureItem, ctx: &Context) -> Vec<Gap> {
+    let Some((b, _)) = ctx.baseline.as_deref() else {
+        return Vec::new();
+    };
+    let code = &feature.code;
+    open_baseline_areas(feature, ctx)
+        .into_iter()
+        .filter(|o| crate::baseline::area_status(b, &o.area) == crate::baseline::AreaStatus::Open)
+        .map(|o| {
+            gap(
+                Check::Baseline,
+                None,
+                "area not answered",
+                format!(
+                    "the design touches area '{}' (`{}`, pack {}), which the baseline has not \
+                     answered: ask it (`kanbanr profile ask --item {code} --json`), then propose \
+                     the answer (`kanbanr baseline propose --answers <file> --item {code}`)",
+                    o.area,
+                    o.tokens.join("`, `"),
+                    o.pack
+                ),
             )
         })
         .collect()
@@ -2139,6 +2347,13 @@ pub struct ItemCheck {
     /// while the next stage holds `docs-folded` and a code repository is attached (DEF-039).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts_to_settle: Vec<String>,
+    /// The baseline areas the Design touches that are not answered (FTR-033 R-2): what to ask
+    /// the person, then propose. Never stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_areas: Vec<crate::baseline::OpenArea>,
+    /// When the baseline has revisions but none accepted: that the gates read nothing from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_note: Option<String>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -2195,6 +2410,9 @@ pub fn check_board(
             "no such item, or nothing in scope".into(),
         ));
     }
+    // The engineering baseline is judged with the project's context (FTR-033).
+    let ctx = Context::load_in(store, p, &project.config, repo);
+    let baseline_note = baseline_note(&ctx);
     let items = features
         .into_iter()
         .map(|f| {
@@ -2218,7 +2436,9 @@ pub fn check_board(
                     v.next.iter().find(|n| n.status == first)
                 })
                 .is_some_and(|n| {
-                    !n.signoffs_held.is_empty()
+                    // `docs_built` is read only when `docs-folded` is asked; a design-review
+                    // hold (FTR-033) is not one.
+                    n.docs_built.is_some()
                         || n.signoffs_needed
                             .iter()
                             .any(|s| s == crate::method::DOCS_FOLDED)
@@ -2240,17 +2460,45 @@ pub fn check_board(
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),
-                gaps: evaluate(f, None, CHECK)
+                gaps: evaluate_in(f, None, CHECK, &ctx)
                     .into_iter()
                     .map(|g| g.message)
                     .collect(),
                 next: view.as_ref().map(|v| v.next.clone()).unwrap_or_default(),
                 rev: view.and_then(|v| v.rev),
                 open_manual: open_manual_tests(f),
+                open_areas: open_baseline_areas(f, &ctx),
+                baseline_note: baseline_note.clone(),
             }
         })
         .collect();
     Ok(CheckReport { items })
+}
+
+/// "the baseline's REV-001 is proposed, not accepted: …" when the baseline has revisions and none
+/// is accepted (FTR-033): the gates read no baseline from it.
+fn baseline_note(ctx: &Context) -> Option<String> {
+    let (b, _) = ctx.baseline.as_deref()?;
+    let states: Vec<crate::baseline::RevisionState> =
+        b.revisions.iter().map(|r| r.state()).collect();
+    if states.contains(&crate::baseline::RevisionState::Accepted) {
+        return None;
+    }
+    let proposed: Vec<&str> = b
+        .revisions
+        .iter()
+        .filter(|r| r.state() == crate::baseline::RevisionState::Proposed)
+        .map(|r| r.id.as_str())
+        .collect();
+    if proposed.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the baseline's {} {} proposed, not accepted: the gates read no baseline from {}",
+        proposed.join(", "),
+        if proposed.len() == 1 { "is" } else { "are" },
+        if proposed.len() == 1 { "it" } else { "them" }
+    ))
 }
 
 /// What `kanbanr check --file` found in a definition that is not on a board (FEAT-052).
@@ -3833,6 +4081,345 @@ mod tests {
         exempt.definition.as_mut().unwrap().exempt = "trivial".into();
         assert!(evaluate_conditions(&exempt, None, &named, &ctx).is_empty());
         assert!(Condition::Check(Check::DesignSections).reads_spec());
+    }
+
+    /// A baseline test board (FTR-033) whose `Scheduled` gate asks for the Design and the
+    /// `design-review` sign-off, with its one item's spec set to `spec`.
+    fn baseline_board(spec: &str) -> (crate::Store, std::path::PathBuf, String) {
+        let (store, dir, code) = crate::baseline::tests::board(false);
+        let gate = crate::config::Gate {
+            requires: vec![Condition::SpecSections {
+                spec_sections: vec!["Design".into()],
+            }],
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        set_spec(&store, &code, spec);
+        (store, dir, code)
+    }
+
+    /// Follow a built-in pack, as setup does.
+    fn follow_builtin(store: &crate::Store, name: &str) {
+        let file = crate::profile::builtin(name).unwrap();
+        crate::baseline::add_pack(
+            store,
+            "demo",
+            name,
+            &file,
+            crate::config::Library::Builtin,
+            crate::baseline::tests::stamp(),
+        )
+        .unwrap();
+    }
+
+    /// The `Scheduled` gate of `code` and the design-review hold.
+    fn baseline_gate(store: &crate::Store, code: &str) -> (NextGate, Option<String>) {
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(store, "demo", &project.config);
+        let f = project.feature(code).unwrap();
+        let gate = next_gates(&project, None, f, &ctx)
+            .into_iter()
+            .find(|g| g.status == "Scheduled")
+            .expect("a Scheduled gate");
+        (gate, signoff_hold(&project, f, &ctx, "design-review"))
+    }
+
+    /// The labels of `gaps` that come from the baseline: "B-n not named", "may contradict B-n",
+    /// "area not answered" (FTR-033).
+    fn baseline_labels(gaps: &[Gap]) -> Vec<String> {
+        gaps.iter()
+            .map(|g| g.label.clone())
+            .filter(|l| {
+                l.ends_with(" not named")
+                    || l.starts_with("may contradict ")
+                    || l == "area not answered"
+            })
+            .collect()
+    }
+
+    /// What `kanbanr check <code>` says, as JSON.
+    fn check_json(store: &crate::Store, code: &str) -> serde_json::Value {
+        let report = check_board(store, "demo", Some(code), None).unwrap();
+        serde_json::to_value(&report.items[0]).unwrap()
+    }
+
+    /// FTR-033 R-4: with B-001 and B-002 (the database) in force and a Design saying
+    /// `migrations/`, `check` and the Design-stage gate name both until the Design names them
+    /// under `### Baseline`; an exempt item has none; a gate naming `baseline` alone reports it.
+    #[test]
+    fn a_design_touching_a_baseline_entry_without_naming_it_is_not_ready() {
+        use crate::baseline::tests::{STORE_PACK, accept_it, answer, follow, propose_answers};
+        let (store, dir, code) =
+            baseline_board("## Design\n\nAdd the orders table under `migrations/`.\n");
+        follow(&store, STORE_PACK);
+        // Only proposed: the gates read nothing from it, and check says so.
+        let v = propose_answers(&store, &code, vec![answer("database", &["postgresql"])]);
+        let (gate, _) = baseline_gate(&store, &code);
+        assert!(baseline_labels(&gate.requires_gaps).is_empty(), "{gate:?}");
+        let json = check_json(&store, &code);
+        assert_eq!(
+            json["baseline_note"],
+            "the baseline's REV-001 is proposed, not accepted: the gates read no baseline from it"
+        );
+        accept_it(&store, &v);
+        let (gate, _) = baseline_gate(&store, &code);
+        assert_eq!(
+            baseline_labels(&gate.requires_gaps),
+            vec!["B-001 not named".to_string(), "B-002 not named".to_string()]
+        );
+        let msg = &gate
+            .requires_gaps
+            .iter()
+            .find(|g| g.label == "B-001 not named")
+            .unwrap()
+            .message;
+        assert!(
+            msg.contains(
+                "the design touches B-001 (PostgreSQL is the database: it says `migrations/`)"
+            ) && msg.contains("add `- B-001: <test name or reason>` under `### Baseline`"),
+            "{msg}"
+        );
+        let json = check_json(&store, &code);
+        assert!(json["baseline_note"].is_null(), "{json}");
+        let gaps: Vec<String> = json["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            gaps.iter()
+                .any(|g| g.starts_with("the design touches B-001")),
+            "{gaps:?}"
+        );
+        // A gate naming `baseline` alone reports it too.
+        let alone: Condition = serde_json::from_value(serde_json::json!("baseline")).unwrap();
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let f = project.feature(&code).unwrap();
+        assert_eq!(
+            baseline_labels(&evaluate_conditions(
+                f,
+                None,
+                std::slice::from_ref(&alone),
+                &ctx
+            ))
+            .len(),
+            2
+        );
+        // Named under `### Baseline`: no gap.
+        set_spec(
+            &store,
+            &code,
+            "## Design\n\nAdd the orders table under `migrations/`.\n\n\
+             ### Baseline\n- B-001: migrations::tests::applies_twice\n\
+             - **B-002** — the migration is named above\n",
+        );
+        let (gate, _) = baseline_gate(&store, &code);
+        assert!(baseline_labels(&gate.requires_gaps).is_empty(), "{gate:?}");
+        let json = check_json(&store, &code);
+        assert!(
+            !json["gaps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|g| g.as_str().unwrap().contains("B-00")),
+            "{json}"
+        );
+        // No Design: nothing touched (L-29). Exempt: nothing asked.
+        set_spec(&store, &code, "Add the orders table in `migrations/`.\n");
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        assert!(
+            baseline_labels(&evaluate_conditions(
+                f,
+                None,
+                std::slice::from_ref(&alone),
+                &ctx
+            ))
+            .is_empty()
+        );
+        set_spec(
+            &store,
+            &code,
+            "## Design\n\nAdd a table in `migrations/`.\n",
+        );
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "s".into(),
+                    exempt: "a spike".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        assert!(evaluate_conditions(f, None, &[alone], &ctx).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 R-4: a Design naming another option of an answered area ("SQLite" with
+    /// PostgreSQL accepted) is flagged at the design-review stage until the entry is named with
+    /// the reason; a word inside another word (`sqlite3-ffi`) is no match; an option also in the
+    /// answer set (a `many` answer) is no contradiction.
+    #[test]
+    fn a_design_that_names_another_option_of_an_answered_area_is_flagged_at_design_review() {
+        use crate::baseline::tests::{accept_it, answer, propose_answers};
+        let (store, dir, code) =
+            baseline_board("## Design\n\nKeep the orders in SQLite for now.\n");
+        follow_builtin(&store, "core");
+        follow_builtin(&store, "data");
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        accept_it(&store, &v);
+        let b = crate::baseline::load(&store, "demo").unwrap();
+        let ids: Vec<String> = crate::baseline::in_force(&b)
+            .iter()
+            .filter(|e| e.area == "database")
+            .map(|e| e.id.clone())
+            .collect();
+        assert!(!ids.is_empty());
+        let (gate, _) = baseline_gate(&store, &code);
+        let flag = gate
+            .requires_gaps
+            .iter()
+            .find(|g| g.label.starts_with("may contradict "))
+            .unwrap_or_else(|| panic!("{gate:?}"));
+        assert!(
+            flag.message
+                .contains("the design says 'SQLite' (line 3), another option of area 'database'")
+                && flag.message.contains("(PostgreSQL)"),
+            "{}",
+            flag.message
+        );
+        // Named with the reason: the reason is the record, no gap.
+        let named: String = ids
+            .iter()
+            .map(|id| format!("- {id}: SQLite only in the local dev loop, until REV-002\n"))
+            .collect();
+        set_spec(
+            &store,
+            &code,
+            &format!("## Design\n\nKeep the orders in SQLite for now.\n\n### Baseline\n{named}"),
+        );
+        let (gate, _) = baseline_gate(&store, &code);
+        assert!(baseline_labels(&gate.requires_gaps).is_empty(), "{gate:?}");
+        // `sqlite3-ffi` holds neither `SQLite` nor `sqlite3` as a word.
+        let design = "## Design\n\nThe database gets a `sqlite3-ffi` shim.\n";
+        assert!(crate::baseline::contradictions(&b, design).is_empty());
+        set_spec(&store, &code, design);
+        let (gate, _) = baseline_gate(&store, &code);
+        let labels = baseline_labels(&gate.requires_gaps);
+        assert!(
+            labels.iter().any(|l| l.ends_with(" not named")),
+            "{labels:?}"
+        );
+        assert!(
+            !labels.iter().any(|l| l.starts_with("may contradict")),
+            "{labels:?}"
+        );
+        // SQLite in the answer set too: no contradiction.
+        let v = propose_answers(
+            &store,
+            "",
+            vec![answer("database", &["postgresql", "sqlite"])],
+        );
+        accept_it(&store, &v);
+        let b = crate::baseline::load(&store, "demo").unwrap();
+        assert!(
+            crate::baseline::contradictions(&b, "## Design\n\nSQLite in the database.\n")
+                .is_empty()
+        );
+        set_spec(
+            &store,
+            &code,
+            "## Design\n\nKeep the orders in SQLite for now.\n",
+        );
+        let (gate, _) = baseline_gate(&store, &code);
+        let labels = baseline_labels(&gate.requires_gaps);
+        assert!(
+            !labels.iter().any(|l| l.starts_with("may contradict")),
+            "{labels:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 R-2: following `core` and `data`, an item whose Design says `migrations/` has its
+    /// `design-review` held, naming area `database`, and the sign-off refused with the sentence,
+    /// until an answer is proposed (answered or `later`); a spec with no Design holds nothing,
+    /// and with `data` removed nothing is held.
+    #[test]
+    fn design_review_is_held_while_the_design_touches_an_area_the_baseline_has_not_answered() {
+        use crate::baseline::tests::{propose_answers, stamp};
+        let design = "## Design\n\nAdd a table under `migrations/`.\n";
+        let (store, dir, code) = baseline_board(design);
+        follow_builtin(&store, "core");
+        follow_builtin(&store, "data");
+        let (gate, hold) = baseline_gate(&store, &code);
+        assert!(
+            !gate.signoffs_needed.contains(&"design-review".to_string()),
+            "{gate:?}"
+        );
+        let held: Vec<&Gap> = gate
+            .signoffs_held
+            .iter()
+            .filter(|g| g.label == "area not answered")
+            .collect();
+        assert_eq!(held.len(), 1, "{:?}", gate.signoffs_held);
+        assert!(
+            held[0]
+                .message
+                .contains("the design touches area 'database' (`migrations/`")
+                && held[0]
+                    .message
+                    .contains("pack data), which the baseline has not answered")
+                && held[0]
+                    .message
+                    .contains(&format!("kanbanr profile ask --item {code} --json")),
+            "{}",
+            held[0].message
+        );
+        assert!(gate.gaps.iter().any(|g| g.label == "area not answered"));
+        let hold = hold.expect("the sign-off is refused");
+        assert!(
+            hold.contains(&format!("{code} cannot be signed off 'design-review' yet"))
+                && hold.contains("area 'database'"),
+            "{hold}"
+        );
+        let json = check_json(&store, &code);
+        assert_eq!(json["open_areas"][0]["area"], "database", "{json}");
+        assert_eq!(json["open_areas"][0]["pack"], "data", "{json}");
+        // Decided later, as a proposal: asked, so the sign-off is offered before acceptance.
+        let later = crate::baseline::Answer {
+            area: "database".into(),
+            later: true,
+            ..Default::default()
+        };
+        let v = propose_answers(&store, &code, vec![later]);
+        let (gate, hold) = baseline_gate(&store, &code);
+        assert!(
+            gate.signoffs_needed.contains(&"design-review".to_string()),
+            "{gate:?}"
+        );
+        assert!(gate.signoffs_held.is_empty() && hold.is_none(), "{gate:?}");
+        crate::baseline::withdraw(&store, "demo", &v.revision.id, "ask again", stamp()).unwrap();
+        assert_eq!(baseline_gate(&store, &code).0.signoffs_held.len(), 1);
+        // No Design: nothing touched, nothing held (L-29).
+        set_spec(&store, &code, "Add a table under `migrations/`.\n");
+        let (gate, hold) = baseline_gate(&store, &code);
+        assert!(gate.signoffs_held.is_empty() && hold.is_none(), "{gate:?}");
+        // With `data` removed, its areas are not asked.
+        set_spec(&store, &code, design);
+        crate::baseline::remove_pack(&store, "demo", "data", stamp()).unwrap();
+        let (gate, hold) = baseline_gate(&store, &code);
+        assert!(gate.signoffs_held.is_empty() && hold.is_none(), "{gate:?}");
+        assert!(check_json(&store, &code)["open_areas"].is_null());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

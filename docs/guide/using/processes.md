@@ -109,6 +109,7 @@ board.
 | `docs_cover` | the item is covered by every project coverage rule it falls under; `{docs_cover: [id]}` asks for only those rules |
 | `system_baseline_accepted` | the project's system baseline has been accepted at least once (`kanbanr catalog baseline`); a project with none opts in with `kanbanr catalog baseline init` |
 | `design_sections` | the spec's Design holds the subsections the item's kind asks for (`kanbanr feature design --template --kind <kind>` lists them) |
+| `baseline` | every accepted baseline entry the design touches is named under `### Baseline` with a test or a reason, and the design names no other option of an answered area without one |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.

@@ -254,6 +254,11 @@ pub struct Records {
     /// How an nfr is measured.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measure: String,
+    /// For a non-goal: the option of the same area it rules out. When that option is chosen too,
+    /// the non-goal gives way to it (FTR-033 P4 Q1); without it the words of the other chosen
+    /// options are matched against the text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub excludes: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
@@ -533,6 +538,20 @@ impl ProfileFile {
                     if r.text.trim().is_empty() {
                         out.push(problem(format!(
                             "area '{a}': option '{o}' records an empty text: write the entry"
+                        )));
+                    }
+                    let excl = r.excludes.trim();
+                    if !excl.is_empty() && r.kind != Kind::NonGoal {
+                        out.push(problem(format!(
+                            "area '{a}': option '{o}': `excludes` is for a non_goal, not a {}",
+                            r.kind.as_str()
+                        )));
+                    } else if !excl.is_empty()
+                        && (excl == o.as_str() || !area.options.iter().any(|x| x.id == excl))
+                    {
+                        out.push(problem(format!(
+                            "area '{a}': option '{o}': `excludes` names '{excl}', which is not \
+                             another option of the area"
                         )));
                     }
                     if !r.iso25010.is_empty() && r.kind != Kind::Nfr {
@@ -1473,7 +1492,14 @@ fn file_token_on_line(token: &str, line: &str) -> bool {
     crate::docdrift::name_on_line(&name, line, &[], "")
 }
 
-/// Whether `text` holds `word`, case-insensitive, with no ASCII letter or digit on either side.
+/// A character that continues a word: an ASCII letter or digit, or a hyphen, so `sqlite3` is not
+/// found inside `sqlite3-ffi` and `pg` not inside `pg-boss` (FTR-033 P5).
+fn word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+/// Whether `text` holds `word`, case-insensitive, with no word character ([`word_char`]: an
+/// ASCII letter, digit or hyphen) on either side.
 fn word_in(text: &str, word: &str) -> bool {
     let hay = text.to_ascii_lowercase();
     let needle = word.to_ascii_lowercase();
@@ -1483,8 +1509,7 @@ fn word_in(text: &str, word: &str) -> bool {
     hay.match_indices(&needle).any(|(at, _)| {
         let before = hay[..at].chars().next_back();
         let after = hay[at + needle.len()..].chars().next();
-        !before.is_some_and(|c| c.is_ascii_alphanumeric())
-            && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+        !before.is_some_and(word_char) && !after.is_some_and(word_char)
     })
 }
 
@@ -1516,7 +1541,8 @@ pub(crate) fn tokens_in(tokens: &[String], text: &str) -> Vec<String> {
 /// The tokens of `area.touches` a design holds, sorted. A token with `.`, `/` or `*` is a file
 /// token: `*.ext` matches a path word ending in `.ext`, a folder (`x/`) a path that starts with
 /// it, any other the whole token, each bounded by `docdrift`'s path-character rule; any other
-/// token is a word, matched case-insensitively with ASCII-alphanumeric boundaries. Fenced blocks
+/// token is a word, matched case-insensitively, bounded by anything but an ASCII letter, digit or
+/// hyphen. Fenced blocks
 /// and code spans are scanned like prose. Pure.
 pub fn touches(area: &Area, design: &str) -> Vec<String> {
     tokens_in(&area.touches, design)
