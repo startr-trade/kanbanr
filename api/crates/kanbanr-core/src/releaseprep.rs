@@ -522,7 +522,8 @@ fn is_heading_of(line: &str, want: &str) -> bool {
     line.trim_start().starts_with(want)
 }
 
-/// `body` without its own leading `## [{number}]` heading line (after any blank lines); `body`
+/// `body` without its own leading `## [{number}]` heading line (after any blank lines) and the
+/// blank lines that follow it, so the fill leaves one blank line under the kept heading; `body`
 /// unchanged when it does not start with one.
 fn strip_own_heading<'a>(body: &'a str, number: &str) -> &'a str {
     let want = format!("## [{number}]");
@@ -533,7 +534,15 @@ fn strip_own_heading<'a>(body: &'a str, number: &str) -> &'a str {
             continue;
         }
         if is_heading_of(line, &want) {
-            return &body[pos + line.len()..];
+            let rest = &body[pos + line.len()..];
+            let mut skip = 0;
+            for blank in rest.split_inclusive('\n') {
+                if !blank.trim().is_empty() {
+                    break;
+                }
+                skip += blank.len();
+            }
+            return &rest[skip..];
         }
         break;
     }
@@ -716,6 +725,13 @@ mod tests {
                 .collect();
             assert_eq!(after, ["## [0.1.0] - 2026-11-16", "### Added"], "{out}");
             assert!(out.contains("## [0.0.1]\n- a\n"), "{out}");
+            // T5: the blank lines after the body's own heading go with it, so one blank line
+            // separates the kept heading and the body, as for a body without a heading.
+            assert_eq!(
+                out,
+                "# C\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-16\n\n### Added\n- x\n\n## [0.0.1]\n- a\n",
+                "exact text"
+            );
         }
         let (out, _) = fill_section_counted(text, "0.1.0", "## [0.1.0-rc1]\n- r\n").unwrap();
         assert_eq!(count(&out), 1, "{out}");
