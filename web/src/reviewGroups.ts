@@ -1,7 +1,7 @@
 // The Review page's decision groups (FTR-038): the tabs and the group the page opens on, the
 // person's selection inside one group, the group button's label and question, and the decision it
 // posts. Pure, so the page and web/scripts/check-review-groups.mjs use the same code.
-import type { DecisionItem, GroupCount, GroupDecision, GroupSlice, ReviewRow } from "./types";
+import type { DecisionItem, GroupCount, GroupDecision, GroupOutline, GroupSlice, ReviewRow } from "./types";
 import { pickTab, type TabDef } from "./ui/tabs.ts";
 
 /** The URL parameter that names the open group: `?group=docs-folded`. */
@@ -29,6 +29,17 @@ export function groupTabs(groups: GroupCount[]): TabDef[] {
       hidden: g.count === 0 && held === 0,
     };
   });
+}
+
+/**
+ * The tabs the page draws (DEF-106): once the summary has counted, it decides, as `groupTabs`. Before
+ * that, the outline (the groups the config can have, in order) gives one tab per group with its count
+ * still pending, so the groups are on screen at once. With neither read there is nothing to draw.
+ */
+export function reviewTabs(outline: GroupOutline[] | null, summary: GroupCount[] | null): TabDef[] {
+  if (summary) return groupTabs(summary);
+  if (outline) return outline.map((g) => ({ key: g.key, label: g.label, pending: true }));
+  return [];
 }
 
 /** The group the page opens on: the one the URL names if it is shown, else the largest. */

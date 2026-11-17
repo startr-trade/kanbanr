@@ -17,14 +17,14 @@
  * Which release holds and which check holds its promotion is derived by core (`manual::holding`,
  * `ManualWaiting.holds`, ADR-0002); this only draws it.
  */
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { AskFirst } from "../../components/AskFirst";
 import { askText, type Selection } from "../../reviewGroups";
 import { itemPrepared, joinManual, manualGroups, manualRowKey, manualRows, type ItemGroup, type ManualRow } from "../../manualTests";
 import { AccordionRow, Section, SeverityPill } from "../../ui";
-import { useAsync } from "../../live";
-import { api } from "../../api";
-import type { GroupSlice, ReviewRow as Row } from "../../types";
+import { useQuery } from "../../data/useQuery";
+import { TAGS, urls } from "../../data/urls";
+import type { GroupSlice, ManualWaiting, PreparedView, ReviewRow as Row } from "../../types";
 import { ReviewRow } from "./ReviewRow";
 
 /** "1 check", "3 checks". */
@@ -54,12 +54,15 @@ export interface ManualGroupProps {
 }
 
 /** The Manual group, its waiting checks read live beside the slice. */
-export function ManualGroupLive(p: Omit<ManualGroupProps, "manual"> & { tick: number }): JSX.Element {
-  const read = useAsync(
-    () => Promise.all([api.getManualTests(p.project), api.getPrepared(p.project)]).then(([w, pr]) => manualRows(w, pr)),
-    [p.project, p.tick],
+export function ManualGroupLive(p: Omit<ManualGroupProps, "manual">): JSX.Element {
+  // Both reads go through the shared cache (DEF-106): the page's own prepared read is the same URL.
+  const waiting = useQuery<ManualWaiting[]>(p.project, urls.manualTests(p.project), TAGS.manualTests);
+  const prepared = useQuery<PreparedView[]>(p.project, urls.prepared(p.project), TAGS.prepared);
+  const manual = useMemo(
+    () => (waiting.data && prepared.data ? manualRows(waiting.data, prepared.data) : null),
+    [waiting.data, prepared.data],
   );
-  return <ManualGroup {...p} manual={read.data} />;
+  return <ManualGroup {...p} manual={manual} />;
 }
 
 export function ManualGroup(p: ManualGroupProps): JSX.Element {

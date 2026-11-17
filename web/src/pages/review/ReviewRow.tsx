@@ -10,11 +10,11 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../../api";
-import { useAsync } from "../../live";
+import { useQuery } from "../../data/useQuery";
+import { TAGS, urls } from "../../data/urls";
 import { checkBlocks, type DiagramProblem } from "../../diagramCheck";
 import { AccordionRow } from "../../ui";
-import type { ReviewRow as Row } from "../../types";
+import type { ItemDiagrams, ReviewRow as Row } from "../../types";
 
 export function ReviewRow(p: {
   project: string;
@@ -82,10 +82,10 @@ export interface DiagramState {
 
 /**
  * Pele's parse of every diagram an item's brief covers — its spec and each doc in `affects_docs`
- * (FEAT-200) — re-run on the live tick, so fixing the spec re-enables Approve without a reload.
+ * (FEAT-200) — read through the shared cache and re-read when the item or its spec changes, so fixing the spec re-enables Approve without a reload.
  */
-export function useDiagramCheck(project: string, code: string, tick: number): DiagramState & { done: boolean } {
-  const diagrams = useAsync(() => api.getItemDiagrams(project, code), [project, code, tick]);
+export function useDiagramCheck(project: string, code: string): DiagramState & { done: boolean } {
+  const diagrams = useQuery<ItemDiagrams>(project, urls.itemDiagrams(project, code), TAGS.itemDiagrams(code));
   const [parsed, setParsed] = useState<{ problems: DiagramProblem[]; failed: string | null; done: boolean }>({
     problems: [],
     failed: null,
@@ -113,7 +113,7 @@ export function useDiagramCheck(project: string, code: string, tick: number): Di
   }, [diagrams.data, diagrams.error]);
   // Fails closed: a refetch in flight counts as loading, so a spec broken since the last check is
   // never approved on the strength of the check before it.
-  const loading = diagrams.loading || !parsed.done;
+  const loading = diagrams.loading || diagrams.refreshing || !parsed.done;
   return { ...parsed, loading };
 }
 
@@ -125,10 +125,9 @@ export function DiagramWatch(p: {
   project: string;
   rowKey: string;
   code: string;
-  tick: number;
   onState(key: string, state: DiagramState): void;
 }): null {
-  const check = useDiagramCheck(p.project, p.code, p.tick);
+  const check = useDiagramCheck(p.project, p.code);
   const { onState, rowKey } = p;
   const signature = `${check.loading}|${check.failed ?? ""}|${check.problems.length}`;
   useEffect(() => {

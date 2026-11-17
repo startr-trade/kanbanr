@@ -34,7 +34,7 @@ import {
   selectAll,
   type Selection,
 } from "../../reviewGroups";
-import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
+import { Empty, ErrorState, LoadingState, WorkingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
 import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
 import { ACCEPT_COMMAND, ACCEPT_SENTENCE } from "../../systemBaselineView";
@@ -139,7 +139,6 @@ export function GroupView(p: {
   group: string;
   writable: boolean;
   who: string | null;
-  tick: number;
   /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
   batches?: Batch[];
   body(row: Row, slice: GroupSlice): ReactNode;
@@ -147,7 +146,7 @@ export function GroupView(p: {
 }): JSX.Element {
   const q = useQuery<GroupSlice>(p.project, urls.reviewGroup(p.project, p.group), REVIEW_TAGS);
   if (q.error && !q.data) return <ErrorState error={`This group could not be read: ${q.error}`} retry={q.reload} />;
-  if (!q.data) return <LoadingState label="Reading the group…" />;
+  if (!q.data) return q.since === null ? <LoadingState label="Reading this group…" /> : <WorkingState label="Reading this group…" since={q.since} />;
   const reload = q.reload;
   return (
     <GroupPanel
@@ -155,7 +154,6 @@ export function GroupView(p: {
       slice={q.data}
       writable={p.writable}
       who={p.who}
-      tick={p.tick}
       batches={p.batches}
       body={(row) => p.body(row, q.data as GroupSlice)}
       onDecided={() => {
@@ -173,7 +171,6 @@ export function GroupPanel(p: {
   /** The monitor may write, as a known identity, outside conversation mode. */
   writable: boolean;
   who: string | null;
-  tick: number;
   /** The open prepared records by batch (FTR-037), for each batch's checks (DEF-089). */
   batches?: Batch[];
   body(row: Row): ReactNode;
@@ -413,7 +410,6 @@ export function GroupPanel(p: {
             slice={slice}
             rows={shown}
             writable={p.writable}
-            tick={p.tick}
             sel={sel}
             onSelect={(key, v) => setSel((s) => select(s, slice.key, key, v, slice.rows, pending))}
             onSelectItem={setSel}
@@ -430,7 +426,7 @@ export function GroupPanel(p: {
             return (
               <Fragment key={row.key}>
                 {needsDiagrams ? (
-                  <DiagramWatch project={p.project} rowKey={row.key} code={row.code} tick={p.tick} onState={onCheck} />
+                  <DiagramWatch project={p.project} rowKey={row.key} code={row.code} onState={onCheck} />
                 ) : null}
                 <ReviewRow
                   project={p.project}

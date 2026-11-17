@@ -41,11 +41,12 @@ import {
   emptySelection,
   groupTabs,
   preselected,
+  reviewTabs,
   select,
   selectAll,
 } from "../src/reviewGroups.ts";
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { closeRender, render } from "./lib/render.mjs";
 
@@ -483,6 +484,94 @@ try {
     if (!text("DLG-001").includes("Holds now: 4 design reviews, 2 approvals")) problems.push(`DLG-001 does not say what it holds: ${text("DLG-001")}`);
     if (!text("DLG-002").includes("Holds nothing now.")) problems.push(`DLG-002 does not say it holds nothing: ${text("DLG-002")}`);
     ok = report("web::check_review_groups_show_what_claude_holds", problems) && ok;
+  }
+  // DEF-106 R-1: the tabs from the outline alone, then from the summary.
+  {
+    const problems = [];
+    const outline = [
+      { key: "approve", label: "Approve", action: "Approve" },
+      { key: "docs-folded", label: "Sign off docs-folded", action: "Sign off" },
+      { key: "manual", label: "Manual checks", action: "Confirm" },
+    ];
+    eq(problems, "neither read gives no tabs", reviewTabs(null, null), []);
+    const early = reviewTabs(outline, null);
+    eq(problems, "an outline alone gives its groups in its order", early.map((t) => t.key), ["approve", "docs-folded", "manual"]);
+    eq(problems, "an outline tab carries its label", early.map((t) => t.label), ["Approve", "Sign off docs-folded", "Manual checks"]);
+    eq(problems, "every outline tab is pending", early.map((t) => t.pending === true), [true, true, true]);
+    eq(problems, "no outline tab is hidden", early.map((t) => t.hidden === true), [false, false, false]);
+    const counted = [
+      count("approve", "Approve", 3),
+      count("docs-folded", "Sign off docs-folded", 0, "Sign off"),
+      count("signoff-design-review", "Sign off design-review", 2, "Sign off"),
+    ];
+    eq(problems, "a summary decides once it is there", reviewTabs(outline, counted), groupTabs(counted));
+    eq(problems, "a re-asked sign-off only the queue knows appears", reviewTabs(outline, counted).map((t) => t.key), ["approve", "docs-folded", "signoff-design-review"]);
+    eq(problems, "an empty group is hidden once counted", reviewTabs(outline, counted).map((t) => t.hidden === true), [false, true, false]);
+    eq(problems, "a summary without an outline still gives its tabs", reviewTabs(null, counted), groupTabs(counted));
+    ok = report("web::check_review_tabs_merge_outline_and_counts", problems) && ok;
+  }
+
+  // DEF-106 R-1, R-10: the groups are drawn before any count, then the counts fill in.
+  {
+    const problems = [];
+    const outline = [
+      { key: "approve", label: "Approve", action: "Approve" },
+      { key: "manual", label: "Manual checks", action: "Confirm" },
+    ];
+    const query = (extra) => ({ data: null, error: null, loading: true, refreshing: false, since: null, ...extra });
+    const head = (summary, url = "/p/x/review") =>
+      render(
+        "src/pages/ReviewPage.tsx",
+        "ReviewGroupsHead",
+        { outline: query({ data: outline, loading: false }), summary, label: "Decisions waiting", children: (k) => `panel of ${k}` },
+        { url },
+      );
+    const waiting = await head(query({ since: Date.now() - 4000 }));
+    const tabs = [...waiting.document.querySelectorAll('[role="tab"]')];
+    eq(problems, "every outline group is a tab before the summary answers", tabs.map((t) => t.textContent.replace(/\s+/g, " ").trim()), ["Approve …", "Manual checks …"]);
+    eq(problems, "a pending tab says it is counting", tabs.map((t) => t.getAttribute("aria-label")), ["Approve, counting", "Manual checks, counting"]);
+    const working = waiting.document.querySelector(".ui-working");
+    if (!working || !working.textContent.includes("Counting what is waiting…")) problems.push(`no counting line: ${waiting.html}`);
+    else if (!/· 4 s/.test(working.textContent)) problems.push(`the counting line does not say how long: ${working.textContent}`);
+    if (!waiting.document.querySelector('[role="tabpanel"]')) problems.push("the open tab has no panel while the counts are pending");
+
+    const counted = [count("approve", "Approve", 3), count("manual", "Manual checks", 0, "Confirm")];
+    const filled = await head(query({ data: counted, loading: false }));
+    const names = [...filled.document.querySelectorAll('[role="tab"]')].map((t) => t.textContent.replace(/\s+/g, " ").trim());
+    eq(problems, "counted, the empty group goes and the count fills in", names, ["Approve 3"]);
+    if (filled.document.querySelector(".ui-working")) problems.push("a line says it is working when nothing is in flight");
+
+    const again = await head(query({ data: counted, loading: false, refreshing: true, since: Date.now() - 3000 }));
+    eq(problems, "a re-read keeps the old counts", [...again.document.querySelectorAll('[role="tab"]')].map((t) => t.textContent.replace(/\s+/g, " ").trim()), ["Approve 3"]);
+    if (!(again.document.querySelector(".ui-working")?.textContent ?? "").includes("Updating the counts…")) problems.push("a re-read does not say it is updating the counts");
+    ok = report("web::check_review_draws_groups_before_counts", problems) && ok;
+  }
+
+  // DEF-106 R-3: nothing on the page reads outside the shared cache.
+  {
+    const problems = [];
+    const dir = new URL("../src/pages/review/", import.meta.url);
+    const files = [
+      ["src/pages/ReviewPage.tsx", read("../src/pages/ReviewPage.tsx")],
+      ...readdirSync(dir)
+        .filter((f) => f.endsWith(".tsx"))
+        .map((f) => [`src/pages/review/${f}`, read(`../src/pages/review/${f}`)]),
+    ];
+    for (const [name, text] of files) {
+      const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      if (/useLiveTick/.test(code)) problems.push(`${name} opens the page's own event stream (useLiveTick)`);
+      if (/EventSource/.test(code)) problems.push(`${name} uses an EventSource`);
+      if (/useAsync\((?:(?!;)[\s\S])*?\btick\b/.test(code)) problems.push(`${name} re-reads a useAsync on a tick`);
+      if (/\btick\b/.test(code)) problems.push(`${name} still names a tick`);
+    }
+    const page = files[0][1];
+    for (const want of ["urls.reviewOutline(", "urls.reviewSummary(", "urls.prepared(", "urls.decisions("]) {
+      if (!page.includes(want)) problems.push(`ReviewPage.tsx does not read ${want} through the cache`);
+    }
+    const manual = read("../src/pages/review/ManualGroup.tsx");
+    for (const want of ["urls.manualTests(", "urls.prepared("]) if (!manual.includes(want)) problems.push(`ManualGroup.tsx does not read ${want} through the cache`);
+    if (!read("../src/pages/review/ReviewRow.tsx").includes("urls.itemDiagrams(")) problems.push("useDiagramCheck does not read through the cache");
+    ok = report("web::check_review_page_reads_only_through_the_cache", problems) && ok;
   }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);

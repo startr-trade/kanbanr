@@ -333,26 +333,28 @@ struct Board {
 }
 
 impl Board {
+    #[cfg(test)]
     fn load(store: &Store, p: &str, repo: Option<&Path>) -> Result<Board> {
         Self::load_at(store, p, repo, &crate::now_rfc3339())
     }
 
     fn load_at(store: &Store, p: &str, repo: Option<&Path>, now: &str) -> Result<Board> {
-        let decisions = crate::decisions::view_parts(store, p, repo, now)?;
+        // One read of the board's items for everything below (DEF-106).
+        let project = store.load(p)?;
+        let decisions = crate::decisions::view_parts_in(store, p, repo, now, &project)?;
         let all: Vec<crate::decisions::Delegation> = decisions
             .delegations
             .iter()
             .map(|d| d.delegation.clone())
             .collect();
-        let meta = store.load_meta(p)?;
         let baseline = match crate::systembaseline::load(store, p)? {
-            Some(_) => Some(crate::systembaseline::state(store, &meta, repo)?),
+            Some(_) => Some(crate::systembaseline::state(store, &project, repo)?),
             None => None,
         };
         Ok(Board {
             baseline,
-            entries: crate::review::pending(store, p, repo)?,
-            manual: crate::manual::waiting(store, p)?,
+            entries: crate::review::pending_in(store, p, repo, &project)?,
+            manual: crate::manual::waiting_in(store, p, &project)?,
             delegations: decisions
                 .delegations
                 .into_iter()
@@ -363,14 +365,15 @@ impl Board {
                 .into_iter()
                 .filter(|a| a.status.eq_ignore_ascii_case("proposed") && !a.is_superseded())
                 .collect(),
-            prepared: crate::prepared::list(
+            prepared: crate::prepared::list_in(
                 store,
                 p,
                 &crate::prepared::ListQuery::default(),
                 repo,
+                &project,
             )?,
             mode: decisions.mode,
-            meta,
+            meta: project,
             releases: crate::releases::load(store, p)?,
             all,
             now: now.to_string(),
@@ -996,7 +999,14 @@ fn computed_here() -> u64 {
     COMPUTED.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
 fn rev_of(store: &Store, p: &str, repo: Option<&Path>) -> ReviewRev {
+    rev_at(store, p, repo, &crate::now_rfc3339())
+}
+
+/// [`rev_of`] at the instant `now`: the one place the clock enters a revision, so a test can move
+/// it past midnight (DEF-106).
+fn rev_at(store: &Store, p: &str, repo: Option<&Path>, now: &str) -> ReviewRev {
     let data_dir = store.data_dir().to_path_buf();
     let prefix = format!("projects/{p}/");
     let mut dirty: Vec<String> = crate::git::dirty_paths(&data_dir)
@@ -1016,9 +1026,8 @@ fn rev_of(store: &Store, p: &str, repo: Option<&Path>) -> ReviewRev {
         });
         seen.push_str(&format!("{f}\0{len}\0{at}\n"));
     }
-    let now = crate::now_rfc3339();
     ReviewRev {
-        ended: crate::decisions::ended_granted(store, p, &now),
+        ended: crate::decisions::ended_granted(store, p, now),
         board_head: crate::git::head_commit(&data_dir).unwrap_or_default(),
         board_dirty: crate::hash::stable_hash(&seen),
         code: repo.map(crate::coderepo::fingerprint).unwrap_or_default(),
@@ -1032,17 +1041,22 @@ fn rev_of(store: &Store, p: &str, repo: Option<&Path>) -> ReviewRev {
 /// the queue, the decisions and the attention badge until the board or the code repository
 /// changes. Concurrent callers at one revision compute it once; an error is returned and not kept.
 fn shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Arc<Board>> {
+    shared_at(store, p, repo, &crate::now_rfc3339())
+}
+
+/// [`shared`] at the instant `now`, which dates both the revision and the board read under it.
+fn shared_at(store: &Store, p: &str, repo: Option<&Path>, now: &str) -> Result<Arc<Board>> {
     #[cfg(test)]
     if crate::git::shared_off() {
-        return Ok(Arc::new(Board::load(store, p, repo)?));
+        return Ok(Arc::new(Board::load_at(store, p, repo, now)?));
     }
     // A board that is not a git repository cannot say when it changed, so nothing is kept.
     if crate::git::head_commit(store.data_dir()).is_none()
         && git2::Repository::open(store.data_dir()).is_err()
     {
-        return Ok(Arc::new(Board::load(store, p, repo)?));
+        return Ok(Arc::new(Board::load_at(store, p, repo, now)?));
     }
-    let rev = rev_of(store, p, repo);
+    let rev = rev_at(store, p, repo, now);
     let slot: SharedSlot = {
         let mut slots = SHARED.lock().unwrap_or_else(|e| e.into_inner());
         let key = (rev.data_dir.clone(), p.to_string());
@@ -1068,7 +1082,7 @@ fn shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Arc<Board>> {
     }
     #[cfg(test)]
     COMPUTED.with(|c| c.set(c.get() + 1));
-    let board = Arc::new(Board::load(store, p, repo)?);
+    let board = Arc::new(Board::load_at(store, p, repo, now)?);
     *held = Some((rev, board.clone()));
     Ok(board)
 }
@@ -1077,6 +1091,17 @@ fn shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Arc<Board>> {
 /// shared read.
 pub fn queue_shared(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<ReviewEntry>> {
     Ok(shared(store, p, repo)?.entries.clone())
+}
+
+/// The review queue of the current revision with the project it was judged on, from the shared
+/// read: what `decisions::waiting` needs, so it reads no item itself (DEF-106).
+pub(crate) fn queue_and_project(
+    store: &Store,
+    p: &str,
+    repo: Option<&Path>,
+) -> Result<(Vec<ReviewEntry>, crate::Project)> {
+    let board = shared(store, p, repo)?;
+    Ok((board.entries.clone(), board.meta.clone()))
 }
 
 /// One decision group the config can have, named before any is counted: a tab the page draws at
@@ -1701,6 +1726,28 @@ mod tests {
         std::fs::write(&path, file("2020-01-01T00:00:00Z", &revoked)).unwrap();
         assert_eq!(rev_of(&store, "demo", None).ended, 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-106 R-5: a new UTC day computes the snapshot again, and the board read under it is dated
+    /// by the day it was read on; later the same day, the same snapshot is kept.
+    #[test]
+    fn a_new_day_computes_it_again() {
+        let (store, dir) = board_with_decisions();
+        let computed = computed_here();
+        let morning = shared_at(&store, "demo", None, "2026-11-17T08:00:00Z").unwrap();
+        assert_eq!(computed_here() - computed, 1, "the first read computes");
+        assert_eq!(morning.now, "2026-11-17T08:00:00Z");
+        let evening = shared_at(&store, "demo", None, "2026-11-17T23:59:59Z").unwrap();
+        assert!(
+            Arc::ptr_eq(&morning, &evening),
+            "the same day keeps the snapshot"
+        );
+        assert_eq!(computed_here() - computed, 1);
+        let next = shared_at(&store, "demo", None, "2026-11-18T00:00:01Z").unwrap();
+        assert!(!Arc::ptr_eq(&morning, &next), "a new day computes it again");
+        assert_eq!(computed_here() - computed, 2);
+        assert_eq!(next.now, "2026-11-18T00:00:01Z");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn define(store: &Store, title: &str, def: FeatureDefinition) -> String {
@@ -2667,5 +2714,380 @@ mod tests {
             .is_err()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// DEF-106 R-8, R-10: the Review reads on a board shaped like the one that took a minute: many
+/// items, prepared records, a long board history and a long code history. The counts (history
+/// walks, board loads) are asserted whatever the build; the timings are `#[ignore]`d and run in
+/// release by the gate: `cargo test -p kanbanr-core --release reviewgroups::perf -- --ignored`.
+#[cfg(test)]
+mod perf {
+    use super::*;
+    use crate::config::{Gate, ProjectConfig};
+    use crate::docdrift::testkit::{code_commit, git_env, scratch};
+    use crate::models::FeatureDefinition;
+    use std::io::Write;
+    use std::time::Instant;
+
+    /// The size of a generated board and its repositories.
+    struct Shape {
+        /// Items waiting for their first approval.
+        items: usize,
+        /// Prepared records, of every kind, on those items.
+        prepared: usize,
+        /// Items with one manual check each.
+        manual: usize,
+        /// Granted delegations.
+        delegations: usize,
+        /// Items waiting on `docs-folded`.
+        docs_folded: usize,
+        /// Texts each of those items links.
+        texts_each: usize,
+        board_commits: usize,
+        code_commits: usize,
+    }
+
+    /// This board when v0.8.0 was designed: 431 items, 449 prepared records, 11,214 board commits
+    /// and 1,902 code commits.
+    const THIS_BOARD: Shape = Shape {
+        items: 400,
+        prepared: 449,
+        manual: 19,
+        delegations: 2,
+        docs_folded: 5,
+        texts_each: 6,
+        board_commits: 11_214,
+        code_commits: 1_902,
+    };
+
+    /// A few of everything, for the counts in every build.
+    const SMALL: Shape = Shape {
+        items: 12,
+        prepared: 10,
+        manual: 3,
+        delegations: 2,
+        docs_folded: 3,
+        texts_each: 3,
+        board_commits: 150,
+        code_commits: 60,
+    };
+
+    /// `n` commits written by one `git fast-import`: each rewrites two files under `dir`'s
+    /// `folder`, so the history is long without the cost of `n` `git commit`s.
+    fn fast_history(repo: &std::path::Path, folder: &str, n: usize) {
+        let mut stream = String::new();
+        for k in 0..n {
+            let msg = format!("history {k}\n");
+            let at = 1_700_000_000 + k as i64 * 60;
+            stream.push_str(&format!(
+                "commit refs/heads/main\ncommitter T <t@example.com> {at} +0000\ndata {}\n{msg}",
+                msg.len()
+            ));
+            for file in [k % 211, (k * 7) % 211] {
+                let body = format!("version {k}\n");
+                stream.push_str(&format!(
+                    "M 100644 inline {folder}/f{file}.txt\ndata {}\n{body}",
+                    body.len()
+                ));
+            }
+            stream.push('\n');
+        }
+        let mut child = std::process::Command::new("git")
+            .args(["fast-import", "--quiet"])
+            .current_dir(repo)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stream.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "git fast-import");
+        git_env(repo, &["reset", "-q", "--hard", "main"], None);
+    }
+
+    /// A manual check's name: it says what the person judges.
+    const MANUAL_TEST: &str = "manual: the page reads clearly";
+
+    fn definition(text: &str, manual: bool) -> FeatureDefinition {
+        let (name, test) = if manual {
+            (MANUAL_TEST, "manual")
+        } else {
+            ("t::x", "unit")
+        };
+        crate::yaml::from_str(&format!(
+            "statement: {text}\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    tests:\n      - name: \"{name}\"\n        kind: {test}\n        state: planned\n"
+        ))
+        .unwrap()
+    }
+
+    /// A board with its history and a code repository with its own, shaped by `s`. Returns the
+    /// store, the board's folder and the code repository.
+    fn generated_board_with_history(s: &Shape) -> (Store, std::path::PathBuf, std::path::PathBuf) {
+        let dir = scratch("review-perf");
+        git_env(&dir, &["init", "-q", "-b", "main"], None);
+        fast_history(&dir, "history", s.board_commits);
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        let mut config = ProjectConfig::default_for("demo");
+        config.cadence.releases = true;
+        config.gates.insert(
+            "Completed".into(),
+            Gate {
+                signoffs: vec!["docs-folded".into()],
+                ..Default::default()
+            },
+        );
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut plain = Vec::new();
+        for i in 0..s.items {
+            let f = store
+                .add_feature("demo", &format!("Item {i}"), "# x", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(definition(&format!("Item {i}"), false)),
+                )
+                .unwrap();
+            plain.push(f.code);
+        }
+        for i in 0..s.manual {
+            let f = store
+                .add_feature("demo", &format!("Checked {i}"), "# x", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(definition(&format!("Checked {i}"), true)),
+                )
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada").unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            // A prepared result for the check, read for what it still waits on.
+            let record = crate::prepared::Prepared {
+                kind: "manual-test".into(),
+                subject: crate::prepared::Subject {
+                    item: f.code.clone(),
+                    requirement: "R-1".into(),
+                    test: MANUAL_TEST.into(),
+                    ..Default::default()
+                },
+                at: format!("2026-11-{:02}T10:{:02}:00Z", 1 + i % 28, i % 60),
+                ..Default::default()
+            };
+            crate::prepared::write_record(&store, "demo", &record).unwrap();
+        }
+        // Prepared records on plain items, most of them stale.
+        for (n, code) in plain
+            .iter()
+            .cycle()
+            .take(s.prepared.saturating_sub(s.manual))
+            .enumerate()
+        {
+            let record = crate::prepared::Prepared {
+                kind: "signoff".into(),
+                subject: crate::prepared::Subject {
+                    item: code.clone(),
+                    signoff: "design-review".into(),
+                    ..Default::default()
+                },
+                at: format!(
+                    "2026-10-{:02}T{:02}:{:02}:{:02}Z",
+                    1 + n % 28,
+                    n / 3600 % 24,
+                    n / 60 % 60,
+                    n % 60
+                ),
+                rev: "old".into(),
+                ..Default::default()
+            };
+            crate::prepared::write_record(&store, "demo", &record).unwrap();
+        }
+        let mut folded = Vec::new();
+        for i in 0..s.docs_folded {
+            let f = store
+                .add_feature("demo", &format!("Folded {i}"), "# x", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(definition(&format!("Folded {i}"), false)),
+                )
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada").unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+            store
+                .add_task(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "one",
+                    None,
+                    &crate::store::TaskFields::default(),
+                )
+                .unwrap();
+            store
+                .set_task_state(
+                    "demo",
+                    &f.code,
+                    &list.code,
+                    "T1",
+                    crate::models::TaskState::Completed,
+                )
+                .unwrap();
+            for j in 0..s.texts_each {
+                store
+                    .write_doc(
+                        "demo",
+                        &format!("design/d{i}-{j}.md"),
+                        &format!(
+                            "---\nitems: [{}]\n---\n\n# D\n\nRun with --flag-{i}-{j}.\n",
+                            f.code
+                        ),
+                    )
+                    .unwrap();
+            }
+            folded.push(f.code);
+        }
+        // Granted delegations, each with a version of decisions.yaml in the board's history.
+        let stamp = "{by: Ada, at: \"2026-11-01T00:00:00Z\", origin: test}";
+        let mut file = String::from("delegations:\n");
+        for d in 0..s.delegations {
+            file.push_str(&format!(
+                "- id: DLG-{}\n  verdicts: [approve]\n  all: true\n  until: \"2099-01-01T00:00:00Z\"\n  proposed: {stamp}\n  granted: {stamp}\n",
+                d + 1
+            ));
+            std::fs::write(store.project_dir("demo").join("decisions.yaml"), &file).unwrap();
+            assert!(crate::git::commit_local(&dir, "a delegation"));
+        }
+        // Nothing is left to commit when a delegation's commit took it all.
+        let _ = crate::git::commit_local(&dir, "the board");
+
+        let code = scratch("review-perf-code");
+        git_env(&code, &["init", "-q", "-b", "main"], None);
+        fast_history(&code, "src", s.code_commits);
+        for (i, item) in folded.iter().enumerate() {
+            let body: String = (0..s.texts_each)
+                .map(|j| format!("let a{j} = \"--flag-{i}-{j}\";\n"))
+                .collect();
+            code_commit(
+                &code,
+                &format!("lib/f{i}.rs"),
+                &body,
+                &format!("add\n\nRefs: kanbanr:{item}"),
+                "2099-01-01T00:00:00+00:00",
+            );
+        }
+        (store, dir, code)
+    }
+
+    /// What one cold read cost: wall time, history walks, board loads.
+    struct Cost {
+        took: std::time::Duration,
+        walks: u64,
+        loads: u64,
+    }
+
+    fn cold<T>(store: &Store, f: impl FnOnce() -> T) -> (T, Cost) {
+        let (walks, loads) = (crate::git::path_history_walks_here(), store.loads());
+        let at = Instant::now();
+        let out = f();
+        let cost = Cost {
+            took: at.elapsed(),
+            walks: crate::git::path_history_walks_here() - walks,
+            loads: store.loads() - loads,
+        };
+        (out, cost)
+    }
+
+    /// The most history walks and board loads one cold summary may cost (R-8). A walk is the
+    /// board's one `git log --raw -M`; loads are measured on the real cold path.
+    const MAX_WALKS: u64 = 1;
+    const MAX_LOADS: u64 = 3;
+
+    /// The counts, whatever the build: a cold summary over a small board and a code repository.
+    #[test]
+    fn a_cold_summary_walks_history_once_and_loads_the_board_a_few_times() {
+        let (store, dir, code) = generated_board_with_history(&SMALL);
+        let (groups, cost) = cold(&store, || summary(&store, "demo", Some(&code)).unwrap());
+        println!(
+            "cold summary: {:?}, {} walks, {} loads",
+            cost.took, cost.walks, cost.loads
+        );
+        assert!(!groups.is_empty());
+        assert!(cost.walks <= MAX_WALKS, "{} history walks", cost.walks);
+        assert!(cost.loads <= MAX_LOADS, "{} board loads", cost.loads);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(code);
+    }
+
+    /// R-8: a cold summary on a board shaped like this one, in release, with the code repository.
+    #[test]
+    #[ignore = "a timing budget: run with --ignored in release"]
+    fn the_summary_answers_cold_within_budget() {
+        let (store, dir, code) = generated_board_with_history(&THIS_BOARD);
+        let (groups, cost) = cold(&store, || summary(&store, "demo", Some(&code)).unwrap());
+        println!(
+            "cold summary: {:?}, {} walks, {} loads",
+            cost.took, cost.walks, cost.loads
+        );
+        assert!(!groups.is_empty());
+        assert!(cost.walks <= MAX_WALKS, "{} history walks", cost.walks);
+        assert!(cost.loads <= MAX_LOADS, "{} board loads", cost.loads);
+        assert!(
+            cost.took < std::time::Duration::from_millis(3_000),
+            "a cold summary took {:?}",
+            cost.took
+        );
+        // Warm: kept until the board or the code repository changes.
+        let (_, warm) = cold(&store, || summary(&store, "demo", Some(&code)).unwrap());
+        println!("warm summary: {:?}, {} loads", warm.took, warm.loads);
+        assert_eq!(warm.loads, 0, "a warm summary loads nothing");
+        assert!(
+            warm.took < std::time::Duration::from_millis(50),
+            "warm {:?}",
+            warm.took
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(code);
+    }
+
+    /// R-10: the outline from the config alone, cold.
+    #[test]
+    #[ignore = "a timing budget: run with --ignored in release"]
+    fn the_outline_answers_cold_within_budget() {
+        let (store, dir, code) = generated_board_with_history(&THIS_BOARD);
+        let (out, cost) = cold(&store, || outline(&store, "demo").unwrap());
+        println!("cold outline: {:?}, {} loads", cost.took, cost.loads);
+        assert!(!out.is_empty());
+        assert_eq!(cost.loads, 0, "the outline reads the config alone");
+        assert!(
+            cost.took < std::time::Duration::from_millis(100),
+            "the outline took {:?}",
+            cost.took
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(code);
     }
 }

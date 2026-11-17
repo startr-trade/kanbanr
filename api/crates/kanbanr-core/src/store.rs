@@ -553,6 +553,28 @@ impl Store {
     /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
     pub fn load_for_gates(&self, id: &str) -> Result<Project> {
         let project = self.load_meta(id)?;
+        if self.gates_read_specs(id, &project) {
+            return self.load(id);
+        }
+        Ok(project)
+    }
+
+    /// [`Store::load_for_gates`]'s answer from a project already loaded in full: the whole project
+    /// when a gate reads spec bodies, else the same project with its specs left out. It reads
+    /// nothing from the board (DEF-106: one load shared by every read of a revision).
+    pub fn gates_view(&self, id: &str, full: &Project) -> Project {
+        let mut project = full.clone();
+        if !self.gates_read_specs(id, &project) {
+            for f in &mut project.features {
+                f.specification = String::new();
+            }
+        }
+        project
+    }
+
+    /// Does judging this project's gates need the spec bodies, which a metadata-only load leaves
+    /// empty?
+    fn gates_read_specs(&self, id: &str, project: &Project) -> bool {
         // A pinned sign-off needs the spec whatever the gates ask now: with the Design part turned
         // off, the empty spec would read every pinned sign-off as changed (FTR-023).
         let pinned = project.features.iter().any(|f| {
@@ -578,7 +600,7 @@ impl Store {
                 .effective_gates()
                 .values()
                 .any(|g| g.signoffs.iter().any(|s| s == crate::method::DESIGN_REVIEW));
-        if pinned
+        pinned
             || docs_folded
             || design_review
             || project
@@ -586,10 +608,6 @@ impl Store {
                 .effective_gates()
                 .values()
                 .any(|g| g.reads_spec())
-        {
-            return self.load(id);
-        }
-        Ok(project)
     }
 
     /// Where the spec a sign-off covered is kept (FTR-023): content-addressed, keyed by code.
