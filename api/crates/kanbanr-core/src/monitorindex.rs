@@ -355,8 +355,27 @@ mod tests {
             )
             .unwrap();
         let list = store.add_todo_list("demo", &a, "Build", None).unwrap().code;
-        let t1 = store.add_task("demo", &a, &list, "one", None).unwrap().key;
-        store.add_task("demo", &a, &list, "two", None).unwrap();
+        let t1 = store
+            .add_task(
+                "demo",
+                &a,
+                &list,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
+            .unwrap()
+            .key;
+        store
+            .add_task(
+                "demo",
+                &a,
+                &list,
+                "two",
+                None,
+                &crate::store::TaskFields::default(),
+            )
+            .unwrap();
         store
             .set_task_state("demo", &a, &list, &t1, TaskState::Completed)
             .unwrap();

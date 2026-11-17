@@ -2742,7 +2742,14 @@ mod tests {
         let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
         let list = store.add_todo_list("demo", &f.code, "w", None).unwrap();
         store
-            .add_task("demo", &f.code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(
@@ -2880,7 +2887,14 @@ mod tests {
         let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
         let list = store.add_todo_list("demo", &f.code, "w", None).unwrap();
         store
-            .add_task("demo", &f.code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &f.code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(

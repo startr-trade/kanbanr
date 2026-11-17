@@ -525,6 +525,25 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT],
             response: Response::Text("text/plain; charset=utf-8"),
         },
+        RouteDoc {
+            path: "/api/projects/{project}/ready/tasks",
+            summary: "What can start now, task by task (FTR-060): the tasks in progress, the tasks \
+                      free to start with their critical-path mark and remaining chain, why each \
+                      other open task waits, and with lanes up to that many ready tasks that can \
+                      start together, critical path first",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "lanes",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::Integer,
+                    description: "Propose up to this many conflict-free ready tasks to start \
+                                  together.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::taskgraph::TaskReadiness>),
+        },
         // ---- docs ----
         RouteDoc {
             path: "/api/projects/{project}/docs",

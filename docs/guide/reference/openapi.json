@@ -5577,6 +5577,41 @@
         ],
         "type": "object"
       },
+      "ReadyTask": {
+        "description": "A task that is running or free to start.",
+        "properties": {
+          "chain_h": {
+            "description": "The longest remaining chain starting at this task, in agent-hours.",
+            "format": "double",
+            "type": "number"
+          },
+          "critical": {
+            "description": "On the project's critical path.",
+            "type": "boolean"
+          },
+          "estimate_h": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "estimate_h",
+          "critical",
+          "chain_h"
+        ],
+        "type": "object"
+      },
       "Recent": {
         "description": "One recent decision, in words.",
         "properties": {
@@ -7531,6 +7566,43 @@
         ],
         "type": "object"
       },
+      "TaskReadiness": {
+        "description": "What can run now in a project.",
+        "properties": {
+          "lanes": {
+            "description": "Ready tasks that can start together, critical path first (empty unless lanes were asked).",
+            "items": {
+              "$ref": "#/components/schemas/ReadyTask"
+            },
+            "type": "array"
+          },
+          "ready": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyTask"
+            },
+            "type": "array"
+          },
+          "running": {
+            "items": {
+              "$ref": "#/components/schemas/ReadyTask"
+            },
+            "type": "array"
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/WaitingTask"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "running",
+          "ready",
+          "waiting",
+          "lanes"
+        ],
+        "type": "object"
+      },
       "TaskState": {
         "description": "Tri-state for a feature's todo items.",
         "enum": [
@@ -7870,6 +7942,78 @@
         ],
         "type": "object"
       },
+      "Wait": {
+        "description": "Why an open task cannot start now.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "A task it waits on is not Completed.",
+            "properties": {
+              "Dependency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "Dependency"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "A task in progress writes some of the same files (none named: that task's files are not\nrecorded, and it is in the same item).",
+            "properties": {
+              "Conflict": {
+                "properties": {
+                  "paths": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "task": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "task",
+                  "paths"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "Conflict"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Its item is not at the build stage: the item's status.",
+            "properties": {
+              "ItemNotAtBuild": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ItemNotAtBuild"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "It records no files, and this task of its item is in progress.",
+            "properties": {
+              "UnknownFootprint": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "UnknownFootprint"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "Waiting": {
         "properties": {
           "code": {
@@ -7892,6 +8036,25 @@
           "code",
           "what",
           "place"
+        ],
+        "type": "object"
+      },
+      "WaitingTask": {
+        "description": "A task that cannot start yet, and every reason why.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "waits": {
+            "items": {
+              "$ref": "#/components/schemas/Wait"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "waits"
         ],
         "type": "object"
       },
@@ -9653,6 +9816,57 @@
           }
         },
         "summary": "What each live item is missing, and its next stages, keyed by code"
+      }
+    },
+    "/api/projects/{project}/ready/tasks": {
+      "get": {
+        "operationId": "getProjectsReadyTasks",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Propose up to this many conflict-free ready tasks to start together.",
+            "in": "query",
+            "name": "lanes",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskReadiness"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What can start now, task by task (FTR-060): the tasks in progress, the tasks free to start with their critical-path mark and remaining chain, why each other open task waits, and with lanes up to that many ready tasks that can start together, critical path first"
       }
     },
     "/api/projects/{project}/releases": {

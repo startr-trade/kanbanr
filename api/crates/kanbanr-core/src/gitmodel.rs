@@ -1487,7 +1487,14 @@ mod tests {
         store.move_feature("demo", &code, "Scheduled").unwrap();
         let list = store.add_todo_list("demo", &code, "work", None).unwrap();
         store
-            .add_task("demo", &code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(
@@ -1612,7 +1619,14 @@ mod tests {
         store.move_feature("demo", &code, "Scheduled").unwrap();
         let list = store.add_todo_list("demo", &code, "work", None).unwrap();
         store
-            .add_task("demo", &code, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &code,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(

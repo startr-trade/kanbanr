@@ -640,7 +640,14 @@ mod tests {
     fn task(store: &crate::Store, code: &str, text: &str, state: TaskState) {
         let todo = store.add_todo_list("demo", code, "t", None).unwrap();
         let t = store
-            .add_task("demo", code, &todo.code, text, None)
+            .add_task(
+                "demo",
+                code,
+                &todo.code,
+                text,
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state("demo", code, &todo.code, &t.key, state)
@@ -759,7 +766,14 @@ mod tests {
 
         let todo = store.add_todo_list("demo", &code, "u", None).unwrap();
         let t = store
-            .add_task("demo", &code, &todo.code, "Also", None)
+            .add_task(
+                "demo",
+                &code,
+                &todo.code,
+                "Also",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state("demo", &code, &todo.code, &t.key, TaskState::Completed)

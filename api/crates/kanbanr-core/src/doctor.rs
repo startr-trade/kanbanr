@@ -146,6 +146,10 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
         scan_repository(store, project, &mut report);
+        // A task ref whose task is gone (FTR-060).
+        report
+            .issues
+            .extend(crate::taskgraph::issues(store, &project.id));
     }
     scan_leftover_writes(store, "board", &mut report);
     scan_identity(store, "board", &mut report);
@@ -202,6 +206,8 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_method_choice(&project, &mut report);
     scan_codes(&project, &mut report);
     scan_repository(store, &project, &mut report);
+    // A task ref whose task is gone (FTR-060).
+    report.issues.extend(crate::taskgraph::issues(store, id));
     scan_identity(store, id, &mut report);
     scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);

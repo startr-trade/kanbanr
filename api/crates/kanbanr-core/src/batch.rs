@@ -178,6 +178,38 @@ pub enum BatchOp {
         text: String,
         #[serde(default)]
         key: Option<String>,
+        /// The tasks it waits on (FTR-060).
+        #[serde(default)]
+        depends_on: Option<Vec<String>>,
+        /// The files it writes.
+        #[serde(default)]
+        writes: Option<Vec<String>>,
+        /// The files it only reads.
+        #[serde(default)]
+        reads: Option<Vec<String>>,
+        /// Its estimate in agent-hours.
+        #[serde(default)]
+        estimate_h: Option<f64>,
+    },
+    /// Change what a task records (FTR-060): its text, the tasks it waits on, the files it writes
+    /// and reads, its estimate. An absent field stays; an empty list or a null estimate clears
+    /// it. Never its state: that is `task.state`.
+    #[serde(rename = "task.edit")]
+    TaskEdit {
+        feature: String,
+        todo: String,
+        key: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        depends_on: Option<Vec<String>>,
+        #[serde(default)]
+        writes: Option<Vec<String>>,
+        #[serde(default)]
+        reads: Option<Vec<String>>,
+        /// Absent: unchanged; `null`: cleared; a number: set.
+        #[serde(default, deserialize_with = "present")]
+        estimate_h: Option<Option<f64>>,
     },
     /// Update a task's state (NotStarted | InProgress | Completed).
     #[serde(rename = "task.state")]
@@ -275,6 +307,16 @@ pub fn normalize(
         op["source"]["revision"] = serde_json::json!(rev);
     }
     body
+}
+
+/// A field that may be absent, `null` or a value: present at all is `Some`, so `null` reads as
+/// `Some(None)` (clear) and absent, through `#[serde(default)]`, as `None` (leave).
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
 }
 
 #[cfg(test)]

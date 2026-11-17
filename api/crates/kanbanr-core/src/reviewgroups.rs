@@ -1265,7 +1265,14 @@ mod tests {
         // Its one task done while it is still Planned, so finishing it moves nothing.
         let list = store.add_todo_list("demo", &built, "work", None).unwrap();
         store
-            .add_task("demo", &built, &list.code, "one", None)
+            .add_task(
+                "demo",
+                &built,
+                &list.code,
+                "one",
+                None,
+                &crate::store::TaskFields::default(),
+            )
             .unwrap();
         store
             .set_task_state(

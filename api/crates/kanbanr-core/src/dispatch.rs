@@ -389,6 +389,27 @@ fn vec_field(body: &Value, k: &str) -> Option<Vec<String>> {
     })
 }
 
+/// A task write's lists (FTR-060): each present array is set, an empty one clears.
+fn task_fields(body: &Value) -> crate::store::TaskFields {
+    crate::store::TaskFields {
+        depends_on: vec_field(body, "depends_on"),
+        writes: vec_field(body, "writes"),
+        reads: vec_field(body, "reads"),
+        ..Default::default()
+    }
+}
+
+/// A task write's `estimate_h` (FTR-060): absent `None`, `null` `Some(None)`, a number set.
+fn task_estimate(body: &Value) -> Result<Option<Option<f64>>> {
+    match body.get("estimate_h") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(v) => v.as_f64().map(|h| Some(Some(h))).ok_or_else(|| {
+            CoreError::Unsupported("estimate_h must be a number of agent-hours or null".into())
+        }),
+    }
+}
+
 /// A project's codes as `config codes` shows them (FEAT-217): the effective default, each kind's
 /// prefix, and per prefix configured or in use, the next code and how many items have it.
 #[derive(Debug, Serialize)]
@@ -1166,6 +1187,19 @@ fn dispatch_routes(
             let view = DependencyView::build(store, None)?;
             ser(&view.ready(Some(p)))
         }
+        // What can start now, task by task (FTR-060): `?lanes=N` proposes up to N to start
+        // together, critical path first.
+        ("GET", ["projects", p, "ready", "tasks"]) => {
+            let project = store.load_meta(p)?;
+            let lanes = match query_param(query, "lanes") {
+                Some(n) => Some(n.parse::<usize>().map_err(|_| {
+                    CoreError::Unsupported(format!("lanes={n}: a whole number of lanes"))
+                })?),
+                None => None,
+            };
+            let graph = crate::taskgraph::TaskGraph::build(store, p, Some(&project))?;
+            ser(&graph.readiness(p, &project.config.tasks.append_only, lanes))
+        }
         ("GET", ["projects", p, "blocked"]) => {
             store.load(p)?;
             let view = DependencyView::build(store, None)?;
@@ -1586,14 +1620,31 @@ fn dispatch_routes(
             &str_field(b, "description").unwrap_or_default(),
             str_field(b, "code"),
         )?),
-        ("POST", ["projects", p, "features", code, "todos", todo, "tasks"]) => ser(&store
-            .add_task(
+        // `{text, key?, depends_on?, writes?, reads?, estimate_h?}` (FTR-060 adds the last four).
+        ("POST", ["projects", p, "features", code, "todos", todo, "tasks"]) => {
+            let fields = crate::store::TaskFields {
+                estimate_h: task_estimate(b)?.flatten().map(Some),
+                ..task_fields(b)
+            };
+            ser(&store.add_task(
                 p,
                 code,
                 todo,
                 &str_field(b, "text").unwrap_or_default(),
                 str_field(b, "key"),
-            )?),
+                &fields,
+            )?)
+        }
+        // `{text?, depends_on?, writes?, reads?, estimate_h?}` (FTR-060): what a task records; an
+        // absent field stays, an empty list or `estimate_h: null` clears it. Never its state.
+        ("PATCH", ["projects", p, "features", code, "todos", todo, "tasks", key]) => {
+            let fields = crate::store::TaskFields {
+                estimate_h: task_estimate(b)?,
+                text: str_field(b, "text"),
+                ..task_fields(b)
+            };
+            ser(&store.edit_task(p, code, todo, key, &fields)?)
+        }
         ("PUT", ["projects", p, "features", code, "todos", todo, "tasks", key]) => {
             let raw = str_field(b, "state").unwrap_or_default();
             let state = TaskState::parse(&raw).ok_or(CoreError::InvalidTaskState(raw))?;
@@ -3202,6 +3253,11 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         }
         ["projects", _p, "features", c, "todos"] => format!("add todo-list to {c}"),
         ["projects", _p, "features", c, "todos", t, "tasks"] => format!("add task to {c}/{t}"),
+        ["projects", _p, "features", c, "todos", t, "tasks", k]
+            if method.eq_ignore_ascii_case("PATCH") =>
+        {
+            format!("edit task {k} ({c}/{t})")
+        }
         ["projects", _p, "features", c, "todos", t, "tasks", k] => {
             format!("update task {k} ({c}/{t})")
         }
