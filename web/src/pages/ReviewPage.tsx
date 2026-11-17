@@ -11,7 +11,7 @@ import type { Adr, DriftFlag, PendingReview, PlannedRelease, SettledText, SpecBr
 import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, blockedSentence, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
-import { type Batch, batches, editedWhileFlagged, openFor } from "../prepared";
+import { type Batch, batchChecks, batches, editedWhileFlagged, openFor } from "../prepared";
 import { lastResultLine, manualCommand, manualRows, notDueLine, outcomeLine, type ManualRow, type Outcome } from "../manualTests";
 import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
 
@@ -729,12 +729,14 @@ function BatchBar({
   const n = batch.views.length;
   const kinds = Array.from(new Set(batch.views.map((v) => v.kind ?? "record")));
   const items = Array.from(new Set(batch.views.map((v) => v.subject.item).filter(Boolean)));
+  const checks = batchChecks(batch);
   return (
     <section className="review-item batch-bar">
       <h2>Batch {batch.name}</h2>
       <p className="muted">
         {n} {kinds.join(", ")} record{n === 1 ? "" : "s"} prepared together
-        {items.length ? ` for ${items.join(", ")}` : ""}, by {batch.views[0]?.by || "Claude"}. Confirm or
+        {items.length ? ` for ${items.join(", ")}` : ""}
+        {checks.length ? ` (checks ${checks.join(", ")})` : ""}, by {batch.views[0]?.by || "Claude"}. Confirm or
         reject them all with one click, or one alone below.
       </p>
       {outcome ? (

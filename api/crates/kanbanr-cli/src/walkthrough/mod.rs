@@ -2023,7 +2023,7 @@ fn prepare_batch(
         .ok_or_else(|| anyhow!("no project here to prepare the checks on; pass --project"))?;
     let backend = crate::Backend::new(target_board.to_path_buf());
     let board = kanbanr_core::Store::new(target_board).load(&project).ok();
-    let kind_of = |item: &str, req: &str, test: &str| -> Option<String> {
+    let test_of = |item: &str, req: &str, test: &str| -> Option<kanbanr_core::models::TestRef> {
         let f = board.as_ref()?.feature(item).ok()?;
         f.definition
             .as_ref()?
@@ -2033,7 +2033,7 @@ fn prepare_batch(
             .tests
             .iter()
             .find(|t| t.name == test)
-            .map(|t| t.kind.trim().to_lowercase())
+            .cloned()
     };
     let repo = crate::scm::repo_root();
     // What this batch already holds: a record open for the same subject is not prepared twice.
@@ -2059,7 +2059,27 @@ fn prepare_batch(
             "walkthrough run {batch} step {} ({}): {}",
             c.step, c.marker, c.why
         );
-        if kind_of(&def.item, &def.requirement, &def.test).as_deref() == Some("walkthrough") {
+        let stored = test_of(&def.item, &def.requirement, &def.test);
+        if stored
+            .as_ref()
+            .is_some_and(|t| t.kind.trim().eq_ignore_ascii_case("walkthrough"))
+        {
+            let state = if c.passed {
+                kanbanr_core::models::TestState::Green
+            } else {
+                kanbanr_core::models::TestState::Red
+            };
+            // A rerun leaves a result that already says this, at this revision, as it is.
+            if stored
+                .as_ref()
+                .is_some_and(|t| t.state == state && t.checked_rev == rev)
+            {
+                out.skipped.push(format!(
+                    "{} {}: already recorded at {rev}",
+                    def.requirement, def.test
+                ));
+                continue;
+            }
             let body = serde_json::json!({
                 "state": if c.passed { "green" } else { "red" },
                 "note": note,
