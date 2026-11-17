@@ -10,12 +10,14 @@ import { useScrollToHash } from "../useBoardIndex";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
 import {
+  durationText,
   featureProgress,
+  lastDuration,
   listsNewestFirst,
   listFullyCompleted,
   zachmanColumns,
 } from "../types";
-import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef } from "../types";
+import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef, TestTiming } from "../types";
 import { signoffDocs } from "../position";
 import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
@@ -246,6 +248,8 @@ function LessonsFor({ project, code }: { project: string; code: string }) {
 
 function Definition({ feature, project }: { feature: Feature; project: string }) {
   const def = feature.definition;
+  // Each test's last kept duration (FTR-058); the item page shows it beside the test's name.
+  const timings = useQuery<{ tests: TestTiming[] }>(project, urls.timings(project, feature.code), TAGS.timings);
   const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -422,7 +426,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
         ) : (
           <div className="todo-tiles">
             {(def.requirements ?? []).map((r) => (
-              <RequirementTile key={r.id} requirement={r} />
+              <RequirementTile key={r.id} requirement={r} timings={timings.data?.tests} />
             ))}
           </div>
         )}
@@ -431,7 +435,13 @@ function Definition({ feature, project }: { feature: Feature; project: string })
   );
 }
 
-function RequirementTile({ requirement: r }: { requirement: Requirement }) {
+function RequirementTile({
+  requirement: r,
+  timings,
+}: {
+  requirement: Requirement;
+  timings: readonly TestTiming[] | undefined;
+}) {
   const tests = r.tests ?? [];
   return (
     <section className="todo-tile" id={r.id}>
@@ -462,6 +472,13 @@ function RequirementTile({ requirement: r }: { requirement: Requirement }) {
             <li key={t.name}>
               <code className="taskkey">{t.kind || "test"}</code>
               <span className="tasktext">{t.name}</span>
+              {/* The last kept duration, muted, only for a test a capture timed (FTR-058 R-8). */}
+              {(() => {
+                const ms = lastDuration(timings, r.id, t.name);
+                return ms === undefined ? null : (
+                  <span className="muted">· {durationText(ms)}</span>
+                );
+              })()}
               <TestBadge test={t} />
             </li>
           ))}

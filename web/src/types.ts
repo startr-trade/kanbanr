@@ -268,6 +268,32 @@ export interface QualityScenario {
   measure?: string;
 }
 
+/** One test's last kept duration (FTR-058): whole milliseconds, from the newest capture that timed it. */
+export interface TestTiming {
+  code: string;
+  requirement: string;
+  test: string;
+  ms: number;
+  at: string;
+}
+
+/** A duration as the CLI prints it: under 1 s `N ms`, under 60 s `S.ss s`, else `M min S s`. */
+export function durationText(ms: number): string {
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(Math.floor(ms / 10) / 100).toFixed(2)} s`;
+  const secs = Math.floor(ms / 1000);
+  return `${Math.floor(secs / 60)} min ${secs % 60} s`;
+}
+
+/** The last kept duration of one requirement's test, or undefined when none was kept. */
+export function lastDuration(
+  timings: readonly TestTiming[] | null | undefined,
+  requirement: string,
+  test: string,
+): number | undefined {
+  return timings?.find((t) => t.requirement === requirement && t.test === test)?.ms;
+}
+
 export interface TestRef {
   name: string;
   kind?: string;

@@ -2,7 +2,7 @@ import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
 import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
-import type { CatalogStatus, FactsOrEmpty } from "./types";
+import type { CatalogStatus, FactsOrEmpty, TestTiming } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { FlowPlan, PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { ReleaseItemRow, ReleasesSummary, Scope } from "./types";
@@ -510,6 +510,11 @@ export const api = {
   getLessonsFor: (id: string, code: string) =>
     getJson<Lesson[]>(
       apiUrl(`/projects/${encodeURIComponent(id)}/lessons?for=${encodeURIComponent(code)}`),
+    ),
+  /** The last kept duration of each of one item's tests (FTR-058). */
+  getTimings: (id: string, code: string) =>
+    getJson<{ tests: TestTiming[] }>(
+      apiUrl(`/projects/${encodeURIComponent(id)}/timings?code=${encodeURIComponent(code)}`),
     ),
   getLessons: (id: string) =>
     getJson<Lesson[]>(apiUrl(`/projects/${encodeURIComponent(id)}/lessons`)),
