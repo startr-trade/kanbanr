@@ -628,6 +628,16 @@ A read-only monitor shows the `kanbanr test` command instead. A check opens once
 its build stage: before then nothing exists to check, so it is listed apart under **Not due yet**
 with no Passed or Failed, and kanbanr refuses a result for it from any page or terminal.
 
+The checks are grouped under their item (FTR-057): one heading per item, reading its code, title,
+status, release and how many checks it has, with its checks beneath it. The release being shipped
+comes first, under **Holding v0.8.0**: the release at a stage, newest first when more than one is in
+flight, or else the next planned release with items. A check that holds that release's next
+promotion carries a **holds Promote v0.8.0 to main** pill, and so does its item's heading; those
+items come first in their section. Every other item follows under **Other items**, collapsed while
+a release is being shipped. When an item has two or more prepared results, its heading offers
+**Confirm 2 prepared for FTR-041**: the first press selects exactly those checks and asks, naming
+them; the second records them together, as one decision.
+
 ### Prepared by Claude
 
 When Claude already has the evidence for a decision, it prepares the record instead of asking you
