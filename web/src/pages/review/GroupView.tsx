@@ -15,6 +15,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../../api";
 import { AskFirst } from "../../components/AskFirst";
+import { dayMonth } from "../../cardText";
 import { blockedSentence } from "../../diagramCheck";
 import { guardInFlight } from "../../inFlight";
 import { type Batch, batchChecks } from "../../prepared";
@@ -64,6 +65,15 @@ const past = (action: string) => PAST[action.toLowerCase()] ?? `${action.toLower
 
 /** The group's sentence above its rows: what its action records. */
 function sentenceOf(slice: GroupSlice): string {
+  const held = slice.rows.filter((r) => r.held_by);
+  const first = held[0];
+  const tail = first
+    ? ` ${held.length} of these Claude holds under ${first.held_by}${first.held_until ? ` until ${dayMonth(first.held_until)}` : ""}; you can still decide them.`
+    : "";
+  return baseSentenceOf(slice) + tail;
+}
+
+function baseSentenceOf(slice: GroupSlice): string {
   switch (slice.key) {
     case "approve":
       return "Approving records agreement pinned to the definition below: change or remove approved text afterwards and the approval lapses; added text is reviewed at the next decision.";
