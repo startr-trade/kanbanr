@@ -2749,6 +2749,26 @@ fn dispatch_routes(
             store, p, repo,
         )?),
         ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p, repo)?),
+        // The Review page's reads (FTR-038): the counts per decision group, one group's rows, and
+        // one row's evidence. A manual row's key holds slashes, so the page percent-encodes it.
+        ("GET", ["projects", p, "review", "summary"]) => {
+            ser(&crate::reviewgroups::summary(store, p, repo)?)
+        }
+        ("GET", ["projects", p, "review", "groups", key]) => ser(&crate::reviewgroups::slice(
+            store,
+            p,
+            &percent_decode(key),
+            repo,
+        )?),
+        ("GET", ["projects", p, "review", "groups", key, "rows", row]) => {
+            ser(&crate::reviewgroups::evidence(
+                store,
+                p,
+                &percent_decode(key),
+                &percent_decode(row),
+                repo,
+            )?)
+        }
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
         ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {

@@ -55,7 +55,11 @@ impl Default for Timing {
 /// The canonical dispatch paths warmed before drift on every pass (A1 shared API §5). Other items add
 /// lines here.
 pub fn warm_routes(project: &str) -> Vec<String> {
-    vec![format!("/projects/{project}/index")]
+    vec![
+        format!("/projects/{project}/index"),
+        // The Review page's counts (FTR-038), so its first open after a change is warm.
+        format!("/projects/{project}/review/summary"),
+    ]
 }
 
 /// One project's background state.
@@ -966,7 +970,10 @@ mod tests {
         let code = code_repo("warm-code");
         assert_eq!(
             warm_routes("demo"),
-            vec!["/projects/demo/index".to_string()]
+            vec![
+                "/projects/demo/index".to_string(),
+                "/projects/demo/review/summary".to_string()
+            ]
         );
         let key = memo::canonical("/projects/demo/index");
         assert!(

@@ -39,6 +39,9 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/features/{code}/readiness` | — | JSON `ReadinessView` | What one item is missing, and what its next stages ask |
 | `GET /api/projects/{project}/features/{code}/diagrams` | — | JSON `ItemDiagrams` | The Mermaid blocks of an item's spec and affects_docs, with the lint's findings |
 | `GET /api/projects/{project}/review` | — | JSON `ReviewEntry[]` | What is waiting for a person's agreement, in the order to ask it |
+| `GET /api/projects/{project}/review/summary` | — | JSON `GroupCount[]` | The decision groups waiting for the person, each counted, in the page's order |
+| `GET /api/projects/{project}/review/groups/{key}` | — | JSON `GroupSlice` | One decision group's rows, in the default order |
+| `GET /api/projects/{project}/review/groups/{key}/rows/{row}` | — | JSON `RowEvidence` | One row's full evidence |
 | `GET /api/projects/{project}/releases` | — | JSON `ReleaseReport[]` | The project's releases, each with what it ships |
 | `GET /api/projects/{project}/sprints` | — | JSON `Sprint[]` | The project's sprints |
 | `GET /api/projects/{project}/sprints/{sprint}` | — | JSON `SprintReport` | One sprint's report |
