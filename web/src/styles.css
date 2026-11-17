@@ -850,3 +850,26 @@ summary:focus-visible,
 @media (max-width: 720px) {
   .overview-now, .overview-recent { grid-template-columns: 1fr; }
 }
+
+/* The Charter page (FTR-076): layout only; every colour is a token and every mark is the accent. */
+.charter-page .charter-read { margin-left: auto; }
+.charter-page .charter-since { margin: 0 0 var(--sp-4); color: var(--text); }
+.charter-page .charter-today { margin: var(--sp-2) 0; }
+.charter-page .charter-more { margin-top: var(--sp-1); font-size: var(--fs-1); }
+.charter-page .charter-more > summary { cursor: pointer; color: var(--text-muted); }
+.charter-page .charter-cited { margin: var(--sp-1) 0 0; padding-left: var(--sp-4); }
+.charter-page .charter-list { margin-bottom: var(--sp-4); }
+.charter-page .charter-lesson-counts { margin: var(--sp-3) 0; }
+.charter-page .charter-wins { margin: 0; padding-left: var(--sp-4); }
+.charter-page .charter-wins li { margin-bottom: var(--sp-1); }
+.charter-page .charter-growth {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-3);
+}
+.charter-page .charter-spark polyline { stroke: var(--accent); stroke-width: 2; }
+/* A goal's proof bar draws in the accent, and what is not yet proven as its faint rest. */
+.charter-page .charter-proven .ui-tone-info { background: var(--accent); }
+.charter-page .charter-proven .ui-tone-neutral { background: var(--surface-2); }
+.charter-page .charter-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

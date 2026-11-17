@@ -8,6 +8,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- The Charter page is compact and visual: goals, non-goals, stakeholders and constraints as tables, each goal's items and proven requirements, the releases travelled with the goals each moved, lessons by theme with where each was learned and cited, and recent wins; every number links to its list (FTR-076).
 - Docs are read at the position you pick: main, the working tree, an item, a sprint, a release or a commit, from git with nothing checked out; every doc page says what it read; `doctor` checks repository doc links at the item's position; an item's merge commit, a sprint's closing commit and the docs a sign-off read are recorded (FTR-004).
 - Planning decisions from the monitor: the person plans items into a sprint or release from the Plan and Releases pages; the decision is recorded as theirs and shown pending until Claude carries it out with `--decision` or declines it with a reason and the nearest valid move (FTR-049).
 - Each project opens on an Overview: what needs you, what is happening now, how much the board holds, the goals, recent decisions and activity, every number leading to its list; a Needs-you badge and drawer on every page; and an Items list filtered by kind, status, goal or evidence. The Board moves to `/p/<project>/board` (FTR-048).
