@@ -1177,7 +1177,18 @@ fn ship_release(
     let parent = releases
         .iter()
         .find(|r| !releases[index].parent.is_empty() && r.version == releases[index].parent);
-    let notes = notes(&releases[index], parent, &shipped, &carried);
+    // The board doc links the parent's board doc, when it has one (DEF-078).
+    let parent_link = parent
+        .filter(|p| !p.notes_doc.is_empty())
+        .map(|p| crate::releaseprep::relative_link(&doc, &p.notes_doc));
+    let notes = notes(
+        &releases[index],
+        parent,
+        parent_link.as_deref(),
+        &shipped,
+        &carried,
+        &crate::gantt::fmt_date(crate::sprints::today()),
+    );
     store.write_doc(id, &doc, &notes)?;
     let release = &mut releases[index];
     release.state = ReleaseState::Shipped;
@@ -1818,6 +1829,23 @@ fn stage_gate_condition(
         refs: Vec::new(),
         implied: false,
     }
+}
+
+/// The link from a patch's repository notes at `path` to its parent's (DEF-078): the parent's
+/// recorded notes path, else the notes template `template` expanded for the parent.
+fn parent_notes_link(
+    template: &str,
+    path: &str,
+    parent: &Release,
+) -> std::result::Result<Option<String>, String> {
+    use crate::releaseprep as prep;
+    let to = if parent.notes_path.is_empty() {
+        let ph = prep::Placeholders::new(&parent.version, &parent.name, &today_ymd())?;
+        prep::expand(template, &ph)
+    } else {
+        parent.notes_path.clone()
+    };
+    Ok(Some(prep::relative_link(path, &to)))
 }
 
 fn today_ymd() -> String {
@@ -3640,7 +3668,22 @@ fn work_prepare(
             let parent = releases
                 .iter()
                 .find(|r| !release.parent.is_empty() && r.version == release.parent);
-            put(&mut files, &path, notes(release, parent, &shipping, &[]));
+            let link = match parent {
+                Some(p) => parent_notes_link(n, &path, p)?,
+                None => None,
+            };
+            put(
+                &mut files,
+                &path,
+                notes(
+                    release,
+                    parent,
+                    link.as_deref(),
+                    &shipping,
+                    &[],
+                    &crate::gantt::fmt_date(crate::sprints::today()),
+                ),
+            );
             parts.push("draft notes".to_string());
             notes_path = path;
         }
@@ -4594,26 +4637,35 @@ fn rolled_back(e: CoreError, undo: Option<CoreError>) -> CoreError {
     }
 }
 
-/// Release notes, from what each shipped item said it was for and what it had to do.
+/// Release notes, from what each shipped item said it was for and what it had to do. A patch's
+/// parent is named in one line: "Patch of P. Everything in [P](LINK) is included; this patch
+/// adds:" (with `parent_link` None: "Patch of P. Everything in P is included; this patch adds:").
+/// The parent's items are never listed (DEF-078). `released` is the date text for the
+/// `_Released …._` line.
 fn notes(
     release: &Release,
     parent: Option<&Release>,
+    parent_link: Option<&str>,
     shipped: &[FeatureItem],
     carried: &[Carry],
+    released: &str,
 ) -> String {
     let mut out = format!("# {}", release.version);
     if !release.name.is_empty() {
         out.push_str(&format!(" — {}", release.name));
     }
-    out.push_str(&format!(
-        "\n\n_Released {}._\n\n",
-        crate::gantt::fmt_date(crate::sprints::today())
-    ));
-    // A patch says what it patches and what it adds to it (FEAT-184).
+    out.push_str(&format!("\n\n_Released {released}._\n\n"));
+    // A patch says what it patches, in one line with a link, and what it adds to it (FEAT-184,
+    // DEF-078). The parent's items are never listed.
     match parent {
         Some(p) => {
+            let named = match parent_link {
+                Some(link) => format!("[{}]({link})", p.version),
+                None => p.version.clone(),
+            };
             out.push_str(&format!(
-                "Patch of {}.\n\n## What this patch adds\n\n",
+                "Patch of {}. Everything in {named} is included; this patch adds:\n\n\
+                 ## What this patch adds\n\n",
                 p.version
             ));
         }
@@ -4635,16 +4687,6 @@ fn notes(
                 out.push('\n');
             }
         }
-    }
-    if let Some(p) = parent {
-        out.push_str(&format!("## Included from {}\n\n", p.version));
-        if p.shipped.is_empty() {
-            out.push_str("Nothing shipped in it.\n");
-        }
-        for code in &p.shipped {
-            out.push_str(&format!("- {code}\n"));
-        }
-        out.push('\n');
     }
     if !carried.is_empty() {
         out.push_str("## Carried over\n\n");
@@ -5617,16 +5659,36 @@ pub(crate) mod tests {
              milestone: M\ncreated_at: '2026-10-19T00:00:00Z'\nupdated_at: '2026-10-19T00:00:00Z'\n",
         )
         .unwrap();
-        let text = super::notes(&patch, Some(&parent), &[fix], &[]);
-        assert!(text.contains("Patch of v1.0.0."), "{text}");
-        assert!(text.contains("## What this patch adds"), "{text}");
-        assert!(text.contains("### FEAT-007 — Cart loses items"), "{text}");
-        assert!(text.contains("## Included from v1.0.0"), "{text}");
+        // DEF-078: one line names the parent and links its notes; its items are never listed.
+        let text = super::notes(
+            &patch,
+            Some(&parent),
+            Some("v1.0.0.md"),
+            std::slice::from_ref(&fix),
+            &[],
+            "16 Nov 2026",
+        );
         assert!(
-            text.contains("- FEAT-001") && text.contains("- FEAT-002"),
+            text.lines().any(|l| l
+                == "Patch of v1.0.0. Everything in [v1.0.0](v1.0.0.md) is included; this patch adds:"),
             "{text}"
         );
-        let plain = super::notes(&parent, None, &[], &[]);
+        assert!(text.contains("## What this patch adds"), "{text}");
+        assert!(text.contains("### FEAT-007 — Cart loses items"), "{text}");
+        assert!(!text.contains("Included from"), "{text}");
+        assert!(!text.contains("- FEAT-001"), "{text}");
+        let unlinked = super::notes(&patch, Some(&parent), None, &[fix], &[], "16 Nov 2026");
+        assert!(
+            unlinked
+                .lines()
+                .any(|l| l == "Patch of v1.0.0. Everything in v1.0.0 is included; this patch adds:"),
+            "{unlinked}"
+        );
+        assert!(
+            !unlinked.contains("](") && !unlinked.contains("Included from"),
+            "{unlinked}"
+        );
+        let plain = super::notes(&parent, None, None, &[], &[], "16 Nov 2026");
         assert!(
             plain.contains("## What shipped") && !plain.contains("Patch of"),
             "{plain}"
