@@ -156,6 +156,10 @@ enum Command {
         /// $KANBANR_ALLOW_REMOTE_WRITES. (DEF-026)
         #[arg(long)]
         allow_remote_writes: bool,
+        /// A board to serve, read-only (FTR-040). Repeat for several; their projects are served
+        /// together. Replaces the data folder; refused with --data-dir and --allow-writes.
+        #[arg(long = "board", value_name = "PATH")]
+        board: Vec<PathBuf>,
     },
     /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
@@ -2564,7 +2568,34 @@ fn run_serve(
     ui_dir: Option<String>,
     allow_writes: bool,
     allow_remote_writes: bool,
+    board: &[PathBuf],
 ) -> anyhow::Result<()> {
+    if !board.is_empty() {
+        // Several boards, read-only by construction (FTR-040). Each refusal comes before anything
+        // binds or is read; KANBANR_DATA_DIR is ignored, so an image's default does not count.
+        if cli.data_dir.is_some() {
+            anyhow::bail!(
+                "--board and --data-dir cannot be used together: --board names every board this \
+                 server shows"
+            );
+        }
+        if allow_writes || allow_remote_writes {
+            anyhow::bail!(
+                "--board serves boards read-only; --allow-writes and --allow-remote-writes are \
+                 refused with it"
+            );
+        }
+        let bind = bind
+            .or_else(|| std::env::var("KANBANR_BIND").ok().filter(|s| !s.is_empty()))
+            .unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        let ui_dir = ui_dir.or_else(|| {
+            std::env::var("KANBANR_UI_DIR")
+                .ok()
+                .filter(|s| !s.is_empty())
+        });
+        let rt = tokio::runtime::Runtime::new()?;
+        return rt.block_on(kanbanr_server::run_boards(board.to_vec(), bind, ui_dir));
+    }
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     if allow_writes {
         backend::outside_core_refusal(
@@ -7467,6 +7498,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             ui_dir,
             allow_writes,
             allow_remote_writes,
+            board,
         } => {
             return run_serve(
                 cli,
@@ -7474,6 +7506,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 ui_dir.clone(),
                 *allow_writes,
                 *allow_remote_writes,
+                board,
             );
         }
         Command::Open { check } => return run_open(cli, *check),
@@ -7980,7 +8013,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false);
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false, &[]);
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work

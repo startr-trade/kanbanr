@@ -2276,3 +2276,82 @@ fn the_timings_routes_answer_last_durations_and_the_report() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A board under the system temp dir with one project, written by the CLI (FTR-040's refusals run
+/// against a real board, so the refusal is the flag's and not the folder's). Returns its folder.
+fn refusal_board(name: &str) -> PathBuf {
+    let base = scratch(name);
+    let data = base.join("data");
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the board is this test's own"
+    );
+    for args in [
+        &["identity", "--name", "Tester", "--email", "t@example.com"][..],
+        &["--project", "demo", "project", "init", "demo"][..],
+    ] {
+        let o = cli_cmd()
+            .args(args)
+            .env("HOME", base.join("home"))
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    data
+}
+
+/// `kanbanr serve` with `extra` arguments must exit non-zero, saying `message`, having bound
+/// nothing: the port it was given stays free (FTR-040).
+fn serve_is_refused(data: &std::path::Path, extra: &[&str], message: &str) {
+    let port = free_port();
+    let bind = format!("127.0.0.1:{port}");
+    let mut cmd = cli_cmd();
+    cmd.args(["serve", "--bind", &bind, "--board", data.to_str().unwrap()])
+        .args(extra);
+    let o = cmd
+        .env("HOME", data.parent().unwrap().join("home"))
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_SERVER_URL")
+        .output()
+        .expect("run kanbanr serve");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "serve {extra:?} was not refused");
+    assert!(stderr.contains(message), "serve {extra:?}: {stderr}");
+    assert!(
+        std::net::TcpStream::connect(&bind).is_err(),
+        "something answers on {bind} after the refusal"
+    );
+}
+
+/// FTR-040 R-2: `--board` serves read-only; asking for writes with it is refused before binding.
+#[test]
+fn serve_with_board_refuses_allow_writes() {
+    let data = refusal_board("board-writes");
+    let message = "--board serves boards read-only; --allow-writes and --allow-remote-writes are \
+                   refused with it";
+    serve_is_refused(&data, &["--allow-writes"], message);
+    serve_is_refused(&data, &["--allow-remote-writes"], message);
+    let _ = std::fs::remove_dir_all(data.parent().unwrap());
+}
+
+/// FTR-040 R-3: `--board` names every board the server shows, so `--data-dir` with it is refused
+/// before binding.
+#[test]
+fn serve_with_board_and_data_dir_is_refused() {
+    let data = refusal_board("board-datadir");
+    let other = data.parent().unwrap().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    serve_is_refused(
+        &data,
+        &["--data-dir", other.to_str().unwrap()],
+        "--board and --data-dir cannot be used together: --board names every board this server \
+         shows",
+    );
+    let _ = std::fs::remove_dir_all(data.parent().unwrap());
+}
