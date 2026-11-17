@@ -66,6 +66,8 @@ pub struct BoardIndex {
     pub item_prefixes: BTreeSet<String>,
     pub milestone_prefixes: BTreeSet<String>,
     pub items: BTreeMap<String, BTreeSet<String>>, // code -> requirement ids
+    /// An item's earlier code -> its current code (FTR-056).
+    pub aliases: BTreeMap<String, String>,
     pub milestones: BTreeSet<String>,
     pub adrs: BTreeMap<String, String>, // id -> doc path
     pub goals: BTreeSet<String>,
@@ -104,6 +106,9 @@ impl BoardIndex {
                 .map(|d| d.requirements.iter().map(|r| r.id.clone()).collect())
                 .unwrap_or_default();
             index.items.insert(f.code.clone(), reqs);
+            for a in &f.aliases {
+                index.aliases.insert(a.clone(), f.code.clone());
+            }
         }
         for m in &p.milestones {
             if let Some(prefix) = prefix_of(&m.code) {
@@ -119,15 +124,27 @@ impl BoardIndex {
         Ok(index)
     }
 
+    /// The current code of the item `code` names: itself, or the code that has it as an earlier
+    /// code (FTR-056). A current code wins should a broken board have both.
+    fn current<'a>(&'a self, code: &'a str) -> &'a str {
+        if self.items.contains_key(code) {
+            code
+        } else {
+            self.aliases.get(code).map_or(code, String::as_str)
+        }
+    }
+
     /// Is the reference something the board has? A requirement reference also needs the
     /// requirement.
     pub fn resolves(&self, r: &Ref) -> bool {
         match r {
-            Ref::Item { code, requirement } => match (self.items.get(code), requirement) {
-                (Some(reqs), Some(req)) => reqs.contains(req),
-                (Some(_), None) => true,
-                (None, _) => false,
-            },
+            Ref::Item { code, requirement } => {
+                match (self.items.get(self.current(code)), requirement) {
+                    (Some(reqs), Some(req)) => reqs.contains(req),
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                }
+            }
             Ref::Milestone { code } => self.milestones.contains(code),
             Ref::Adr { id } => self.adrs.contains_key(id),
             Ref::Goal { id } => self.goals.contains(id),
@@ -145,10 +162,13 @@ impl BoardIndex {
         }
         let p = &self.project;
         Some(match r {
-            Ref::Item { code, requirement } => match requirement {
-                Some(req) => format!("/p/{p}/feature/{code}#{req}"),
-                None => format!("/p/{p}/feature/{code}"),
-            },
+            Ref::Item { code, requirement } => {
+                let code = self.current(code);
+                match requirement {
+                    Some(req) => format!("/p/{p}/feature/{code}#{req}"),
+                    None => format!("/p/{p}/feature/{code}"),
+                }
+            }
             Ref::Milestone { code } => format!("/p/{p}/milestone/{code}"),
             Ref::Goal { id } => format!("/p/{p}/charter#{id}"),
             Ref::Adr { id } => format!("/p/{p}/docs/file/{}", self.adrs[id]),
@@ -589,5 +609,42 @@ mod tests {
         };
         assert!(index.resolves(&repo_doc));
         assert_eq!(index.href(&repo_doc), None);
+    }
+
+    /// FTR-056 R-2: a link written with an earlier code is not broken, and points at the new code.
+    #[test]
+    fn a_link_to_an_old_code_resolves_and_points_at_the_new_code() {
+        let mut index = BoardIndex {
+            project: "demo".into(),
+            ..Default::default()
+        };
+        index
+            .items
+            .insert("DEF-001".into(), ["R-1".to_string()].into_iter().collect());
+        index.aliases.insert("FEAT-001".into(), "DEF-001".into());
+        let item = |code: &str, requirement: Option<&str>| Ref::Item {
+            code: code.into(),
+            requirement: requirement.map(String::from),
+        };
+        for code in ["DEF-001", "FEAT-001"] {
+            assert!(index.resolves(&item(code, None)), "{code}");
+            assert!(index.resolves(&item(code, Some("R-1"))), "{code}");
+            assert_eq!(
+                index.href(&item(code, None)).as_deref(),
+                Some("/p/demo/feature/DEF-001")
+            );
+            assert_eq!(
+                index.href(&item(code, Some("R-1"))).as_deref(),
+                Some("/p/demo/feature/DEF-001#R-1")
+            );
+            assert!(!index.resolves(&item(code, Some("R-9"))));
+        }
+        assert!(!index.resolves(&item("FEAT-009", None)));
+        let found = find(
+            "See [x](/p/demo/feature/FEAT-001) and kanbanr:FEAT-001/R-1.",
+            &index,
+        );
+        assert!(!found.is_empty());
+        assert!(found.iter().all(|f| !index.is_broken(f)), "{found:?}");
     }
 }

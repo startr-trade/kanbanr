@@ -583,7 +583,16 @@ impl Store {
 
     /// The spec text kept for a sign-off, or `None` when it is missing (FTR-023).
     pub fn spec_pin_text(&self, id: &str, code: &str, spec_rev: &str) -> Option<String> {
-        std::fs::read_to_string(self.pin_path(id, code, spec_rev)).ok()
+        if let Ok(text) = std::fs::read_to_string(self.pin_path(id, code, spec_rev)) {
+            return Some(text);
+        }
+        // FTR-056: a pin kept under an earlier code of the item is still its pin; new pins go
+        // under the current code.
+        let project = self.load_meta(id).ok()?;
+        let item = crate::aliases::find(&project, code)?;
+        item.codes()
+            .filter(|c| *c != code)
+            .find_map(|c| std::fs::read_to_string(self.pin_path(id, c, spec_rev)).ok())
     }
 
     /// Load a single feature's specification body on demand. Scans the configured status folders
@@ -1011,7 +1020,8 @@ impl Store {
             return Err(CoreError::MilestoneRequired);
         }
         project.milestone(milestone)?;
-        let existing: Vec<String> = project.features.iter().map(|f| f.code.clone()).collect();
+        // FTR-056: the counter sees earlier codes too, so a retired number is never given again.
+        let existing: Vec<String> = crate::aliases::taken(project).into_iter().collect();
         let code = match code {
             Some(c) => c,
             None => {
@@ -1032,9 +1042,7 @@ impl Store {
         if !validate::valid_name(&code) {
             return Err(CoreError::InvalidName(code));
         }
-        if existing.iter().any(|c| c == &code) {
-            return Err(CoreError::FeatureExists(code));
-        }
+        crate::aliases::check_free(project, &code, None)?;
         // FEAT-200: a strict project refuses a spec whose diagrams fail the lint, before anything
         // changes; otherwise the caller reports the findings as warnings.
         crate::diagrams::guard(
@@ -1092,6 +1100,7 @@ impl Store {
         new_code: Option<String>,
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
+        let old_code = project.feature(code)?.code.clone();
         let mut pending = Pending::default();
         let f = Self::edit_feature_on(
             &mut project,
@@ -1103,7 +1112,38 @@ impl Store {
             new_code,
         )?;
         self.flush(id, &project, &pending)?;
+        if old_code != f.code {
+            self.rewrite_qualified_deps(id, &old_code, &f.code)?;
+        }
         Ok(f)
+    }
+
+    /// FTR-056: another project's `depends_on: ["<id>:<old>"]` follows a rename to `<id>:<new>`.
+    /// Runs after the item's own flush; a crash between leaves a dependency that still resolves
+    /// through the alias.
+    fn rewrite_qualified_deps(&self, id: &str, old: &str, new: &str) -> Result<()> {
+        let (from, to) = (format!("{id}:{old}"), format!("{id}:{new}"));
+        for q in self.list_projects()? {
+            if q == id {
+                continue;
+            }
+            let mut other = self.load(&q)?; // full: a flush rewrites each spec
+            let mut pending = Pending::default();
+            for f in other.features.iter_mut() {
+                let mut changed = false;
+                for d in f.depends_on.iter_mut().filter(|d| **d == from) {
+                    *d = to.clone();
+                    changed = true;
+                }
+                if changed {
+                    pending.persist_features.insert(f.code.clone());
+                }
+            }
+            if !pending.persist_features.is_empty() {
+                self.flush(&q, &other, &pending)?;
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1125,14 +1165,14 @@ impl Store {
             Some(None) => return Err(CoreError::MilestoneRequired),
             None => {}
         }
+        // FTR-056: `code` may be an earlier code; the rename acts on the item it names.
+        let old_code = project.feature(code)?.code.clone();
         let rename = match &new_code {
-            Some(nc) if nc != code => {
+            Some(nc) if *nc != old_code => {
                 if !validate::valid_name(nc) {
                     return Err(CoreError::InvalidName(nc.clone()));
                 }
-                if project.features.iter().any(|f| &f.code == nc) {
-                    return Err(CoreError::FeatureExists(nc.clone()));
-                }
+                crate::aliases::check_free(project, nc, Some(&old_code))?;
                 Some(nc.clone())
             }
             _ => None,
@@ -1141,7 +1181,7 @@ impl Store {
         let feature = project.feature_mut(code)?;
         // FEAT-200: checked against the code the item ends up with, before any change.
         if let Some(spec) = &specification {
-            let final_code = rename.as_deref().unwrap_or(code);
+            let final_code = rename.as_deref().unwrap_or(&old_code);
             crate::diagrams::guard(&diagrams, &format!("{final_code} spec"), spec)?;
         }
         if let Some(t) = title {
@@ -1154,16 +1194,37 @@ impl Store {
             feature.milestone = ms;
         }
         if let Some(nc) = &rename {
+            // The code given up is kept as an alias (nothing is removed); a code taken back
+            // leaves the aliases.
+            feature.aliases.retain(|a| a != nc);
+            if !feature.aliases.contains(&old_code) {
+                feature.aliases.push(old_code.clone());
+            }
             feature.code = nc.clone();
         }
         feature.updated_at = now_rfc3339();
         let updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
-        if rename.is_some() {
+        if let Some(nc) = &rename {
             // The renamed feature is written at its new code; drop the old-code files (same status).
             pending
                 .remove_features
-                .insert((updated.status.clone(), code.to_string()));
+                .insert((updated.status.clone(), old_code.clone()));
+            // Other items that depend on, or were split from, the old code now name the new one.
+            for other in project.features.iter_mut().filter(|o| o.code != *nc) {
+                let mut changed = false;
+                for d in other.depends_on.iter_mut().filter(|d| **d == old_code) {
+                    *d = nc.clone();
+                    changed = true;
+                }
+                if other.split_from.as_deref() == Some(old_code.as_str()) {
+                    other.split_from = Some(nc.clone());
+                    changed = true;
+                }
+                if changed {
+                    pending.persist_features.insert(other.code.clone());
+                }
+            }
         }
         Ok(updated)
     }
@@ -1893,7 +1954,10 @@ impl Store {
         if pins_spec {
             let (text, rev) = crate::readiness::spec_pin(&feature.specification);
             if !rev.is_empty() {
-                pending.pins.insert(self.pin_path(id, code, &rev), text);
+                // New pins go under the item's current code (FTR-056).
+                pending
+                    .pins
+                    .insert(self.pin_path(id, &feature.code, &rev), text);
                 spec_rev = rev;
             }
         }
@@ -5809,6 +5873,224 @@ mod tests {
             std::fs::read(store.feature_path("demo", &f.status, &f.code)).unwrap(),
             before
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- FTR-056: a rename keeps the old code as an alias ------------------------------------
+
+    fn rename(store: &Store, from: &str, to: &str) -> Result<FeatureItem> {
+        store.edit_feature("demo", from, None, None, None, Some(to.to_string()))
+    }
+
+    fn item_file(dir: &Path, status: &str, code: &str) -> PathBuf {
+        dir.join("projects/demo/features")
+            .join(status)
+            .join(format!("{code}.yaml"))
+    }
+
+    #[test]
+    fn a_renamed_item_keeps_its_old_code_as_an_alias() {
+        let (store, dir) = atomic_board("alias-keep");
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        assert_eq!(f.code, "FEAT-001");
+        let r = rename(&store, "FEAT-001", "DEF-001").unwrap();
+        assert_eq!(r.code, "DEF-001");
+        assert_eq!(r.aliases, ["FEAT-001"]);
+        let p = store.load("demo").unwrap();
+        assert_eq!(p.features.len(), 1);
+        assert_eq!(p.feature("FEAT-001").unwrap().code, "DEF-001");
+        assert_eq!(p.feature("DEF-001").unwrap().specification, "spec");
+        let status = &p.features[0].status;
+        assert!(item_file(&dir, status, "DEF-001").exists());
+        assert!(!item_file(&dir, status, "FEAT-001").exists());
+        let text = std::fs::read_to_string(item_file(&dir, status, "DEF-001")).unwrap();
+        let (code_at, alias_at) = (text.find("code: DEF-001"), text.find("aliases:"));
+        assert!(code_at < alias_at && alias_at.is_some(), "{text}");
+        let spec = |c: &str| {
+            dir.join("projects/demo/features")
+                .join(status)
+                .join("features-spec")
+                .join(format!("{c}.md"))
+        };
+        assert!(spec("DEF-001").exists() && !spec("FEAT-001").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rename_rewrites_dependencies_on_the_old_code_across_the_board() {
+        let (store, dir) = atomic_board("alias-deps");
+        store.add_feature("demo", "A", "", "M", None).unwrap();
+        store.add_feature("demo", "B", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                "FEAT-002",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["FEAT-001".into()]),
+            )
+            .unwrap();
+        store
+            .init_project("other", ProjectConfig::default_for("other"))
+            .unwrap();
+        store
+            .add_milestone("other", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        store
+            .add_feature("other", "C", "other spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "other",
+                "FEAT-001",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["demo:FEAT-001".into()]),
+            )
+            .unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        let demo = store.load("demo").unwrap();
+        assert_eq!(demo.feature("FEAT-002").unwrap().depends_on, ["DEF-001"]);
+        let other = store.load("other").unwrap();
+        let c = other.feature("FEAT-001").unwrap();
+        assert_eq!(c.depends_on, ["demo:DEF-001"]);
+        assert_eq!(c.specification, "other spec", "the spec is not blanked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renaming_back_to_an_earlier_code_keeps_every_code() {
+        let (store, dir) = atomic_board("alias-back");
+        store.add_feature("demo", "A", "", "M", None).unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        let back = rename(&store, "DEF-001", "FEAT-001").unwrap();
+        assert_eq!(back.code, "FEAT-001");
+        assert_eq!(back.aliases, ["DEF-001"]);
+        // By an earlier code too: it acts on the item it names.
+        let again = rename(&store, "DEF-001", "MNT-001").unwrap();
+        assert_eq!(again.code, "MNT-001");
+        assert_eq!(again.aliases, ["DEF-001", "FEAT-001"]);
+        let p = store.load("demo").unwrap();
+        assert_eq!(p.features.len(), 1);
+        assert_eq!(crate::aliases::taken(&p).len(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rename_keeps_the_items_approval_and_sign_offs_current() {
+        let (store, dir) = atomic_board("alias-approval");
+        store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let def = crate::models::FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![crate::models::Requirement {
+                text: "THE SYSTEM SHALL run CI".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .set_feature_definition("demo", "FEAT-001", Some(def))
+            .unwrap();
+        store.approve_feature("demo", "FEAT-001", "Ada").unwrap();
+        store
+            .signoff_feature("demo", "FEAT-001", "design-review", "Ada", "", "")
+            .unwrap();
+        let before = store.load("demo").unwrap();
+        let d0 = before
+            .feature("FEAT-001")
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        let after = store.load("demo").unwrap();
+        let d1 = after
+            .feature("DEF-001")
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(d1.content_rev(), d0.content_rev());
+        let approval = d1.approval.as_ref().expect("approval kept");
+        assert_eq!(approval.rev, d1.content_rev(), "approval is still current");
+        assert_eq!(d1.signoffs.len(), 1);
+        assert_eq!(d1.signoffs[0].rev, d1.content_rev());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sign_off_pin_kept_under_an_earlier_code_is_found() {
+        let (store, dir) = atomic_board("alias-pin");
+        store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let path = store.pin_path("demo", "FEAT-001", "abc123");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "the pinned text").unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        for code in ["DEF-001", "FEAT-001"] {
+            assert_eq!(
+                store.spec_pin_text("demo", code, "abc123").as_deref(),
+                Some("the pinned text"),
+                "{code}"
+            );
+        }
+        assert!(store.spec_pin_text("demo", "DEF-001", "zzz").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_earlier_code_is_never_given_to_a_new_item() {
+        let (store, dir) = atomic_board("alias-noreuse");
+        store.add_feature("demo", "A", "", "M", None).unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        let err = store
+            .add_feature("demo", "B", "", "M", Some("FEAT-001".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("was an earlier code of DEF-001"), "{err}");
+        let err = store
+            .add_feature("demo", "B", "", "M", Some("DEF-001".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("DEF-001 is DEF-001's code"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_counter_skips_numbers_held_as_aliases() {
+        let (store, dir) = atomic_board("alias-counter");
+        for t in ["A", "B", "C"] {
+            store.add_feature("demo", t, "", "M", None).unwrap();
+        }
+        rename(&store, "FEAT-003", "DEF-003").unwrap();
+        let next = store.add_feature("demo", "D", "", "M", None).unwrap();
+        assert_eq!(next.code, "FEAT-004");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renaming_to_another_items_earlier_code_is_refused() {
+        let (store, dir) = atomic_board("alias-refuse");
+        store.add_feature("demo", "A", "", "M", None).unwrap();
+        store.add_feature("demo", "B", "", "M", None).unwrap();
+        rename(&store, "FEAT-001", "DEF-001").unwrap();
+        let err = rename(&store, "FEAT-002", "FEAT-001")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("was an earlier code of DEF-001"), "{err}");
+        let err = rename(&store, "FEAT-002", "DEF-001")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("DEF-001 is DEF-001's code"), "{err}");
+        let p = store.load("demo").unwrap();
+        assert_eq!(p.feature("FEAT-002").unwrap().code, "FEAT-002");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

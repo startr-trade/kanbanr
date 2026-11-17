@@ -292,7 +292,8 @@ impl Delegation {
                 self.steps.join(", ")
             ));
         }
-        if !any(&self.items, &item.code) {
+        // FTR-056: a grant names the code it was given under; the item's earlier codes count.
+        if !item.codes().any(|c| any(&self.items, c)) {
             return Some(format!("{id} does not cover {}", item.code));
         }
         if !any(&self.kinds, kind) {

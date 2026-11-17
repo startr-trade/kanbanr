@@ -215,7 +215,18 @@ impl Scope {
         }
     }
 
-    /// Does this scope allow `op` on `item`?
+    /// This scope with its item as the item's current code (FTR-056): a scope issued for an
+    /// item that was renamed since still covers it. A code no item answers to is kept as it is.
+    pub fn resolved(&self, project: &Project) -> Scope {
+        let mut s = self.clone();
+        if let Some(c) = crate::aliases::current(project, &self.item) {
+            s.item = c.to_string();
+        }
+        s
+    }
+
+    /// Does this scope allow `op` on `item`? Pure: the caller passes the item's current code and
+    /// a scope [`resolved`](Scope::resolved) against the board (FTR-056).
     pub fn allows(&self, op: Operation, item: &str) -> bool {
         self.operations.contains(&op) && self.item == item
     }
@@ -365,6 +376,22 @@ pub struct Requested {
     pub task: Option<String>,
     /// What to call it in a refusal.
     pub label: String,
+}
+
+impl Requested {
+    /// This request with its item as the item's current code (FTR-056), so a write addressed by
+    /// an earlier code is judged as the item it names.
+    pub fn resolved(mut self, project: &Project) -> Requested {
+        if self.project == project.id
+            && let Some(c) = self
+                .item
+                .as_deref()
+                .and_then(|i| crate::aliases::current(project, i))
+        {
+            self.item = Some(c.to_string());
+        }
+        self
+    }
 }
 
 /// Why a scope refused something. Its text is the message.
@@ -659,14 +686,14 @@ fn task_scope_refusal(
             continue;
         }
         match s.task.as_deref() {
-            None if s.item == item.code => {
+            None if item.answers_to(&s.item) => {
                 return Ok(Some(format!(
                     "agent scope {} is live for the whole of {}: one agent holds the item, so                      revoke it before issuing a scope for one of its tasks",
                     s.id, item.code
                 )));
             }
             None => {}
-            Some(t) if s.item == item.code && t == task => {
+            Some(t) if item.answers_to(&s.item) && t == task => {
                 return Ok(Some(format!(
                     "{} {task} is already worked under agent scope {}",
                     item.code, s.id
@@ -770,7 +797,7 @@ pub fn issue(
     } else if req.role == Role::Build
         && let Some(s) = active(&scopes, now)
             .into_iter()
-            .find(|s| s.role == Role::Build && s.item == item.code && s.task.is_some())
+            .find(|s| s.role == Role::Build && item.answers_to(&s.item) && s.task.is_some())
     {
         return Err(CoreError::Unsupported(format!(
             "agent scope {} is live for {} {}: while a task of {} is worked under its own scope,              a scope for the whole item is refused; revoke the task scopes first",
@@ -1929,9 +1956,9 @@ pub fn footprints(store: &Store, id: &str, root: &Path) -> Result<Vec<Footprint>
                 let mut shas = Vec::new();
                 let mut touched: std::collections::BTreeSet<String> = Default::default();
                 for (sha, msg) in &commits {
-                    let by_scope = trailer_scope(msg)
-                        .and_then(|s| scopes.get(s))
-                        .filter(|s| s.item == item.code && s.task.as_deref() == Some(key.as_str()));
+                    let by_scope = trailer_scope(msg).and_then(|s| scopes.get(s)).filter(|s| {
+                        item.answers_to(&s.item) && s.task.as_deref() == Some(key.as_str())
+                    });
                     let by_ref = crate::scm::parse_refs(msg).iter().any(|r| {
                         matches!(r, crate::scm::ItemRef::Task { code, todo, task: t }
                             if *code == item.code && *todo == list.code && *t == task.key)

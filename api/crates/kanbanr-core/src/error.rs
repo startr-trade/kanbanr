@@ -31,6 +31,9 @@ pub enum CoreError {
     FeatureNotFound(String),
     #[error("feature '{0}' already exists")]
     FeatureExists(String),
+    /// A code a new item or a rename may not take (FTR-056): the message says whose it is.
+    #[error("{0}")]
+    CodeTaken(String),
     #[error("a milestone is required for a feature item")]
     MilestoneRequired,
     #[error("milestone '{0}' not found")]
@@ -150,6 +153,7 @@ impl CoreError {
             NeedsMigration { .. } => 409,
             ProjectExists(_)
             | FeatureExists(_)
+            | CodeTaken(_)
             | MilestoneExists(_)
             | TaskExists(_, _)
             | TodoListExists(_, _)
@@ -194,6 +198,7 @@ mod tests {
         assert_eq!(CoreError::FeatureNotFound("F".into()).status(), 404);
         assert_eq!(CoreError::NoSuchRoute("x".into()).status(), 404);
         assert_eq!(CoreError::FeatureExists("F".into()).status(), 409);
+        assert_eq!(CoreError::CodeTaken("F is taken".into()).status(), 409);
         let too_new = CoreError::SchemaTooNew {
             found: 9,
             understood: 1,

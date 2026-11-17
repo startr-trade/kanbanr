@@ -534,15 +534,24 @@ fn parse_log(out: &str, item: Option<&str>) -> Vec<Change> {
     changes
 }
 
-/// The names in the diff of every non-merge commit whose `Refs:` trailer names `code`, newest
-/// first. A commit that changed no recognised name is left out.
-pub fn item_changes(repo: &Path, code: &str, since: Option<&str>) -> Result<Vec<Change>> {
-    if !valid_code(code) {
-        return Err(CoreError::Refused(format!(
-            "{code:?} is not an item code (letters, a dash, digits)"
-        )));
+/// The names in the diff of every non-merge commit whose `Refs:` trailer names one of `codes`
+/// (an item's current code and its earlier ones, FTR-056), newest first. A commit that changed no
+/// recognised name is left out. Each change carries the first code, the item's current one.
+pub fn item_changes(repo: &Path, codes: &[&str], since: Option<&str>) -> Result<Vec<Change>> {
+    let Some(code) = codes.first().copied() else {
+        return Err(CoreError::Refused("no item code to look for".into()));
+    };
+    for c in codes {
+        if !valid_code(c) {
+            return Err(CoreError::Refused(format!(
+                "{c:?} is not an item code (letters, a dash, digits)"
+            )));
+        }
     }
-    let grep = format!("--grep=^Refs:.*kanbanr:{code}([^0-9A-Za-z]|$)");
+    let grep = format!(
+        "--grep=^Refs:.*kanbanr:({})([^0-9A-Za-z]|$)",
+        codes.join("|")
+    );
     let mut args = vec![
         "log",
         "--no-merges",
@@ -1320,8 +1329,13 @@ pub fn changed_at(board: &Path, files: &[&Path]) -> Option<String> {
 /// The flags for one item: every linked text that names something the item changed after the text
 /// last changed. Needs the code repository (`repo`). Sorted by target kind and id.
 pub fn flags_for_item(store: &Store, project: &str, code: &str, repo: &Path) -> Result<Vec<Flag>> {
-    let changes = item_changes(repo, code, None)?;
-    flags_for_changes(store, project, code, &changes)
+    // FTR-056: a trailer under an earlier code of the item counts for it.
+    let board = store.load_meta(project)?;
+    let item = board.feature(code).ok();
+    let current = item.map_or(code, |f| f.code.as_str());
+    let codes: Vec<&str> = item.map_or_else(|| vec![code], |f| f.codes().collect());
+    let changes = item_changes(repo, &codes, None)?;
+    flags_for_changes(store, project, current, &changes)
 }
 
 /// [`flags_for_item`] over changes already read (the board-wide report reads the log once).
@@ -1513,7 +1527,11 @@ fn refs_in_message(message: &str) -> BTreeSet<String> {
 }
 
 /// One `git log -p -U0` over `since`, split into per-item changes by the commits' `Refs:` trailers.
-fn board_changes(repo: &Path, since: &str) -> Result<BTreeMap<String, Vec<Change>>> {
+fn board_changes(
+    repo: &Path,
+    since: &str,
+    board: &crate::Project,
+) -> Result<BTreeMap<String, Vec<Change>>> {
     if !valid_since(since) {
         return Err(CoreError::Refused(format!(
             "{since:?} is not a date (try 2026-11-01)"
@@ -1545,7 +1563,11 @@ fn board_changes(repo: &Path, since: &str) -> Result<BTreeMap<String, Vec<Change
         let Some((sha, at)) = header.split_once(' ') else {
             return;
         };
-        let items = refs_in_message(message);
+        // FTR-056: a trailer naming an earlier code is the item it now belongs to.
+        let items: BTreeSet<String> = refs_in_message(message)
+            .into_iter()
+            .map(|c| crate::aliases::current(board, &c).map_or(c.clone(), str::to_string))
+            .collect();
         if items.is_empty() {
             return;
         }
@@ -1661,16 +1683,19 @@ pub fn report(
     let board = store.load_meta(project)?;
     let (since_used, by_item) = match (since, item) {
         (_, Some(code)) => {
-            let changes = item_changes(repo, code, since)?;
+            let item = board.feature(code).ok();
+            let current = item.map_or(code, |f| f.code.as_str());
+            let codes: Vec<&str> = item.map_or_else(|| vec![code], |f| f.codes().collect());
+            let changes = item_changes(repo, &codes, since)?;
             (
                 since.unwrap_or_default().to_string(),
-                BTreeMap::from([(code.to_string(), changes)]),
+                BTreeMap::from([(current.to_string(), changes)]),
             )
         }
-        (Some(s), None) => (s.to_string(), board_changes(repo, s)?),
+        (Some(s), None) => (s.to_string(), board_changes(repo, s, &board)?),
         (None, None) => {
             let s = default_since(store, project);
-            let changes = board_changes(repo, &s)?;
+            let changes = board_changes(repo, &s, &board)?;
             (s, changes)
         }
     };
@@ -2267,7 +2292,7 @@ mod tests {
         ] {
             code_commit(&dir, file, "let x = 1;\n", "c\n\nRefs: kanbanr:FTR-1", date);
         }
-        let changes = item_changes(&dir, "FTR-1", Some("2026-11-04")).unwrap();
+        let changes = item_changes(&dir, &["FTR-1"], Some("2026-11-04")).unwrap();
         let mut at: Vec<&str> = changes.iter().map(|c| &c.at[..10]).collect();
         at.sort();
         assert_eq!(at, vec!["2026-11-04", "2026-11-04"], "{changes:?}");
@@ -2336,7 +2361,7 @@ mod tests {
             Some("2026-11-06T10:00:00+00:00"),
         );
 
-        let changes = item_changes(&dir, "FTR-1", None).unwrap();
+        let changes = item_changes(&dir, &["FTR-1"], None).unwrap();
         let found: BTreeSet<&str> = changes
             .iter()
             .flat_map(|c| c.names.iter())
@@ -2360,12 +2385,49 @@ mod tests {
         );
 
         // From the start of 4 November (UTC): the commits of the 4th and the 5th (DEF-037).
-        let recent = item_changes(&dir, "FTR-1", Some("2026-11-04")).unwrap();
+        let recent = item_changes(&dir, &["FTR-1"], Some("2026-11-04")).unwrap();
         assert_eq!(recent.len(), 2, "{recent:?}");
-        assert!(item_changes(&dir, "FTR-1; rm", None).is_err());
-        assert!(item_changes(&dir, "FTR-1", Some("--output=x")).is_err());
+        assert!(item_changes(&dir, &["FTR-1; rm"], None).is_err());
+        assert!(item_changes(&dir, &["FTR-1"], Some("--output=x")).is_err());
         assert!(valid_since("2026-11-01"));
         assert!(!valid_since("--x"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-056 R-2: commits naming an earlier code of an item are found with those naming its
+    /// current code.
+    #[test]
+    fn item_changes_finds_commits_that_name_an_earlier_code() {
+        let dir = scratch("alias-changes");
+        git_env(&dir, &["init", "-q", "-b", "main"], None);
+        code_commit(
+            &dir,
+            "src/a.rs",
+            "let a = \"--old-flag\";\n",
+            "one\n\nRefs: kanbanr:FEAT-1/R-1",
+            "2026-11-01T10:00:00+00:00",
+        );
+        code_commit(
+            &dir,
+            "src/b.rs",
+            "let b = \"--new-flag\";\n",
+            "two\n\nRefs: kanbanr:DEF-1",
+            "2026-11-02T10:00:00+00:00",
+        );
+        code_commit(
+            &dir,
+            "src/c.rs",
+            "let c = \"--other-flag\";\n",
+            "three\n\nRefs: kanbanr:FEAT-12",
+            "2026-11-03T10:00:00+00:00",
+        );
+        let both = item_changes(&dir, &["DEF-1", "FEAT-1"], None).unwrap();
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(both.iter().all(|c| c.item == "DEF-1"), "{both:?}");
+        assert_eq!(item_changes(&dir, &["DEF-1"], None).unwrap().len(), 1);
+        assert_eq!(item_changes(&dir, &["FEAT-1"], None).unwrap().len(), 1);
+        assert!(item_changes(&dir, &[], None).is_err());
+        assert!(item_changes(&dir, &["DEF-1", "x; rm"], None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
