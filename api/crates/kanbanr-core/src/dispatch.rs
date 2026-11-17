@@ -1768,6 +1768,7 @@ fn dispatch_routes(
                 &str_field(b, "reason").unwrap_or_default(),
                 &crate::origin::from_body(b),
                 &crate::origin::delegation_from_body(b),
+                crate::origin::heard_from_body(b).as_ref(),
             )?)
         }
         ("POST", ["projects", p, "features", code, "approve"]) => {
@@ -1781,6 +1782,7 @@ fn dispatch_routes(
                 &approver(b)?,
                 &crate::origin::from_body(b),
                 &crate::origin::delegation_from_body(b),
+                crate::origin::heard_from_body(b).as_ref(),
             )?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
@@ -1852,6 +1854,7 @@ fn dispatch_routes(
                 &heads,
                 &position,
                 &docs_read,
+                crate::origin::heard_from_body(b).as_ref(),
             )?;
             // The sign-off answers the settlements it took (DEF-039).
             for id in settled {

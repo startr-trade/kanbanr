@@ -2612,6 +2612,7 @@ mod tests {
                 "terminal",
                 "",
                 &[],
+                None,
             )
             .unwrap();
         let stale = |id: &str| {

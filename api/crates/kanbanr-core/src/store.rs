@@ -1581,7 +1581,7 @@ impl Store {
 
     /// Record agreement to an item's definition as it currently stands (FEAT-048).
     pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
-        self.approve_feature_as(id, code, by, "", "")
+        self.approve_feature_as(id, code, by, "", "", None)
     }
 
     /// As [`Store::approve_feature`], recording where it was taken (DEF-028).
@@ -1592,6 +1592,7 @@ impl Store {
         by: &str,
         origin: &str,
         delegation: &str,
+        heard: Option<&crate::models::Heard>,
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
@@ -1619,11 +1620,13 @@ impl Store {
             parts: definition.part_revs(),
             origin: origin.to_string(),
             delegation: delegation.to_string(),
+            heard: heard.cloned(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
             origin: origin.to_string(),
             delegation: delegation.to_string(),
+            heard: heard.cloned(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "approved".to_string(),
@@ -1656,10 +1659,11 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
-        self.ratify_feature_as(id, code, by, reason, "", "")
+        self.ratify_feature_as(id, code, by, reason, "", "", None)
     }
 
     /// As [`Store::ratify_feature`], recording where it was taken (DEF-028).
+    #[allow(clippy::too_many_arguments)]
     pub fn ratify_feature_as(
         &self,
         id: &str,
@@ -1668,6 +1672,7 @@ impl Store {
         reason: &str,
         origin: &str,
         delegation: &str,
+        heard: Option<&crate::models::Heard>,
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
@@ -1694,11 +1699,13 @@ impl Store {
             parts: definition.part_revs(),
             origin: origin.to_string(),
             delegation: delegation.to_string(),
+            heard: heard.cloned(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
             origin: origin.to_string(),
             delegation: delegation.to_string(),
+            heard: heard.cloned(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "ratified".to_string(),
@@ -1777,6 +1784,7 @@ impl Store {
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
             delegation: String::new(),
+            heard: None,
             origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
@@ -1849,7 +1857,7 @@ impl Store {
         doc: &str,
         origin: &str,
     ) -> Result<(FeatureItem, Option<String>)> {
-        self.signoff_feature_checked_as(id, code, signoff, by, note, doc, origin, "", &[])
+        self.signoff_feature_checked_as(id, code, signoff, by, note, doc, origin, "", &[], None)
     }
 
     /// As [`Store::signoff_feature_reported_as`], recording the flagged texts the person settled
@@ -1866,6 +1874,7 @@ impl Store {
         origin: &str,
         delegation: &str,
         checked: &[crate::models::Checked],
+        heard: Option<&crate::models::Heard>,
     ) -> Result<(FeatureItem, Option<String>)> {
         self.signoff_feature_pinned_as(
             id,
@@ -1878,6 +1887,7 @@ impl Store {
             delegation,
             checked,
             &Default::default(),
+            heard,
         )
     }
 
@@ -1896,6 +1906,7 @@ impl Store {
         delegation: &str,
         checked: &[crate::models::Checked],
         branch_heads: &std::collections::BTreeMap<String, String>,
+        heard: Option<&crate::models::Heard>,
     ) -> Result<(FeatureItem, Option<String>)> {
         self.signoff_feature_located_as(
             id,
@@ -1910,6 +1921,7 @@ impl Store {
             branch_heads,
             "",
             &Default::default(),
+            heard,
         )
     }
 
@@ -1931,6 +1943,7 @@ impl Store {
         branch_heads: &std::collections::BTreeMap<String, String>,
         position: &str,
         docs_read: &std::collections::BTreeMap<String, String>,
+        heard: Option<&crate::models::Heard>,
     ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
@@ -1986,6 +1999,7 @@ impl Store {
             branch_heads: branch_heads.clone(),
             position: position.to_string(),
             docs_read: docs_read.clone(),
+            heard: heard.cloned(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -3567,6 +3581,7 @@ impl Store {
                     definition.approval = Some(crate::models::Approval {
                         extra: Default::default(),
                         delegation: String::new(),
+                        heard: None,
                         by: by.unwrap_or_else(|| "unknown".to_string()),
                         at: now_rfc3339(),
                         rev: definition.content_rev(),

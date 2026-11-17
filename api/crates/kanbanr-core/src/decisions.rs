@@ -2145,6 +2145,7 @@ mod tests {
                 "delegated",
                 "DLG-001",
                 &[],
+                None,
             )
             .unwrap();
         let project = store.load("demo").unwrap();
@@ -2297,7 +2298,7 @@ mod tests {
                 .unwrap();
         }
         store
-            .approve_feature_as("demo", &defect, "Ada", "terminal", "")
+            .approve_feature_as("demo", &defect, "Ada", "terminal", "", None)
             .unwrap();
         crate::adr::create(&store, "demo", "Use one table", Default::default()).unwrap();
         let g = propose(&store, "demo", defects(), who("conversation")).unwrap();
@@ -2313,6 +2314,7 @@ mod tests {
                 "delegated",
                 "DLG-001",
                 &[],
+                None,
             )
             .unwrap();
         (store, dir, defect, feature)
@@ -2394,7 +2396,7 @@ mod tests {
     fn keep_and_undo_review_a_delegated_decision() {
         let (store, dir, defect, feature) = waiting_board();
         store
-            .approve_feature_as("demo", &feature, "Claude", "delegated", "DLG-001")
+            .approve_feature_as("demo", &feature, "Claude", "delegated", "DLG-001", None)
             .unwrap();
         let _ = defect;
         let list = to_review(&store.load("demo").unwrap(), &load(&store, "demo").unwrap());

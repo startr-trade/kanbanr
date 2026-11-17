@@ -1323,7 +1323,7 @@ mod tests {
             },
         );
         store
-            .approve_feature_as("demo", &checked, "Claude", "delegated", "DLG-1")
+            .approve_feature_as("demo", &checked, "Claude", "delegated", "DLG-1", None)
             .unwrap();
         store.move_feature("demo", &checked, "Scheduled").unwrap();
         store.move_feature("demo", &checked, "Completed").unwrap();

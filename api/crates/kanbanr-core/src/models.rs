@@ -378,6 +378,10 @@ pub struct Signoff {
     /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub delegation: String,
+    /// The person's answer in the conversation this record was taken from (FTR-035). Absent
+    /// otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard: Option<Heard>,
     /// What the person checked when giving `docs-folded` (FTR-013): each text flagged as naming
     /// something the item changed, with whether they confirmed it is still right or filed a
     /// correction. Absent on a record without flags, or one an older kanbanr wrote.
@@ -528,6 +532,10 @@ pub struct ApprovalEvent {
     /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub delegation: String,
+    /// The person's answer in the conversation this record was taken from (FTR-035). Absent
+    /// otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard: Option<Heard>,
     /// What an `approved` verdict agreed to, when it was less than the whole definition
     /// (FTR-039): `tests` when the change since the last decision touched only tests, else empty.
     /// Declared last, so an older kanbanr keeps it in `extra`; approvals are outside
@@ -536,6 +544,36 @@ pub struct ApprovalEvent {
     pub scope: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+/// The person's answer a conversation verdict was recorded from (FTR-035).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Heard {
+    /// The question as asked, tag included.
+    #[serde(default)]
+    pub question: String,
+    /// The option label the person chose.
+    #[serde(default)]
+    pub answer: String,
+    /// The pass it used, `P-…`.
+    #[serde(default)]
+    pub pass: String,
+    /// When the hook heard the answer (RFC 3339).
+    #[serde(default)]
+    pub heard_at: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_use_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub session_id: String,
+    /// Keys this version does not know, kept and written back (FEAT-151).
     #[serde(
         flatten,
         default,
@@ -565,6 +603,10 @@ pub struct Approval {
     /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub delegation: String,
+    /// The person's answer in the conversation this record was taken from (FTR-035). Absent
+    /// otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard: Option<Heard>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -2367,6 +2409,38 @@ mod tests {
                 .unwrap()
                 .contains("delegation: DLG-001")
         );
+    }
+
+    /// FTR-035 R-2: a record keeps the question and the answer it was heard from; an older
+    /// reader, whose structs lack `heard`, keeps it in `extra` and writes it back; a record
+    /// without it writes nothing.
+    #[test]
+    fn the_question_and_answer_survive_an_older_reader() {
+        let yaml = "id: design-review\nby: Ada\nat: 2026-11-15T10:00:00Z\nrev: abc\n\
+                    origin: conversation\nheard:\n  question: Sign off design-review? [kanbanr signoff X-1 design-review --rev abcdef12 --project demo]\n  \
+                    answer: Sign off\n  pass: P-3f2a9c1d7b40\n  heard_at: 2026-11-15T10:00:00Z\n";
+        let s: Signoff = crate::yaml::from_str(yaml).unwrap();
+        let h = s.heard.as_ref().expect("heard is read");
+        assert_eq!(h.answer, "Sign off");
+        assert_eq!(h.pass, "P-3f2a9c1d7b40");
+        assert!(h.question.starts_with("Sign off design-review?"));
+        assert!(crate::yaml::to_string(&s).unwrap().contains("heard:"));
+        let plain = Signoff {
+            id: "design-review".into(),
+            ..Default::default()
+        };
+        assert!(!crate::yaml::to_string(&plain).unwrap().contains("heard"));
+
+        #[derive(Serialize, Deserialize)]
+        struct Older {
+            id: String,
+            #[serde(flatten, default)]
+            extra: Extra,
+        }
+        let o: Older = crate::yaml::from_str(yaml).unwrap();
+        assert_eq!(o.extra["heard"]["answer"], serde_json::json!("Sign off"));
+        let back = crate::yaml::to_string(&o).unwrap();
+        assert!(back.contains("heard:") && back.contains("P-3f2a9c1d7b40"));
     }
 
     /// DEF-043 compat: a test's `at`, a transition's `origin` and a stage change's

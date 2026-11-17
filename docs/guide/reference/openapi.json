@@ -403,6 +403,10 @@
             "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
             "type": "string"
           },
+          "heard": {
+            "$ref": "#/components/schemas/Heard",
+            "description": "The person's answer in the conversation this record was taken from (FTR-035). Absent\notherwise; an older kanbanr keeps it in `extra`."
+          },
           "origin": {
             "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
@@ -438,6 +442,10 @@
           "delegation": {
             "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
             "type": "string"
+          },
+          "heard": {
+            "$ref": "#/components/schemas/Heard",
+            "description": "The person's answer in the conversation this record was taken from (FTR-035). Absent\notherwise; an older kanbanr keeps it in `extra`."
           },
           "origin": {
             "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
@@ -3937,6 +3945,45 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "Heard": {
+        "additionalProperties": true,
+        "description": "The person's answer a conversation verdict was recorded from (FTR-035).",
+        "properties": {
+          "answer": {
+            "default": "",
+            "description": "The option label the person chose.",
+            "type": "string"
+          },
+          "heard_at": {
+            "default": "",
+            "description": "When the hook heard the answer (RFC 3339).",
+            "type": "string"
+          },
+          "pass": {
+            "default": "",
+            "description": "The pass it used, `P-…`.",
+            "type": "string"
+          },
+          "question": {
+            "default": "",
+            "description": "The question as asked, tag included.",
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "tool_use_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "answer",
+          "pass",
+          "heard_at"
         ],
         "type": "object"
       },
@@ -8831,6 +8878,10 @@
             },
             "description": "Each repository doc the item lists under Affects docs that exists at `position`, with its\nblob id there (FTR-004): what was read can be opened again. Empty otherwise.",
             "type": "object"
+          },
+          "heard": {
+            "$ref": "#/components/schemas/Heard",
+            "description": "The person's answer in the conversation this record was taken from (FTR-035). Absent\notherwise; an older kanbanr keeps it in `extra`."
           },
           "id": {
             "description": "The name a gate asks for (`design-review`).",

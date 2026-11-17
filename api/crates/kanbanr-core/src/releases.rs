@@ -9350,6 +9350,7 @@ pub(crate) mod tests {
                 "delegated",
                 "DLG-001",
                 &[],
+                None,
             )
             .unwrap();
         let warned = plan();
