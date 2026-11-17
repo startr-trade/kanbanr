@@ -14,6 +14,7 @@ import {
   zachmanColumns,
 } from "../types";
 import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef } from "../types";
+import { signoffDocs } from "../position";
 import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
@@ -102,7 +103,7 @@ export default function FeaturePage() {
       <section className="section">
         <h2>Specification</h2>
         {feature.specification.trim() ? (
-          <Markdown source={feature.specification} headingOffset={1} />
+          <Markdown source={feature.specification} headingOffset={1} at={feature.code} />
         ) : (
           <p className="muted">No specification provided.</p>
         )}
@@ -530,6 +531,29 @@ function FeatureActivity({ project, code }: { project: string; code: string }) {
 }
 
 /**
+ * What a sign-off read (FTR-004): the commit its docs were read at and a link to each doc, opened at
+ * that commit, so the reviewer sees exactly what was signed. Nothing when it recorded no position.
+ */
+export function SignoffDocs({ project, signoff }: { project: string; signoff: Signoff }) {
+  const docs = signoffDocs(project, signoff);
+  if (!docs) return null;
+  return (
+    <span className="muted small">
+      {" "}
+      · {docs.line}
+      {docs.links.map((l) => (
+        <span key={l.path}>
+          {" "}
+          <Link to={l.href} className="mono">
+            {l.path}
+          </Link>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
  * The sign-offs on an item, latest per name, with their history (FEAT-182). A sign-off given in
  * error is withdrawn here with a reason, as an approval is: the earlier entry stays on the record
  * and stops counting.
@@ -602,6 +626,7 @@ function Signoffs({
                     ? "withdrawn"
                     : `by ${s.by} · ${day(s.at)}${viaOrigin(s.origin)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
               </span>
+              {!gone ? <SignoffDocs project={project} signoff={s} /> : null}
               {writable && !gone ? (
                 asking === s.id ? (
                   <div className="review-actions">

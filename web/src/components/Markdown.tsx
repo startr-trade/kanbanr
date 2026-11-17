@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
 import { locateError } from "../diagramCheck";
 import { appHref } from "../runtimeConfig";
 import { useBoardIndex } from "../useBoardIndex";
+import { currentPick, rewriteRepoLinks } from "../position";
 
 // Unique-per-diagram id prefix, so two diagrams on one page never share an SVG id.
 let diagramSeq = 0;
@@ -21,6 +22,10 @@ let diagramSeq = 0;
  *   and sanitised like the rest; their colours come from the monitor's theme (`styles.css`).
  * - References to the board (`FEAT-012`, `ADR-0005`, a doc path…) link to their pages, and a link
  *   into the monitor navigates in place rather than reloading it (FEAT-181).
+ * - A relative link under `docs/` (`docs/guide/using/x.md`) is a repository doc: it opens the doc's
+ *   page at the position, which is `at` (an item page passes its own code) or else the pick in the
+ *   URL or kept for the session (FTR-004). A link to a board doc (`/p/…/docs/file/…`) is absolute and
+ *   untouched.
  * - Headings are shifted down by `headingOffset` (default 1), so the page's own title stays its
  *   only h1 (DEF-082). `DocPage` passes 0 when the doc starts with an h1 and the page draws none.
  */
@@ -28,12 +33,17 @@ export default function Markdown({
   source,
   resolveImage,
   headingOffset = 1,
+  at,
 }: {
   source: string;
   resolveImage?: (src: string) => string;
   headingOffset?: 0 | 1 | 2;
+  /** The position repository doc links open at; default is the current pick (FTR-004). */
+  at?: string;
 }) {
   const { project } = useParams();
+  const { search } = useLocation();
+  const pick = at ?? currentPick(search);
   const index = useBoardIndex(project);
   const navigate = useNavigate();
   // A board link written as a path (`/p/x/feature/Y`) is an in-app route. Under hash routing — the
@@ -41,11 +51,12 @@ export default function Markdown({
   // the host for a file that is not there; the hash router then follows it.
   const html = useMemo(
     () =>
-      markdownToSafeHtml(source, resolveImage, DOMPurify, index, headingOffset).replace(
-        /(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g,
-        (_m, pre, path, post) => pre + appHref(path) + post,
-      ),
-    [source, resolveImage, index, headingOffset],
+      rewriteRepoLinks(
+        markdownToSafeHtml(source, resolveImage, DOMPurify, index, headingOffset),
+        project ?? "",
+        pick,
+      ).replace(/(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g, (_m, pre, path, post) => pre + appHref(path) + post),
+    [source, resolveImage, index, headingOffset, project, pick],
   );
   const follow = (e: MouseEvent<HTMLDivElement>) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

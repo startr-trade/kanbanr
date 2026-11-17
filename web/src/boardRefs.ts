@@ -7,6 +7,7 @@
  * the board uses, an ADR id, a goal id when the charter has goals, or a doc path — and code spans,
  * fences and HTML comments are skipped.
  */
+import { repoDocTarget } from "./position.ts";
 
 export type Ref =
   | { kind: "item"; code: string; requirement?: string }
@@ -274,6 +275,9 @@ export function targetRef(target: string, index: BoardIndex): Ref | null {
     return null;
   }
   if (target.startsWith("/p/")) return null;
+  // A relative link under docs/ names a doc of the code repository, which the board cannot judge: it
+  // is not a board ref, so it is neither linked nor reported broken (FTR-004; core's `Ref::RepoDoc`).
+  if (repoDocTarget(target)) return null;
   const path = target.split("#")[0];
   return path.endsWith(".md") ? { kind: "doc", path: docKey(path) } : null;
 }

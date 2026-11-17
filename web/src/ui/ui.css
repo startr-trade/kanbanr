@@ -375,3 +375,39 @@ a.ui-progress:hover .ui-progress-bar { outline: 1px solid var(--accent); }
   .ui-stepper { flex-wrap: wrap; row-gap: var(--sp-3); }
   .ui-tile { min-width: 6rem; }
 }
+
+/* The position picker (FTR-004, R-10): a select that wears the tabs' tokens (a control's height, the
+   focus ring, the accent underline on the current value), a typed field and a Go button in one row,
+   and the banner that says what a doc page read. */
+.ui-position {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ui-position-label { color: var(--text-muted); font-size: var(--fs-1); }
+.ui-position-select,
+.ui-position-typed {
+  min-height: var(--row-h);
+  padding: 0 var(--sp-3);
+  background: var(--control);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  font: inherit;
+  font-size: var(--fs-2);
+}
+.ui-position-select { box-shadow: inset 0 -2px 0 var(--accent); max-width: 28rem; }
+.ui-position-typed { width: 16rem; max-width: 100%; }
+.ui-position-select:focus-visible,
+.ui-position-typed:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ui-position-go { min-height: var(--row-h); }
+.ui-position-banner {
+  margin: var(--sp-2) 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface-2);
+  border-left: 2px solid var(--accent);
+  color: var(--text-muted);
+  font-size: var(--fs-1);
+  overflow-wrap: anywhere;
+}

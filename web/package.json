@@ -63,7 +63,8 @@
     "check:planning": "node scripts/check-planning.mjs",
     "check:plan-page": "node scripts/check-plan-page.mjs",
     "check:releases-page": "node scripts/check-releases-page.mjs",
-    "check:plan-flow": "node scripts/check-plan-flow.mjs"
+    "check:plan-flow": "node scripts/check-plan-flow.mjs",
+    "check:position": "node scripts/check-position.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

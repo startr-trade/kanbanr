@@ -4,6 +4,7 @@ import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import Markdown from "../components/Markdown";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
+import { BOARD_DOC_BANNER } from "../position";
 import type { DocFolder } from "../types";
 
 /** Whether a doc's first heading is an h1 (`# Title`, or `Title` over `===`), outside code fences. */
@@ -77,6 +78,9 @@ export default function DocPage() {
         </nav>
         <LiveDot />
       </div>
+      <p className="ui-position-banner" role="note">
+        {path} · {BOARD_DOC_BANNER}
+      </p>
       <article className="doc-article">
         {!ownH1 && <h1>{title}</h1>}
         <Markdown

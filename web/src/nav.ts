@@ -72,7 +72,7 @@ export const NAV: NavArea[] = [
     label: "Records",
     entries: [
       { key: "charter", label: "Charter", path: (p) => `${base(p)}/charter` },
-      { key: "docs", label: "Docs", path: (p) => `${base(p)}/docs`, match: ["/docs/"] },
+      { key: "docs", label: "Docs", path: (p) => `${base(p)}/docs`, match: ["/docs/", "/repo"] },
       // What the project must document, by question and perspective (FTR-005 R-13).
       { key: "catalog", label: "Catalog", path: (p) => `${base(p)}/catalog` },
     ],

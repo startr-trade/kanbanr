@@ -1,8 +1,10 @@
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "../data/useQuery";
+import { useQuery, type Query } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
-import type { DocFolder } from "../types";
+import { PositionPicker, usePick } from "../components/PositionPicker";
+import { repoDocsHref } from "../position";
+import type { DocFolder, PickView } from "../types";
 
 function findFolder(root: DocFolder, path: string): DocFolder | null {
   if (path === "" || path === root.path) return root;
@@ -21,24 +23,51 @@ export default function DocsPage() {
   const project = params.project ?? "";
   const folderPath = (params["*"] ?? "").replace(/\/$/, "");
   // The doc tree through the shared cache, re-read only when a doc changes (DEF-081).
-  const { data, error, loading } = useQuery<DocFolder>(project, urls.docTree(project), TAGS.docTree);
+  const tree = useQuery<DocFolder>(project, urls.docTree(project), TAGS.docTree);
+  // The position the repository's docs are read at (FTR-004); the board's docs have one version.
+  const pick = usePick();
+  const picks = useQuery<PickView[]>(project, urls.positions(project), TAGS.positions);
+  return <DocsBody project={project} folderPath={folderPath} tree={tree} pick={pick} picks={picks.data} />;
+}
 
-  if (loading && !data) return <Loading />;
-  if (error) return <ErrorBox error={error} />;
-  if (!data) return null;
-
-  const folder = findFolder(data, folderPath);
-  if (!folder) return <ErrorBox error={`Folder '${folderPath}' not found`} />;
+/** What the page draws, given its reads. The picker is in the header, whatever the reads answer. */
+export function DocsBody({
+  project,
+  folderPath,
+  tree,
+  pick,
+  picks,
+}: {
+  project: string;
+  folderPath: string;
+  tree: Pick<Query<DocFolder>, "data" | "error" | "loading">;
+  pick: string;
+  picks: PickView[] | null;
+}) {
+  const { data, error, loading } = tree;
+  const header = (
+    <div className="page-head">
+      <h1>Documentation</h1>
+      <PositionPicker picks={picks} pick={pick} />
+      <LiveDot />
+    </div>
+  );
+  const folder = data ? findFolder(data, folderPath) : null;
+  if (loading && !data) return <>{header}<Loading /></>;
+  if (error) return <>{header}<ErrorBox error={error} /></>;
+  if (!data) return header;
+  if (!folder) return <>{header}<ErrorBox error={`Folder '${folderPath}' not found`} /></>;
 
   const base = `/p/${encodeURIComponent(project)}/docs`;
   const crumbs = folderPath ? folderPath.split("/") : [];
 
   return (
     <div className="docs-page">
-      <div className="page-head">
-        <h1>Documentation</h1>
-        <LiveDot />
-      </div>
+      {header}
+      <p className="muted small">
+        These are the board's docs, one version each. <Link to={repoDocsHref(project, pick)}>The repository's docs at {pick}</Link>{" "}
+        are read from the position picked.
+      </p>
 
       <nav className="docs-crumbs">
         <Link to={base}>docs</Link>
