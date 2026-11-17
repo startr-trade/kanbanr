@@ -117,6 +117,10 @@ pub enum BatchOp {
         state: String,
         #[serde(default)]
         checked_rev: Option<String>,
+        /// The run's duration for this test, in whole milliseconds, when its runner printed one
+        /// (FTR-058). Kept in the run's `timings/` file, never on the test.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ms: Option<u64>,
     },
     /// Record a lesson learned (FEAT-055). Saying one that is already recorded affirms it.
     #[serde(rename = "lesson.add")]

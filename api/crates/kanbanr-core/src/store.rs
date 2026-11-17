@@ -56,6 +56,11 @@ struct Pending {
     /// Spec pins to keep (FTR-023), by path: the normalised text a sign-off covered. Written
     /// before the feature files so a sign-off never points at text that wasn't kept.
     pins: std::collections::BTreeMap<PathBuf, String>,
+    /// The timed rows a batch's `test.state` ops carried (FTR-058): kept as one `timings/` run
+    /// file, written before the feature files.
+    timings: Vec<crate::timings::TimingRow>,
+    /// The project revision of that run: the first timed op's `checked_rev`.
+    timings_rev: Option<String>,
 }
 
 pub struct Store {
@@ -765,6 +770,17 @@ impl Store {
         // Bring an older board's layout up to date before writing into it (FEAT-071), so the two
         // shapes never have to coexist in a single write.
         self.migrate_layout(id, &project.config.statuses);
+        // A batch's durations are kept first, as one run file written once (FTR-058): a crash
+        // after it leaves an observed duration and no state change, never the reverse.
+        if !pending.timings.is_empty() {
+            let run = crate::timings::TimingRun {
+                at: now_rfc3339(),
+                rev: pending.timings_rev.clone().unwrap_or_default(),
+                tests: pending.timings.clone(),
+                ..Default::default()
+            };
+            crate::timings::write(self, id, &run)?;
+        }
         // Pins are content-addressed: written once, never changed (FTR-023).
         for (path, text) in &pending.pins {
             if path.exists() {
@@ -3091,21 +3107,54 @@ impl Store {
                     test,
                     state,
                     checked_rev,
+                    ms,
                 } => {
                     if skipped.contains(&feature) {
                         return Ok(skip("test.state", &feature));
                     }
                     let parsed = crate::models::TestState::parse(&state)
                         .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
-                    let f = Self::set_test_state_on(
-                        &mut project,
-                        &mut pending,
-                        &resolve(&aliases, &feature),
-                        &requirement,
-                        &test,
-                        parsed,
-                        checked_rev.as_deref(),
-                    )?;
+                    let code = resolve(&aliases, &feature);
+                    // A result the item already holds, at the revision it already holds, changes
+                    // nothing: the item is not rewritten and logs nothing (FTR-058). Only the
+                    // duration is new, and it goes to the run file.
+                    let stored = project.feature(&code).ok().and_then(|f| {
+                        let def = f.definition.as_ref()?;
+                        let r = def.requirements.iter().find(|r| r.id == requirement)?;
+                        let t = r.tests.iter().find(|t| t.name == test)?;
+                        Some((f.clone(), t.state, t.checked_rev.clone()))
+                    });
+                    let unchanged = stored.as_ref().is_some_and(|(_, s, rev)| {
+                        *s == parsed
+                            && checked_rev
+                                .as_deref()
+                                .is_none_or(|c| c.trim() == rev.as_str())
+                    });
+                    let f = match stored {
+                        Some((f, _, _)) if unchanged => f,
+                        _ => Self::set_test_state_on(
+                            &mut project,
+                            &mut pending,
+                            &code,
+                            &requirement,
+                            &test,
+                            parsed,
+                            checked_rev.as_deref(),
+                        )?,
+                    };
+                    if let Some(ms) = ms {
+                        pending.timings.push(crate::timings::TimingRow {
+                            code: f.code.clone(),
+                            requirement: requirement.clone(),
+                            test: test.clone(),
+                            passed: parsed == crate::models::TestState::Green,
+                            ms,
+                            ..Default::default()
+                        });
+                        if pending.timings_rev.is_none() {
+                            pending.timings_rev = checked_rev.clone();
+                        }
+                    }
                     Ok(serde_json::json!({
                         "op": "test.state", "code": f.code, "requirement": requirement,
                         "test": test, "state": state,
@@ -4888,6 +4937,138 @@ mod tests {
         assert!(matches!(err, CoreError::BatchOpFailed(1, _)), "{err}");
         assert!(err.to_string().contains("FEAT-001 spec"), "{err}");
         assert!(store.load("demo").unwrap().features.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-058 R-4: a batch whose `test.state` carries a duration keeps it in one `timings/` run
+    /// file, and an op whose state and revision are what the item already holds (a timing-only
+    /// op) leaves the item's file byte-identical, its `updated_at` and the activity log alone. A
+    /// dry run writes nothing.
+    #[test]
+    fn a_timed_result_is_kept_in_a_run_file_and_an_unchanged_state_leaves_the_item_alone() {
+        let (store, dir) = atomic_board("timed-result");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the board is the test's own"
+        );
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let def = crate::models::FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![crate::models::Requirement {
+                id: "R-1".into(),
+                text: "THE SYSTEM SHALL run CI".into(),
+                tests: vec![crate::models::TestRef {
+                    name: "ci::runs".into(),
+                    kind: "unit".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let op = |state: &str, rev: &str, ms: u64| -> Vec<crate::batch::BatchOp> {
+            serde_json::from_value(json!([{
+                "op": "test.state", "feature": f.code, "requirement": "R-1",
+                "test": "ci::runs", "state": state, "checked_rev": rev, "ms": ms,
+            }]))
+            .unwrap()
+        };
+        let timings = || crate::timings::runs(&store, "demo").unwrap();
+
+        // A dry run writes no run file.
+        store
+            .apply_batch_with("demo", op("green", "abc1234", 7), true)
+            .unwrap();
+        assert!(timings().is_empty(), "a dry run writes nothing");
+
+        // A changed state is recorded, and its duration kept in a run file at the op's revision.
+        store
+            .apply_batch_with("demo", op("green", "abc1234", 7), false)
+            .unwrap();
+        let runs = timings();
+        assert_eq!(runs.len(), 1, "{runs:?}");
+        assert_eq!(runs[0].rev, "abc1234");
+        assert!(!runs[0].at.is_empty());
+        assert_eq!(
+            runs[0].tests,
+            vec![crate::timings::TimingRow {
+                code: f.code.clone(),
+                requirement: "R-1".into(),
+                test: "ci::runs".into(),
+                passed: true,
+                ms: 7,
+                ..Default::default()
+            }]
+        );
+        let item = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        let test = &item.definition.as_ref().unwrap().requirements[0].tests[0];
+        assert_eq!(
+            (test.state, test.checked_rev.as_str()),
+            (crate::models::TestState::Green, "abc1234")
+        );
+
+        // The same state at the same revision, with a new duration: a timing-only op.
+        let path = store.feature_path("demo", &item.status, &f.code);
+        let before = std::fs::read(&path).unwrap();
+        let activity = crate::activity::read_all(&dir, "demo").len();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        store
+            .apply_batch_with("demo", op("green", "abc1234", 9), false)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "an unchanged state leaves the item's file byte-identical"
+        );
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .updated_at,
+            item.updated_at
+        );
+        assert_eq!(crate::activity::read_all(&dir, "demo").len(), activity);
+        let runs = timings();
+        assert_eq!(runs.len(), 2, "a second run file: {runs:?}");
+        assert_eq!(runs[1].tests[0].ms, 9);
+        assert!(runs[1].tests[0].passed);
+
+        // A red is a change: recorded, and its row says it failed.
+        store
+            .apply_batch_with("demo", op("red", "abc1234", 3), false)
+            .unwrap();
+        let runs = timings();
+        assert_eq!(runs.len(), 3);
+        assert!(!runs[2].tests[0].passed);
+        let item = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            item.definition.as_ref().unwrap().requirements[0].tests[0].state,
+            crate::models::TestState::Red
+        );
+
+        // An op with no duration writes no run file.
+        let untimed: Vec<crate::batch::BatchOp> = serde_json::from_value(json!([{
+            "op": "test.state", "feature": f.code, "requirement": "R-1",
+            "test": "ci::runs", "state": "green", "checked_rev": "def5678",
+        }]))
+        .unwrap();
+        store.apply_batch_with("demo", untimed, false).unwrap();
+        assert_eq!(timings().len(), 3, "no duration, no run file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
