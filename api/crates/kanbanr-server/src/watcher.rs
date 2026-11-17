@@ -60,7 +60,7 @@ pub fn tags_for(rel: &str) -> Vec<String> {
         ["decisions.yaml"] => one("decisions"),
         ["scopes.yaml"] => one("scopes"),
         ["system-baseline.yaml"] => one("catalog"),
-        ["baseline.yaml"] | ["packs", _, ..] | ["profiles", _, ..] => one("baseline"),
+        ["baseline.yaml"] | ["packs", _, ..] => one("baseline"),
         ["milestones", _, ..] => one("milestones"),
         ["timings", _, ..] => one("timings"),
         [
@@ -299,7 +299,6 @@ mod tests {
             ("system-baseline.yaml", &["catalog"]),
             ("baseline.yaml", &["baseline"]),
             ("packs/core.yaml", &["baseline"]),
-            ("profiles/team-web.yaml", &["baseline"]),
             ("prepared/FTR-1.yaml", &["prepared"]),
             ("manual/FTR-1.yaml", &["manual"]),
             ("gates/v1.yaml", &["gates"]),
