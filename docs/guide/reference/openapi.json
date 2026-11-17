@@ -8243,6 +8243,13 @@
             "description": "A board doc holding the record — minutes, a checklist.",
             "type": "string"
           },
+          "docs_read": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Each repository doc the item lists under Affects docs that exists at `position`, with its\nblob id there (FTR-004): what was read can be opened again. Empty otherwise.",
+            "type": "object"
+          },
           "id": {
             "description": "The name a gate asks for (`design-review`).",
             "type": "string"
@@ -8260,6 +8267,10 @@
             },
             "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
             "type": "object"
+          },
+          "position": {
+            "description": "The position text (`<commit>` or `<commit>+<dirty>`) the item resolved to when the sign-off\nwas given with the code repository (FTR-004). Empty without one, or on a record an older\nkanbanr wrote.",
+            "type": "string"
           },
           "reason": {
             "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",

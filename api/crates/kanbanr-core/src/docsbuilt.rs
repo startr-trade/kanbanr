@@ -379,6 +379,29 @@ pub fn named_repository_docs(
         .collect()
 }
 
+/// The repository docs `feature` names (the set [`named_repository_docs`] gives) with their blob ids
+/// at the position `at` (FTR-004), as a sign-off records them: one `tree_at` call, the same for git
+/// and disk. A doc not there is left out; a `tree_at` error leaves the map empty, because a record
+/// that cannot be made steps aside (ADR-0004).
+pub fn docs_read_at(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    repo: &std::path::Path,
+    at: &crate::picks::Picked,
+) -> crate::Result<BTreeMap<String, String>> {
+    let named = named_repository_docs(project, feature);
+    if named.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let Ok(tree) = crate::position::tree_at(repo, &at.state, "") else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(tree
+        .into_iter()
+        .filter(|(path, _)| named.contains(path))
+        .collect())
+}
+
 /// Does a change to `path` lapse a docs-folded sign-off (DEF-072)? True for a doc in `named`, and
 /// for any path that is neither a test file (`docdrift::is_test_path`) nor documentation
 /// (`docdrift::is_documentation`, except lockfiles, which ship).

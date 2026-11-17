@@ -165,6 +165,40 @@ fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> 
     Ok(())
 }
 
+/// Where a sign-off was given (FTR-004): with the code repository, the position text the item
+/// resolves to (`picks::resolve` of `Pick::Item`) and the blob id there of each repository doc its
+/// spec lists; for every sign-off name. Without the repository, or when the position cannot be
+/// resolved or read, both are empty: the record steps aside, it never blocks the sign-off
+/// (ADR-0004).
+fn signoff_location(
+    store: &Store,
+    p: &str,
+    code: &str,
+    repo: Option<&std::path::Path>,
+) -> (String, std::collections::BTreeMap<String, String>) {
+    let none = (String::new(), std::collections::BTreeMap::new());
+    let Some(repo) = repo else {
+        return none;
+    };
+    let pick = crate::picks::Pick::Item(code.to_string());
+    let Ok(at) = crate::picks::resolve(store, p, repo, &pick) else {
+        return none;
+    };
+    let Ok(project) = store.load_meta(p) else {
+        return none;
+    };
+    let Ok(mut feature) = project.feature(code).cloned() else {
+        return none;
+    };
+    let Ok(spec) = store.feature_spec(p, code) else {
+        return none;
+    };
+    feature.specification = spec;
+    let docs_read =
+        crate::docsbuilt::docs_read_at(&project, &feature, repo, &at).unwrap_or_default();
+    (at.state.position.text(), docs_read)
+}
+
 /// What was settled when `docs-folded` is given (FTR-013, DEF-039). With a code repository the
 /// flags are recomputed. Each flag is covered by Claude's newest open settlement that still
 /// `settles` it, else by an entry in the request's `checked` (a person's terminal may send one);
@@ -1801,7 +1835,11 @@ fn dispatch_routes(
             let origin = crate::origin::from_body(b);
             let (checked, settled) =
                 signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
-            let (feature, held) = store.signoff_feature_pinned_as(
+            // Given with the code repository, it records where the item stood and the blob of each
+            // repository doc it lists there (FTR-004). A position that cannot be resolved steps
+            // aside (ADR-0004): the sign-off is recorded without it.
+            let (position, docs_read) = signoff_location(store, p, code, repo);
+            let (feature, held) = store.signoff_feature_located_as(
                 p,
                 code,
                 &name,
@@ -1812,6 +1850,8 @@ fn dispatch_routes(
                 &crate::origin::delegation_from_body(b),
                 &checked,
                 &heads,
+                &position,
+                &docs_read,
             )?;
             // The sign-off answers the settlements it took (DEF-039).
             for id in settled {
@@ -3938,6 +3978,103 @@ mod tests {
             Some(&serde_json::json!({"by": "Ada", "spec_rev": now})),
         )
         .unwrap();
+    }
+
+    /// FTR-004 R-7: a sign-off given with the code repository records the position the item
+    /// resolved to and, for each repository doc its spec lists under Affects docs, the blob id at
+    /// that position; a listed doc missing there is left out. Given without the repository, both
+    /// stay empty and the sign-off is recorded as before.
+    #[test]
+    fn a_signoff_given_with_the_repository_records_its_position_and_each_docs_blob() {
+        use crate::coderepo::git;
+        use crate::coderepo::tests::{commit_file, scratch_repo};
+        let (store, dir) = release_board("signoff-located");
+        assert!(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        store
+            .add_milestone("shop", "M", "", vec![], Some("MS-001".into()))
+            .unwrap();
+        let spec = "## Design\nRead x.\n\n### Affects docs\n\
+                    - [docs/guide/a.md](docs/guide/a.md)\n- `docs/guide/missing.md`\n";
+        let f = store
+            .add_feature("shop", "Cart", spec, "MS-001", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "shop",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let repo = scratch_repo("dispatch-signoff-located");
+        assert!(
+            std::fs::canonicalize(&repo)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        // The item's branch holds the doc; main holds a different text, and is checked out.
+        std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
+        commit_file(&repo, "docs/guide/a.md", "on main\n", "main doc");
+        let branch = format!("feat/{}-cart", f.code);
+        git(&repo, &["checkout", "-q", "-b", &branch, "main"]).unwrap();
+        commit_file(&repo, "docs/guide/a.md", "on the branch\n", "branch doc");
+        let tip = crate::coderepo::rev_parse(&repo, "HEAD").unwrap();
+        let blob = git(&repo, &["rev-parse", &format!("{tip}:docs/guide/a.md")])
+            .unwrap()
+            .trim()
+            .to_string();
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+
+        let signoffs = |store: &Store| {
+            store
+                .load("shop")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+                .signoffs
+        };
+        // Without the repository: recorded, with neither field.
+        dispatch(
+            &store,
+            "POST",
+            &format!("/projects/shop/features/{}/signoff/design-review", f.code),
+            Some(&serde_json::json!({"by": "Ada"})),
+        )
+        .unwrap();
+        let first = signoffs(&store).pop().unwrap();
+        assert_eq!(first.id, "design-review");
+        assert!(first.position.is_empty(), "{first:?}");
+        assert!(first.docs_read.is_empty(), "{first:?}");
+
+        // With it: the branch tip, and the blob of the one listed doc there.
+        dispatch_in(
+            &store,
+            "POST",
+            &format!("/projects/shop/features/{}/signoff/code-review", f.code),
+            Some(&serde_json::json!({"by": "Ada"})),
+            Some(&repo),
+        )
+        .unwrap();
+        let second = signoffs(&store).pop().unwrap();
+        assert_eq!(second.id, "code-review");
+        assert_eq!(
+            second.position,
+            crate::position::PositionRef::at_commit("shop", &tip).text()
+        );
+        assert_eq!(
+            second.docs_read,
+            [("docs/guide/a.md".to_string(), blob)].into(),
+            "the missing doc is left out"
+        );
     }
 
     /// FEAT-217: the codes routes show the next code per prefix and set the map; a feature POSTed

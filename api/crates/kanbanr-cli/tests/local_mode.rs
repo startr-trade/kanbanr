@@ -18731,3 +18731,287 @@ fn doctor_summarises_the_evidence_when_run_from_the_project_folder() {
     assert!(o.status.success(), "{o:?}");
     assert!(!outside.contains("evidence:"), "{outside}");
 }
+
+// ---- repository docs at a position (FTR-004) ----
+
+/// A `view_scratch` board (project `shop`, `docs/overview.md` on main) with sprints and releases
+/// on, one milestone and one item. Returns the base, the work folder and the item's code.
+fn doc_at_scratch(tag: &str) -> (PathBuf, PathBuf, String) {
+    let (base, work) = view_scratch(tag);
+    assert!(
+        std::fs::canonicalize(&work)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the scratch repository must be under the temporary directory (L-41)"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    let made = ok(run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Read docs",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let made: serde_json::Value = serde_json::from_str(&made).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    (base, work, code)
+}
+
+/// Commit `text` as `path` on a new branch `branch` cut from main, then go back to main.
+fn commit_on_branch(base: &Path, work: &Path, branch: &str, path: &str, text: &str) {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(
+        base,
+        work,
+        &["checkout", "-q", "-b", branch, "main"],
+    ));
+    let file = work.join(path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, text).unwrap();
+    ok(git_in(base, work, &["add", path]));
+    ok(git_in(
+        base,
+        work,
+        &["commit", "-q", "--no-verify", "-m", "[no-ref] work"],
+    ));
+    ok(git_in(base, work, &["checkout", "-q", "main"]));
+}
+
+/// FTR-004 R-8: `doc show <PATH> --at <PICK>` reads a code-repository doc at an item, a sprint, a
+/// release and main: four positions, four texts, each from git with the checkout untouched. The
+/// first line is the banner, then a blank line, then the text; `--json` prints the answer; a doc
+/// missing there names the position and exits 1; a commit the repository lacks exits 6.
+#[test]
+fn doc_show_at_reads_a_repository_doc_at_an_item_a_sprint_a_release_and_main() {
+    let (base, work, code) = doc_at_scratch("doc-show-at");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["release", "add", "v0.1.0"]));
+    let doc = "docs/overview.md";
+    commit_on_branch(
+        &base,
+        &work,
+        &format!("feat/{code}-read-docs"),
+        doc,
+        "item\n",
+    );
+    commit_on_branch(&base, &work, "sprint/SP-001", doc, "sprint\n");
+    commit_on_branch(&base, &work, "release/v0.1.0", doc, "release\n");
+    // An uncommitted edit on the checkout: no pick but the working tree shows it.
+    std::fs::write(work.join(doc), "uncommitted\n").unwrap();
+    let head = tip(&base, &work, "HEAD");
+    let refs_before = String::from_utf8(git_in(&base, &work, &["for-each-ref"]).stdout).unwrap();
+
+    for (pick, text, label) in [
+        (
+            code.as_str(),
+            "item\n",
+            format!("{code} · feat/{code}-read-docs @ "),
+        ),
+        (
+            "SP-001",
+            "sprint\n",
+            "SP-001 · sprint/SP-001 @ ".to_string(),
+        ),
+        (
+            "v0.1.0",
+            "release\n",
+            "v0.1.0 · release/v0.1.0 @ ".to_string(),
+        ),
+        ("main", "# Overview\n", "main @ ".to_string()),
+    ] {
+        let out = ok(run_in(&base, &work, &["doc", "show", doc, "--at", pick]));
+        let mut lines = out.splitn(3, '\n');
+        let banner = lines.next().unwrap();
+        assert!(
+            banner.starts_with(&format!("{doc} · at {label}")),
+            "{pick}: {banner}"
+        );
+        assert!(banner.contains(" · from git ("), "{pick}: {banner}");
+        assert_eq!(
+            lines.next(),
+            Some(""),
+            "{pick}: a blank line after the banner"
+        );
+        assert_eq!(lines.next().unwrap().trim_end(), text.trim_end(), "{pick}");
+
+        let json: serde_json::Value = serde_json::from_str(&ok(run_in(
+            &base,
+            &work,
+            &["--json", "doc", "show", doc, "--at", pick],
+        )))
+        .unwrap();
+        assert_eq!(json["text"], text, "{pick}");
+        assert_eq!(json["source"], "git", "{pick}");
+        assert_eq!(json["path"], doc, "{pick}");
+        assert_eq!(json["missing"], false, "{pick}");
+    }
+    // The working tree: from disk, with the uncommitted text.
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["doc", "show", doc, "--at", "worktree"],
+    ));
+    let banner = out.lines().next().unwrap();
+    assert!(
+        banner.starts_with(&format!("{doc} · at working tree @ ")),
+        "{banner}"
+    );
+    assert!(
+        banner.contains("from disk, with uncommitted changes"),
+        "{banner}"
+    );
+    assert!(out.ends_with("uncommitted\n"), "{out}");
+
+    // A doc missing at the position: the reason, exit 1.
+    let o = run_in(
+        &base,
+        &work,
+        &["doc", "show", "docs/none.md", "--at", "main"],
+    );
+    assert_eq!(o.status.code(), Some(1), "{o:?}");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("docs/none.md is not in the repository at main @"),
+        "{err}"
+    );
+    // A commit the repository lacks: exit 6, as FTR-003's position commands answer.
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "doc",
+            "show",
+            doc,
+            "--at",
+            "0123456789abcdef0123456789abcdef01234567",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(6), "{o:?}");
+
+    // Nothing was checked out or moved.
+    assert_eq!(tip(&base, &work, "HEAD"), head);
+    assert_eq!(
+        String::from_utf8(git_in(&base, &work, &["for-each-ref"]).stdout).unwrap(),
+        refs_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join(doc)).unwrap(),
+        "uncommitted\n"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-004 R-6: `kanbanr doctor`, run from the project folder, checks each spec's repository doc
+/// link at the item's position: absent on the item's branch is an error naming the position, even
+/// when main has it; present on the branch is no error, even when main lacks it.
+#[test]
+fn doctor_checks_repository_links_at_the_items_position() {
+    let (base, work, code) = doc_at_scratch("doctor-repo-links");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let spec = base.join("spec.md");
+    std::fs::write(
+        &spec,
+        "# Read docs\n\nSee [the guide](docs/guide/new.md) and [the overview](docs/overview.md).\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "edit",
+            &code,
+            "--spec-file",
+            spec.to_str().unwrap(),
+        ],
+    ));
+    let branch = format!("feat/{code}-read-docs");
+    // On the branch, the overview is gone and the new guide is not there yet.
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "-b", &branch, "main"],
+    ));
+    ok(git_in(&base, &work, &["rm", "-q", "docs/overview.md"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "--no-verify", "-m", "[no-ref] drop"],
+    ));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let doctor = |base: &Path, work: &Path| {
+        String::from_utf8(run_in(base, work, &["doctor"]).stdout).unwrap()
+    };
+    let out = doctor(&base, &work);
+    for path in ["docs/guide/new.md", "docs/overview.md"] {
+        assert!(
+            out.contains(&format!(
+                "links {path}, which is not in the code repository at {code} · {branch} @ "
+            )),
+            "{path} is judged at the item's branch: {out}"
+        );
+    }
+    // The branch gains both: no error, though main still lacks the guide.
+    ok(git_in(&base, &work, &["checkout", "-q", &branch]));
+    std::fs::create_dir_all(work.join("docs/guide")).unwrap();
+    std::fs::write(work.join("docs/guide/new.md"), "# New\n").unwrap();
+    std::fs::write(work.join("docs/overview.md"), "# Overview\n").unwrap();
+    ok(git_in(&base, &work, &["add", "docs"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "--no-verify", "-m", "[no-ref] add"],
+    ));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let out = doctor(&base, &work);
+    assert!(
+        !out.contains("which is not in the code repository"),
+        "both are on the item's branch: {out}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

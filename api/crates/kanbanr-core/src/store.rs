@@ -1829,6 +1829,41 @@ impl Store {
         checked: &[crate::models::Checked],
         branch_heads: &std::collections::BTreeMap<String, String>,
     ) -> Result<(FeatureItem, Option<String>)> {
+        self.signoff_feature_located_as(
+            id,
+            code,
+            signoff,
+            by,
+            note,
+            doc,
+            origin,
+            delegation,
+            checked,
+            branch_heads,
+            "",
+            &Default::default(),
+        )
+    }
+
+    /// As [`Store::signoff_feature_pinned_as`], recording the position the item resolved to and
+    /// the blob id of each repository doc read there (FTR-004): what was signed can be opened
+    /// again. Both are empty when the sign-off was given without the code repository.
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_located_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
+        delegation: &str,
+        checked: &[crate::models::Checked],
+        branch_heads: &std::collections::BTreeMap<String, String>,
+        position: &str,
+        docs_read: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
             return Err(CoreError::Unsupported(
@@ -1878,6 +1913,8 @@ impl Store {
             delegation: delegation.to_string(),
             checked: checked.to_vec(),
             branch_heads: branch_heads.clone(),
+            position: position.to_string(),
+            docs_read: docs_read.clone(),
             ..Default::default()
         });
         feature.updated_at = at;
