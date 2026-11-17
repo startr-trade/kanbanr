@@ -574,7 +574,7 @@ fn holds(
     }
 }
 
-fn goal_facts(project: &Project, id: &str, statement: &str) -> GoalFacts {
+pub(crate) fn goal_facts(project: &Project, id: &str, statement: &str) -> GoalFacts {
     let mut g = GoalFacts {
         id: id.to_string(),
         title: statement.to_string(),

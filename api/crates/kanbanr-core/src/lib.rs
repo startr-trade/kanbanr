@@ -24,6 +24,7 @@ pub mod boards;
 pub mod buildplan;
 pub mod catalog;
 pub mod charter;
+pub mod charterview;
 pub mod claude;
 pub mod coderepo;
 pub mod config;
