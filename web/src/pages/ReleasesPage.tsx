@@ -105,7 +105,7 @@ export function ReleasesBody(p: PageProps & { summary: ReleasesSummary }): JSX.E
         </p>
       ) : (
         <>
-          <p className="releases-filter">
+          <div className="releases-filter ui-table-tools">
             <label>
               Filter{" "}
               <input
@@ -116,7 +116,7 @@ export function ReleasesBody(p: PageProps & { summary: ReleasesSummary }): JSX.E
                 onChange={(e) => setState({ q: e.currentTarget.value })}
               />
             </label>
-          </p>
+          </div>
           <Tabs tabs={releaseTabs(summary)} param="tab" defaultKey={defaultTab(summary, null)} label="Releases">
             {(key) => <ReleaseList {...page} scope={TAB_OF[key as ReleaseTab]} />}
           </Tabs>

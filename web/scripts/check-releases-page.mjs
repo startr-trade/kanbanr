@@ -32,6 +32,12 @@
 //   web::check_releases_filter_reads_no_closed_table (R-10) — with `?q=v0.9`: a closed release
 //     named otherwise is hidden, the open release's table gets the filter, and no closed release's
 //     items are read.
+//   web::check_release_blocking_reason_is_shown_once (R-3) — notShownAbove drops the lines already
+//     shown in the header; a release whose header shows a reason and its first step shows each of
+//     them once in the whole release, a distinct missing line still shows under Needs, and with only
+//     the duplicate missing there is no Needs heading (UX-5).
+//   web::check_releases_filter_wears_the_kit_search_style (R-10) — the page filter's input sits
+//     inside `.ui-table-tools`, as each release table's filter does.
 //
 // Usage: npm run check:releases-page
 import { ITEM_COLUMNS, TAB_OF, defaultTab, headerChips, initiallyOpen, releaseTabs, stepperSteps } from "../src/releaseTabs.ts";
@@ -130,6 +136,19 @@ const BLOCKED = {
   missing: [REASON],
   ready: false,
 };
+// UX-5: a plan whose blocking reason and first step would each show twice (header and body).
+const DUP = {
+  ...READY,
+  version: "v1.1.0",
+  from: "",
+  to: "candidate",
+  button: "Promote v1.1.0 to candidate",
+  conditions: [],
+  steps: [{ action: "branch", stage: "candidate", does: "makes A from B", noop: false }],
+  missing: ["X does not exist", "Y"],
+  ready: false,
+};
+const DUP_ONLY = { ...DUP, version: "v1.2.0", missing: ["X does not exist"] };
 const ITEMS = [
   { code: "FTR-1", title: "One", kind: "feature", status: "Done", sprint: "SP-004", tests_green: 3, tests_named: 4, approval: "approved", design_review: "signed", docs_folded: "", carried_to: "", finished: true },
   { code: "FTR-2", title: "Two", kind: "feature", status: "In Progress", sprint: "SP-004", tests_green: 1, tests_named: 2, approval: "lapsed", design_review: "", docs_folded: "", carried_to: "", finished: false },
@@ -140,10 +159,13 @@ const ITEMS = [
 // The shared cache the rendered components read through, loaded by the same Vite server, so a
 // check seeds it and records the URLs a render reads.
 const { cache } = await load("src/data/cache.ts");
+const actions = await load("src/pages/releases/ReleaseActions.tsx");
 const { TAGS, urls } = await load("src/data/urls.ts");
 const P = "shop";
 await cache.fetch(urls.releasePlan(P, "v0.8.0"), [], async () => READY);
 await cache.fetch(urls.releasePlan(P, "v0.7.1"), [], async () => BLOCKED);
+await cache.fetch(urls.releasePlan(P, "v1.1.0"), [], async () => DUP);
+await cache.fetch(urls.releasePlan(P, "v1.2.0"), [], async () => DUP_ONLY);
 await cache.fetch(urls.releaseItems(P, "v0.8.0"), [], async () => ITEMS);
 const reads = [];
 const read = cache.read.bind(cache);
@@ -464,6 +486,41 @@ await check(
     if (!rows.length) problems.push("the open release draws no table");
     expect("the open table gets the filter", rows, ["FTR-9"]);
     expect("only the open release's items are read", itemReads(out.reads), ["v0.8.0"]);
+  },
+);
+
+await check(
+  "web::check_release_blocking_reason_is_shown_once",
+  "a reason and a first step the header shows are not repeated in the body; a different missing line still shows under Needs, and with none left there is no Needs heading.",
+  async (expect) => {
+    const notShownAbove = actions.notShownAbove ?? (() => ["notShownAbove is not exported"]);
+    expect("drops a line already shown, trimmed", notShownAbove(["a", " b ", "c"], ["b", "x"]), ["a", "c"]);
+    expect("keeps all when none was shown", notShownAbove(["a"], []), ["a"]);
+    const count = (document, what) => text(document.body).split(what).length - 1;
+    const both = await row(release("v1.1.0", { stage: "", branch: "release/v1.1.0" }), "current", "candidate", true);
+    expect("the reason shows once", count(both.document, "X does not exist"), 1);
+    expect("the first step shows once", count(both.document, "makes A from B"), 1);
+    expect("the other missing line still shows", count(both.document, "Y"), 1);
+    expect("Needs still shows", count(both.document, "Needs:"), 1);
+    const only = await row(release("v1.2.0", { stage: "", branch: "release/v1.2.0" }), "current", "candidate", true);
+    expect("only the duplicate: the reason once", count(only.document, "X does not exist"), 1);
+    expect("only the duplicate: no Needs heading", count(only.document, "Needs:"), 0);
+  },
+);
+
+await check(
+  "web::check_releases_filter_wears_the_kit_search_style",
+  "the page filter's input sits inside .ui-table-tools, the class each release table's filter wears.",
+  async (expect) => {
+    const out = await drawn(
+      "src/pages/ReleasesPage.tsx",
+      "ReleasesBody",
+      { ...PAGE, summary: summary(1, 0, 0), cadence: null },
+      "/p/shop/releases",
+    );
+    const input = out.document.querySelector(".releases-filter input[type=search]");
+    expect("the filter input is drawn", input != null, true);
+    expect("it sits inside .ui-table-tools", input?.closest(".ui-table-tools") != null, true);
   },
 );
 

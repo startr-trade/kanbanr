@@ -10,6 +10,12 @@ import { PreparedPanel } from "../../components/PreparedPanel";
 import { AskFirst } from "../../components/AskFirst";
 import { openFor } from "../../prepared";
 
+/** The lines of `lines` whose trimmed text is not one already `shown` (UX-5: a reason shows once). */
+export function notShownAbove(lines: string[], shown: string[]): string[] {
+  const seen = new Set(shown.map((l) => l.trim()));
+  return lines.filter((l) => !seen.has(l.trim()));
+}
+
 /**
  * A release's one button (FEAT-212): named for its next step, with what the step will do beside it,
  * the cut's preview inline, and — until the plan is ready — what is missing and how to fix it.
@@ -102,6 +108,27 @@ export function ReleaseButton({
   const preparedPromotion = action.confirm && !plan.data.awaiting
     ? openFor(prepared, "promotion", { release: release.version, stage: plan.data.to })
     : undefined;
+  // What the header already said, so the body does not say it again (UX-5). Only a release drawn in
+  // two parts has a header above its body; the reason shows there only beside a disabled button.
+  const whyShown = Boolean(why) && action.button && !preparedPromotion;
+  const shownAbove =
+    variant === "body"
+      ? [
+          ...(whyShown ? [why] : []),
+          ...action.does.slice(0, 1),
+          ...(action.again && writable ? [action.again.disabledWhy] : []),
+          ...(action.again ? action.again.does.slice(0, 1) : []),
+        ].filter(Boolean)
+      : [];
+  const doesShown = variant === "body" ? action.does.slice(1) : action.does;
+  const needs = full
+    ? notShownAbove(
+        action.missing.map((m) => (m.fix ? `${m.text} — ${m.fix}` : m.text)),
+        shownAbove,
+      )
+    : [];
+  const missingBody = full ? action.missing.filter((m) => needs.includes(m.fix ? `${m.text} — ${m.fix}` : m.text)) : [];
+  const againMissingBody = action.again ? notShownAbove(action.again.missing.map((m) => m.text), shownAbove) : [];
   const tip = plan.data.release_tip;
   // A direct press asks first (DEF-034); the question is dropped when an outcome arrives or the plan
   // names another stage or another again offer, and kept across live ticks.
@@ -224,7 +251,7 @@ export function ReleaseButton({
           <Inline text={action.does[0]} />
         </p>
       ) : null}
-      {action.again && (head || action.again.missing.length) ? (
+      {action.again && (head || againMissingBody.length) ? (
         <div className="small release-again">
           {head && writable ? (
             <AskFirst
@@ -256,15 +283,15 @@ export function ReleaseButton({
               <code>{action.again.command}</code>
             </>
           )}
-          {full && action.again.missing.length ? (
+          {full && againMissingBody.length ? (
             <>
               <p>
                 <strong>Needs:</strong>
               </p>
               <ul className="dep-list">
-                {action.again.missing.map((m) => (
-                  <li key={m.text}>
-                    <Inline text={m.text} />
+                {againMissingBody.map((m) => (
+                  <li key={m}>
+                    <Inline text={m} />
                   </li>
                 ))}
               </ul>
@@ -303,9 +330,9 @@ export function ReleaseButton({
           </p>
         </div>
       ) : null}
-      {full && action.does.length ? (
+      {full && doesShown.length ? (
         <ul className="dep-list small">
-          {action.does.map((d) => (
+          {doesShown.map((d) => (
             <li key={d}>
               <Inline text={d} />
             </li>
@@ -342,22 +369,26 @@ export function ReleaseButton({
       ) : null}
       {full && action.missing.length ? (
         <div className="small">
-          <p>
-            <strong>Needs:</strong>
-          </p>
-          <ul className="dep-list">
-            {action.missing.map((m) => (
-              <li key={m.text}>
-                <Inline text={m.text} />
-                {m.fix ? (
-                  <>
-                    {" — "}
-                    <Inline text={m.fix} />
-                  </>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          {missingBody.length ? (
+            <>
+              <p>
+                <strong>Needs:</strong>
+              </p>
+              <ul className="dep-list">
+                {missingBody.map((m) => (
+                  <li key={m.text}>
+                    <Inline text={m.text} />
+                    {m.fix ? (
+                      <>
+                        {" — "}
+                        <Inline text={m.fix} />
+                      </>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
           {action.gate ? (
             <RecordResult
               project={project}
