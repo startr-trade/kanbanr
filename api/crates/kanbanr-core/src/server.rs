@@ -84,6 +84,45 @@ impl Meta {
             writer_newer,
         }
     }
+
+    /// The answer for a read-only daemon over several boards (FTR-040): no writes and no
+    /// identity, so no approval is offered. The writer shown is the first board's whose writer
+    /// is newer than this daemon, else the first board's; `writer_newer` is any board's.
+    pub fn for_boards(boards: &crate::boards::Boards) -> Self {
+        let running = crate::writer::running();
+        let writers: Vec<_> = boards
+            .all()
+            .iter()
+            .map(|b| {
+                let recorded = crate::writer::recorded(&b.dir);
+                let newer = recorded
+                    .as_ref()
+                    .is_some_and(|w| crate::writer::newer(&running, w, None));
+                (recorded, newer)
+            })
+            .collect();
+        let writer_newer = writers.iter().any(|(_, newer)| *newer);
+        let shown = writers
+            .iter()
+            .find(|(_, newer)| *newer)
+            .or_else(|| writers.first())
+            .and_then(|(w, _)| w.clone());
+        Meta {
+            writes: false,
+            identity: None,
+            schema_version: crate::config::CURRENT_SCHEMA_VERSION,
+            version: running.version.clone(),
+            dirty: crate::writer::is_dirty(&running.commit),
+            commit: running.commit.clone(),
+            board_writer: shown.map(|w| BoardWriter {
+                version: w.version,
+                commit: w.commit,
+                at: w.at,
+                dirty: w.dirty,
+            }),
+            writer_newer,
+        }
+    }
 }
 
 /// The liveness probe's answer: `GET /healthz`.

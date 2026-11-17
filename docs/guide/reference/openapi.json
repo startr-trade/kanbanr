@@ -4995,6 +4995,10 @@
       "ProjectSummary": {
         "description": "One project on the board, as the home page lists it: `GET /projects`.",
         "properties": {
+          "board": {
+            "description": "The board the project is served from, when the server runs over a list of boards\n(FTR-040); absent from the CLI's `project list`.",
+            "type": "string"
+          },
           "counts": {
             "additionalProperties": {
               "format": "uint",
