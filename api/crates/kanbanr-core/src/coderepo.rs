@@ -419,6 +419,58 @@ pub fn tag_exists(root: &Path, tag: &str) -> bool {
     )
 }
 
+/// The commit the tag `tag` names (FTR-004), peeled through an annotated tag; None when there is
+/// no such tag.
+pub fn tag_commit(root: &Path, tag: &str) -> Option<String> {
+    git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/tags/{tag}^{{commit}}"),
+        ],
+    )
+    .ok()
+    .filter(|c| !c.is_empty())
+}
+
+/// The newest merge commit on `line` whose message references `code` through a `kanbanr:` token
+/// ([`crate::scm::parse_refs`]), among the last 2,000 merges (FTR-004). A code in prose without
+/// the marker, or a reference to another item, is not a match. None when `line` names no commit.
+pub fn merge_commit_for(root: &Path, line: &str, code: &str) -> Result<Option<String>> {
+    if rev_parse(root, line).is_err() {
+        return Ok(None);
+    }
+    let out = git_raw(
+        root,
+        &[
+            "log",
+            "--merges",
+            "--format=%H%x00%B%x00",
+            "-n",
+            "2000",
+            line,
+            "--",
+        ],
+    )?;
+    let text = String::from_utf8_lossy(&out);
+    let mut parts = text.split('\0');
+    while let (Some(sha), Some(body)) = (parts.next(), parts.next()) {
+        let sha = sha.trim();
+        if sha.is_empty() {
+            continue;
+        }
+        if crate::scm::parse_refs(body)
+            .iter()
+            .any(|r| r.code() == code)
+        {
+            return Ok(Some(sha.to_string()));
+        }
+    }
+    Ok(None)
+}
+
 /// An annotated tag `tag` on `at`, as `cut --tag` always made one.
 pub fn create_tag(root: &Path, tag: &str, at: &str, message: &str) -> Result<()> {
     git(root, &["tag", "-a", tag, "-m", message, at]).map(|_| ())
@@ -1531,6 +1583,58 @@ pub(crate) mod tests {
         git(&repo, &["checkout", "-q", "other"]).unwrap();
         merge_no_ff(&repo, "other", "release/v1", "merge into other").unwrap();
         assert!(repo.join("a").exists());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-004 R-5: the newest merge whose message references the item is found; a merge naming
+    /// another item whose code starts the same, and a body naming the code in prose only, are not.
+    #[test]
+    fn merge_commit_for_finds_the_merge_naming_the_item() {
+        let repo = scratch_repo("merge-for");
+        assert!(repo.starts_with(std::env::temp_dir()));
+        let merge = |branch: &str, file: &str, message: &str| -> String {
+            create_branch_from(&repo, branch, "main").unwrap();
+            git(&repo, &["checkout", "-q", branch]).unwrap();
+            commit_file(&repo, file, "x\n", "work");
+            git(&repo, &["checkout", "-q", "main"]).unwrap();
+            merge_no_ff(&repo, "main", branch, message).unwrap().1
+        };
+        let older = merge(
+            "feat/FTR-001-a",
+            "a",
+            "Merge feat/FTR-001-a into main\n\nRefs: kanbanr:FTR-001",
+        );
+        let wanted = merge(
+            "feat/FTR-001-b",
+            "b",
+            "Merge feat/FTR-001-b into main\n\nRefs: kanbanr:FTR-001/R-2",
+        );
+        merge(
+            "feat/FTR-0010-c",
+            "c",
+            "Merge feat/FTR-0010-c into main\n\nRefs: kanbanr:FTR-0010",
+        );
+        merge(
+            "feat/x-d",
+            "d",
+            "Merge feat/x-d into main\n\nFTR-001: this follows FTR-001 in prose\n\nRefs: kanbanr:FTR-002",
+        );
+        assert_ne!(older, wanted);
+        assert_eq!(
+            merge_commit_for(&repo, "main", "FTR-001").unwrap(),
+            Some(wanted.clone())
+        );
+        assert!(
+            merge_commit_for(&repo, "main", "FTR-0010")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(merge_commit_for(&repo, "main", "FTR-003").unwrap(), None);
+        assert_eq!(merge_commit_for(&repo, "nope", "FTR-001").unwrap(), None);
+        // tag_commit peels an annotated tag and answers None for a missing one.
+        create_tag(&repo, "v1", &wanted, "v1").unwrap();
+        assert_eq!(tag_commit(&repo, "v1"), Some(wanted));
+        assert_eq!(tag_commit(&repo, "v2"), None);
         let _ = std::fs::remove_dir_all(&repo);
     }
 
