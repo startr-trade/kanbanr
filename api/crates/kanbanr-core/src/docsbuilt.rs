@@ -389,10 +389,10 @@ pub fn docs_read_at(
     repo: &std::path::Path,
     at: &crate::picks::Picked,
 ) -> crate::Result<BTreeMap<String, String>> {
-    let named = named_repository_docs(project, feature);
-    if named.is_empty() {
+    if named_repository_docs(project, feature).is_empty() {
         return Ok(BTreeMap::new());
     }
+    let named = resolved_repository_docs(project, feature, repo, "HEAD");
     let Ok(tree) = crate::position::tree_at(repo, &at.state, "") else {
         return Ok(BTreeMap::new());
     };
@@ -472,7 +472,14 @@ pub fn moved_on(
             }
             return Some(moved);
         };
-        let named = named.get_or_insert_with(|| named_repository_docs(project, feature));
+        let named = named.get_or_insert_with(|| {
+            resolved_repository_docs(
+                project,
+                feature,
+                root,
+                &line_of(project, feature, ctx, facts),
+            )
+        });
         if let Some(path) = files.iter().find(|p| lapses_signoff(p, named)) {
             return Some(format!(
                 "{b} changed {path} after sign-off '{name}' was given"
@@ -480,6 +487,245 @@ pub fn moved_on(
         }
     }
     None
+}
+
+/// When the item first entered its build stage (DEF-105): the `at` of the first transition in its
+/// history whose `to` is the build role's status (`In Progress` once `kanbanr start` moves it
+/// there). Without a build role, or with no such transition, the time it was created.
+pub fn build_started_at<'a>(config: &crate::ProjectConfig, feature: &'a FeatureItem) -> &'a str {
+    config
+        .branch_status()
+        .and_then(|status| feature.history.iter().find(|t| t.to == status))
+        .map_or(feature.created_at.as_str(), |t| t.at.as_str())
+}
+
+/// Old path to new path for every rename on `rev`'s history (DEF-105), newest rename winning when a
+/// path moved more than once. One git log.
+fn renames_on(root: &std::path::Path, rev: &str) -> crate::Result<BTreeMap<String, String>> {
+    if rev.is_empty() || rev.starts_with('-') {
+        return Err(crate::CoreError::Refused(format!(
+            "refusing revision {rev:?}"
+        )));
+    }
+    #[cfg(test)]
+    GIT_LOGS.with(|c| c.set((c.get().0, c.get().1 + 1)));
+    let out = crate::coderepo::git(
+        root,
+        &[
+            "log",
+            rev,
+            "--no-merges",
+            "-M",
+            "--diff-filter=R",
+            "--name-status",
+            "--format=%x1e",
+            "--",
+        ],
+    )?;
+    let mut renames = BTreeMap::new();
+    for line in out.lines() {
+        let mut cols = line.split('\t');
+        if cols.next().is_some_and(|s| s.starts_with('R'))
+            && let (Some(old), Some(new)) = (cols.next(), cols.next())
+        {
+            renames
+                .entry(old.to_string())
+                .or_insert_with(|| new.to_string());
+        }
+    }
+    Ok(renames)
+}
+
+/// Follow `path` forward through `renames`, at most 16 steps, to the name it has now. `None` when
+/// it was never renamed.
+fn moved_to(renames: &BTreeMap<String, String>, path: &str) -> Option<String> {
+    let mut at = path;
+    for _ in 0..16 {
+        match renames.get(at) {
+            Some(next) => at = next,
+            None => break,
+        }
+    }
+    (at != path).then(|| at.to_string())
+}
+
+/// A listed repository doc and the path it is judged at (DEF-105).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoDoc {
+    pub listed: String,
+    /// The path today: `listed`, unless the line's history moved it.
+    pub path: String,
+    /// False when no tree asked holds `path`.
+    pub exists: bool,
+}
+
+/// Where each `listed` doc is, over the files of `revs` (the line first). One `ls-tree` per rev,
+/// and the line's rename log once, only when a listed name is missing.
+fn resolve(
+    root: &std::path::Path,
+    revs: &[&str],
+    listed: &BTreeSet<String>,
+) -> crate::Result<Vec<RepoDoc>> {
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    for rev in revs {
+        if rev.is_empty() || rev.starts_with('-') {
+            return Err(crate::CoreError::Refused(format!(
+                "refusing revision {rev:?}"
+            )));
+        }
+        let raw = crate::coderepo::git_raw(root, &["ls-tree", "-r", "--name-only", "-z", rev])?;
+        files.extend(
+            raw.split(|b| *b == 0)
+                .filter(|n| !n.is_empty())
+                .map(|n| String::from_utf8_lossy(n).into_owned()),
+        );
+    }
+    let renames = match (listed.iter().any(|p| !files.contains(p)), revs.first()) {
+        (true, Some(line)) => renames_on(root, line)?,
+        _ => BTreeMap::new(),
+    };
+    Ok(listed
+        .iter()
+        .map(|p| {
+            if files.contains(p) {
+                return RepoDoc {
+                    listed: p.clone(),
+                    path: p.clone(),
+                    exists: true,
+                };
+            }
+            match moved_to(&renames, p) {
+                Some(now) if files.contains(&now) => RepoDoc {
+                    listed: p.clone(),
+                    path: now,
+                    exists: true,
+                },
+                _ => RepoDoc {
+                    listed: p.clone(),
+                    path: p.clone(),
+                    exists: false,
+                },
+            }
+        })
+        .collect())
+}
+
+/// The repository docs `feature` names, each at the path it has on `rev` (DEF-105). On a git error
+/// the named set is kept as it is.
+pub fn resolved_repository_docs(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    root: &std::path::Path,
+    rev: &str,
+) -> BTreeSet<String> {
+    let named = named_repository_docs(project, feature);
+    if named.is_empty() {
+        return named;
+    }
+    match resolve(root, &[rev], &named) {
+        Ok(docs) => docs.into_iter().map(|d| d.path).collect(),
+        Err(_) => named,
+    }
+}
+
+// Git logs run by the repository-docs judgement, per thread, for the cost test (DEF-105 R-6).
+#[cfg(test)]
+thread_local! {
+    static GIT_LOGS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// `at` (a board time such as `2026-11-16 21:33:32.48+00:00`) as `2026-11-16T21:33:32Z`, whole
+/// seconds in UTC, for git's `--since`. `None` when it is not a time.
+fn git_time(at: &str) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+    let at = at.trim().replacen(' ', "T", 1);
+    let t = time::OffsetDateTime::parse(&at, &Rfc3339)
+        .ok()?
+        .to_offset(time::UtcOffset::UTC);
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        t.year(),
+        u8::from(t.month()),
+        t.day(),
+        t.hour(),
+        t.minute(),
+        t.second()
+    ))
+}
+
+/// An item code: letters, a dash, digits. `docdrift` holds the same rule, privately.
+fn valid_code(code: &str) -> bool {
+    code.split_once('-').is_some_and(|(p, n)| {
+        !p.is_empty()
+            && p.chars().all(|c| c.is_ascii_alphabetic())
+            && !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// The repository-relative paths touched by every non-merge commit, on any ref, whose `Refs:`
+/// trailer names one of `codes` and that was committed at or after `since` (DEF-105). One git log.
+/// A renamed file is named by its new path.
+fn refs_touched(
+    root: &std::path::Path,
+    codes: &[&str],
+    since: &str,
+) -> crate::Result<BTreeSet<String>> {
+    if codes.is_empty() {
+        return Err(crate::CoreError::Refused("no item code to look for".into()));
+    }
+    for c in codes {
+        if !valid_code(c) {
+            return Err(crate::CoreError::Refused(format!(
+                "{c:?} is not an item code (letters, a dash, digits)"
+            )));
+        }
+    }
+    let since = git_time(since).ok_or_else(|| {
+        crate::CoreError::Refused(format!("{since:?} is not a time git can read"))
+    })?;
+    let grep = format!(
+        "--grep=^Refs:.*kanbanr:({})([^0-9A-Za-z]|$)",
+        codes.join("|")
+    );
+    let since = format!("--since={since}");
+    #[cfg(test)]
+    GIT_LOGS.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    let out = crate::coderepo::git(
+        root,
+        &[
+            "log",
+            "--all",
+            "--no-merges",
+            "-M",
+            "-E",
+            &grep,
+            &since,
+            "--name-only",
+            "--format=%x1e",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('\x1e'))
+        .map(String::from)
+        .collect())
+}
+
+/// The line the item's docs are judged against: the git model's line for the item, else main.
+fn line_of(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+    facts: &crate::gitmodel::BranchFacts,
+) -> String {
+    let config = &project.config;
+    if config.cadence.git_model {
+        let model = crate::gitmodel::derive(config, &ctx.sprints, facts);
+        crate::gitmodel::line_for(&model, feature, &ctx.releases).unwrap_or(model.main)
+    } else {
+        facts.main.clone()
+    }
 }
 
 /// The repository docs `paths` that have not changed on the item's branch against its line, or one
@@ -518,12 +764,7 @@ fn repository_unbuilt(
             feature.code
         ));
     }
-    let line = if config.cadence.git_model {
-        let model = crate::gitmodel::derive(config, &ctx.sprints, facts);
-        crate::gitmodel::line_for(&model, feature, &ctx.releases).unwrap_or(model.main)
-    } else {
-        facts.main.clone()
-    };
+    let line = line_of(project, feature, ctx, facts);
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for branch in &branches {
         match crate::coderepo::changed_since_fork(root, &line, branch) {
@@ -536,14 +777,65 @@ fn repository_unbuilt(
             }
         }
     }
+    // Every commit that names the item since it entered its build stage, merged or not (DEF-105).
+    let codes: Vec<&str> = feature.codes().collect();
+    let started = build_started_at(config, feature);
+    match refs_touched(root, &codes, started) {
+        Ok(files) => changed.extend(files),
+        Err(_) => {
+            return held(format!(
+                "the code repository's history could not be read for {}'s commits, so the \
+                 repository docs cannot be checked",
+                feature.code
+            ));
+        }
+    }
     let shown = branches.join(", ");
-    paths
-        .iter()
-        .filter(|p| !changed.contains(p.as_str()))
-        .map(|p| Unbuilt {
-            kind: DocKind::Repository,
-            path: p.clone(),
-            why: format!("{p} has not changed on {shown} against {line}"),
+    let since = config
+        .branch_status()
+        .map_or("it was created".to_string(), |s| format!("it entered {s}"));
+    let paths: BTreeSet<String> = paths.iter().cloned().collect();
+    let revs: Vec<&str> = std::iter::once(line.as_str())
+        .chain(branches.iter().map(String::as_str))
+        .collect();
+    let docs = match resolve(root, &revs, &paths) {
+        Ok(docs) => docs,
+        Err(_) => {
+            return held(format!(
+                "the code repository's files could not be read for {}, so the repository docs \
+                 cannot be checked",
+                feature.code
+            ));
+        }
+    };
+    docs.into_iter()
+        .filter(|d| !changed.contains(&d.listed) && !changed.contains(&d.path))
+        .map(|d| {
+            if !d.exists {
+                return Unbuilt {
+                    kind: DocKind::Repository,
+                    why: format!(
+                        "{} is not a file in the code repository: not written yet, or Affects \
+                         docs names it wrongly",
+                        d.listed
+                    ),
+                    path: d.listed,
+                };
+            }
+            let moved = if d.path == d.listed {
+                String::new()
+            } else {
+                format!(" (listed as {})", d.listed)
+            };
+            Unbuilt {
+                kind: DocKind::Repository,
+                why: format!(
+                    "{}{moved} has not changed on {shown} against {line}, and no commit for {} \
+                     since {since} touched it",
+                    d.path, feature.code
+                ),
+                path: d.path,
+            }
         })
         .collect()
 }
@@ -710,6 +1002,9 @@ mod tests {
         );
         task(&store, &b, "Build it", TaskState::Completed);
         let branch = branch_for(&store, &b);
+        // The doc exists on the line, so only its change is missing (DEF-105).
+        std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "docs/guide/b.md", "b0\n", "base doc");
         crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
         crate::coderepo::tests::commit_file(&repo, "code.rs", "x\n", "code");
         let got = judge(&store, &b, Some(&repo));
@@ -830,6 +1125,7 @@ mod tests {
         );
         task(&store, &code, "Build it", TaskState::Completed);
         let branch = branch_for(&store, &code);
+        crate::coderepo::tests::commit_file(&repo, "CHANGELOG.md", "base\n", "base changelog");
         crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
         crate::coderepo::tests::commit_file(&repo, file, "x\n", "the item");
         crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
@@ -863,7 +1159,8 @@ mod tests {
         assert_eq!(repo.len(), 1, "{got:?}");
         assert_eq!(repo[0].path, "CHANGELOG.md");
         assert!(
-            repo[0].why.contains("CHANGELOG.md has not changed on"),
+            repo[0].why.contains("CHANGELOG.md has not changed on")
+                && repo[0].why.contains("no commit for"),
             "{got:?}"
         );
     }
@@ -1006,6 +1303,385 @@ mod tests {
             why,
             format!("{branch} was rewritten after sign-off 'docs-folded' was given")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // ---- DEF-105: an item's Refs commits count, merged or not -------------------------------
+
+    /// Write `file` (making its folders) and commit it with `message` on the checked-out branch.
+    fn commit_with(repo: &std::path::Path, file: &str, body: &str, message: &str) {
+        if let Some(parent) = std::path::Path::new(file).parent() {
+            std::fs::create_dir_all(repo.join(parent)).unwrap();
+        }
+        crate::coderepo::tests::commit_file(repo, file, body, message);
+    }
+
+    /// As `commit_with`, with the committer and author date set to `date`.
+    fn commit_dated(repo: &std::path::Path, file: &str, message: &str, date: &str) {
+        std::fs::write(repo.join(file), "x\n").unwrap();
+        crate::coderepo::git(repo, &["add", file]).unwrap();
+        let out = std::process::Command::new("git")
+            .current_dir(repo)
+            .args(["commit", "-q", "-m", message])
+            .env("GIT_COMMITTER_DATE", date)
+            .env("GIT_AUTHOR_DATE", date)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+
+    fn refs(code: &str) -> String {
+        format!("work\n\nRefs: kanbanr:{code}/TL-001/T1")
+    }
+
+    /// An item whose Design lists `docs`, its task done, as `(store, board dir, repo, code, branch)`.
+    fn doc_item(
+        tag: &str,
+        docs: &[&str],
+    ) -> (
+        crate::Store,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        String,
+        String,
+    ) {
+        let (store, dir, repo) = fixture(tag);
+        let list: Vec<String> = docs.iter().map(|d| format!("`{d}`")).collect();
+        let spec = format!(
+            "## Design\n\n### Affects docs\nRepository docs: {}.\n",
+            list.join(", ")
+        );
+        let code = item(&store, "Doc item", &spec, &[]);
+        task(&store, &code, "Build it", TaskState::Completed);
+        let branch = branch_for(&store, &code);
+        (store, dir, repo, code, branch)
+    }
+
+    fn repo_unbuilt_of(got: &DocsBuilt) -> Vec<&Unbuilt> {
+        got.unbuilt
+            .iter()
+            .filter(|u| u.kind == DocKind::Repository)
+            .collect()
+    }
+
+    fn merge_branch(repo: &std::path::Path, branch: &str) {
+        crate::coderepo::git(repo, &["checkout", "-q", "main"]).unwrap();
+        crate::coderepo::merge_no_ff(repo, "main", branch, "Merge the item").unwrap();
+    }
+
+    /// DEF-105 R-1: a doc a Refs commit wrote in an earlier wave, merged before the branch's last
+    /// merge, reads as built.
+    #[test]
+    fn a_doc_written_in_an_earlier_merged_wave_reads_as_built() {
+        let (store, dir, repo, code, branch) = doc_item("wave", &["CHANGELOG.md"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "CHANGELOG.md", "one\n", &refs(&code));
+        merge_branch(&repo, &branch);
+        crate::coderepo::git(&repo, &["checkout", "-q", &branch]).unwrap();
+        crate::coderepo::git(&repo, &["merge", "-q", "--ff-only", "main"]).unwrap();
+        commit_with(&repo, "src.rs", "two\n", "second wave");
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-1: a doc a Refs commit wrote on another branch (here one the item's pattern does not
+    /// name) reads as built.
+    #[test]
+    fn a_doc_touched_by_a_refs_commit_on_another_branch_reads_as_built() {
+        let (store, dir, repo, code, branch) = doc_item("other-branch", &["CHANGELOG.md"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "src.rs", "x\n", "code");
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", "scratch/wip", "main"]).unwrap();
+        commit_with(&repo, "CHANGELOG.md", "x\n", &refs(&code));
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let got = judge(&store, &code, Some(&repo));
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-1: a commit whose trailer names the item's earlier code counts (FTR-056).
+    #[test]
+    fn a_commit_under_an_earlier_code_counts_for_the_item() {
+        let (store, dir, repo, code, branch) = doc_item("alias", &["CHANGELOG.md"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "CHANGELOG.md", "x\n", &refs("OLD-7"));
+        merge_branch(&repo, &branch);
+        crate::coderepo::git(&repo, &["checkout", "-q", &branch]).unwrap();
+        crate::coderepo::git(&repo, &["merge", "-q", "--ff-only", "main"]).unwrap();
+        commit_with(&repo, "src.rs", "two\n", "second wave");
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        assert_eq!(repo_unbuilt_of(&got).len(), 1, "not recoded: {got:?}");
+        let mut project = store.load("demo").unwrap();
+        project
+            .features
+            .iter_mut()
+            .find(|f| f.code == code)
+            .unwrap()
+            .aliases = vec!["OLD-7".into()];
+        let ctx = Context::load_in(&store, "demo", &project.config, Some(&repo));
+        let got = evaluate(&project, project.feature(&code).unwrap(), &ctx);
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-2: an untrailered commit still on the unmerged branch counts, as under DEF-091.
+    #[test]
+    fn an_unmerged_commit_without_a_trailer_on_the_branch_still_counts() {
+        let (store, dir, repo, code, branch) = doc_item("untrailed", &["CHANGELOG.md"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "CHANGELOG.md", "x\n", "no trailer here");
+        let got = judge(&store, &code, Some(&repo));
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-3: a Refs commit older than the item's build stage does not count.
+    #[test]
+    fn a_refs_commit_before_the_build_stage_does_not_count() {
+        let (store, dir, repo, code, branch) = doc_item("before", &["CHANGELOG.md"]);
+        commit_dated(
+            &repo,
+            "CHANGELOG.md",
+            &refs(&code),
+            "2020-01-02T03:04:05+00:00",
+        );
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "src.rs", "x\n", "code");
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        let unbuilt = repo_unbuilt_of(&got);
+        assert_eq!(unbuilt.len(), 1, "{got:?}");
+        assert_eq!(unbuilt[0].path, "CHANGELOG.md");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-3: another item's commit brought in by a catch-up merge does not count.
+    #[test]
+    fn another_items_commit_through_a_catch_up_merge_does_not_count() {
+        let (store, dir, repo, code, branch) = doc_item("catch-up", &["CHANGELOG.md"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "src.rs", "x\n", &refs(&code));
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        commit_with(&repo, "CHANGELOG.md", "x\n", &refs("OTHER-1"));
+        crate::coderepo::git(&repo, &["checkout", "-q", &branch]).unwrap();
+        crate::coderepo::git(&repo, &["merge", "-q", "--no-ff", "-m", "catch up", "main"]).unwrap();
+        let got = judge(&store, &code, Some(&repo));
+        let unbuilt = repo_unbuilt_of(&got);
+        assert_eq!(unbuilt.len(), 1, "{got:?}");
+        assert_eq!(unbuilt[0].path, "CHANGELOG.md");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105: the build stage is the first move into the build status, else the creation time.
+    #[test]
+    fn the_build_stage_starts_at_the_first_move_into_the_build_status() {
+        let config = crate::ProjectConfig::default_for("demo");
+        let status = config.branch_status().expect("a build status");
+        let store_dir =
+            std::env::temp_dir().join(format!("kanbanr-docsbuilt-bs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&store_dir);
+        std::fs::create_dir_all(&store_dir).unwrap();
+        let store = crate::Store::new(store_dir.clone());
+        store.init_project("demo", config.clone()).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store.add_feature("demo", "T", "", "M", None).unwrap();
+        let mut f = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        assert_eq!(build_started_at(&config, &f), f.created_at);
+        let t = |at: &str, to: &str| crate::models::Transition {
+            at: at.into(),
+            from: "x".into(),
+            to: to.into(),
+            ..Default::default()
+        };
+        f.history = vec![
+            t("2026-01-01 00:00:00+00:00", "Other"),
+            t("2026-02-02 00:00:00+00:00", &status),
+            t("2026-03-03 00:00:00+00:00", &status),
+        ];
+        assert_eq!(build_started_at(&config, &f), "2026-02-02 00:00:00+00:00");
+        let _ = std::fs::remove_dir_all(&store_dir);
+    }
+
+    // ---- DEF-105: moved docs and names that are no file --------------------------------------
+
+    /// Move `from` to `to` on the checked-out branch and commit it.
+    fn move_file(repo: &std::path::Path, from: &str, to: &str) {
+        if let Some(parent) = std::path::Path::new(to).parent() {
+            std::fs::create_dir_all(repo.join(parent)).unwrap();
+        }
+        crate::coderepo::git(repo, &["mv", from, to]).unwrap();
+        crate::coderepo::git(repo, &["commit", "-q", "-m", "move"]).unwrap();
+    }
+
+    /// The item lists `docs/old/x.md`, which main holds at `docs/guide/x.md` since a move; its
+    /// branch commits `file` (with the item's trailer), and is merged into main.
+    fn moved_doc_item(tag: &str, file: &str) -> DocsBuilt {
+        let (store, dir, repo, code, branch) = doc_item(tag, &["docs/old/x.md"]);
+        commit_with(&repo, "docs/old/x.md", "v1\n", "add");
+        move_file(&repo, "docs/old/x.md", "docs/guide/x.md");
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, file, "v2\n", &refs(&code));
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        got
+    }
+
+    /// DEF-105 R-4: a doc listed under its old path is judged, and shown, at the path it has now.
+    #[test]
+    fn a_doc_listed_under_its_old_path_is_judged_at_its_new_path() {
+        let got = moved_doc_item("moved-built", "docs/guide/x.md");
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let got = moved_doc_item("moved-unbuilt", "src.rs");
+        let unbuilt = repo_unbuilt_of(&got);
+        assert_eq!(unbuilt.len(), 1, "{got:?}");
+        assert_eq!(unbuilt[0].path, "docs/guide/x.md");
+        assert!(
+            unbuilt[0]
+                .why
+                .starts_with("docs/guide/x.md (listed as docs/old/x.md) has not changed on"),
+            "{got:?}"
+        );
+    }
+
+    /// DEF-105 R-4: `a -> b -> c` is followed to `c`.
+    #[test]
+    fn a_chain_of_renames_is_followed_to_the_path_today() {
+        let (store, dir, repo, code, branch) = doc_item("chain", &["a.md"]);
+        commit_with(&repo, "a.md", "v1\n", "add");
+        move_file(&repo, "a.md", "b.md");
+        move_file(&repo, "b.md", "c.md");
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "src.rs", "v2\n", "code");
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        let unbuilt = repo_unbuilt_of(&got);
+        assert_eq!(unbuilt.len(), 1, "{got:?}");
+        assert_eq!(unbuilt[0].path, "c.md");
+        assert!(unbuilt[0].why.contains("(listed as a.md)"), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let mut renames = BTreeMap::new();
+        renames.insert("a.md".to_string(), "b.md".to_string());
+        renames.insert("b.md".to_string(), "c.md".to_string());
+        assert_eq!(moved_to(&renames, "a.md").as_deref(), Some("c.md"));
+        assert_eq!(moved_to(&renames, "b.md").as_deref(), Some("c.md"));
+        assert_eq!(moved_to(&renames, "c.md"), None);
+        // A cycle stops instead of looping.
+        renames.insert("c.md".to_string(), "a.md".to_string());
+        assert!(moved_to(&renames, "a.md").is_some());
+    }
+
+    /// DEF-105 R-4: a docs-folded sign-off pins the moved doc under its path today, and a later
+    /// change there lapses it.
+    #[test]
+    fn a_signoff_pins_and_lapses_on_the_moved_path() {
+        let (store, dir, repo, code, branch) = doc_item("signoff-moved", &["docs/old/x.md"]);
+        commit_with(&repo, "docs/old/x.md", "v1\n", "add");
+        move_file(&repo, "docs/old/x.md", "docs/guide/x.md");
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "docs/guide/x.md", "v2\n", &refs(&code));
+        sign(&store, &code, &repo, "");
+        let project = store.load("demo").unwrap();
+        let feature = project.feature(&code).unwrap();
+        let at = crate::picks::resolve(
+            &store,
+            "demo",
+            &repo,
+            &crate::picks::Pick::Item(code.clone()),
+        )
+        .unwrap();
+        let pinned = docs_read_at(&project, feature, &repo, &at).unwrap();
+        assert_eq!(
+            pinned.keys().cloned().collect::<Vec<_>>(),
+            vec!["docs/guide/x.md".to_string()]
+        );
+        assert_eq!(lapse(&store, &code, &repo), None);
+        commit_with(&repo, "docs/guide/x.md", "v3\n", "edit the doc");
+        let why = lapse(&store, &code, &repo).expect("a change to the moved doc lapses it");
+        assert!(why.contains("changed docs/guide/x.md"), "{why}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-5: a listed name that is no file anywhere says so.
+    #[test]
+    fn a_name_that_is_no_file_says_so() {
+        let (store, dir, repo, code, branch) = doc_item("no-file", &["openapi.json"]);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        commit_with(&repo, "src.rs", "x\n", &refs(&code));
+        merge_branch(&repo, &branch);
+        let got = judge(&store, &code, Some(&repo));
+        let unbuilt = repo_unbuilt_of(&got);
+        assert_eq!(unbuilt.len(), 1, "{got:?}");
+        assert_eq!(unbuilt[0].path, "openapi.json");
+        assert_eq!(
+            unbuilt[0].why,
+            "openapi.json is not a file in the code repository: not written yet, or Affects docs \
+             names it wrongly"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-105 R-6: 14 listed docs cost one Refs log, and a rename log only when a name is missing.
+    #[test]
+    fn the_repository_docs_cost_one_log_and_at_most_one_rename_log() {
+        let names: Vec<String> = (0..14).map(|i| format!("docs/guide/d{i}.md")).collect();
+        let listed: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (store, dir, repo, code, branch) = doc_item("cost-present", &listed);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        for n in &names {
+            commit_with(&repo, n, "x\n", &refs(&code));
+        }
+        merge_branch(&repo, &branch);
+        GIT_LOGS.with(|c| c.set((0, 0)));
+        let got = judge(&store, &code, Some(&repo));
+        assert_eq!(GIT_LOGS.with(|c| c.get()), (1, 0));
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // Three listed under old names: one more log, for the renames.
+        let old: Vec<String> = (0..3).map(|i| format!("docs/old/o{i}.md")).collect();
+        let mut listed: Vec<&str> = names[..11].iter().map(String::as_str).collect();
+        listed.extend(old.iter().map(String::as_str));
+        let (store, dir, repo, code, branch) = doc_item("cost-moved", &listed);
+        for (i, o) in old.iter().enumerate() {
+            commit_with(&repo, o, "x\n", "add");
+            move_file(&repo, o, &format!("docs/guide/o{i}.md"));
+        }
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        for n in &names[..11] {
+            commit_with(&repo, n, "x\n", &refs(&code));
+        }
+        for i in 0..3 {
+            commit_with(&repo, &format!("docs/guide/o{i}.md"), "y\n", &refs(&code));
+        }
+        merge_branch(&repo, &branch);
+        GIT_LOGS.with(|c| c.set((0, 0)));
+        let got = judge(&store, &code, Some(&repo));
+        assert_eq!(GIT_LOGS.with(|c| c.get()), (1, 1));
+        assert!(repo_unbuilt_of(&got).is_empty(), "{got:?}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
