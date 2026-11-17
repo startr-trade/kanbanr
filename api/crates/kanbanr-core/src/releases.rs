@@ -281,6 +281,229 @@ pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
     Ok(reports)
 }
 
+/// The Releases page's tab a release falls in (FTR-041). The route names them `current`,
+/// `planned` and `past`; the page labels `past` as Released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// At a stage and not yet shipped: a candidate, on main, tagged and waiting for its workflow
+    /// (DEF-049), or a patch in progress.
+    Current,
+    /// Not yet at a stage.
+    Planned,
+    /// Shipped, or superseded by a patch.
+    Past,
+}
+
+/// Which tab `r` is in (FTR-041): `Past` when shipped or superseded, else `Current` when it has a
+/// stage, else `Planned`. A patch in progress has a stage (DEF-049), so it is `Current`.
+pub fn scope_of(r: &Release) -> Scope {
+    if r.state == ReleaseState::Shipped || !r.superseded_by.is_empty() {
+        Scope::Past
+    } else if !r.stage.is_empty() {
+        Scope::Current
+    } else {
+        Scope::Planned
+    }
+}
+
+/// How many releases each tab holds, and the tab the page opens on (FTR-041). Derived from
+/// `releases.yaml` alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReleasesSummary {
+    pub current: usize,
+    pub planned: usize,
+    pub past: usize,
+    /// `current` when any release is in flight, else `planned` when any is planned, else `past`.
+    pub open: String,
+}
+
+/// The counts by [`scope_of`] (FTR-041). Reads the board's releases only: no item, no repository.
+pub fn summary(store: &Store, id: &str) -> Result<ReleasesSummary> {
+    if !store.project_exists(id) {
+        return Err(CoreError::ProjectNotFound(id.to_string()));
+    }
+    let all = load(store, id)?;
+    let count = |scope: Scope| all.iter().filter(|r| scope_of(r) == scope).count();
+    let (current, planned, past) = (
+        count(Scope::Current),
+        count(Scope::Planned),
+        count(Scope::Past),
+    );
+    let open = if current > 0 {
+        "current"
+    } else if planned > 0 {
+        "planned"
+    } else {
+        "past"
+    };
+    Ok(ReleasesSummary {
+        current,
+        planned,
+        past,
+        open: open.to_string(),
+    })
+}
+
+/// One tab's releases (FTR-041): [`report_all`] filtered by [`scope_of`], newest first by version
+/// (DEF-034). Versions that do not parse keep their insertion order, after the rest.
+pub fn slice(store: &Store, id: &str, scope: Scope) -> Result<Vec<ReleaseReport>> {
+    let mut reports: Vec<ReleaseReport> = report_all(store, id)?
+        .into_iter()
+        .filter(|r| scope_of(&r.release) == scope)
+        .collect();
+    newest_first(&mut reports);
+    Ok(reports)
+}
+
+/// One row of a release's item table (FTR-041). Derived, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReleaseItemRow {
+    pub code: String,
+    pub title: String,
+    pub kind: String,
+    pub status: String,
+    pub sprint: String,
+    /// Tests named across the definition's requirements that are green.
+    pub tests_green: usize,
+    /// Every test named across the definition's requirements.
+    pub tests_named: usize,
+    /// `approved` (ratified counts), `lapsed`, `added` (approved, then only extended) or `none`.
+    pub approval: String,
+    /// `signed`, `lapsed`, or empty when never given (or withdrawn).
+    pub design_review: String,
+    /// `signed`, `lapsed`, or empty when never given (or withdrawn).
+    pub docs_folded: String,
+    /// The release a carried item moved to, or `unplanned`; empty for an item not carried.
+    pub carried_to: String,
+    /// An end status, or a stage marked `done` (FEAT-137), as [`ReleaseReport::finished`] counts.
+    pub finished: bool,
+}
+
+/// The item table of release `version` (FTR-041), without the code repository: a docs-folded
+/// sign-off is judged by the board alone. See [`items_table_in`].
+pub fn items_table(store: &Store, id: &str, version: &str) -> Result<Vec<ReleaseItemRow>> {
+    items_table_in(store, id, version, None)
+}
+
+/// [`items_table`] with the code repository, when the surface has one: a docs-folded sign-off
+/// whose branch moved on reads `lapsed` (`docsbuilt::moved_on`, DEF-046). Rows are the release's
+/// items as [`report_all`] lists them, then a patch's `included`, then its carried items, each code
+/// once; a code no longer on the board is left out. An unknown version is a 404.
+pub fn items_table_in(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: Option<&Path>,
+) -> Result<Vec<ReleaseItemRow>> {
+    let project = store.load_meta(id)?;
+    let all = load(store, id)?;
+    let release = all
+        .iter()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::NoSuchRoute(format!("no release {version}")))?;
+    // The same rule as `report_all`'s `items`, in board order.
+    let mut codes: Vec<String> = project
+        .features
+        .iter()
+        .filter(|f| {
+            f.release.as_deref() == Some(release.version.as_str())
+                || release.shipped.contains(&f.code)
+        })
+        .map(|f| f.code.clone())
+        .collect();
+    let included = all
+        .iter()
+        .find(|r| !release.parent.is_empty() && r.version == release.parent)
+        .map(|r| r.shipped.clone())
+        .unwrap_or_default();
+    for code in included
+        .into_iter()
+        .chain(release.carried.iter().map(|c| c.code.clone()))
+    {
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    // Built only when a docs-folded sign-off pinned branches: the one judgement that reads git.
+    let mut ctx: Option<crate::readiness::Context> = None;
+    let mut rows = Vec::with_capacity(codes.len());
+    for code in &codes {
+        let Some(found) = project.features.iter().find(|f| &f.code == code) else {
+            continue;
+        };
+        let def = found.definition.as_ref();
+        // A sign-off that pinned the spec is judged against it (FTR-023); the meta load has none.
+        let pinned = def.is_some_and(|d| {
+            [crate::method::DESIGN_REVIEW, crate::method::DOCS_FOLDED]
+                .iter()
+                .any(|n| d.signoff_latest(n).is_some_and(|s| !s.spec_rev.is_empty()))
+        });
+        let mut item = found.clone();
+        if pinned {
+            item.specification = store.feature_spec(id, code)?;
+        }
+        let tests: Vec<&crate::models::TestRef> = def
+            .map(|d| d.requirements.iter().flat_map(|r| &r.tests).collect())
+            .unwrap_or_default();
+        use crate::models::ApprovalState;
+        let approval = match def.map(|d| d.approval_state()) {
+            Some(ApprovalState::Current | ApprovalState::Ratified) => "approved",
+            Some(ApprovalState::Lapsed) => "lapsed",
+            Some(ApprovalState::Extended) => "added",
+            Some(ApprovalState::Missing) | None => "none",
+        };
+        let design_review = signoff_pill(&item, crate::method::DESIGN_REVIEW, || false);
+        let docs_folded = signoff_pill(&item, crate::method::DOCS_FOLDED, || {
+            let ctx = ctx.get_or_insert_with(|| {
+                crate::readiness::Context::load_in(store, id, &project.config, repo)
+            });
+            crate::docsbuilt::moved_on(&project, &item, ctx).is_some()
+        });
+        rows.push(ReleaseItemRow {
+            code: item.code.clone(),
+            title: item.title.clone(),
+            kind: item.kind.clone().unwrap_or_default(),
+            status: item.status.clone(),
+            sprint: item.sprint.clone().unwrap_or_default(),
+            tests_green: tests.iter().filter(|t| t.state == TestState::Green).count(),
+            tests_named: tests.len(),
+            approval: approval.to_string(),
+            design_review: design_review.to_string(),
+            docs_folded: docs_folded.to_string(),
+            carried_to: release
+                .carried
+                .iter()
+                .find(|c| &c.code == code)
+                .map(|c| c.to.clone())
+                .unwrap_or_default(),
+            finished: project.config.counts_as_done(&item.status),
+        });
+    }
+    Ok(rows)
+}
+
+/// A sign-off's pill (FTR-041): empty when the newest entry of `name` is missing or a withdrawal;
+/// `lapsed` when it no longer covers the definition or the spec it pinned (FTR-023), or when
+/// `moved` says its branch moved on; else `signed`.
+fn signoff_pill(item: &FeatureItem, name: &str, moved: impl FnOnce() -> bool) -> &'static str {
+    let given = item
+        .definition
+        .as_ref()
+        .and_then(|d| d.signoff_latest(name))
+        .is_some_and(|s| s.verdict.is_given());
+    if !given {
+        ""
+    } else if item.signoff_current(name).is_none() || moved() {
+        "lapsed"
+    } else {
+        "signed"
+    }
+}
+
 fn path(store: &Store, id: &str) -> PathBuf {
     store.project_dir(id).join(RELEASES_FILE)
 }
@@ -495,6 +718,12 @@ pub fn add(store: &Store, id: &str, version: &str, target: &str, name: &str) -> 
     if version.is_empty() {
         return Err(CoreError::Unsupported(
             "a release needs a version (e.g. v1.2.0)".into(),
+        ));
+    }
+    // `GET /projects/{p}/releases/summary` is the tab counts' route (FTR-041).
+    if version == "summary" {
+        return Err(CoreError::Unsupported(
+            "a release cannot be called 'summary': the releases route uses that name".into(),
         ));
     }
     if !target.trim().is_empty() && crate::gantt::parse_ymd(target).is_none() {
@@ -5784,6 +6013,245 @@ pub(crate) mod tests {
         patch.parent = "v0.1.0".into();
         patch.version = "v0.1.1".into();
         assert!(super::first_release_hints(&config, &[patch]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-041 R-1: a release falls in Past when shipped or superseded, else Current at a stage
+    /// (a patch at candidate and a release tagged and waiting included), else Planned; the summary
+    /// counts each and opens on Current, else Planned, else Past.
+    #[test]
+    fn releases_fall_into_current_planned_and_past() {
+        use super::{Release, ReleaseState, Scope, scope_of};
+        let planned = Release {
+            version: "v0.9.0".into(),
+            ..Release::default()
+        };
+        let candidate = Release {
+            version: "v0.8.0".into(),
+            stage: "candidate".into(),
+            ..Release::default()
+        };
+        let waiting = Release {
+            version: "v0.7.0".into(),
+            stage: "production".into(),
+            tagged_at: "2026-11-01T10:00:00Z".into(),
+            ..Release::default()
+        };
+        assert!(waiting.waits_on_tag());
+        let shipped = Release {
+            version: "v0.6.0".into(),
+            stage: "production".into(),
+            state: ReleaseState::Shipped,
+            ..Release::default()
+        };
+        let superseded = Release {
+            version: "v0.5.0".into(),
+            stage: "production".into(),
+            tagged_at: "2026-10-01T10:00:00Z".into(),
+            superseded_by: "v0.5.1".into(),
+            ..Release::default()
+        };
+        let patch = Release {
+            version: "v0.6.1".into(),
+            parent: "v0.6.0".into(),
+            stage: "candidate".into(),
+            ..Release::default()
+        };
+        assert_eq!(scope_of(&planned), Scope::Planned);
+        assert_eq!(scope_of(&candidate), Scope::Current);
+        assert_eq!(
+            scope_of(&waiting),
+            Scope::Current,
+            "tagged, waiting: DEF-049"
+        );
+        assert_eq!(scope_of(&shipped), Scope::Past);
+        assert_eq!(scope_of(&superseded), Scope::Past, "superseded is Past");
+        assert_eq!(scope_of(&patch), Scope::Current, "a patch in progress");
+        assert_eq!(serde_json::to_value(Scope::Past).unwrap(), "past");
+
+        let (store, dir) = plain_board("scope");
+        let summary = |store: &Store| super::summary(store, "shop").unwrap();
+        let none = summary(&store);
+        assert_eq!(
+            (none.current, none.planned, none.past, none.open.as_str()),
+            (0, 0, 0, "past")
+        );
+        super::save(&store, "shop", &[shipped.clone(), superseded.clone()]).unwrap();
+        assert_eq!(summary(&store).open, "past");
+        super::save(
+            &store,
+            "shop",
+            &[shipped.clone(), superseded.clone(), planned.clone()],
+        )
+        .unwrap();
+        assert_eq!(summary(&store).open, "planned");
+        super::save(
+            &store,
+            "shop",
+            &[planned, candidate, waiting, shipped, superseded, patch],
+        )
+        .unwrap();
+        let all = summary(&store);
+        assert_eq!(
+            (all.current, all.planned, all.past, all.open.as_str()),
+            (3, 1, 2, "current")
+        );
+        let current: Vec<String> = super::slice(&store, "shop", Scope::Current)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.release.version)
+            .collect();
+        assert_eq!(current, ["v0.8.0", "v0.7.0", "v0.6.1"], "newest first");
+        // No release can be called `summary`: the route takes that name (FTR-041).
+        let err = super::add(&store, "shop", "summary", "", "").unwrap_err();
+        assert!(err.to_string().contains("summary"), "{err}");
+        assert!(matches!(
+            super::summary(&store, "nope"),
+            Err(crate::error::CoreError::ProjectNotFound(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-041 R-4: a release's item table has one row per item, with its tests green out of
+    /// named, its approval and sign-off pills, where a carried item went, and a patch's included
+    /// items; an unknown version is a 404.
+    #[test]
+    fn a_release_item_table_lists_its_items_with_tests_and_signoffs() {
+        use crate::models::{FeatureDefinition, Requirement, TestRef, TestState};
+        let (store, dir) = plain_board("items");
+        let def = |statement: &str| FeatureDefinition {
+            statement: statement.into(),
+            requirements: vec![Requirement {
+                id: "R-1".into(),
+                text: "It works".into(),
+                tests: vec![
+                    TestRef {
+                        name: "a::green".into(),
+                        state: TestState::Green,
+                        ..Default::default()
+                    },
+                    TestRef {
+                        name: "a::planned".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let item = |title: &str| {
+            let code = store
+                .add_feature("shop", title, "", "M", None)
+                .unwrap()
+                .code;
+            store
+                .set_feature_definition("shop", &code, Some(def(title)))
+                .unwrap();
+            code
+        };
+        super::add(&store, "shop", "v0.2.0", "", "").unwrap();
+        super::add(&store, "shop", "v0.3.0", "", "").unwrap();
+        // Approved, and finished.
+        let approved = item("Approved");
+        store.approve_feature("shop", &approved, "Ada").unwrap();
+        for status in ["Scheduled", "Completed"] {
+            store
+                .move_feature_approved("shop", &approved, status, None)
+                .unwrap();
+        }
+        // Approved, then its definition changed.
+        let lapsed = item("Lapsed");
+        store.approve_feature("shop", &lapsed, "Ada").unwrap();
+        store
+            .set_feature_definition("shop", &lapsed, Some(def("Lapsed, changed")))
+            .unwrap();
+        // A design review given on the definition as it stands.
+        let reviewed = item("Reviewed");
+        store
+            .signoff_feature("shop", &reviewed, "design-review", "Ada", "", "")
+            .unwrap();
+        // Docs folded, then the definition changed: it no longer covers what is there.
+        let folded = item("Folded");
+        store
+            .signoff_feature("shop", &folded, "docs-folded", "Ada", "", "")
+            .unwrap();
+        store
+            .set_feature_definition("shop", &folded, Some(def("Folded, changed")))
+            .unwrap();
+        // Carried from v0.2.0 to v0.3.0.
+        let carried = item("Carried");
+        let planned = [
+            approved.clone(),
+            lapsed.clone(),
+            reviewed.clone(),
+            folded.clone(),
+        ];
+        super::plan(&store, "shop", "v0.2.0", &planned).unwrap();
+        super::plan(&store, "shop", "v0.3.0", std::slice::from_ref(&carried)).unwrap();
+        // A shipped v0.1.0 and its patch v0.1.1, which keeps what v0.1.0 shipped.
+        let kept = item("Kept");
+        let mut releases = super::load(&store, "shop").unwrap();
+        releases[0].carried.push(super::Carry {
+            code: carried.clone(),
+            to: "v0.3.0".into(),
+            why: String::new(),
+        });
+        releases.push(super::Release {
+            version: "v0.1.0".into(),
+            state: super::ReleaseState::Shipped,
+            shipped: vec![kept.clone()],
+            ..Default::default()
+        });
+        releases.push(super::Release {
+            version: "v0.1.1".into(),
+            parent: "v0.1.0".into(),
+            stage: "candidate".into(),
+            ..Default::default()
+        });
+        super::save(&store, "shop", &releases).unwrap();
+
+        let rows = super::items_table(&store, "shop", "v0.2.0").unwrap();
+        let codes: Vec<&str> = rows.iter().map(|r| r.code.as_str()).collect();
+        // In the report's `items` order (the board's), then the carried one.
+        let report = super::report_all(&store, "shop")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.release.version == "v0.2.0")
+            .unwrap();
+        let mut expected: Vec<&str> = report.items.iter().map(String::as_str).collect();
+        let mut sorted = expected.clone();
+        sorted.sort_unstable();
+        let mut want: Vec<&str> = planned.iter().map(String::as_str).collect();
+        want.sort_unstable();
+        assert_eq!(sorted, want, "exactly its planned items");
+        expected.push(carried.as_str());
+        assert_eq!(codes, expected, "its items, then the carried one");
+        let row = |code: &str| rows.iter().find(|r| r.code == code).unwrap();
+        let a = row(&approved);
+        assert_eq!(a.title, "Approved");
+        assert_eq!((a.tests_green, a.tests_named), (1, 2));
+        assert_eq!(a.approval, "approved");
+        assert_eq!(a.status, "Completed");
+        assert!(a.finished);
+        assert_eq!((a.design_review.as_str(), a.docs_folded.as_str()), ("", ""));
+        assert_eq!(a.carried_to, "");
+        assert_eq!(row(&lapsed).approval, "lapsed");
+        assert!(!row(&lapsed).finished);
+        let r = row(&reviewed);
+        assert_eq!(
+            (r.approval.as_str(), r.design_review.as_str()),
+            ("none", "signed")
+        );
+        assert_eq!(row(&folded).docs_folded, "lapsed");
+        assert_eq!(row(&folded).design_review, "");
+        assert_eq!(row(&carried).carried_to, "v0.3.0");
+
+        let patch = super::items_table(&store, "shop", "v0.1.1").unwrap();
+        let codes: Vec<&str> = patch.iter().map(|r| r.code.as_str()).collect();
+        assert_eq!(codes, [kept.as_str()], "a patch lists what it keeps");
+
+        let err = super::items_table(&store, "shop", "v9.9.9").unwrap_err();
+        assert_eq!(err.status(), 404, "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
