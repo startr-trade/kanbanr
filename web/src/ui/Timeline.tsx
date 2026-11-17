@@ -64,22 +64,45 @@ export function Timeline(p: { from: string; to: string; today?: string; lanes: L
     );
   };
 
-  const mark = (m: Mark, i: number, y: number) => {
-    const mx = x(m.at);
-    const my = y + BAND_H / 2;
-    return (
-      <g key={`m${i}`} className={`ui-tl-mark ui-tl-${m.kind}`}>
-        <title>{markText(m)}</title>
-        {m.kind === "diamond" ? (
-          <polygon points={`${mx},${my - 7} ${mx + 7},${my} ${mx},${my + 7} ${mx - 7},${my}`} />
-        ) : (
-          <circle cx={mx} cy={my} r={5} />
-        )}
-        <text className="ui-tl-label" x={mx + 9} y={my} dominantBaseline="middle">
-          {m.label}
-        </text>
-      </g>
-    );
+  /** Marks whose x fall within this many px draw as one (a day at the window's scale). */
+  const MERGE_PX = 4;
+  /** An estimate of one label character's width, to see whether two labels would overprint. */
+  const CHAR_PX = 6.5;
+  /** Group a lane's marks that sit on one spot; draw each group once, dropping a label that would overprint. */
+  const marks = (lane: Lane, y: number) => {
+    const sorted = lane.marks.map((m) => ({ m, mx: x(m.at) })).sort((a, b) => a.mx - b.mx);
+    const groups: { mx: number; members: Mark[] }[] = [];
+    for (const { m, mx } of sorted) {
+      const last = groups[groups.length - 1];
+      if (last && mx - last.mx <= MERGE_PX) last.members.push(m);
+      else groups.push({ mx, members: [m] });
+    }
+    let labelEnd = -Infinity;
+    return groups.map((g, i) => {
+      const my = y + BAND_H / 2;
+      const first = g.members[0]!;
+      const n = g.members.length;
+      const diamond = g.members.some((m) => m.kind === "diamond");
+      const label = n > 1 ? `${first.label} +${n - 1}` : first.label;
+      const start = g.mx + 9;
+      const showLabel = start >= labelEnd;
+      if (showLabel) labelEnd = start + label.length * CHAR_PX + 4;
+      return (
+        <g key={`m${i}`} className={`ui-tl-mark ui-tl-${diamond ? "diamond" : "dot"}`}>
+          <title>{n > 1 ? g.members.map(markText).join("\n") : markText(first)}</title>
+          {diamond ? (
+            <polygon points={`${g.mx},${my - 7} ${g.mx + 7},${my} ${g.mx},${my + 7} ${g.mx - 7},${my}`} />
+          ) : (
+            <circle cx={g.mx} cy={my} r={5} />
+          )}
+          {showLabel && (
+            <text className="ui-tl-label" x={start} y={my} dominantBaseline="middle">
+              {label}
+            </text>
+          )}
+        </g>
+      );
+    });
   };
 
   return (
@@ -93,7 +116,7 @@ export function Timeline(p: { from: string; to: string; today?: string; lanes: L
                 {lane.label}
               </text>
               {lane.bands.map((b, i) => band(b, i, y))}
-              {lane.marks.map((m, i) => mark(m, i, y))}
+              {marks(lane, y)}
             </g>
           );
         })}

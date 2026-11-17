@@ -312,6 +312,35 @@ try {
     }
     report("web::check_flow_tiles_offer_the_flow_report_sentence", problems);
   }
+  // R-8 (T10): marks on one day draw as one mark.
+  {
+    const problems = [];
+    const marks = Array.from({ length: 8 }, (_, i) => ({ at: "2026-11-15", label: i === 0 ? "X" : `Y${i}`, kind: "dot" }));
+    const lanes = [{ key: "d", label: "Decisions", bands: [], marks }];
+    const { document } = await render("src/ui/Timeline.tsx", "Timeline", { from: "2026-11-10", to: "2026-11-23", lanes, caption: "c" });
+    const drawn = [...document.querySelectorAll("svg .ui-tl-mark")];
+    if (drawn.length !== 1) problems.push(`eight marks on one day drew ${drawn.length} marks, not 1`);
+    else {
+      if (text(drawn[0].querySelector("text")) !== "X +7") problems.push(`the label is "${text(drawn[0].querySelector("text"))}", not "X +7"`);
+      const title = text(drawn[0].querySelector("title"));
+      for (const m of marks) if (!title.includes(m.label)) problems.push(`the title does not name ${m.label}`);
+    }
+    // Apart marks stay separate; a diamond in a group makes it a diamond; a crowded label is dropped.
+    const mixed = [
+      { at: "2026-11-12", label: "A", kind: "dot" },
+      { at: "2026-11-20", label: "A very long label that cannot fit", kind: "dot" },
+      { at: "2026-11-20", label: "R", kind: "diamond" },
+      { at: "2026-11-21", label: "C", kind: "dot" },
+    ];
+    const r2 = await render("src/ui/Timeline.tsx", "Timeline", { from: "2026-11-10", to: "2026-11-23", lanes: [{ key: "d", label: "D", bands: [], marks: mixed }], caption: "c" });
+    const m2 = [...r2.document.querySelectorAll("svg .ui-tl-mark")];
+    if (m2.length !== 3) problems.push(`mixed lane drew ${m2.length} marks, not 3`);
+    else {
+      if (!m2[1].classList.contains("ui-tl-diamond")) problems.push("a group holding a diamond is not a diamond");
+      if (m2[2].querySelector("text")) problems.push("a label that would overprint its neighbour was not dropped");
+    }
+    report("web::check_timeline_marks_on_one_day_draw_as_one_mark", problems);
+  }
 } catch (e) {
   failed = true;
   console.error(`check-overview: ${e?.stack ?? e}`);
