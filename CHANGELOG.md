@@ -177,6 +177,7 @@ All notable changes to kanbanr are documented here. The format follows
   no longer matches what ships (DEF-078).
 - A patch of a release made before the docs move is prepared at the paths its branch has, and the
   plan says which earlier path it used (MNT-002).
+- In delegated mode the board no longer says 'waiting on you' for a sign-off or approval a delegation holds: cards say 'Claude, under DLG-n' with a link, the Needs you badge, the Review page's counts and the session-start summary count only your own decisions, and Needs you reads in three parts — yours (with a delegation that ends within three days or was revoked), what Claude decided since you last looked, and what each delegation still holds (DEF-104).
 
 ## [0.7.0] - 2026-11-16
 

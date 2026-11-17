@@ -395,6 +395,14 @@ Overview leads with what needs you, then what is happening, then how much the bo
 - **Goals**, **Recent decisions** (ADRs, approvals, sign-offs, release stages, shipped releases,
   newest first, in words) and **Activity**.
 
+**In delegated mode.** While a delegation is in force, Needs you reads in three parts. **Yours** is
+what only you can do, and it is all the badge counts; a delegation that ends within three days, or
+was revoked, is listed there with how many decisions return to you. **Decided by Claude** lists what
+Claude decided under a delegation since you last looked, newest first, each linking to the Review
+page to keep or undo. **Held** says what each delegation still holds ("DLG-001: 4 design reviews,
+2 approvals, until 4 Dec"): that is Claude's work, not yours. "Since you last looked" is kept in
+this browser only.
+
 Every page also carries a **Needs you** badge in the top bar with the same total; it opens a
 drawer with the same lines. **Work → Items** (`/p/<project>/items`) lists items filtered by kind,
 status, milestone, goal, sprint, release or evidence (red, planned, stale, unproven, proven,
@@ -487,6 +495,11 @@ progress, else the last 14 days. One line under it, such as "320 finished earlie
 agent is on it now*, *Blocked or stalled*) open with full cards; the others show a count and their
 oldest item, for example "Building · 23 — oldest FTR-012, 23 days in In Progress", and open in place
 as one-line rows. A long group scrolls inside itself; nothing is hidden behind a page number.
+
+**Decisions Claude holds.** In delegated mode a card says "design review: Claude, under DLG-001"
+for a sign-off or approval a delegation in force covers, in a quiet style with a link to the
+delegation, and it never says "waiting on you" for it. "Waiting on you" stays for what is yours.
+When the delegation ends or you revoke it, the same card reads as yours again.
 
 **A column that explains itself.** Under its name each column draws a bar of its groups. Each entry
 in the legend shows that group alone, and "Show as table" gives the same counts as a table. A line
@@ -840,6 +853,11 @@ An empty group has no tab. The page opens on the largest group, or on the one it
   baseline awaits acceptance or a re-acceptance is prepared, never as a panel on the page. In a
   design-review row, "Changes the system baseline" lists each baseline row the item changes, pinned
   hash against now.
+- **What Claude holds.** In delegated mode a row whose decision a delegation in force covers is
+  shown last in its group, with a pill naming the delegation ("Claude holds it, under DLG-001"),
+  and is not counted in the group's number. It is still yours to decide if you want to: tick it
+  like any other row. A group with only such rows stays listed, with a count of 0 and "· 4
+  Claude's" on its tab, and its sentence says how many Claude holds and until when.
 - **Rows.** Each row is one item on one line: its code, its title, what is being decided, and pills
   for what needs your eye ("approval lapsed", "spec changed since sign-off", "added since
   approval", "prepared", the batch it is in), with its release and sprint. Under it, one line says
@@ -979,6 +997,8 @@ below:
   nothing is taken under it until it can be. In delegated mode a granted one also says
   whether the Claude Code allow rule auto mode needs is in place ("auto mode: allowed"), or names
   the missing rule and the command that adds it, `kanbanr claude permissions --write`.
+- **Holds now.** Each granted delegation says what it holds at this moment ("Holds now: 4 design
+  reviews, 2 approvals", or "Holds nothing now."). A card's delegation link opens here.
 - **Delegated decisions to review**: what Claude decided under a delegation, on which item, under
   which delegation and when, with **Keep** and **Undo** and an optional reason. Undo withdraws the
   approval or sign-off.

@@ -15,10 +15,20 @@ const NAMED = 5;
 
 /**
  * One tab per group, in the summary's order: the group's label, with its count shown beside it
- * by `Tabs` (so the tab reads "Approve 3"). A group with nothing waiting is hidden.
+ * by `Tabs` (so the tab reads "Approve 3"). A group with nothing waiting and nothing Claude holds is hidden; a group Claude holds rows of says so
+ * ("Approve · 4 Claude's").
  */
 export function groupTabs(groups: GroupCount[]): TabDef[] {
-  return groups.map((g) => ({ key: g.key, label: g.label, count: g.count, hidden: g.count === 0 }));
+  return groups.map((g) => {
+    const held = g.held ?? 0;
+    return {
+      key: g.key,
+      label: held > 0 ? `${g.label} · ${held} Claude's` : g.label,
+      count: g.count,
+      // A group of only what Claude holds stays listed, with count 0: the person can still decide it.
+      hidden: g.count === 0 && held === 0,
+    };
+  });
 }
 
 /** The group the page opens on: the one the URL names if it is shown, else the largest. */

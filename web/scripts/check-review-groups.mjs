@@ -434,6 +434,56 @@ try {
     eq(problems, "the delegated body has its own Keep and Undo", undoButtons, ["Keep", "Undo"]);
     ok = report("web::check_review_reasoned_actions_stay_in_the_row", problems) && ok;
   }
+  // DEF-104 (supporting R-4): what a delegation holds is shown last, uncounted, and still decidable.
+  {
+    const problems = [];
+    const g = (key, label, n, held) => ({ ...count(key, label, n), held });
+    const tabs = groupTabs([g("approve", "Approve", 3, 0), g("docs-folded", "Sign off docs-folded", 0, 4), g("ratify", "Ratify", 0, 0), g("manual", "Manual", 2)]);
+    const by = (k) => tabs.find((t) => t.key === k);
+    eq(problems, "a held-only group's tab is shown", by("docs-folded")?.hidden, false);
+    eq(problems, "its count stays 0", by("docs-folded")?.count, 0);
+    eq(problems, "its label says what Claude holds", by("docs-folded")?.label, "Sign off docs-folded · 4 Claude's");
+    eq(problems, "a group with nothing at all is hidden", by("ratify")?.hidden, true);
+    eq(problems, "a group with no held count keeps its label", by("approve")?.label, "Approve");
+    eq(problems, "a group without the field keeps its label", by("manual")?.label, "Manual");
+
+    const held = (k) => row(k, { held_by: "DLG-001", held_until: "2026-12-04T10:00:00Z", pills: ["Claude holds it, under DLG-001"] });
+    const rows = [row("DEF-1"), held("DEF-2")];
+    const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
+    eq(problems, "a held row stays selectable", [...select(emptySelection("docs-folded"), "docs-folded", "DEF-2", true, rows).keys], ["DEF-2"]);
+    const shown = await renderPanel(docs);
+    const sentence = shown.document.querySelector(".review-group-sentence")?.textContent ?? "";
+    if (!sentence.includes("1 of these Claude holds under DLG-001 until 4 Dec; you can still decide them.")) {
+      problems.push(`the sentence does not name the delegation: ${sentence}`);
+    }
+    const plain = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("DEF-1")]));
+    if ((plain.document.querySelector(".review-group-sentence")?.textContent ?? "").includes("Claude holds")) {
+      problems.push("a group with no held row names a delegation");
+    }
+    const box = shown.document.getElementById("DEF-2")?.querySelector('.ui-row-select input[type="checkbox"]');
+    if (!box || box.hasAttribute("disabled")) problems.push("a held row's checkbox is missing or disabled");
+
+    const view = {
+      mode: "delegated",
+      modes: [],
+      to_review: [],
+      delegations: [
+        { id: "DLG-001", state: "granted", verdicts: ["approve"], until: "2026-12-04T10:00:00Z" },
+        { id: "DLG-002", state: "granted", verdicts: ["approve"], until: "2026-12-04T10:00:00Z" },
+      ],
+      waiting: [
+        ...["A", "B", "C", "D"].map((c) => ({ code: `FTR-${c}`, what: "sign off design-review", place: "delegated", delegation: "DLG-001" })),
+        ...["E", "F"].map((c) => ({ code: `FTR-${c}`, what: "approve its definition", place: "delegated", delegation: "DLG-001" })),
+        { code: "FTR-G", what: "approve its definition", place: "monitor" },
+      ],
+    };
+    const here = await render("src/pages/review/DecisionsHere.tsx", "DecisionsHere", { project: "x", view, error: null, writable: false, who: null });
+    eq(problems, "the delegation's block is the card's link target", here.document.getElementById("DLG-001")?.tagName, "DIV");
+    const text = (id) => here.document.getElementById(id)?.textContent ?? "";
+    if (!text("DLG-001").includes("Holds now: 4 design reviews, 2 approvals")) problems.push(`DLG-001 does not say what it holds: ${text("DLG-001")}`);
+    if (!text("DLG-002").includes("Holds nothing now.")) problems.push(`DLG-002 does not say it holds nothing: ${text("DLG-002")}`);
+    ok = report("web::check_review_groups_show_what_claude_holds", problems) && ok;
+  }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);
   ok = false;

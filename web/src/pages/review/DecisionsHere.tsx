@@ -6,7 +6,28 @@
  */
 import { useState } from "react";
 import { api } from "../../api";
+import { verdictNoun } from "../../needsYouState";
 import type { DecisionsView, Waiting } from "../../types";
+
+/** The verdict a waiting line asks ("sign off design-review" is `signoff:design-review`), or null. */
+function verdictOf(w: Waiting): string | null {
+  if (w.what.startsWith("sign off ")) return `signoff:${w.what.slice("sign off ".length)}`;
+  if (w.what.startsWith("approve")) return "approve";
+  if (w.what.startsWith("ratify")) return "ratify";
+  return null;
+}
+
+/** "Holds now: 4 design reviews, 2 approvals" for one delegation, from what waits for Claude under it. */
+function holdsNow(waiting: Waiting[], id: string): string {
+  const counts = new Map<string, number>();
+  for (const w of waiting) {
+    if (w.place !== "delegated" || w.delegation !== id) continue;
+    const v = verdictOf(w);
+    if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  if (counts.size === 0) return "Holds nothing now.";
+  return `Holds now: ${[...counts].map(([v, n]) => `${n} ${verdictNoun(v, n)}`).join(", ")}`;
+}
 
 /** Where a waiting decision is taken, in words. */
 function placeWords(w: Waiting): string {
@@ -125,7 +146,7 @@ export function DecisionsHere({
         </p>
       ) : null}
       {granted.map((g) => (
-        <div key={g.id} className="small">
+        <div key={g.id} id={g.id} className="small">
           <p>
             <strong>{g.id}</strong> granted: {g.verdicts.join(", ")}
             {g.kinds?.length ? ` · ${g.kinds.join(", ")}` : ""}
@@ -158,6 +179,7 @@ export function DecisionsHere({
               )
             ) : null}
           </p>
+          <p className="muted">{holdsNow(view.waiting, g.id)}</p>
           {said[g.id] ? (
             <p>{said[g.id]}</p>
           ) : writable ? (
