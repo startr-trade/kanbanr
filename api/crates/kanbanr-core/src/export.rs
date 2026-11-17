@@ -274,9 +274,44 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
 /// The definition as markdown: why the item exists, the six dimensions with their gaps named, and
 /// each requirement with its evidence. This is what `kanbanr feature show` prints, which is the
 /// whole of what Claude sees about an item — a field rendered nowhere may as well not exist.
+#[cfg(test)]
 pub(crate) fn definition_sections(
     feature: &FeatureItem,
     def: &crate::models::FeatureDefinition,
+) -> String {
+    definition_sections_with(feature, def, None)
+}
+
+/// The catalog rows a design changes, told apart by where each came from (FTR-006): what
+/// `feature show` prints as "Views changed".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ViewsChanged {
+    /// Rows the design's docs reach: `affects_docs` and the docs linked under Affects docs.
+    pub from_docs: Vec<String>,
+    /// Rows only `affects_views` names.
+    pub named: Vec<String>,
+}
+
+impl ViewsChanged {
+    /// "context, components (from affects_docs); code-structure (named)"; empty when none.
+    pub fn line(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.from_docs.is_empty() {
+            parts.push(format!("{} (from affects_docs)", self.from_docs.join(", ")));
+        }
+        if !self.named.is_empty() {
+            parts.push(format!("{} (named)", self.named.join(", ")));
+        }
+        parts.join("; ")
+    }
+}
+
+/// [`definition_sections`] with the catalog rows the design changes, when the caller read the
+/// catalog: the "Views changed" line replaces the plain "Affects views" one.
+pub(crate) fn definition_sections_with(
+    feature: &FeatureItem,
+    def: &crate::models::FeatureDefinition,
+    views: Option<&ViewsChanged>,
 ) -> String {
     let mut out = String::from("## Definition\n\n");
     if def.statement.trim().is_empty() {
@@ -299,9 +334,13 @@ pub(crate) fn definition_sections(
         let docs: Vec<String> = def.affects_docs.iter().map(|d| format!("`{d}`")).collect();
         out.push_str(&format!("- **Affects docs:** {}\n", docs.join(", ")));
     }
-    if !def.affects_views.is_empty() {
-        let views: Vec<String> = def.affects_views.iter().map(|v| format!("`{v}`")).collect();
-        out.push_str(&format!("- **Affects views:** {}\n", views.join(", ")));
+    match views.map(ViewsChanged::line).filter(|l| !l.is_empty()) {
+        Some(line) => out.push_str(&format!("- **Views changed:** {line}\n")),
+        None if !def.affects_views.is_empty() => {
+            let named: Vec<String> = def.affects_views.iter().map(|v| format!("`{v}`")).collect();
+            out.push_str(&format!("- **Affects views:** {}\n", named.join(", ")));
+        }
+        None => {}
     }
     if !def.affects_no_docs.trim().is_empty() {
         out.push_str(&format!(
@@ -499,6 +538,16 @@ pub fn to_markdown(
     milestone: Option<&Milestone>,
     release: Option<&str>,
 ) -> String {
+    to_markdown_with(feature, milestone, release, None)
+}
+
+/// [`to_markdown`] with the catalog rows the design changes (FTR-006), when the caller has them.
+pub fn to_markdown_with(
+    feature: &FeatureItem,
+    milestone: Option<&Milestone>,
+    release: Option<&str>,
+    views: Option<&ViewsChanged>,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {} — {}\n\n", feature.code, feature.title));
     out.push_str(&format!("- **Status:** {}\n", feature.status));
@@ -520,7 +569,7 @@ pub fn to_markdown(
     // The definition, when there is one. Rendered only if present, so every item written before
     // the method keeps producing byte-identical markdown.
     if let Some(def) = feature.definition.as_ref() {
-        out.push_str(&definition_sections(feature, def));
+        out.push_str(&definition_sections_with(feature, def, views));
     }
 
     out.push_str("## Specification\n\n");
@@ -699,6 +748,32 @@ mod tests {
             md.contains("**changed since sign-off**: the spec changed"),
             "{md}"
         );
+    }
+
+    /// FTR-006: with the catalog read, `feature show` says which rows the design's docs reach and
+    /// which only `affects_views` names.
+    #[test]
+    fn feature_show_prints_views_changed_with_where_each_came_from() {
+        let mut f = item("FEAT-001", None);
+        f.definition = Some(crate::models::FeatureDefinition {
+            statement: "s".into(),
+            affects_views: vec!["code-structure".into()],
+            ..Default::default()
+        });
+        let views = super::ViewsChanged {
+            from_docs: vec!["context".into(), "components".into()],
+            named: vec!["code-structure".into()],
+        };
+        let md = super::to_markdown_with(&f, None, None, Some(&views));
+        assert!(
+            md.contains(
+                "- **Views changed:** context, components (from affects_docs); code-structure (named)\n"
+            ),
+            "{md}"
+        );
+        assert!(!md.contains("Affects views"), "{md}");
+        let none = super::ViewsChanged::default();
+        assert!(!super::to_markdown_with(&f, None, None, Some(&none)).contains("Views changed"));
     }
 
     /// FTR-006: `feature show` prints the catalog rows a design names in `affects_views`.

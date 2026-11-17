@@ -997,9 +997,30 @@ pub fn views_changed_of(
     spec: &str,
     def: &crate::models::FeatureDefinition,
 ) -> Vec<String> {
+    let (mut from_docs, named) = views_changed_split(catalog, project, spec, def);
+    from_docs.extend(named);
+    from_docs.sort();
+    from_docs.dedup();
+    from_docs
+}
+
+/// [`views_changed_of`] told apart by where each row came from: the rows the design's docs reach
+/// (`affects_docs` and the docs linked under Affects docs), and those only `affects_views` names
+/// (a row both reach is in the first). Each sorted. Pure.
+pub fn views_changed_split(
+    catalog: &Catalog,
+    project: &str,
+    spec: &str,
+    def: &crate::models::FeatureDefinition,
+) -> (Vec<String>, Vec<String>) {
     let mut docs = def.affects_docs.clone();
     docs.extend(crate::docsbuilt::linked_board_docs(spec, project));
-    views_changed(catalog, &docs, &def.affects_views)
+    let from_docs = views_changed(catalog, &docs, &[]);
+    let named = views_changed(catalog, &[], &def.affects_views)
+        .into_iter()
+        .filter(|r| !from_docs.contains(r))
+        .collect();
+    (from_docs, named)
 }
 
 /// What a `kanbanr:` generator derives for `project`, as JSON: the value the system baseline

@@ -1541,7 +1541,21 @@ fn dispatch_routes(
             match query_param(query, "format").as_deref() {
                 Some("json") => export::to_json(feature, ms, line.as_deref())
                     .map_err(|e| CoreError::Unsupported(format!("export: {e}"))),
-                _ => Ok(export::to_markdown(feature, ms, line.as_deref())),
+                _ => {
+                    // The catalog rows the design changes (FTR-006), when the project has a catalog.
+                    let views = crate::catalog::load(store, p).ok().flatten().and_then(|c| {
+                        let def = feature.definition.as_ref()?;
+                        let (from_docs, named) =
+                            crate::catalog::views_changed_split(&c, p, &feature.specification, def);
+                        Some(export::ViewsChanged { from_docs, named })
+                    });
+                    Ok(export::to_markdown_with(
+                        feature,
+                        ms,
+                        line.as_deref(),
+                        views.as_ref(),
+                    ))
+                }
             }
         }
         ("POST", ["projects", p, "features"]) => {

@@ -1217,6 +1217,17 @@ enum FeatureCmd {
         #[arg(long)]
         kind: Option<String>,
     },
+    /// Print the skeleton a kind's Design starts from, with the subsections its `design_sections`
+    /// check asks for (FTR-006). Writes nothing.
+    Design {
+        /// Print the skeleton (the only thing this prints).
+        #[arg(long)]
+        template: bool,
+        /// The kind: feature (default), defect, chore, docs or spike; bug, refactor and recurring
+        /// are read as defect and chore.
+        #[arg(long)]
+        kind: Option<String>,
+    },
     /// Add a feature item (a milestone is required; code auto-generates if omitted).
     Add {
         #[arg(long)]
@@ -1912,6 +1923,21 @@ enum PrepareCmd {
         #[arg(long, value_name = "NAME")]
         batch: Option<String>,
     },
+    /// Prepare the acceptance of the system baseline, for the person to confirm on the Review page.
+    /// Claude never accepts it itself.
+    SystemBaseline {
+        /// What was agreed, or where it was agreed.
+        #[arg(long)]
+        note: Option<String>,
+        /// Where the evidence came from (see `prepare signoff --help`), such as
+        /// `doc:architecture/context.md`. At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+        /// The batch this record belongs to (FTR-037, FTR-055): records prepared together, which the
+        /// Review page confirms in one action. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
+    },
     /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
     /// change and it is still right, or a correction is filed. Run it from the project folder.
     Text {
@@ -2362,6 +2388,28 @@ enum CatalogCmd {
     },
     /// Switch a row back on: its `when` clause decides again.
     On { id: String },
+    /// The system baseline (FTR-006): the catalog's system rows, pinned and accepted by the person
+    /// before the first build. Without a subcommand, where it stands.
+    Baseline {
+        #[command(subcommand)]
+        cmd: Option<SystemBaselineCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SystemBaselineCmd {
+    /// Where the system baseline stands, and what changed since it was accepted (the default).
+    Show,
+    /// Write the baseline from the catalog's applying system rows and turn the build stage's wait
+    /// for its acceptance on. New projects have the wait already; this is how an existing one opts in.
+    Init,
+    /// Accept the baseline as it stands: the person's own, on the Review page or in their terminal.
+    /// Claude prepares it instead (`kanbanr prepare system-baseline`).
+    Accept {
+        /// What was agreed, kept with the acceptance.
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2771,6 +2819,9 @@ fn command_access(cmd: &Command) -> Access {
         },
         Command::Catalog { cmd } => match cmd {
             None | Some(CatalogCmd::Show) | Some(CatalogCmd::Init { print: true, .. }) => Read,
+            Some(CatalogCmd::Baseline {
+                cmd: None | Some(SystemBaselineCmd::Show),
+            }) => Read,
             Some(_) => Core,
         },
         Command::Planning(cmd) => match cmd {
@@ -6525,6 +6576,123 @@ fn run_facts(cli: &Cli, client: &Backend, cmd: Option<&FactsCmd>) -> anyhow::Res
     Ok(())
 }
 
+/// `kanbanr catalog baseline [init|accept]` (FTR-006): the system baseline. Parsing and printing
+/// only; core pins the sources, judges what changed and records the acceptance.
+fn run_system_baseline(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    cmd: Option<&SystemBaselineCmd>,
+) -> anyhow::Result<()> {
+    let base = format!("/projects/{p}/catalog/baseline");
+    let repo = code_repo();
+    let resp = match cmd.unwrap_or(&SystemBaselineCmd::Show) {
+        SystemBaselineCmd::Show => client.get_in(&base, repo.as_deref())?,
+        SystemBaselineCmd::Init => client.write_in(
+            Method::Post,
+            &format!("{base}/init"),
+            Some(json!({})),
+            repo.as_deref(),
+        )?,
+        SystemBaselineCmd::Accept { note } => {
+            let who = verdict_author(cli, None)?;
+            client.write_in(
+                Method::Post,
+                &format!("{base}/accept"),
+                Some(json!({ "by": who, "note": note.clone().unwrap_or_default() })),
+                repo.as_deref(),
+            )?
+        }
+    };
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(&resp)?;
+    match cmd {
+        Some(SystemBaselineCmd::Init) => println!(
+            "system baseline initialised for '{p}': the build stage waits until the person accepts it"
+        ),
+        Some(SystemBaselineCmd::Accept { .. }) => println!("system baseline accepted for '{p}'"),
+        _ => {}
+    }
+    print_system_baseline(p, &v);
+    Ok(())
+}
+
+/// The system baseline's state in words (FTR-006): where it stands, then what changed, what is
+/// missing and what cannot be pinned.
+fn print_system_baseline(p: &str, v: &Value) {
+    let s = &v["state"];
+    let review = format!("{}/p/{p}/review?group=system-baseline", monitor_url());
+    match s["kind"].as_str().unwrap_or("") {
+        "not_initialised" => println!(
+            "system baseline: not initialised (`kanbanr catalog baseline init` writes it from the catalog's system rows)"
+        ),
+        "awaiting" => println!("system baseline: awaiting acceptance by the person at {review}"),
+        kind => {
+            let a = &s["accepted"];
+            let n = s["accepted_count"].as_u64().unwrap_or(0);
+            let via = match a["origin"].as_str().unwrap_or("") {
+                "monitor" => "the monitor",
+                "terminal" | "cli" | "" => "the terminal",
+                other => other,
+            };
+            println!(
+                "system baseline: {} {} by {} via {via} ({n} acceptance{})",
+                if kind == "changed" {
+                    "accepted, then changed:"
+                } else {
+                    "accepted"
+                },
+                a["at"].as_str().unwrap_or("").get(..10).unwrap_or(""),
+                a["by"].as_str().unwrap_or(""),
+                if n == 1 { "" } else { "s" },
+            );
+        }
+    }
+    for c in s["changes"].as_array().into_iter().flatten() {
+        let row = c["row"].as_str().unwrap_or("");
+        if c["missing"].as_bool().unwrap_or(false) {
+            println!(
+                "missing: {} (row {row})",
+                c["source"].as_str().unwrap_or("")
+            );
+        } else {
+            println!(
+                "changed since: {} (row {row})",
+                c["source"].as_str().unwrap_or("")
+            );
+        }
+    }
+    let missing = strs(&s["missing"]);
+    if !missing.is_empty() {
+        println!(
+            "missing: {} (write them before it can be accepted)",
+            missing.join(", ")
+        );
+    }
+    let unpinned = strs(&s["unpinned"]);
+    if !unpinned.is_empty() {
+        println!(
+            "not pinned: {} (source kept by another tool)",
+            unpinned.join(", ")
+        );
+    }
+    if let Some(r) = v["prepared"].as_object() {
+        let note = r
+            .get("fields")
+            .and_then(|f| f["note"].as_str())
+            .filter(|n| !n.is_empty())
+            .map(|n| format!(": {n}"))
+            .unwrap_or_default();
+        println!(
+            "prepared acceptance {}{note}: waiting for the person at {review}",
+            r.get("id").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+}
+
 fn print_facts(v: &Value) {
     for q in &kanbanr_core::facts::VOCABULARY {
         let values: Vec<&str> = v[q.key]
@@ -6549,6 +6717,9 @@ fn run_catalog(cli: &Cli, client: &Backend, cmd: Option<&CatalogCmd>) -> anyhow:
     let p = require_project(cli)?;
     let base = format!("/projects/{p}/catalog");
     let repo = code_repo();
+    if let Some(CatalogCmd::Baseline { cmd }) = cmd {
+        return run_system_baseline(cli, client, &p, cmd.as_ref());
+    }
     let resp = match cmd.unwrap_or(&CatalogCmd::Show) {
         CatalogCmd::Show => client.get_in(&base, repo.as_deref())?,
         CatalogCmd::Init { print: true, .. } => {
@@ -6585,6 +6756,7 @@ fn run_catalog(cli: &Cli, client: &Backend, cmd: Option<&CatalogCmd>) -> anyhow:
             Some(json!({ "applies": true })),
             repo.as_deref(),
         )?,
+        CatalogCmd::Baseline { .. } => unreachable!("handled above"),
     };
     if cli.json {
         println!("{}", pretty(&resp));
@@ -12548,6 +12720,15 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             }
             Ok(())
         }
+        FeatureCmd::Design { template, kind } => {
+            if !*template {
+                anyhow::bail!(
+                    "`kanbanr feature design` prints a skeleton and writes nothing: pass --template (and --kind <kind>)"
+                );
+            }
+            print!("{}", kanbanr_core::design::skeleton(kind.as_deref()));
+            Ok(())
+        }
         FeatureCmd::Define {
             code,
             file,
@@ -14831,6 +15012,19 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                 format!("the result of {code} {requirement}"),
             )
         }
+        PrepareCmd::SystemBaseline {
+            note,
+            sources: s,
+            batch: _,
+        } => (
+            json!({
+                "kind": "system-baseline",
+                "subject": {"target": "system-baseline"},
+                "fields": {"note": note.clone().unwrap_or_default()},
+                "sources": sources(s)?,
+            }),
+            "the acceptance of the system baseline".to_string(),
+        ),
         PrepareCmd::Ratify {
             code,
             reason,
@@ -14884,7 +15078,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
     Ok(())
 }
 
-/// The batch a prepare command names (FTR-037, FTR-055), for the five that take one: one place
+/// The batch a prepare command names (FTR-037, FTR-055), for the six that take one: one place
 /// writes it to the record's body.
 fn batch_of(cmd: &PrepareCmd) -> Option<&String> {
     match cmd {
@@ -14892,6 +15086,7 @@ fn batch_of(cmd: &PrepareCmd) -> Option<&String> {
         | PrepareCmd::Promotion { batch, .. }
         | PrepareCmd::Gate { batch, .. }
         | PrepareCmd::Ratify { batch, .. }
+        | PrepareCmd::SystemBaseline { batch, .. }
         | PrepareCmd::Test { batch, .. } => batch.as_ref(),
         PrepareCmd::Text { .. } | PrepareCmd::List { .. } => None,
     }
