@@ -7,7 +7,7 @@
  * tab reads its own slice, and a row reads its items only once it is opened. The tab is `?tab=`
  * and the open rows are the hash (`#sprint:SP-004`; a bare `#SP-004` is read as a sprint).
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type Meta } from "../api";
 import { isReadOnly } from "../runtimeConfig";
@@ -19,7 +19,9 @@ import { defaultTab, openLanes, planTabs, planTargets, toTimeline } from "../pla
 import { pendingByTarget } from "../planning";
 import type { CompactIndex, PlanningView, PlanScope, PlanSlice, PlanSummary } from "../types";
 import { PlanRow } from "./plan/PlanRow";
-import type { PlanningContext } from "./plan/RowItems";
+import { ITEM_DRAG, draftDrop, type PlanningContext } from "./plan/RowItems";
+import { PlanningAction } from "../components/PlanningAction";
+import type { PlanningRequest } from "../types";
 import { PastRow } from "./plan/PastRow";
 import { FlowPanel } from "./plan/FlowPanel";
 
@@ -125,6 +127,10 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
     [navigate, location.pathname, location.search, location.hash],
   );
 
+  // The request a drop drafted (R-7): shown as the PlanningAction question; nothing is recorded
+  // until it is confirmed there.
+  const [drafted, setDrafted] = useState<PlanningRequest | null>(null);
+  const droppable = scope !== "past" && !!planning?.writable;
   const lanes = [...slice.lanes, ...slice.undated];
   if (lanes.length === 0) {
     if (scope === "current") return <Empty title="Nothing is running today." ask="Ask Claude to plan the next sprint." />;
@@ -145,6 +151,22 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
           caption={`${CAPTION[scope]}: ${timeline.from} to ${timeline.to}`}
         />
       )}
+      {drafted && planning ? (
+        <div className="plan-drop" role="group" aria-label="Drafted from a drop">
+          <PlanningAction
+            key={`${drafted.target}:${drafted.items.join(",")}`}
+            project={project}
+            items={drafted.items}
+            targets={planning.targets.filter((t) => t.key.endsWith(`:${drafted.target}`))}
+            writable={planning.writable}
+            who={planning.who}
+            asking
+          />{" "}
+          <button className="btn" onClick={() => setDrafted(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <div className="plan-rows">
         {lanes.map((lane) =>
           scope === "past" ? (
@@ -159,17 +181,32 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
               onToggle={(v) => toggle(lane.key, v)}
             />
           ) : (
-            <PlanRow
+            <div
               key={lane.key}
-              project={project}
-              lane={lane}
-              from={slice.from}
-              to={slice.to}
-              today={slice.today}
-              open={open.has(lane.key)}
-              onToggle={(v) => toggle(lane.key, v)}
-              planning={planning}
-            />
+              className="plan-drop-zone"
+              onDragOver={droppable ? (e) => (e.dataTransfer.types.includes(ITEM_DRAG) ? e.preventDefault() : undefined) : undefined}
+              onDrop={
+                droppable
+                  ? (e) => {
+                      const request = draftDrop(e.dataTransfer.getData(ITEM_DRAG), lane.key, planning!.targets);
+                      if (!request) return;
+                      e.preventDefault();
+                      setDrafted(request);
+                    }
+                  : undefined
+              }
+            >
+              <PlanRow
+                project={project}
+                lane={lane}
+                from={slice.from}
+                to={slice.to}
+                today={slice.today}
+                open={open.has(lane.key)}
+                onToggle={(v) => toggle(lane.key, v)}
+                planning={planning}
+              />
+            </div>
           ),
         )}
       </div>

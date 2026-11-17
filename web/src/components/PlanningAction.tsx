@@ -66,6 +66,8 @@ export function PlanningAction(p: {
   writable: boolean;
   /** The person the decision is recorded for: the board's identity. */
   who: string;
+  /** Open with the question showing, for a request a drop on the Plan page drafted (FTR-049, R-7). */
+  asking?: boolean;
 }): JSX.Element | null {
   const [key, setKey] = useState(p.targets[0]?.key ?? "");
   const { made, error, run, reset } = useRecord(p.project, p.who);
@@ -92,6 +94,7 @@ export function PlanningAction(p: {
         ask={request ? requestText(request.action, request.target, request.items) : ""}
         disabled={!request}
         disabledWhy="select one or more items first"
+        asking={p.asking}
         onConfirm={() => (request ? run(request) : undefined)}
       />{" "}
       <Outcome made={made} error={error} />

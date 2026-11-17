@@ -18,6 +18,10 @@
 // PlanningAction for the selection, offering the open sprints and releases but not the row's own;
 // a read-only monitor shows the pills and no selection.
 //
+// web::check_plan_drag_drafts_a_request_and_moves_nothing (R-7): an item dragged from an opened
+// row and dropped on another sprint or release row drafts the request (`dropRequest`) and opens the
+// PlanningAction question with that item and target; the drop posts nothing, the second press does.
+//
 // The components are rendered to markup through scripts/lib/render.mjs, and rendered in jsdom and
 // pressed, with `fetch` replaced by a recorder, so the posts are the ones api.ts would send.
 //
@@ -40,7 +44,9 @@ const R1 = "web::check_planning_action_asks_first_and_posts_one_decision";
 const R5 = "web::check_a_declined_planning_decision_offers_the_nearest_move";
 const R3 = "web::check_plan_rows_show_pending_planning_decisions";
 
-const problems = { [R1]: [], [R3]: [], [R5]: [] };
+const R7 = "web::check_plan_drag_drafts_a_request_and_moves_nothing";
+
+const problems = { [R1]: [], [R3]: [], [R5]: [], [R7]: [] };
 const expect = (test, name, got, want) => {
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     problems[test].push(`${name}: got ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
@@ -203,6 +209,24 @@ const base = { project: "demo", items: ["FTR-044", "DEF-076"], targets, writable
   const ro = await render("src/pages/plan/RowItems.tsx", "RowItemsBody", { ...row, planning: { ...planning, writable: false } }, { url: "/p/demo/plan" });
   ok(R3, "read-only: the pills, no selection or action", ro.document.querySelectorAll('input[type="checkbox"], .plan-planning').length === 0 && ro.document.body.textContent.includes("pending: into SP-004 (PD-1)"), ro.html.slice(0, 400));
 }
+
+// ---- R-1: "Move to…" on the Releases page's item table (FTR-049 T7) ----
+{
+  const rel = { version: "v0.8.0", state: "planned", items: [] };
+  const rows = [
+    { code: "FTR-044", title: "Forty-four", kind: "feature", status: "Planned", sprint: "", tests_green: 0, tests_named: 0, approval: "none", signoff: "" },
+    { code: "DEF-076", title: "Seventy-six", kind: "defect", status: "Planned", sprint: "", tests_green: 0, tests_named: 0, approval: "none", signoff: "" },
+  ];
+  const props = { project: "demo", release: rel, rows, writable: true, who: "Ada", targets: [{ key: "release:v0.9.0", label: "v0.9.0" }], empty: "none" };
+  const at = (p) => render("src/pages/releases/ReleaseBody.tsx", "ReleaseItems", p, { url: "/p/demo/releases" });
+  const { document } = await at(props);
+  expect(R1, "releases: a checkbox per item", [...document.querySelectorAll('table input[type="checkbox"]')].map((c) => c.getAttribute("aria-label")), ["Select FTR-044", "Select DEF-076"]);
+  expect(R1, "releases: one action, Move to the other release", [...document.querySelectorAll(".release-move button")].map((b) => b.textContent), ["Move to v0.9.0"]);
+  const ro = await at({ ...props, writable: false });
+  ok(R1, "releases: read-only shows the plain table", ro.document.querySelectorAll('input[type="checkbox"], .release-move').length === 0 && ro.document.querySelectorAll("table").length === 1, ro.html.slice(0, 300));
+  const alone = await at({ ...props, targets: [] });
+  ok(R1, "releases: no other planned release, no selection", alone.document.querySelectorAll('input[type="checkbox"], .release-move').length === 0, alone.html.slice(0, 300));
+}
 await closeRender();
 
 // ---- the components, rendered in jsdom and pressed ----
@@ -210,6 +234,8 @@ const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://loc
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// The monitor listens for live changes; there is no daemon here.
+globalThis.EventSource = class { addEventListener() {} removeEventListener() {} close() {} };
 
 const posts = [];
 let answer = () => ({ ...decision("PD-7", "into-sprint", "SP-004", ["FTR-044", "DEF-076"]) });
@@ -303,6 +329,74 @@ try {
   expect(R5, "the nearest move, for the same items", posts[0]?.body, { action: "into-release", target: "v0.8.0", items: ["FTR-044"], by: "Ada" });
   ok(R5, "then it shows pending", text().includes("pending: Claude carries it out at its next turn"), text());
   await act(() => root3.unmount());
+
+  // R-7: a drag drafts a request and moves nothing.
+  // R-7: the pure model.
+  const { draftDrop, ITEM_DRAG } = await vite.ssrLoadModule("/src/pages/plan/RowItems.tsx");
+  const open = [{ key: "sprint:SP-004" }, { key: "sprint:SP-005" }, { key: "release:v0.9.0" }];
+  const carry = (item, from) => JSON.stringify({ item, from });
+  expect(R7, "a drop on a sprint lane drafts into-sprint", draftDrop(carry("FTR-044", "sprint:SP-005"), "sprint:SP-004", open), { action: "into-sprint", target: "SP-004", items: ["FTR-044"] });
+  expect(R7, "a drop on a release lane drafts into-release", draftDrop(carry("FTR-044", "sprint:SP-005"), "release:v0.9.0", open), { action: "into-release", target: "v0.9.0", items: ["FTR-044"] });
+  expect(R7, "a drop on a lane not offered (frozen) drafts nothing", draftDrop(carry("FTR-044", "sprint:SP-005"), "release:v0.8.0", open), null);
+  expect(R7, "a drop on its own lane drafts nothing", draftDrop(carry("FTR-044", "sprint:SP-004"), "sprint:SP-004", open), null);
+  expect(R7, "a drop on a milestone lane drafts nothing", draftDrop(carry("FTR-044", "sprint:SP-004"), "milestone:MS-1", [...open, { key: "milestone:MS-1" }]), null);
+  expect(R7, "data that is not an item's drafts nothing", [draftDrop("", "sprint:SP-004", open), draftDrop("{}", "sprint:SP-004", open), draftDrop("text", "sprint:SP-004", open)], [null, null, null]);
+  {
+    const { MemoryRouter } = await import("react-router-dom");
+    const page = await vite.ssrLoadModule("/src/pages/PlanPage.tsx");
+    const laneOf = (key, kind, state, label) => ({ key, kind, label, state, from: "2026-11-16", to: "2026-11-29", bands: [], marks: [], done: 0, total: 2, points_done: null, points_total: null, carried: 0, burndown: null });
+    const slice = {
+      scope: "planned",
+      today: "2026-11-17",
+      from: "2026-11-03",
+      to: "2026-12-01",
+      lanes: [laneOf("sprint:SP-004", "sprint", "active", "SP-004"), laneOf("sprint:SP-005", "sprint", "planned", "SP-005"), laneOf("release:v0.9.0", "release", "planned", "v0.9.0")],
+      undated: [],
+    };
+    const rowBody = { key: "sprint:SP-005", items: [{ code: "FTR-044", title: "Forty-four", status: "Planned", from: "2026-11-30", to: "2026-12-05", placed: "sprint", critical: false, pending: [] }], by_status: [], carried: [] };
+    const planning = { views: [], targets: [{ key: "sprint:SP-004", label: "SP-004" }, { key: "sprint:SP-005", label: "SP-005" }, { key: "release:v0.9.0", label: "v0.9.0" }], writable: true, who: "Ada" };
+    posts.length = 0;
+    globalThis.fetch = async (url, init) => {
+      posts.push({ url: String(url), method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body) : null });
+      const body = String(url).includes("/plan/rows/") ? rowBody : decision("PD-9", "into-sprint", "SP-004", ["FTR-044"]);
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const writes = () => posts.filter((p) => p.method === "POST");
+    const root4 = createRoot(document.getElementById("root"));
+    await act(async () => root4.render(React.createElement(MemoryRouter, { initialEntries: ["/p/demo/plan#sprint:SP-005"] }, React.createElement(page.PlanTabBody, { project: "demo", scope: "planned", slice, planning }))));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    const row = [...document.querySelectorAll("table.plan-items tbody tr")].find((r) => r.textContent.includes("FTR-044"));
+    ok(R7, "an item row in an opened row is draggable", row?.getAttribute("draggable") === "true", document.getElementById("root").innerHTML.slice(0, 300));
+    const store = new Map();
+    const dataTransfer = { types: [], effectAllowed: "", setData(t, v) { store.set(t, v); this.types = [...store.keys()]; }, getData: (t) => store.get(t) ?? "" };
+    const fire = (el, type) => {
+      const ev = new window.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, "dataTransfer", { value: dataTransfer });
+      return act(async () => { el.dispatchEvent(ev); });
+    };
+    await fire(row, "dragstart");
+    ok(R7, "the drag carries the item and its lane", store.get(ITEM_DRAG) === JSON.stringify({ item: "FTR-044", from: "sprint:SP-005" }), [...store.entries()]);
+    const zones = [...document.querySelectorAll(".plan-drop-zone")];
+    expect(R7, "a drop zone per row", zones.length, 3);
+    // Its own lane: nothing is drafted.
+    await fire(zones[1], "drop");
+    ok(R7, "dropped on its own row: no question", !document.querySelector(".plan-drop"), document.getElementById("root").textContent);
+    // Another sprint: the question opens, armed, and nothing is posted.
+    await fire(zones[0], "drop");
+    const drop = document.querySelector(".plan-drop");
+    ok(R7, "the drop opens the question for that item and target", !!drop && drop.textContent.includes("Plan FTR-044 into SP-004?"), drop?.textContent);
+    expect(R7, "the question has the confirm, Cancel and Dismiss", [...drop.querySelectorAll("button")].map((b) => b.textContent), ["Plan into SP-004", "Cancel", "Dismiss"]);
+    expect(R7, "the drop posts nothing", writes().length, 0);
+    await act(async () => { [...drop.querySelectorAll("button")].find((b) => b.textContent === "Plan into SP-004").dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    expect(R7, "the second press posts one decision", writes().map((p) => p.body), [{ action: "into-sprint", target: "SP-004", items: ["FTR-044"], by: "Ada" }]);
+    await act(() => root4.unmount());
+    // A read-only monitor: no drag, no drop zone behaviour.
+    const root5 = createRoot(document.getElementById("root"));
+    await act(async () => root5.render(React.createElement(MemoryRouter, { initialEntries: ["/p/demo/plan#sprint:SP-005"] }, React.createElement(page.PlanTabBody, { project: "demo", scope: "planned", slice, planning: { ...planning, writable: false } }))));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    ok(R7, "read-only: nothing is draggable", document.querySelectorAll('[draggable="true"]').length === 0, document.getElementById("root").innerHTML.slice(0, 200));
+    await act(() => root5.unmount());
+  }
 } finally {
   await vite.close();
 }

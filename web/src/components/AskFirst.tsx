@@ -15,9 +15,11 @@ export function AskFirst(p: {
   disabledWhy?: string;
   /** The button's class; "btn" when not given. */
   className?: string;
+  /** Open with the question already showing, as a drop on the Plan page does (FTR-049). */
+  asking?: boolean;
 }): JSX.Element {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => setArmed(false), [p.label, p.ask]);
+  const [armed, setArmed] = useState(p.asking === true);
+  useEffect(() => setArmed(p.asking === true), [p.label, p.ask, p.asking]);
   const className = p.className ?? "btn";
   const title = p.disabled ? p.disabledWhy : undefined;
   if (!armed) {
