@@ -8,7 +8,7 @@
 
 use crate::models::{Source, TestState};
 use crate::store::Project;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -878,14 +878,624 @@ pub trait Locator {
     fn prime(&self, _kinds: &[TestKind], _rev: Option<&str>) {}
 }
 
-/// One tracked test and whether its name is still in the repository.
-#[derive(Debug, Clone, Serialize)]
+/// Does a repository path sit where `expected` (one of [`expected_paths`]) says, compared by whole
+/// path components, never as a string (L-46)? An `expected` ending in `/` is a folder that must
+/// appear among the path's folders (`tests/` holds `crates/cli/tests/a.rs`, not
+/// `foo_tests/a.rs`); any other is a file the path must end in (`a.rs` is `src/a.rs`, not
+/// `src/xa.rs`).
+pub fn is_expected_path(path: &str, expected: &str) -> bool {
+    let parts = |s: &str| -> Vec<String> {
+        s.split(['/', '\\'])
+            .filter(|c| !c.is_empty() && *c != ".")
+            .map(str::to_string)
+            .collect()
+    };
+    let path = parts(path);
+    let want = parts(expected);
+    if want.is_empty() {
+        return false;
+    }
+    if expected.ends_with('/') || expected.ends_with('\\') {
+        let Some((_, folders)) = path.split_last() else {
+            return false;
+        };
+        folders.windows(want.len()).any(|w| w == want.as_slice())
+    } else {
+        path.ends_with(&want)
+    }
+}
+
+/// Is any of these locations where a test of this kind belongs?
+fn in_expected_place(kind: &TestKind, at: &[Location]) -> bool {
+    let expected = expected_paths(kind);
+    at.iter()
+        .any(|l| expected.iter().any(|p| is_expected_path(&l.path, p)))
+}
+
+/// One tracked test and whether its name is still in the repository. `found` is "defined at
+/// HEAD"; `defined_at_rev` whether it was defined at its recorded revision, when that was asked;
+/// `elsewhere` the paths it is defined at when none is where its name says (MNT-001).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedTest {
     pub code: String,
     pub requirement: String,
     pub test: String,
     pub state: TestState,
     pub found: bool,
+    #[serde(default)]
+    pub defined_at_rev: Option<bool>,
+    #[serde(default)]
+    pub elsewhere: Vec<String>,
+}
+
+/// A recorded result whose test is not defined at HEAD (MNT-001 R-2): the revision it was last
+/// recorded at, whether the test was defined there, and where a test of the same name now is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Vanished {
+    pub code: String,
+    pub requirement: String,
+    pub test: String,
+    pub state: TestState,
+    pub checked_rev: String,
+    pub defined_at_rev: Option<bool>,
+    pub elsewhere: Vec<String>,
+}
+
+/// Why a green result does not prove its test at the revision it names (MNT-001 R-3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MisattributedWhy {
+    /// No revision is recorded.
+    NoRevision,
+    /// The repository does not have the revision.
+    UnknownRevision,
+    /// The revision is known but the test was not defined there.
+    NotDefinedAtRevision,
+    /// The revision is not an ancestor of HEAD.
+    NotOnHeadLine,
+}
+
+impl MisattributedWhy {
+    fn text(self) -> &'static str {
+        match self {
+            MisattributedWhy::NoRevision => "no revision recorded",
+            MisattributedWhy::UnknownRevision => "at a revision the repository does not have",
+            MisattributedWhy::NotDefinedAtRevision => "at a revision that did not hold the test",
+            MisattributedWhy::NotOnHeadLine => "at a revision not on HEAD's line",
+        }
+    }
+}
+
+/// A green result at a revision that does not prove its test (MNT-001 R-3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Misattributed {
+    pub code: String,
+    pub requirement: String,
+    pub test: String,
+    pub checked_rev: String,
+    pub why: MisattributedWhy,
+    /// Commits between the revision and HEAD, when the repository could count them.
+    pub behind: Option<u64>,
+}
+
+/// A tracked test that has never run (`planned`) or fails (`red`), and whether it is written,
+/// that is defined at HEAD (MNT-001 R-4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeverRun {
+    pub code: String,
+    pub requirement: String,
+    pub test: String,
+    pub state: TestState,
+    pub written: bool,
+}
+
+/// The manual checks a person still owes (MNT-001 R-5): every manual test, the open ones (not
+/// green), the open ones per item and per release, and the open walkthrough tests apart.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualLoad {
+    pub total: usize,
+    pub open: usize,
+    pub per_item: BTreeMap<String, usize>,
+    pub per_release: BTreeMap<String, usize>,
+    pub walkthrough_open: usize,
+}
+
+/// Finished items with no definition, split at the charter's adoption (MNT-001 R-6).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Undefined {
+    pub pre_charter: Vec<String>,
+    pub since_charter: Vec<String>,
+}
+
+/// The board's evidence reconciled against the code (MNT-001): derived, never stored (ADR-0002).
+/// `ops` returns each vanished result to `planned`; [`Reconciliation::batch`] applies them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Reconciliation {
+    pub head: String,
+    pub rows: Vec<TrackedTest>,
+    pub vanished: Vec<Vanished>,
+    pub misattributed: Vec<Misattributed>,
+    pub never_run: Vec<NeverRun>,
+    pub failing: Vec<NeverRun>,
+    pub unproven_finished_requirements: Vec<String>,
+    pub manual: ManualLoad,
+    pub undefined: Undefined,
+    pub ops: Vec<Value>,
+}
+
+/// `a::b (green at 1a2b3c4)`, or `(green, no revision)` when none is recorded.
+fn vanished_label(v: &Vanished) -> String {
+    let state = state_word(v.state);
+    if v.checked_rev.is_empty() {
+        format!("{} ({state}, no revision)", v.test)
+    } else {
+        format!("{} ({state} at {})", v.test, v.checked_rev)
+    }
+}
+
+fn state_word(s: TestState) -> &'static str {
+    match s {
+        TestState::Planned => "planned",
+        TestState::Red => "red",
+        TestState::Green => "green",
+    }
+}
+
+impl Reconciliation {
+    /// The batch body that returns every vanished result to `planned`, its message naming each
+    /// test and the revision it was recorded at, so the board's history keeps them; `None` when
+    /// nothing vanished.
+    pub fn batch(&self) -> Option<Value> {
+        if self.ops.is_empty() {
+            return None;
+        }
+        let n = self.ops.len();
+        let named: Vec<String> = self.vanished.iter().map(vanished_label).collect();
+        Some(json!({
+            "operations": self.ops,
+            "message": format!(
+                "tests: {n} result(s) whose test no longer exists are back to planned: {}",
+                named.join(", ")
+            ),
+        }))
+    }
+
+    /// The report `kanbanr tests` prints: each section with its count and one line per row.
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::new();
+        let _ = writeln!(s, "Tests reconciled at {}", self.head);
+
+        let _ = writeln!(s, "Vanished ({})", self.vanished.len());
+        for v in &self.vanished {
+            let state = state_word(v.state);
+            let _ = write!(s, "  {} {} {state} {} — ", v.code, v.requirement, v.test);
+            if v.checked_rev.is_empty() {
+                let _ = write!(s, "no revision recorded");
+            } else {
+                let there = match v.defined_at_rev {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "not checked",
+                };
+                let _ = write!(
+                    s,
+                    "last {state} at {} (test defined there: {there})",
+                    v.checked_rev
+                );
+            }
+            if !v.elsewhere.is_empty() {
+                let _ = write!(s, " [defined at HEAD as {}]", v.elsewhere.join(", "));
+            }
+            s.push('\n');
+        }
+
+        let _ = writeln!(s, "Misattributed ({})", self.misattributed.len());
+        for m in &self.misattributed {
+            let _ = write!(
+                s,
+                "  {} {} green {} — {}",
+                m.code,
+                m.requirement,
+                m.test,
+                m.why.text()
+            );
+            if !m.checked_rev.is_empty() {
+                let _ = write!(s, " ({})", m.checked_rev);
+            }
+            if let Some(n) = m.behind {
+                let _ = write!(s, ", {n} commit(s) behind HEAD");
+            }
+            s.push('\n');
+        }
+
+        let written = self.never_run.iter().filter(|n| n.written).count();
+        let _ = writeln!(s, "Never run ({}: {written} written)", self.never_run.len());
+        for n in &self.never_run {
+            let w = if n.written { "written" } else { "not written" };
+            let _ = writeln!(s, "  {} {} {} — {w}", n.code, n.requirement, n.test);
+        }
+
+        let _ = writeln!(s, "Failing ({})", self.failing.len());
+        for n in &self.failing {
+            let _ = writeln!(s, "  {} {} {}", n.code, n.requirement, n.test);
+        }
+
+        let _ = writeln!(
+            s,
+            "Unproven requirements on finished items ({})",
+            self.unproven_finished_requirements.len()
+        );
+        for r in &self.unproven_finished_requirements {
+            let _ = writeln!(s, "  {r}");
+        }
+
+        let m = &self.manual;
+        let _ = writeln!(s, "Manual checks open ({} of {})", m.open, m.total);
+        let counts = |map: &BTreeMap<String, usize>| {
+            map.iter()
+                .map(|(k, n)| format!("{k} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if !m.per_release.is_empty() {
+            let _ = writeln!(s, "  per release: {}", counts(&m.per_release));
+        }
+        if !m.per_item.is_empty() {
+            let _ = writeln!(s, "  per item: {}", counts(&m.per_item));
+        }
+        if m.walkthrough_open > 0 {
+            let _ = writeln!(s, "  walkthrough tests open: {}", m.walkthrough_open);
+        }
+
+        let u = &self.undefined;
+        let _ = writeln!(
+            s,
+            "Finished items without a definition ({} pre-charter, {} since)",
+            u.pre_charter.len(),
+            u.since_charter.len()
+        );
+        if !u.pre_charter.is_empty() {
+            let _ = writeln!(s, "  pre-charter: {}", u.pre_charter.join(", "));
+        }
+        if !u.since_charter.is_empty() {
+            let _ = writeln!(s, "  since: {}", u.since_charter.join(", "));
+        }
+
+        if !self.ops.is_empty() {
+            let _ = writeln!(
+                s,
+                "{} recorded result(s) name a test that is not in the repo; \
+                 run `kanbanr tests --write` to return them to planned",
+                self.ops.len()
+            );
+        }
+        s
+    }
+}
+
+/// Is `created_at` before the charter's adoption? Compared as instants when both read as the
+/// board's timestamps, else as text.
+fn before_charter(created_at: &str, adopted: &str) -> bool {
+    match (
+        crate::report::parse_time(created_at),
+        crate::report::parse_time(adopted),
+    ) {
+        (Some(a), Some(b)) => a < b,
+        _ => created_at < adopted,
+    }
+}
+
+/// One tracked, searchable test as the planner walks it.
+struct Entry<'a> {
+    code: &'a str,
+    requirement: &'a str,
+    test: &'a str,
+    state: TestState,
+    checked_rev: &'a str,
+    kind: TestKind,
+}
+
+/// Reconcile every tracked test with the code (MNT-001): which recorded results name a test not
+/// defined at HEAD (with the revision they name and a likely rename), which greens name a
+/// revision that never held their test, which tests never ran or fail, which finished items'
+/// requirements lack a green, the open manual checks per item and per release, and the finished
+/// items with no definition. A `Literal` name is never looked for in the code: only a captured
+/// run speaks for it. `ops` returns each vanished result to `planned`, as
+/// [`plan_stale_tests`] always did.
+pub fn plan_reconciliation(
+    project: &Project,
+    releases: &[crate::releases::Release],
+    charter_adopted: Option<&str>,
+    locator: &dyn Locator,
+) -> Reconciliation {
+    let mut out = Reconciliation {
+        head: locator.head(),
+        ..Reconciliation::default()
+    };
+    let mut entries: Vec<Entry> = Vec::new();
+    for f in &project.features {
+        let finished = project.config.counts_as_done(&f.status);
+        let Some(def) = &f.definition else {
+            if finished {
+                let pre = charter_adopted
+                    .filter(|a| !a.trim().is_empty())
+                    .is_some_and(|a| before_charter(&f.created_at, a));
+                if pre {
+                    out.undefined.pre_charter.push(f.code.clone());
+                } else {
+                    out.undefined.since_charter.push(f.code.clone());
+                }
+            }
+            continue;
+        };
+        for r in &def.requirements {
+            if finished
+                && !r.tests.is_empty()
+                && !r.tests.iter().any(|t| t.state == TestState::Green)
+            {
+                out.unproven_finished_requirements
+                    .push(format!("{}/{}", f.code, r.id));
+            }
+            for t in &r.tests {
+                let name = t.name.trim();
+                if name.is_empty() {
+                    continue;
+                }
+                match classify(name, &t.kind) {
+                    TestKind::Manual => {
+                        let m = &mut out.manual;
+                        m.total += 1;
+                        if t.state != TestState::Green {
+                            m.open += 1;
+                            *m.per_item.entry(f.code.clone()).or_default() += 1;
+                            for v in releases.iter().filter(|v| {
+                                f.release.as_deref() == Some(v.version.as_str())
+                                    || v.shipped.iter().any(|c| c == &f.code)
+                            }) {
+                                *m.per_release.entry(v.version.clone()).or_default() += 1;
+                            }
+                        }
+                    }
+                    TestKind::Walkthrough => {
+                        if t.state != TestState::Green {
+                            out.manual.walkthrough_open += 1;
+                        }
+                    }
+                    kind => entries.push(Entry {
+                        code: &f.code,
+                        requirement: &r.id,
+                        test: name,
+                        state: t.state,
+                        checked_rev: t.checked_rev.trim(),
+                        kind,
+                    }),
+                }
+            }
+        }
+    }
+
+    // HEAD first, every kind at once.
+    let searched = |k: &TestKind| !matches!(k, TestKind::Literal { .. });
+    let mut head_kinds: Vec<TestKind> = Vec::new();
+    for e in &entries {
+        if searched(&e.kind) && !head_kinds.contains(&e.kind) {
+            head_kinds.push(e.kind.clone());
+        }
+    }
+    locator.prime(&head_kinds, None);
+    let at_head: Vec<Vec<Location>> = entries
+        .iter()
+        .map(|e| {
+            if searched(&e.kind) {
+                locator.find(&e.kind, None)
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+
+    // The rename hint for a vanished result: a test of the same last name defined at HEAD.
+    let bare = |k: &TestKind| match k {
+        TestKind::Rust { modules, name } if !modules.is_empty() => Some(TestKind::Rust {
+            modules: Vec::new(),
+            name: name.clone(),
+        }),
+        TestKind::Python { name, .. } => Some(TestKind::Rust {
+            modules: Vec::new(),
+            name: name.clone(),
+        }),
+        _ => None,
+    };
+    let recorded = |e: &Entry| matches!(e.state, TestState::Green | TestState::Red);
+    let mut hint_kinds: Vec<TestKind> = Vec::new();
+    for (e, at) in entries.iter().zip(&at_head) {
+        if searched(&e.kind)
+            && at.is_empty()
+            && recorded(e)
+            && let Some(k) = bare(&e.kind)
+            && !hint_kinds.contains(&k)
+        {
+            hint_kinds.push(k);
+        }
+    }
+    if !hint_kinds.is_empty() {
+        locator.prime(&hint_kinds, None);
+    }
+
+    // The revision facts each recorded revision needs, then every kind per revision at once.
+    let mut facts: BTreeMap<&str, RevFacts> = BTreeMap::new();
+    let mut per_rev: BTreeMap<&str, Vec<TestKind>> = BTreeMap::new();
+    for (e, at) in entries.iter().zip(&at_head) {
+        if !searched(&e.kind) || e.checked_rev.is_empty() {
+            continue;
+        }
+        let vanished = at.is_empty() && recorded(e);
+        let green_found = !at.is_empty() && e.state == TestState::Green;
+        if !vanished && !green_found {
+            continue;
+        }
+        if green_found {
+            let f = *facts
+                .entry(e.checked_rev)
+                .or_insert_with(|| locator.revision(e.checked_rev));
+            if !f.known || !f.on_head_line {
+                continue;
+            }
+        }
+        let kinds = per_rev.entry(e.checked_rev).or_default();
+        if !kinds.contains(&e.kind) {
+            kinds.push(e.kind.clone());
+        }
+    }
+    for (rev, kinds) in &per_rev {
+        locator.prime(kinds, Some(rev));
+    }
+
+    for (e, at) in entries.iter().zip(at_head) {
+        let found = !at.is_empty();
+        let elsewhere: Vec<String> = if found && !in_expected_place(&e.kind, &at) {
+            paths_of(&at)
+        } else {
+            Vec::new()
+        };
+        let mut defined_at_rev = None;
+        let literal = !searched(&e.kind);
+
+        if !literal && !found && recorded(e) {
+            if !e.checked_rev.is_empty() {
+                defined_at_rev = Some(!locator.find(&e.kind, Some(e.checked_rev)).is_empty());
+            }
+            let hint = bare(&e.kind)
+                .map(|k| paths_of(&locator.find(&k, None)))
+                .unwrap_or_default();
+            out.vanished.push(Vanished {
+                code: e.code.to_string(),
+                requirement: e.requirement.to_string(),
+                test: e.test.to_string(),
+                state: e.state,
+                checked_rev: e.checked_rev.to_string(),
+                defined_at_rev,
+                elsewhere: hint,
+            });
+            out.ops.push(json!({
+                "op": "test.state", "feature": e.code, "requirement": e.requirement,
+                "test": e.test, "state": "planned", "checked_rev": "",
+            }));
+        } else if !literal && found && e.state == TestState::Green {
+            let mut why = None;
+            let mut behind = None;
+            if e.checked_rev.is_empty() {
+                why = Some(MisattributedWhy::NoRevision);
+            } else {
+                let f = facts[e.checked_rev];
+                behind = f.behind;
+                if !f.known {
+                    why = Some(MisattributedWhy::UnknownRevision);
+                } else if !f.on_head_line {
+                    why = Some(MisattributedWhy::NotOnHeadLine);
+                } else {
+                    let there = !locator.find(&e.kind, Some(e.checked_rev)).is_empty();
+                    defined_at_rev = Some(there);
+                    if !there {
+                        why = Some(MisattributedWhy::NotDefinedAtRevision);
+                    }
+                }
+            }
+            if let Some(why) = why {
+                out.misattributed.push(Misattributed {
+                    code: e.code.to_string(),
+                    requirement: e.requirement.to_string(),
+                    test: e.test.to_string(),
+                    checked_rev: e.checked_rev.to_string(),
+                    why,
+                    behind,
+                });
+            }
+        } else if e.state == TestState::Planned {
+            out.never_run.push(never_run(e, found));
+        } else if e.state == TestState::Red {
+            // Found, or a literal name a run recorded as failing.
+            out.failing.push(never_run(e, found));
+        }
+
+        out.rows.push(TrackedTest {
+            code: e.code.to_string(),
+            requirement: e.requirement.to_string(),
+            test: e.test.to_string(),
+            state: e.state,
+            found,
+            defined_at_rev,
+            elsewhere,
+        });
+    }
+    out
+}
+
+fn never_run(e: &Entry, written: bool) -> NeverRun {
+    NeverRun {
+        code: e.code.to_string(),
+        requirement: e.requirement.to_string(),
+        test: e.test.to_string(),
+        state: e.state,
+        written,
+    }
+}
+
+/// The distinct paths of these locations, in order.
+fn paths_of(at: &[Location]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in at {
+        if !out.contains(&l.path) {
+            out.push(l.path.clone());
+        }
+    }
+    out
+}
+
+/// The name a kind was read from, as [`classify`] was given it.
+fn kind_name(kind: &TestKind) -> String {
+    match kind {
+        TestKind::Rust { modules, name } => {
+            let mut s = modules.join("::");
+            if !s.is_empty() {
+                s.push_str("::");
+            }
+            s.push_str(name);
+            s
+        }
+        TestKind::Python { file, class, name } if file.is_empty() => format!("{class}.{name}"),
+        TestKind::Python { file, class, name } => {
+            format!("{}.{class}.{name}", file.trim_end_matches(".py"))
+        }
+        TestKind::Web { name } => name.clone(),
+        TestKind::File { path } => path.clone(),
+        TestKind::Literal { text } => text.clone(),
+        TestKind::Manual | TestKind::Walkthrough => String::new(),
+    }
+}
+
+/// A [`Locator`] over a yes/no search of the working tree, for [`plan_stale_tests`]: a name it
+/// finds is defined at HEAD; no revision is known.
+struct SearchLocator<'a> {
+    search: &'a dyn Fn(&str) -> bool,
+}
+
+impl Locator for SearchLocator<'_> {
+    fn find(&self, kind: &TestKind, rev: Option<&str>) -> Vec<Location> {
+        if rev.is_some() || !(self.search)(&kind_name(kind)) {
+            return Vec::new();
+        }
+        vec![Location {
+            path: String::new(),
+            line: 0,
+        }]
+    }
+    fn revision(&self, _rev: &str) -> RevFacts {
+        RevFacts::default()
+    }
+    fn head(&self) -> String {
+        String::new()
+    }
 }
 
 /// Every tracked test, and the operations that return a vanished one's recorded result to
@@ -915,40 +1525,32 @@ impl StaleTests {
 /// board can hold: it reports a requirement as proven by something nobody can run. Such a result
 /// goes back to `planned` rather than being deleted — the requirement still needs a test, it just
 /// no longer has one. `repo_search` answers whether a test name is still in the repository.
+///
+/// A thin adapter over [`plan_reconciliation`] (MNT-001), so this and the reconciliation report
+/// can never disagree on what to write: one planner makes `ops`. A manual or walkthrough test has
+/// no name in the repository to find and is not listed (FTR-037).
 pub fn plan_stale_tests(project: &Project, repo_search: &dyn Fn(&str) -> bool) -> StaleTests {
-    let mut out = StaleTests::default();
-    for f in &project.features {
-        let Some(def) = &f.definition else { continue };
-        for r in &def.requirements {
-            for t in &r.tests {
-                let name = t.name.trim();
-                // A manual check is performed by a person and has no name in the repo to find;
-                // treating its absence as rot would push people to stop recording manual gates. A
-                // walkthrough test is proved by a run, which records it as any automated test, but
-                // its name is a sentence, not a symbol in the repository (FTR-037).
-                if name.is_empty() || is_unsearchable(&t.kind) {
-                    continue;
-                }
-                let found = repo_search(name);
-                out.rows.push(TrackedTest {
-                    code: f.code.clone(),
-                    requirement: r.id.clone(),
-                    test: name.to_string(),
-                    state: t.state,
-                    found,
-                });
-                // Only recorded evidence is worth correcting: a `planned` test is expected to be
-                // absent — that is what planned means.
-                if !found && t.state != TestState::Planned {
-                    out.ops.push(json!({
-                        "op": "test.state", "feature": f.code, "requirement": r.id,
-                        "test": name, "state": "planned", "checked_rev": "",
-                    }));
-                }
-            }
-        }
+    let plan = plan_reconciliation(
+        project,
+        &[],
+        None,
+        &SearchLocator {
+            search: repo_search,
+        },
+    );
+    // The search names no path, so no row is "defined elsewhere".
+    let rows = plan
+        .rows
+        .into_iter()
+        .map(|r| TrackedTest {
+            elsewhere: Vec::new(),
+            ..r
+        })
+        .collect();
+    StaleTests {
+        rows,
+        ops: plan.ops,
     }
-    out
 }
 
 /// One imported item's provenance, and whether its file source is still there.
@@ -2312,13 +2914,8 @@ test tests::fails ... FAILED
                 line: 3
             }]
         );
-        let path_ok = found.iter().any(|l| {
-            expected_paths(&kind)
-                .iter()
-                .any(|p| l.path.ends_with(p.as_str()) || l.path.contains(p.as_str()))
-        });
         assert!(
-            !path_ok,
+            !in_expected_place(&kind, &found),
             "src/other.rs is not where releases::tests::x belongs"
         );
         // Python, a monitor check and a path are found where they belong.
@@ -2330,5 +2927,484 @@ test tests::fails ... FAILED
         // The default prime is a no-op.
         tree.prime(&[kind], None);
         assert_eq!(tree.head(), "head");
+    }
+
+    /// A fixture locator for the planner (MNT-001): definitions by name at HEAD and per
+    /// revision, revision facts by revision, and every prime it was told about.
+    #[derive(Default)]
+    struct MapLocator {
+        head: BTreeMap<String, Vec<Location>>,
+        at: BTreeMap<(String, String), Vec<Location>>,
+        revs: BTreeMap<String, RevFacts>,
+        primed: std::cell::RefCell<Vec<(Option<String>, Vec<TestKind>)>>,
+    }
+
+    fn loc(path: &str) -> Vec<Location> {
+        vec![Location {
+            path: path.into(),
+            line: 1,
+        }]
+    }
+
+    impl MapLocator {
+        fn at_head(mut self, name: &str, path: &str) -> Self {
+            self.head.insert(name.into(), loc(path));
+            self
+        }
+        fn at_rev(mut self, rev: &str, name: &str, path: &str) -> Self {
+            self.at.insert((rev.into(), name.into()), loc(path));
+            self
+        }
+        fn rev(mut self, rev: &str, known: bool, on_head_line: bool, behind: Option<u64>) -> Self {
+            self.revs.insert(
+                rev.into(),
+                RevFacts {
+                    known,
+                    on_head_line,
+                    behind,
+                },
+            );
+            self
+        }
+    }
+
+    impl Locator for MapLocator {
+        fn find(&self, kind: &TestKind, rev: Option<&str>) -> Vec<Location> {
+            let name = kind_name(kind);
+            match rev {
+                None => self.head.get(&name).cloned().unwrap_or_default(),
+                Some(r) => self
+                    .at
+                    .get(&(r.to_string(), name))
+                    .cloned()
+                    .unwrap_or_default(),
+            }
+        }
+        fn revision(&self, rev: &str) -> RevFacts {
+            self.revs.get(rev).copied().unwrap_or_default()
+        }
+        fn head(&self) -> String {
+            "9f9f9f9".into()
+        }
+        fn prime(&self, kinds: &[TestKind], rev: Option<&str>) {
+            self.primed
+                .borrow_mut()
+                .push((rev.map(str::to_string), kinds.to_vec()));
+        }
+    }
+
+    /// An item for the planner's fixtures: `defn` is its definition's requirements, or `None`.
+    fn item(
+        code: &str,
+        status: &str,
+        release: Option<&str>,
+        created_at: &str,
+        defn: Option<&str>,
+    ) -> crate::models::FeatureItem {
+        let mut f: crate::models::FeatureItem = crate::yaml::from_str(&format!(
+            "code: {code}\ntitle: t\nstatus: {status}\nmilestone: MS-001\n\
+             created_at: '{created_at}'\nupdated_at: '{created_at}'\n"
+        ))
+        .unwrap();
+        f.release = release.map(str::to_string);
+        f.definition =
+            defn.map(|reqs| crate::yaml::from_str(&format!("requirements:\n{reqs}")).unwrap());
+        f
+    }
+
+    fn project_of(features: Vec<crate::models::FeatureItem>) -> Project {
+        let p = Project {
+            id: "shop".into(),
+            config: crate::config::ProjectConfig::default_for("shop"),
+            milestones: vec![],
+            features,
+        };
+        assert!(p.config.counts_as_done("Completed"));
+        assert!(!p.config.counts_as_done("Planned"));
+        p
+    }
+
+    const T0: &str = "2026-01-01T00:00:00Z";
+
+    /// Q3 (17 Nov): a location is where a test belongs only by whole path components (L-46).
+    #[test]
+    fn an_expected_path_is_matched_by_whole_components() {
+        assert!(is_expected_path("api/src/a.rs", "a.rs"));
+        assert!(is_expected_path("a.rs", "a.rs"));
+        assert!(!is_expected_path("api/src/xa.rs", "a.rs"));
+        assert!(is_expected_path("src/releases/mod.rs", "releases/mod.rs"));
+        assert!(!is_expected_path("src/xreleases/mod.rs", "releases/mod.rs"));
+        assert!(is_expected_path(
+            "api/crates/cli/tests/local_mode.rs",
+            "tests/"
+        ));
+        assert!(!is_expected_path("api/foo_tests/local_mode.rs", "tests/"));
+        assert!(!is_expected_path("api/tests_x/local_mode.rs", "tests/"));
+        // A folder must hold the file; a file named like the folder is not in it.
+        assert!(!is_expected_path("api/tests", "tests/"));
+        assert!(is_expected_path("web/scripts/check-y.mjs", "web/scripts/"));
+        assert!(!is_expected_path(
+            "myweb/scripts/check-y.mjs",
+            "web/scripts/"
+        ));
+        assert!(is_expected_path(
+            "repo/scripts/tests/test_x.py",
+            "scripts/tests/test_x.py"
+        ));
+        assert!(!is_expected_path("scripts/tests/my_test_x.py", "test_x.py"));
+        assert!(!is_expected_path("src/a.rs", ""));
+        // The planner reads `elsewhere` this way: xa.rs is not a.rs.
+        let kind = classify("a::tests::x", "unit");
+        assert!(in_expected_place(&kind, &loc("src/a.rs")));
+        assert!(!in_expected_place(&kind, &loc("src/xa.rs")));
+    }
+
+    /// MNT-001 R-2.
+    #[test]
+    fn a_vanished_result_lists_its_revision_and_a_likely_rename() {
+        let p = project_of(vec![item(
+            "FTR-001",
+            "Planned",
+            None,
+            T0,
+            Some(
+                "  - id: R-1\n    text: x\n    tests:\n\
+                 \x20     - name: a::old\n        state: green\n        checked_rev: 1a2b3c4\n\
+                 \x20     - name: b::tests::old_name\n        state: red\n        checked_rev: 5d6e7f8\n\
+                 \x20     - name: c::tests::x\n        state: planned\n\
+                 \x20     - name: d::gone\n        state: planned\n\
+                 \x20     - name: e::nowhere\n        state: green\n",
+            ),
+        )]);
+        let loc = MapLocator::default()
+            .at_rev("1a2b3c4", "a::old", "src/a.rs")
+            .at_head("old_name", "src/b.rs")
+            .at_head("c::tests::x", "src/other.rs");
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        assert_eq!(r.head, "9f9f9f9");
+        assert_eq!(r.vanished.len(), 3, "{:?}", r.vanished);
+        let a = &r.vanished[0];
+        assert_eq!(
+            (a.test.as_str(), a.checked_rev.as_str(), a.defined_at_rev),
+            ("a::old", "1a2b3c4", Some(true))
+        );
+        assert!(a.elsewhere.is_empty());
+        let b = &r.vanished[1];
+        assert_eq!(b.test, "b::tests::old_name");
+        assert_eq!(b.state, TestState::Red);
+        assert_eq!(b.defined_at_rev, Some(false));
+        assert_eq!(b.elsewhere, ["src/b.rs"], "the likely rename");
+        let e = &r.vanished[2];
+        assert_eq!((e.checked_rev.as_str(), e.defined_at_rev), ("", None));
+        // Found at HEAD, but not where its name says: on the row, not vanished.
+        let c = r.rows.iter().find(|t| t.test == "c::tests::x").unwrap();
+        assert!(c.found);
+        assert_eq!(c.elsewhere, ["src/other.rs"]);
+        // One op per vanished recorded result; a planned vanished test has none.
+        assert_eq!(r.ops.len(), 3);
+        assert_eq!(r.ops[0]["test"], "a::old");
+        assert_eq!(r.ops[0]["state"], "planned");
+        assert_eq!(r.ops[0]["checked_rev"], "");
+        assert!(r.ops.iter().all(|o| o["test"] != "d::gone"));
+        assert_eq!(r.never_run.len(), 2);
+        let text = r.render();
+        assert!(
+            text.contains(
+                "Vanished (3)\n  FTR-001 R-1 green a::old — last green at 1a2b3c4 \
+                 (test defined there: yes)\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "  FTR-001 R-1 red b::tests::old_name — last red at 5d6e7f8 \
+                 (test defined there: no) [defined at HEAD as src/b.rs]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("  FTR-001 R-1 green e::nowhere — no revision recorded\n"));
+        assert!(text.ends_with(
+            "3 recorded result(s) name a test that is not in the repo; \
+             run `kanbanr tests --write` to return them to planned\n"
+        ));
+        // HEAD is primed with every kind at once, before the revisions.
+        let primed = loc.primed.borrow();
+        assert_eq!(primed[0].0, None);
+        assert_eq!(primed[0].1.len(), 5);
+        // Q2: a literal name is never looked for in the code, so never vanished by location.
+        let p = project_of(vec![item(
+            "FTR-002",
+            "Planned",
+            None,
+            T0,
+            Some(
+                "  - id: R-1\n    text: x\n    tests:\n\
+                 \x20     - name: cargo deny check\n        state: green\n        checked_rev: abc\n",
+            ),
+        )]);
+        let loc = MapLocator::default().at_head("cargo deny check", "Makefile");
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        assert!(r.vanished.is_empty() && r.ops.is_empty() && r.misattributed.is_empty());
+        assert!(!r.rows[0].found, "a literal is not located by text search");
+        assert!(loc.primed.borrow()[0].1.is_empty());
+    }
+
+    /// MNT-001 R-3.
+    #[test]
+    fn a_green_at_a_revision_that_lacks_the_test_is_misattributed() {
+        let test = |name: &str, rev: &str| {
+            if rev.is_empty() {
+                format!("      - name: {name}\n        state: green\n")
+            } else {
+                format!("      - name: {name}\n        state: green\n        checked_rev: {rev}\n")
+            }
+        };
+        let tests = [
+            test("a::none", ""),
+            test("a::unknown", "0000000"),
+            test("a::off_line", "b0b0b0b"),
+            test("a::not_there", "c0c0c0c"),
+            test("a::proven", "c0c0c0c"),
+        ]
+        .concat();
+        let p = project_of(vec![item(
+            "FTR-001",
+            "Planned",
+            None,
+            T0,
+            Some(&format!("  - id: R-1\n    text: x\n    tests:\n{tests}")),
+        )]);
+        let mut loc = MapLocator::default()
+            .rev("0000000", false, false, None)
+            .rev("b0b0b0b", true, false, None)
+            .rev("c0c0c0c", true, true, Some(12))
+            .at_rev("c0c0c0c", "a::proven", "src/a.rs");
+        for n in ["none", "unknown", "off_line", "not_there", "proven"] {
+            loc = loc.at_head(&format!("a::{n}"), "src/a.rs");
+        }
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        let why: Vec<(&str, MisattributedWhy, Option<u64>)> = r
+            .misattributed
+            .iter()
+            .map(|m| (m.test.as_str(), m.why, m.behind))
+            .collect();
+        assert_eq!(
+            why,
+            [
+                ("a::none", MisattributedWhy::NoRevision, None),
+                ("a::unknown", MisattributedWhy::UnknownRevision, None),
+                ("a::off_line", MisattributedWhy::NotOnHeadLine, None),
+                (
+                    "a::not_there",
+                    MisattributedWhy::NotDefinedAtRevision,
+                    Some(12)
+                ),
+            ]
+        );
+        // A green at a known revision that holds the test is in no list.
+        assert!(r.vanished.is_empty() && r.never_run.is_empty() && r.failing.is_empty());
+        assert!(r.ops.is_empty());
+        let proven = r.rows.iter().find(|t| t.test == "a::proven").unwrap();
+        assert_eq!(proven.defined_at_rev, Some(true));
+        let text = r.render();
+        assert!(text.contains("Misattributed (4)\n"), "{text}");
+        assert!(text.contains(
+            "  FTR-001 R-1 green a::not_there — at a revision that did not hold the test \
+             (c0c0c0c), 12 commit(s) behind HEAD\n"
+        ));
+        assert!(text.contains("  FTR-001 R-1 green a::none — no revision recorded\n"));
+        // The revisions are asked once each, and primed per revision.
+        let primed = loc.primed.borrow();
+        assert!(
+            primed
+                .iter()
+                .any(|(rev, k)| rev.as_deref() == Some("c0c0c0c") && k.len() == 2)
+        );
+        assert!(
+            !primed
+                .iter()
+                .any(|(rev, _)| rev.as_deref() == Some("0000000"))
+        );
+    }
+
+    /// MNT-001 R-4.
+    #[test]
+    fn never_run_and_failing_tests_are_split_by_whether_they_are_written() {
+        let reqs = "  - id: R-1\n    text: x\n    tests:\n\
+                    \x20     - name: a::written\n\
+                    \x20     - name: a::unwritten\n\
+                    \x20     - name: a::fails\n        state: red\n        checked_rev: abc\n\
+                    \x20 - id: R-2\n    text: y\n    tests:\n\
+                    \x20     - name: a::proven\n        state: green\n        checked_rev: abc\n\
+                    \x20 - id: R-3\n    text: z\n";
+        let p = project_of(vec![
+            item("FTR-001", "Completed", None, T0, Some(reqs)),
+            item("FTR-002", "Planned", None, T0, Some(reqs)),
+        ]);
+        let loc = MapLocator::default()
+            .rev("abc", true, true, Some(0))
+            .at_head("a::written", "src/a.rs")
+            .at_head("a::fails", "src/a.rs")
+            .at_head("a::proven", "src/a.rs")
+            .at_rev("abc", "a::proven", "src/a.rs");
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        let never: Vec<(&str, &str, bool)> = r
+            .never_run
+            .iter()
+            .map(|n| (n.code.as_str(), n.test.as_str(), n.written))
+            .collect();
+        assert_eq!(
+            never,
+            [
+                ("FTR-001", "a::written", true),
+                ("FTR-001", "a::unwritten", false),
+                ("FTR-002", "a::written", true),
+                ("FTR-002", "a::unwritten", false),
+            ]
+        );
+        assert_eq!(r.failing.len(), 2);
+        assert!(r.failing.iter().all(|n| n.written && n.test == "a::fails"));
+        // Only the finished item's requirement with tests and no green; R-3 has no test.
+        assert_eq!(r.unproven_finished_requirements, ["FTR-001/R-1"]);
+        let text = r.render();
+        assert!(text.contains("Never run (4: 2 written)\n  FTR-001 R-1 a::written — written\n"));
+        assert!(
+            text.contains("Failing (2)\n  FTR-001 R-1 a::fails\n"),
+            "{text}"
+        );
+        assert!(text.contains("Unproven requirements on finished items (1)\n  FTR-001/R-1\n"));
+    }
+
+    /// MNT-001 R-5.
+    #[test]
+    fn open_manual_and_walkthrough_tests_are_counted_per_item_and_per_release() {
+        let manual = "  - id: R-1\n    text: x\n    tests:\n\
+                      \x20     - name: 'manual: reads well'\n        kind: manual\n\
+                      \x20     - name: looks right\n        kind: manual\n        state: green\n\
+                      \x20     - name: 'walkthrough: the runbook completes'\n        kind: walkthrough\n";
+        let p = project_of(vec![
+            item("FTR-001", "Planned", Some("v1"), T0, Some(manual)),
+            item("FTR-002", "Completed", None, T0, Some(manual)),
+            item("FTR-003", "Planned", None, T0, Some(manual)),
+        ]);
+        let releases = [
+            crate::releases::Release {
+                version: "v0".into(),
+                shipped: vec!["FTR-002".into()],
+                ..Default::default()
+            },
+            crate::releases::Release {
+                version: "v1".into(),
+                ..Default::default()
+            },
+        ];
+        let r = plan_reconciliation(&p, &releases, None, &MapLocator::default());
+        let m = &r.manual;
+        assert_eq!((m.total, m.open, m.walkthrough_open), (6, 3, 3));
+        assert_eq!(
+            m.per_item,
+            BTreeMap::from([
+                ("FTR-001".to_string(), 1),
+                ("FTR-002".to_string(), 1),
+                ("FTR-003".to_string(), 1),
+            ])
+        );
+        assert_eq!(
+            m.per_release,
+            BTreeMap::from([("v0".to_string(), 1), ("v1".to_string(), 1)])
+        );
+        // Neither kind is looked for in the code, nor a row.
+        assert!(r.rows.is_empty() && r.ops.is_empty());
+        let text = r.render();
+        assert!(
+            text.contains(
+                "Manual checks open (3 of 6)\n  per release: v0 1, v1 1\n\
+                 \x20 per item: FTR-001 1, FTR-002 1, FTR-003 1\n  walkthrough tests open: 3\n"
+            ),
+            "{text}"
+        );
+    }
+
+    /// MNT-001 R-6.
+    #[test]
+    fn finished_items_without_a_definition_are_split_at_the_charter_date() {
+        let p = project_of(vec![
+            item("FEAT-001", "Completed", None, "2026-09-01T00:00:00Z", None),
+            item("FEAT-002", "Completed", None, "2026-10-01T00:00:00Z", None),
+            item("FEAT-003", "Planned", None, "2026-09-01T00:00:00Z", None),
+            item(
+                "FEAT-004",
+                "Completed",
+                None,
+                "2026-09-01T00:00:00Z",
+                Some("  - id: R-1\n    text: x\n"),
+            ),
+        ]);
+        let loc = MapLocator::default();
+        let r = plan_reconciliation(&p, &[], Some("2026-09-25T00:29:29Z"), &loc);
+        assert_eq!(
+            r.undefined,
+            Undefined {
+                pre_charter: vec!["FEAT-001".into()],
+                since_charter: vec!["FEAT-002".into()],
+            }
+        );
+        assert!(r.render().contains(
+            "Finished items without a definition (1 pre-charter, 1 since)\n\
+             \x20 pre-charter: FEAT-001\n  since: FEAT-002\n"
+        ));
+        // No charter: every one is since.
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        assert_eq!(r.undefined.pre_charter, Vec::<String>::new());
+        assert_eq!(r.undefined.since_charter, ["FEAT-001", "FEAT-002"]);
+    }
+
+    /// MNT-001 R-7.
+    #[test]
+    fn write_returns_vanished_results_to_planned_and_names_their_revisions() {
+        let p = project_of(vec![item(
+            "FTR-001",
+            "Planned",
+            None,
+            T0,
+            Some(
+                "  - id: R-1\n    text: x\n    tests:\n\
+                 \x20     - name: a::b\n        state: green\n        checked_rev: 1a2b3c4\n\
+                 \x20     - name: c::d\n        state: red\n\
+                 \x20     - name: e::f\n\
+                 \x20     - name: g::h\n        state: green\n        checked_rev: 1a2b3c4\n",
+            ),
+        )]);
+        let loc = MapLocator::default()
+            .rev("1a2b3c4", true, true, Some(3))
+            .at_head("g::h", "src/g.rs")
+            .at_rev("1a2b3c4", "g::h", "src/g.rs");
+        let r = plan_reconciliation(&p, &[], None, &loc);
+        let batch = r.batch().unwrap();
+        assert_eq!(
+            batch["message"],
+            "tests: 2 result(s) whose test no longer exists are back to planned: \
+             a::b (green at 1a2b3c4), c::d (red, no revision)"
+        );
+        assert_eq!(batch["operations"], json!(r.ops));
+        // The ops are exactly the vanished rows with a recorded state, in order.
+        let vanished: Vec<Value> = r
+            .vanished
+            .iter()
+            .map(|v| {
+                json!({
+                    "op": "test.state", "feature": v.code, "requirement": v.requirement,
+                    "test": v.test, "state": "planned", "checked_rev": "",
+                })
+            })
+            .collect();
+        assert_eq!(r.ops, vanished);
+        // The old adapter writes the same.
+        let old = plan_stale_tests(&p, &|name| name == "g::h");
+        assert_eq!(old.ops, r.ops);
+        assert!(old.rows.iter().all(|t| t.elsewhere.is_empty()));
+        // Nothing vanished: no batch.
+        let loc = loc.at_head("a::b", "src/a.rs").at_head("c::d", "src/c.rs");
+        assert!(plan_reconciliation(&p, &[], None, &loc).batch().is_none());
     }
 }
