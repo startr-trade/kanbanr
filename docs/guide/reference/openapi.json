@@ -1524,7 +1524,7 @@
             "type": "integer"
           },
           "stale_items": {
-            "description": "The report's stale evidence entries (one per requirement whose green predates the code\nrepository's HEAD); 0 without a code repository.",
+            "description": "The distinct items among the report's stale evidence (its entries are `CODE/R-n`, one per\nrequirement whose green predates the code repository's HEAD), as `?evidence=stale` lists\nthem; 0 without a code repository.",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
