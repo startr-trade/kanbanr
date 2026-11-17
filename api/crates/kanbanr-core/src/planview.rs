@@ -827,11 +827,25 @@ pub struct PortfolioLane {
     pub marks: Vec<PlanMark>,
 }
 
+/// The portfolio's timeline: its span and one lane per project, so the web never works out the
+/// window (the coordinator, 17 Nov 2026).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PortfolioPlan {
+    /// The Current tab's window over the running sprints the lanes draw, `YYYY-MM-DD` (UTC).
+    pub from: String,
+    pub to: String,
+    pub today: String,
+    pub lanes: Vec<PortfolioLane>,
+}
+
 /// The portfolio's timeline (FTR-043 R-7): one lane per project with sprints or releases on,
 /// holding its running sprint's band and its releases-in-flight diamonds, over the Current tab's
-/// window. A project with neither cadence on has no lane.
-pub fn portfolio(store: &Store, today: Date) -> Result<Vec<PortfolioLane>> {
+/// window (widened to the running sprints of the projects with sprints on). A project with neither
+/// cadence on has no lane.
+pub fn portfolio(store: &Store, today: Date) -> Result<PortfolioPlan> {
     let mut lanes = Vec::new();
+    let mut drawn: Vec<Sprint> = Vec::new();
     for p in store.list_projects()? {
         let b = board(store, &p)?;
         let cadence = &b.project.config.cadence;
@@ -839,6 +853,7 @@ pub fn portfolio(store: &Store, today: Date) -> Result<Vec<PortfolioLane>> {
             continue;
         }
         let bands = if cadence.sprints {
+            drawn.extend(running(&b.sprints, today).cloned());
             running(&b.sprints, today)
                 .flat_map(|s| sprint_lane(&b, store, &p, s, today, false, Count::Estimate).bands)
                 .collect()
@@ -867,7 +882,13 @@ pub fn portfolio(store: &Store, today: Date) -> Result<Vec<PortfolioLane>> {
             marks,
         });
     }
-    Ok(lanes)
+    let (from, to) = window(today, &drawn);
+    Ok(PortfolioPlan {
+        from: fmt_date(from),
+        to: fmt_date(to),
+        today: fmt_date(today),
+        lanes,
+    })
 }
 
 #[cfg(test)]
@@ -1559,7 +1580,15 @@ mod tests {
             .init_project("bare", ProjectConfig::default_for("bare"))
             .unwrap();
 
-        let lanes = portfolio(&store, TODAY).unwrap();
+        let plan = portfolio(&store, TODAY).unwrap();
+        // The window is the Current tab's, over the running sprints the lanes draw, so the web
+        // never works it out (the coordinator, 17 Nov 2026).
+        assert_eq!(
+            (plan.today.as_str(), plan.from.as_str(), plan.to.as_str()),
+            ("2026-11-17", "2026-11-03", "2026-12-01"),
+            "{plan:?}"
+        );
+        let lanes = plan.lanes;
         let mut projects: Vec<&str> = lanes.iter().map(|l| l.project.as_str()).collect();
         projects.sort();
         assert_eq!(projects, ["ops", "shop"], "{lanes:?}");

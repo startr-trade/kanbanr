@@ -909,7 +909,7 @@ pub fn public_routes() -> Vec<RouteDoc> {
             path: "/api/portfolio/plan",
             summary: "The portfolio's timeline: one row per project with sprints or releases on",
             params: &[],
-            response: Response::Json(schema_of::<Vec<crate::planview::PortfolioLane>>),
+            response: Response::Json(schema_of::<crate::planview::PortfolioPlan>),
         },
         // ---- live updates ----
         RouteDoc {

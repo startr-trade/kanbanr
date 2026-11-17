@@ -84,7 +84,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/portfolio` | — | JSON `PortfolioView` | The workspace: its programs and their projects |
 | `GET /api/portfolio/rollups` | — | JSON `RollupReport` | Progress rolled up by program and project |
 | `GET /api/portfolio/board` | — | JSON `BoardReport` | Every project's items on one board, in normalized lanes |
-| `GET /api/portfolio/plan` | — | JSON `PortfolioLane[]` | The portfolio's timeline: one row per project with sprints or releases on |
+| `GET /api/portfolio/plan` | — | JSON `PortfolioPlan` | The portfolio's timeline: one row per project with sprints or releases on |
 | `GET /api/projects/{project}/events` | — | `text/event-stream` | Server-sent events: `changed` whenever this project changes |
 | `GET /api/events` | — | `text/event-stream` | Server-sent events: `changed` whenever anything on the board changes |
 

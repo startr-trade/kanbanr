@@ -5752,6 +5752,34 @@
         ],
         "type": "object"
       },
+      "PortfolioPlan": {
+        "description": "The portfolio's timeline: its span and one lane per project, so the web never works out the\nwindow (the coordinator, 17 Nov 2026).",
+        "properties": {
+          "from": {
+            "description": "The Current tab's window over the running sprints the lanes draw, `YYYY-MM-DD` (UTC).",
+            "type": "string"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioLane"
+            },
+            "type": "array"
+          },
+          "to": {
+            "type": "string"
+          },
+          "today": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "today",
+          "lanes"
+        ],
+        "type": "object"
+      },
       "PortfolioView": {
         "description": "The portfolio index as a serializable view: the workspace metadata + programs, with the implicit\ndefault program materialized when none are declared (so callers always see a consistent shape).",
         "properties": {
@@ -9457,10 +9485,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/PortfolioLane"
-                  },
-                  "type": "array"
+                  "$ref": "#/components/schemas/PortfolioPlan"
                 }
               }
             },
