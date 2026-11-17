@@ -1291,6 +1291,7 @@ enum FeatureCmd {
         spec: Option<String>,
         #[arg(long)]
         spec_file: Option<String>,
+        /// Rename the item; the old code is kept as an alias, so references to it still resolve.
         #[arg(long = "code")]
         new_code: Option<String>,
         /// Move the feature to a different (existing) milestone.

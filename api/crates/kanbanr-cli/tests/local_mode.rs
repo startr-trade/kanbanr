@@ -10907,6 +10907,63 @@ fn feature_show_json_is_the_item() {
     assert_eq!(shown["specification"], exported["specification"]);
 }
 
+/// FTR-056 R-2: after `feature edit --code`, the old code still shows the item, with its earlier
+/// codes listed; `--json` carries the aliases.
+#[test]
+fn feature_show_answers_an_old_code_with_the_renamed_item() {
+    let fx = JsonFixture::new("ftr056-show");
+    fx.run(&["feature", "edit", "FEAT-001", "--code", "DEF-001"]);
+    for code in ["DEF-001", "FEAT-001"] {
+        let shown = fx.run(&["feature", "show", code]);
+        assert!(
+            shown.starts_with("# DEF-001 — Cart recovery"),
+            "{code}: {shown}"
+        );
+        assert!(shown.contains("- **Earlier codes:** FEAT-001"), "{shown}");
+        let j = fx.json(&["--json", "feature", "show", code]);
+        assert_eq!(j["code"], "DEF-001");
+        assert_eq!(j["aliases"][0], "FEAT-001");
+    }
+    let help = fx.run(&["feature", "edit", "--help"]);
+    assert!(help.contains("kept as an alias"), "{help}");
+}
+
+/// FTR-056 R-2: a commit trailer written under the old code still traces to the renamed item and
+/// its requirement.
+#[test]
+fn why_traces_a_commit_trailer_naming_an_old_code() {
+    let fx = JsonFixture::new("ftr056-why");
+    std::fs::create_dir_all(fx.work.join("src")).unwrap();
+    std::fs::write(fx.work.join("src").join("cart.rs"), "fn retain() {}\n").unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&fx.work)
+            .env("HOME", &fx.home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+    };
+    git(&["add", "-A"]);
+    git(&[
+        "commit",
+        "-q",
+        "-m",
+        "feat(cart): retain carts\n\nRefs: kanbanr:FEAT-001/R-1",
+    ]);
+    fx.run(&["feature", "edit", "FEAT-001", "--code", "DEF-001"]);
+    let why = fx.json(&["--json", "why", "src/cart.rs:1"]);
+    let text = why.to_string();
+    assert!(text.contains("DEF-001"), "{text}");
+    let item = &why["references"][0]["items"][0];
+    assert_eq!(item["code"], "DEF-001", "{text}");
+    assert_eq!(item["requirements"][0]["id"], "R-1", "{text}");
+}
+
 /// DEF-009 R-2: `why --json` names the requirement and the goal behind an annotated line.
 #[test]
 fn why_json_names_the_requirement_and_goal() {

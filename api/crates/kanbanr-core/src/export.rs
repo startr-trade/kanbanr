@@ -497,6 +497,14 @@ pub fn to_markdown(
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {} — {}\n\n", feature.code, feature.title));
+    // FTR-056: the codes this item gave up, which still reach it. Absent for an item never renamed,
+    // so its markdown stays byte-identical.
+    if !feature.aliases.is_empty() {
+        out.push_str(&format!(
+            "- **Earlier codes:** {}\n",
+            feature.aliases.join(", ")
+        ));
+    }
     out.push_str(&format!("- **Status:** {}\n", feature.status));
     if let Some(m) = milestone {
         out.push_str(&format!("- **Milestone:** {} ({})\n", m.name, m.code));
