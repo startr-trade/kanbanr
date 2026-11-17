@@ -5,6 +5,7 @@
 
 use crate::config::CodesConfig;
 use crate::error::Result;
+use crate::models::FeatureItem;
 use crate::releases::ReleaseState;
 use crate::sprints::SprintState;
 use crate::store::Store;
@@ -29,6 +30,105 @@ pub struct CompactIndex {
     pub docs: Vec<String>,
     /// The charter's goals.
     pub goals: Vec<IndexGoal>,
+    /// How many items each displayed lane took in and let go on each of the last
+    /// [`FLOW_WINDOW_DAYS`] days (FTR-078). Counted when the index is built; the days are absolute,
+    /// so the monitor counts its own last 7 from them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flow: Vec<LaneFlow>,
+}
+
+/// How many days back the lanes' flow reaches, today included.
+pub const FLOW_WINDOW_DAYS: i64 = 28;
+
+/// One lane's moves by day (FTR-078).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct LaneFlow {
+    pub status: String,
+    /// Ascending by day; only days on which something moved.
+    pub days: Vec<FlowDay>,
+}
+
+/// The moves into and out of a lane on one day.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct FlowDay {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    pub entered: usize,
+    pub left: usize,
+}
+
+/// The day an item entered its current status: the first 10 characters of the last move into it
+/// (a move to the same status is not an entry), else of its creation; empty when that is shorter.
+pub fn entered_on(f: &FeatureItem) -> String {
+    let at = f
+        .history
+        .iter()
+        .rev()
+        .find(|t| t.to == f.status && t.from != t.to)
+        .map(|t| t.at.as_str())
+        .unwrap_or(&f.created_at);
+    day_of(at).unwrap_or_default().to_string()
+}
+
+/// The `YYYY-MM-DD` a stored time starts with, when it starts with one.
+fn day_of(at: &str) -> Option<&str> {
+    let day = at.get(..10)?;
+    let fmt = time::macros::format_description!("[year]-[month]-[day]");
+    time::Date::parse(day, &fmt).ok().map(|_| day)
+}
+
+/// Each displayed lane's moves by day over the [`FLOW_WINDOW_DAYS`] ending `today`. A move counts
+/// once: `entered` on its `to` lane and `left` on its `from` lane. Moves between a status and
+/// itself, and moves whose time is not a date, are skipped.
+pub fn lane_flow(features: &[FeatureItem], displayed: &[String], today: &str) -> Vec<LaneFlow> {
+    use std::collections::BTreeMap;
+    let fmt = time::macros::format_description!("[year]-[month]-[day]");
+    let Ok(end) = time::Date::parse(today, &fmt) else {
+        return Vec::new();
+    };
+    let start = end - time::Duration::days(FLOW_WINDOW_DAYS - 1);
+    let mut lanes: BTreeMap<&str, BTreeMap<time::Date, (usize, usize)>> = BTreeMap::new();
+    for t in features.iter().flat_map(|f| f.history.iter()) {
+        if t.from == t.to {
+            continue;
+        }
+        let Some(date) = day_of(&t.at).and_then(|d| time::Date::parse(d, &fmt).ok()) else {
+            continue;
+        };
+        if date < start || date > end {
+            continue;
+        }
+        lanes
+            .entry(t.to.as_str())
+            .or_default()
+            .entry(date)
+            .or_default()
+            .0 += 1;
+        lanes
+            .entry(t.from.as_str())
+            .or_default()
+            .entry(date)
+            .or_default()
+            .1 += 1;
+    }
+    displayed
+        .iter()
+        .map(|status| LaneFlow {
+            status: status.clone(),
+            days: lanes
+                .get(status.as_str())
+                .into_iter()
+                .flatten()
+                .map(|(date, (entered, left))| FlowDay {
+                    day: date.to_string(),
+                    entered: *entered,
+                    left: *left,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// The part of the configuration the shell, links and cards read.
@@ -95,9 +195,13 @@ pub struct IndexItem {
     pub done: usize,
     /// Tasks in all its todo-lists.
     pub total: usize,
-    /// When it was created, to the whole second (RFC 3339): the board's newest-first order. Nothing
-    /// in the monitor reads `updated_at` from here, so it is not sent (DEF-081 T7).
+    /// When it was created, to the whole second (RFC 3339): the board's newest-first order.
+    /// `updated_at` is not sent here (DEF-081 T7); the Board reads it from the readiness read.
     pub created_at: String,
+    /// The day (`YYYY-MM-DD`) it entered its current status (FTR-078): how long it has been
+    /// there. Absent when no time is known.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub entered_on: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,6 +328,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
             done: f.done_count(),
             total: f.task_count(),
             created_at: to_the_second(&f.created_at),
+            entered_on: entered_on(f),
         })
         .collect();
     let milestones = p
@@ -282,6 +387,11 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
         adrs,
         docs,
         goals,
+        flow: lane_flow(
+            &p.features,
+            &c.displayed_states,
+            &crate::now_rfc3339()[..10],
+        ),
     })
 }
 
@@ -289,7 +399,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
 mod tests {
     use super::*;
     use crate::config::ProjectConfig;
-    use crate::models::{FeatureDefinition, Requirement, TaskState};
+    use crate::models::{FeatureDefinition, FeatureItem, Requirement, TaskState};
 
     /// A board of its own under the system temp folder, never the repository's (L-41).
     fn temp_store(tag: &str) -> (Store, std::path::PathBuf) {
@@ -401,6 +511,116 @@ mod tests {
             .write_doc("demo", "notes/plan.md", "# Plan\n")
             .unwrap();
         (a, ms)
+    }
+
+    /// An item with `status` and the moves `(at, from, to)` in its history (FTR-078).
+    fn moved_item(
+        code: &str,
+        status: &str,
+        created: &str,
+        moves: &[(&str, &str, &str)],
+    ) -> FeatureItem {
+        let mut y = format!(
+            "code: {code}\ntitle: T\nspecification: ''\nstatus: {status}\nmilestone: ''\n\
+             created_at: '{created}'\nupdated_at: '{created}'\nhistory:\n"
+        );
+        for (at, from, to) in moves {
+            y.push_str(&format!("- at: '{at}'\n  from: {from}\n  to: {to}\n"));
+        }
+        if moves.is_empty() {
+            y = y.replace("history:\n", "");
+        }
+        crate::yaml::from_str(&y).unwrap()
+    }
+
+    /// FTR-078 R-8: the day an item entered its status is the day of its last move into it, and
+    /// before any move the day it was created.
+    #[test]
+    fn an_item_enters_its_status_on_its_last_move_into_it() {
+        let f = moved_item(
+            "FTR-1",
+            "Build",
+            "2026-11-01T08:00:00Z",
+            &[
+                ("2026-11-10T09:00:00Z", "Planned", "Build"),
+                ("2026-11-12T09:00:00Z", "Build", "Planned"),
+                ("2026-11-15T23:59:59Z", "Planned", "Build"),
+            ],
+        );
+        assert_eq!(entered_on(&f), "2026-11-15");
+        // A move to the same status is not an entry.
+        let f = moved_item(
+            "FTR-1",
+            "Build",
+            "2026-11-01T08:00:00Z",
+            &[
+                ("2026-11-10T09:00:00Z", "Planned", "Build"),
+                ("2026-11-14T09:00:00Z", "Build", "Build"),
+            ],
+        );
+        assert_eq!(entered_on(&f), "2026-11-10");
+        // Never moved: created there.
+        let f = moved_item("FTR-2", "Planned", "2026-11-03T08:00:00Z", &[]);
+        assert_eq!(entered_on(&f), "2026-11-03");
+        let f = moved_item("FTR-3", "Planned", "soon", &[]);
+        assert_eq!(entered_on(&f), "");
+    }
+
+    /// FTR-078 R-8: each move in the last 28 days counts once, in on its `to` lane and out on its
+    /// `from` lane, by day; days outside the window, same-status moves and unreadable times do not.
+    #[test]
+    fn lane_flow_counts_moves_in_and_out_by_day() {
+        let a = moved_item(
+            "FTR-1",
+            "Completed",
+            "2026-09-01T00:00:00Z",
+            &[
+                ("2026-10-20T10:00:00Z", "Planned", "Build"),
+                ("2026-10-21T10:00:00Z", "Build", "Planned"),
+                ("2026-11-16T10:00:00Z", "Planned", "Build"),
+                ("2026-11-17T10:00:00Z", "Build", "Completed"),
+                ("2026-11-17T11:00:00Z", "Completed", "Completed"),
+                ("not a time", "Planned", "Build"),
+            ],
+        );
+        let b = moved_item(
+            "FTR-2",
+            "Build",
+            "2026-09-01T00:00:00Z",
+            &[("2026-11-16T12:00:00Z", "Planned", "Build")],
+        );
+        let displayed: Vec<String> = ["Planned", "Build", "Completed"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let flow = lane_flow(&[a, b], &displayed, "2026-11-17");
+        let names: Vec<&str> = flow.iter().map(|l| l.status.as_str()).collect();
+        assert_eq!(names, ["Planned", "Build", "Completed"]);
+        let day = |d: &str, entered, left| FlowDay {
+            day: d.into(),
+            entered,
+            left,
+        };
+        // 2026-10-20 is 28 days back: outside the window ending 2026-11-17 (10-21 is the first).
+        assert_eq!(
+            flow[0].days,
+            vec![day("2026-10-21", 1, 0), day("2026-11-16", 0, 2)]
+        );
+        assert_eq!(
+            flow[1].days,
+            vec![
+                day("2026-10-21", 0, 1),
+                day("2026-11-16", 2, 0),
+                day("2026-11-17", 0, 1)
+            ]
+        );
+        assert_eq!(flow[2].days, vec![day("2026-11-17", 1, 0)]);
+        // A board with no history has an empty flow for every lane.
+        assert!(
+            lane_flow(&[], &displayed, "2026-11-17")
+                .iter()
+                .all(|l| l.days.is_empty())
+        );
     }
 
     /// DEF-081 R-2.

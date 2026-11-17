@@ -1178,6 +1178,10 @@
       "CardReadiness": {
         "description": "One card's readiness: its gaps, and its next stages.",
         "properties": {
+          "doing": {
+            "$ref": "#/components/schemas/Doing",
+            "description": "The first task in progress, if any."
+          },
           "gaps": {
             "items": {
               "$ref": "#/components/schemas/Gap"
@@ -1189,11 +1193,30 @@
               "$ref": "#/components/schemas/NextStage"
             },
             "type": "array"
+          },
+          "req_proven": {
+            "description": "How many of the item's requirements have a green test.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "req_total": {
+            "description": "How many requirements the item has.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "updated_at": {
+            "description": "When the item last changed (RFC3339), so the Board can say \"changed since you last looked\"\n(FTR-078).",
+            "type": "string"
           }
         },
         "required": [
           "gaps",
-          "next"
+          "next",
+          "updated_at",
+          "req_proven",
+          "req_total"
         ],
         "type": "object"
       },
@@ -1554,6 +1577,41 @@
           }
         ]
       },
+      "CheckFamily": {
+        "description": "The family a stage's check belongs to, for the Board's five-step stepper (FTR-078).",
+        "enum": [
+          "definition",
+          "approval",
+          "signoffs",
+          "tests",
+          "docs"
+        ],
+        "type": "string"
+      },
+      "CheckTally": {
+        "description": "One family's share of what a stage lacks.",
+        "properties": {
+          "asked": {
+            "description": "The gate asks for something of this family (or lacks something of it).",
+            "type": "boolean"
+          },
+          "family": {
+            "$ref": "#/components/schemas/CheckFamily"
+          },
+          "missing": {
+            "description": "How many of the stage's gaps are of this family.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "family",
+          "asked",
+          "missing"
+        ],
+        "type": "object"
+      },
       "Checked": {
         "additionalProperties": true,
         "description": "One flagged text and how it was settled.",
@@ -1729,6 +1787,13 @@
             "description": "Every doc path under the project's docs, forward-slashed.",
             "items": {
               "type": "string"
+            },
+            "type": "array"
+          },
+          "flow": {
+            "description": "How many items each displayed lane took in and let go on each of the last\n[`FLOW_WINDOW_DAYS`] days (FTR-078). Counted when the index is built; the days are absolute,\nso the monitor counts its own last 7 from them.",
+            "items": {
+              "$ref": "#/components/schemas/LaneFlow"
             },
             "type": "array"
           },
@@ -2419,6 +2484,24 @@
           "description",
           "folders",
           "docs"
+        ],
+        "type": "object"
+      },
+      "Doing": {
+        "description": "The task an item has in progress (FTR-078).",
+        "properties": {
+          "task": {
+            "description": "`TL-001/T3`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The task's text, cut to [`DOING_CHARS`] characters with \"…\" when longer.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task",
+          "text"
         ],
         "type": "object"
       },
@@ -3322,6 +3405,31 @@
         ],
         "type": "object"
       },
+      "FlowDay": {
+        "description": "The moves into and out of a lane on one day.",
+        "properties": {
+          "day": {
+            "description": "`YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "entered": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "left": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "entered",
+          "left"
+        ],
+        "type": "object"
+      },
       "FlowPlan": {
         "description": "A scope's work in agent-hours over its task graph, and how long it takes with more agents.",
         "properties": {
@@ -4173,7 +4281,7 @@
             "type": "string"
           },
           "created_at": {
-            "description": "When it was created, to the whole second (RFC 3339): the board's newest-first order. Nothing\nin the monitor reads `updated_at` from here, so it is not sent (DEF-081 T7).",
+            "description": "When it was created, to the whole second (RFC 3339): the board's newest-first order.\n`updated_at` is not sent here (DEF-081 T7); the Board reads it from the readiness read.",
             "type": "string"
           },
           "depends_on": {
@@ -4187,6 +4295,10 @@
             "format": "uint",
             "minimum": 0,
             "type": "integer"
+          },
+          "entered_on": {
+            "description": "The day (`YYYY-MM-DD`) it entered its current status (FTR-078): how long it has been\nthere. Absent when no time is known.",
+            "type": "string"
           },
           "goals": {
             "description": "The charter goals its definition serves.",
@@ -4570,6 +4682,26 @@
           "estimate_h",
           "actual_h",
           "ratio"
+        ],
+        "type": "object"
+      },
+      "LaneFlow": {
+        "description": "One lane's moves by day (FTR-078).",
+        "properties": {
+          "days": {
+            "description": "Ascending by day; only days on which something moved.",
+            "items": {
+              "$ref": "#/components/schemas/FlowDay"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "days"
         ],
         "type": "object"
       },
@@ -5343,6 +5475,13 @@
       "NextGate": {
         "description": "What moving an item on to one next status would ask, and what it still lacks (FEAT-117).",
         "properties": {
+          "checks": {
+            "description": "What the stage lacks, by family (FTR-078): five tallies in [`CheckFamily::ALL`] order whose\n`missing` add up to `gaps.len()`.",
+            "items": {
+              "$ref": "#/components/schemas/CheckTally"
+            },
+            "type": "array"
+          },
           "enforce": {
             "$ref": "#/components/schemas/Enforce"
           },
@@ -5394,13 +5533,21 @@
           "gaps",
           "requires_gaps",
           "warnings",
-          "signoffs_needed"
+          "signoffs_needed",
+          "checks"
         ],
         "type": "object"
       },
       "NextStage": {
         "description": "A next stage on a card: its status, how many things it still lacks, which of those are\nsign-offs, and how many of the item's tasks are open (FEAT-205) — so a card never reads as\nready while a sign-off or work is outstanding.",
         "properties": {
+          "checks": {
+            "description": "What the stage lacks, by family (FTR-078), copied from the gate.",
+            "items": {
+              "$ref": "#/components/schemas/CheckTally"
+            },
+            "type": "array"
+          },
           "ends": {
             "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
             "type": "boolean"
@@ -5444,7 +5591,8 @@
           "tasks_open",
           "ends",
           "immediate",
-          "for_you"
+          "for_you",
+          "checks"
         ],
         "type": "object"
       },

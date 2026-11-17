@@ -8,6 +8,8 @@
 //     `clampWindow` keeps at least 14 days around today; the hidden list holds every band and mark;
 //   web::check_stepper_marks_done_current_and_next — `stepsFromStages` for no current stage, the
 //     middle one, the last one and shipped; the current step carries aria-current.
+//   web::check_stepper_takes_its_words (FTR-078, R-10) — `words` replaces the text a state is
+//     shown with, state by state; without it `STEP_WORD` says "done", "now", "next", "skipped".
 //   web::check_growth_chart_has_a_table_and_one_axis (FTR-076, R-5) — `growthPath` draws a step line
 //     and a track in the plot; the chart is one `<svg role=img>` named by its caption with one y
 //     axis (0 and the maximum), a marker of at least 8 px and a `<title>` per point, the last point
@@ -181,6 +183,32 @@ try {
     eq(problems, "a done step's date and who", lis[0]?.querySelector(".ui-step-when")?.textContent, "2026-11-12 · the person");
     if (lis[1]?.querySelector(".ui-step-when") || lis[2]?.querySelector(".ui-step-when")) problems.push("a step that is not done shows a date");
     if (lis.some((li) => li.querySelector(".ui-step-dot")?.getAttribute("aria-hidden") !== "true")) problems.push("a dot is not aria-hidden");
+    ok = report(name, problems) && ok;
+  }
+
+  // FTR-078 R-10: the stepper takes its words.
+  current = "web::check_stepper_takes_its_words";
+  {
+    const name = current;
+    const problems = [];
+    const stages = [
+      { key: "a", label: "Definition", state: "done" },
+      { key: "b", label: "Tests green 9", state: "next" },
+      { key: "c", label: "Docs", state: "skipped" },
+      { key: "d", label: "Now", state: "current" },
+    ];
+    const words = (html) => {
+      const m = [...html.matchAll(/class="ui-step-state">([^<]*)</g)];
+      return m.map((x) => x[1]);
+    };
+    const checks = await render("src/ui/StageStepper.tsx", "StageStepper", {
+      stages,
+      label: "Checks for Completed",
+      words: { done: "met", next: "to do", skipped: "not asked" },
+    });
+    eq(problems, "the given words, the rest unchanged", words(checks.html), ["met", "to do", "not asked", "now"]);
+    const plain = await render("src/ui/StageStepper.tsx", "StageStepper", { stages, label: "Stages" });
+    eq(problems, "without words", words(plain.html), ["done", "next", "skipped", "now"]);
     ok = report(name, problems) && ok;
   }
 

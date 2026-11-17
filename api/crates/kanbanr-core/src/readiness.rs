@@ -851,6 +851,9 @@ pub struct NextGate {
     /// unbuilt document. Only Claude can build them, so they are not "for you".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub signoffs_held: Vec<Gap>,
+    /// What the stage lacks, by family (FTR-078): five tallies in [`CheckFamily::ALL`] order whose
+    /// `missing` add up to `gaps.len()`.
+    pub checks: Vec<CheckTally>,
     /// What `docs-folded` was judged against, when it was asked (not serialized).
     #[serde(skip)]
     #[cfg_attr(feature = "schema", schemars(skip))]
@@ -918,6 +921,8 @@ pub struct NextStage {
     pub immediate: bool,
     /// How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).
     pub for_you: usize,
+    /// What the stage lacks, by family (FTR-078), copied from the gate.
+    pub checks: Vec<CheckTally>,
 }
 
 /// One card's readiness: its gaps, and its next stages.
@@ -926,6 +931,165 @@ pub struct NextStage {
 pub struct CardReadiness {
     pub gaps: Vec<Gap>,
     pub next: Vec<NextStage>,
+    /// When the item last changed (RFC3339), so the Board can say "changed since you last looked"
+    /// (FTR-078).
+    pub updated_at: String,
+    /// How many of the item's requirements have a green test.
+    pub req_proven: usize,
+    /// How many requirements the item has.
+    pub req_total: usize,
+    /// The first task in progress, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doing: Option<Doing>,
+}
+
+/// The task an item has in progress (FTR-078).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Doing {
+    /// `TL-001/T3`.
+    pub task: String,
+    /// The task's text, cut to [`DOING_CHARS`] characters with "…" when longer.
+    pub text: String,
+}
+
+/// How many characters of a task's text a card keeps.
+pub const DOING_CHARS: usize = 80;
+
+/// The family a stage's check belongs to, for the Board's five-step stepper (FTR-078).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CheckFamily {
+    Definition,
+    Approval,
+    Signoffs,
+    Tests,
+    Docs,
+}
+
+impl CheckFamily {
+    /// Every family, in the order the stepper draws them.
+    pub const ALL: [CheckFamily; 5] = [
+        CheckFamily::Definition,
+        CheckFamily::Approval,
+        CheckFamily::Signoffs,
+        CheckFamily::Tests,
+        CheckFamily::Docs,
+    ];
+}
+
+/// One family's share of what a stage lacks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CheckTally {
+    pub family: CheckFamily,
+    /// The gate asks for something of this family (or lacks something of it).
+    pub asked: bool,
+    /// How many of the stage's gaps are of this family.
+    pub missing: usize,
+}
+
+/// The family of the check a gap is about. The match has no catch-all over `Check`: a new check
+/// must be placed here before it compiles.
+pub fn family_of(gap: &Gap) -> CheckFamily {
+    match gap.check {
+        Check::Approved | Check::Bypass => CheckFamily::Approval,
+        Check::TestsGreen => CheckFamily::Tests,
+        Check::DocsUpdated | Check::DiagramsValid | Check::DocsCover => CheckFamily::Docs,
+        Check::Signoff => {
+            if gap
+                .label
+                .contains(&format!("'{}'", crate::method::DOCS_FOLDED))
+            {
+                CheckFamily::Docs
+            } else {
+                CheckFamily::Signoffs
+            }
+        }
+        Check::Definition
+        | Check::Statement
+        | Check::Zachman
+        | Check::Goals
+        | Check::GoalsKnown
+        | Check::Requirements
+        | Check::Ears
+        | Check::TestsNamed
+        | Check::Quality
+        | Check::Small
+        | Check::Estimated
+        | Check::InSprint
+        | Check::InRelease
+        | Check::SpecSections
+        | Check::SystemBaselineAccepted
+        | Check::DesignSections
+        | Check::Baseline => CheckFamily::Definition,
+    }
+}
+
+/// Which families a gate's conditions and sign-offs ask for, indexed as [`CheckFamily::ALL`].
+pub(crate) fn families_asked(requires: &[Condition], signoffs: &[String]) -> [bool; 5] {
+    let index = |f: CheckFamily| CheckFamily::ALL.iter().position(|x| *x == f).unwrap_or(0);
+    let mut asked = [false; 5];
+    for c in requires {
+        let family = match c {
+            Condition::Check(check) => family_of(&Gap {
+                check: *check,
+                requirement: None,
+                level: Level::Error,
+                label: String::new(),
+                message: String::new(),
+            }),
+            Condition::Zachman { .. } | Condition::SpecSections { .. } => CheckFamily::Definition,
+            Condition::DocsCover { .. } => CheckFamily::Docs,
+        };
+        asked[index(family)] = true;
+    }
+    for name in signoffs {
+        let family = if name == crate::method::DOCS_FOLDED {
+            CheckFamily::Docs
+        } else {
+            CheckFamily::Signoffs
+        };
+        asked[index(family)] = true;
+    }
+    asked
+}
+
+/// The five tallies of `gaps`, in [`CheckFamily::ALL`] order. A family with a gap is asked.
+pub(crate) fn tally(gaps: &[Gap], asked: [bool; 5]) -> Vec<CheckTally> {
+    CheckFamily::ALL
+        .iter()
+        .zip(asked)
+        .map(|(family, asked)| {
+            let missing = gaps.iter().filter(|g| family_of(g) == *family).count();
+            CheckTally {
+                family: *family,
+                asked: asked || missing > 0,
+                missing,
+            }
+        })
+        .collect()
+}
+
+/// The first task in list order that is in progress, as a card shows it.
+fn doing_of(f: &FeatureItem) -> Option<Doing> {
+    f.todo_lists.iter().find_map(|l| {
+        l.tasks
+            .iter()
+            .find(|t| t.state == crate::models::TaskState::InProgress)
+            .map(|t| {
+                let mut chars = t.text.chars();
+                let mut text: String = chars.by_ref().take(DOING_CHARS).collect();
+                if chars.next().is_some() {
+                    text.push('…');
+                }
+                Doing {
+                    task: format!("{}/{}", l.code, t.key),
+                    text,
+                }
+            })
+    })
 }
 
 /// The board's cards in one answer, keyed by item code, in board order:
@@ -954,7 +1118,12 @@ impl ProjectReadiness {
                 .iter()
                 .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
                 .map(|f| {
+                    let evidence = crate::report::item_evidence(f, None);
                     let card = CardReadiness {
+                        updated_at: f.updated_at.clone(),
+                        req_proven: evidence.req_proven,
+                        req_total: evidence.req_total,
+                        doing: doing_of(f),
                         gaps: evaluate(f, None, CARD),
                         // The next stage, with how much it still lacks (FEAT-117).
                         next: {
@@ -975,6 +1144,7 @@ impl ProjectReadiness {
                                             matches!(g.check, Check::Signoff | Check::Approved)
                                         })
                                         .count(),
+                                    checks: n.checks,
                                     status: n.status,
                                     missing: n.gaps.len(),
                                     signoffs: n.signoffs_needed,
@@ -1151,6 +1321,7 @@ pub fn next_gates(
             }
             gaps.extend(signoffs);
             gaps.extend(signoffs_held.iter().cloned());
+            let checks = tally(&gaps, families_asked(&gate.requires, &gate.signoffs));
             let mut warnings: Vec<Gap> = said
                 .into_iter()
                 .chain(evaluate_entering(
@@ -1172,6 +1343,7 @@ pub fn next_gates(
                 warnings,
                 signoffs_needed,
                 signoffs_held,
+                checks,
                 docs_built,
             })
         })
@@ -2913,6 +3085,204 @@ mod tests {
             )
             .unwrap();
         (store, dir, item.code, list.code)
+    }
+
+    /// A board like [`linked_docs_board`] whose `Completed` gate asks for `requires` and the two
+    /// sign-offs (FTR-078).
+    fn tally_board(
+        tag: &str,
+        requires: Vec<Condition>,
+        signoffs: Vec<String>,
+    ) -> (crate::Store, std::path::PathBuf, String, String) {
+        let (store, dir, code, list) = linked_docs_board(tag);
+        let gate = crate::config::Gate {
+            requires,
+            signoffs,
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        (store, dir, code, list)
+    }
+
+    /// FTR-078 R-10: the five tallies' `missing` add up to what the stage lacks, a lapsed or held
+    /// `docs-folded` counts under docs, and the card's stage carries the same tallies.
+    #[test]
+    fn check_counts_add_up_to_what_the_stage_lacks() {
+        let (store, dir, code, _) = tally_board(
+            "tally-sum",
+            vec![
+                Condition::Check(Check::Definition),
+                Condition::Check(Check::TestsGreen),
+                Condition::Check(Check::DocsUpdated),
+            ],
+            vec!["design-review".into(), "docs-folded".into()],
+        );
+        let (gate, _) = completed_gate(&store, &code, None);
+        assert_eq!(gate.checks.len(), 5, "{:?}", gate.checks);
+        let families: Vec<CheckFamily> = gate.checks.iter().map(|c| c.family).collect();
+        assert_eq!(families, CheckFamily::ALL.to_vec());
+        let sum: usize = gate.checks.iter().map(|c| c.missing).sum();
+        assert_eq!(sum, gate.gaps.len(), "{:?} vs {:?}", gate.checks, gate.gaps);
+        assert!(!gate.gaps.is_empty());
+        let by = |f: CheckFamily| gate.checks.iter().find(|c| c.family == f).unwrap();
+        // The held docs-folded (its document unbuilt) and the unchanged doc are docs.
+        assert!(by(CheckFamily::Docs).missing >= 1, "{:?}", gate.checks);
+        assert!(by(CheckFamily::Docs).asked);
+        // design-review is a sign-off that is not docs-folded.
+        assert_eq!(by(CheckFamily::Signoffs).missing, 1, "{:?}", gate.checks);
+        assert!(by(CheckFamily::Tests).asked && by(CheckFamily::Definition).asked);
+        let card = ProjectReadiness::load(&store, "demo").unwrap();
+        let n = &card.0.iter().find(|(c, _)| c == &code).unwrap().1.next[0];
+        assert_eq!(n.checks, gate.checks);
+        assert_eq!(n.checks.iter().map(|c| c.missing).sum::<usize>(), n.missing);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-078 R-10: a family the gate does not ask is `asked: false` with nothing missing; a
+    /// family with a gap is asked whatever the gate says; each check has one family.
+    #[test]
+    fn a_family_the_gate_does_not_ask_reads_as_not_asked() {
+        let (store, dir, code, _) = tally_board(
+            "tally-unasked",
+            vec![Condition::Check(Check::Definition)],
+            vec![],
+        );
+        let (gate, _) = completed_gate(&store, &code, None);
+        let by = |f: CheckFamily| gate.checks.iter().find(|c| c.family == f).unwrap();
+        assert!(by(CheckFamily::Definition).asked);
+        for f in [
+            CheckFamily::Approval,
+            CheckFamily::Signoffs,
+            CheckFamily::Tests,
+            CheckFamily::Docs,
+        ] {
+            assert_eq!(
+                *by(f),
+                CheckTally {
+                    family: f,
+                    asked: false,
+                    missing: 0
+                }
+            );
+        }
+        // The pure parts.
+        let asked = families_asked(
+            &[
+                Condition::Check(Check::Approved),
+                Condition::Zachman { zachman: vec![] },
+                Condition::DocsCover { docs_cover: vec![] },
+            ],
+            &["design-review".to_string(), "docs-folded".to_string()],
+        );
+        assert_eq!(asked, [true, true, true, false, true]);
+        let gap = |check, label: &str| Gap {
+            check,
+            requirement: None,
+            level: Level::Error,
+            label: label.into(),
+            message: String::new(),
+        };
+        assert_eq!(family_of(&gap(Check::Bypass, "")), CheckFamily::Approval);
+        assert_eq!(family_of(&gap(Check::TestsGreen, "")), CheckFamily::Tests);
+        assert_eq!(family_of(&gap(Check::DiagramsValid, "")), CheckFamily::Docs);
+        assert_eq!(
+            family_of(&gap(Check::Signoff, "sign-off 'docs-folded' lapsed")),
+            CheckFamily::Docs
+        );
+        assert_eq!(
+            family_of(&gap(Check::Signoff, "sign-off 'design-review' lapsed")),
+            CheckFamily::Signoffs
+        );
+        let tallies = tally(&[gap(Check::TestsGreen, "x")], [false; 5]);
+        assert_eq!(
+            tallies[3],
+            CheckTally {
+                family: CheckFamily::Tests,
+                asked: true,
+                missing: 1
+            }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-078 R-12: a card carries when its item last changed, how many requirements are proven,
+    /// and its first task in progress, cut on a character boundary.
+    #[test]
+    fn a_card_carries_its_last_change_its_proof_and_its_current_task() {
+        let (store, dir, code, list) = linked_docs_board("card-facts");
+        let card_of = |store: &crate::Store| {
+            let r = ProjectReadiness::load(store, "demo").unwrap();
+            r.0.into_iter().find(|(c, _)| c == &code).unwrap().1
+        };
+        let card = card_of(&store);
+        assert!(card.doing.is_none());
+        assert_eq!((card.req_proven, card.req_total), (0, 0));
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        let req = |id: &str, state| Requirement {
+            id: id.into(),
+            text: "The system shall x".into(),
+            tests: vec![TestRef {
+                name: format!("t_{id}"),
+                state,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        def.requirements = vec![req("R-1", TestState::Green), req("R-2", TestState::Red)];
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        let long = "é".repeat(100);
+        store
+            .add_task(
+                "demo",
+                &code,
+                &list,
+                &long,
+                None,
+                &crate::store::TaskFields::default(),
+            )
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T2",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        let card = card_of(&store);
+        let item = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(card.updated_at, item.updated_at);
+        assert!(!card.updated_at.is_empty());
+        assert_eq!((card.req_proven, card.req_total), (1, 2));
+        let doing = card.doing.expect("a task in progress");
+        assert_eq!(doing.task, format!("{list}/T2"));
+        assert_eq!(doing.text, format!("{}…", "é".repeat(DOING_CHARS)));
+        // A short one is kept whole, and the first in list order wins.
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        let doing = card_of(&store).doing.unwrap();
+        assert_eq!(doing.task, format!("{list}/T1"));
+        assert_eq!(doing.text, "Write the parser");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The `Completed` gate of `code`, with the docs-folded hold, judged with `repo`.

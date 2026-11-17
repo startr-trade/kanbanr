@@ -15,14 +15,18 @@ export const STEP_WORD: Record<Step["state"], string> = {
   skipped: "skipped",
 };
 
-export function StageStepper(p: { stages: Step[]; label: string }): JSX.Element {
+/**
+ * `words` replaces the text of the states it names (FTR-078): the Board says "met", "to do" and
+ * "not asked" for a stage's checks. A state it leaves out keeps its `STEP_WORD`.
+ */
+export function StageStepper(p: { stages: Step[]; label: string; words?: Partial<Record<Step["state"], string>> }): JSX.Element {
   return (
     <ol className="ui-stepper" aria-label={p.label}>
       {p.stages.map((s) => (
         <li key={s.key} className={`ui-step ui-step-${s.state}`} aria-current={s.state === "current" ? "step" : undefined}>
           <span className="ui-step-dot" aria-hidden="true" />
           <span className="ui-step-label">{s.label}</span>
-          <span className="ui-step-state">{STEP_WORD[s.state]}</span>
+          <span className="ui-step-state">{p.words?.[s.state] ?? STEP_WORD[s.state]}</span>
           {s.state === "done" && (s.at || s.by) && (
             <span className="ui-step-when">{[s.at ? s.at.slice(0, 10) : null, s.by || null].filter(Boolean).join(" · ")}</span>
           )}
