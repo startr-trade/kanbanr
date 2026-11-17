@@ -13294,6 +13294,82 @@ fn decisions_propose_grant_and_take_under() {
     assert_eq!(list[0]["delegation"], "DLG-001");
 }
 
+/// DEF-107 R-1: a sign-off taken under a delegation still prints Claude under the delegation.
+#[test]
+fn signoff_under_a_delegation_still_prints_claude_under_it() {
+    let (base, work) = delegation_board("def107-under");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let taken = ok(in_session(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review", "--under", "DLG-001"],
+    ));
+    let said = String::from_utf8_lossy(&taken.stdout);
+    assert!(
+        said.contains("sign-off 'design-review' recorded by Claude under DLG-001"),
+        "{said}"
+    );
+}
+
+/// DEF-107 R-1: a person's sign-off on an item whose latest earlier sign-off was delegated prints
+/// the person. The line names the sign-off just written, not the delegation of an older one.
+#[test]
+fn signoff_by_the_person_prints_the_person_when_an_earlier_signoff_was_delegated() {
+    let (base, work) = delegation_board("def107-person");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    ok(in_session(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review", "--under", "DLG-001"],
+    ));
+    let mine = ok(run_in(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "docs-folded", "--by", "the-person"],
+    ));
+    let said = String::from_utf8_lossy(&mine.stdout);
+    assert!(
+        said.contains("sign-off 'docs-folded' recorded by the-person"),
+        "{said}"
+    );
+    assert!(!said.contains("DLG-001"), "{said}");
+    assert!(!said.contains("Claude"), "{said}");
+}
+
 /// DEF-043 R-2: a move with an override records where it was made: `conversation` inside a
 /// Claude Code session, `terminal` outside one. The override must be one the gate needed, or it
 /// is not recorded at all (DEF-056 R-2): so the item moved is defined and never approved, and the

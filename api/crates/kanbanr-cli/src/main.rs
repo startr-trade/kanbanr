@@ -10661,7 +10661,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 &format!("/projects/{p}/features/{code}/approve"),
                 Some(json!({ "by": who, "rev": rev, "delegation": under, "pass": pass })),
             )?;
-            let who = recorded_by(&resp, &who);
+            let who = recorded_by(&resp, &who, Recorded::Approval);
             print_write(
                 cli,
                 &resp,
@@ -10713,7 +10713,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 })),
                 scm::repo_root().as_deref(),
             )?;
-            let who = recorded_by(&resp, &who);
+            let who = recorded_by(&resp, &who, Recorded::Signoff(name));
             print_write(
                 cli,
                 &resp,
@@ -14752,9 +14752,16 @@ fn gate_commit(
 }
 
 /// `kanbanr prepare …` (FTR-034): write a prepared record, and say where it waits for the person.
+/// The record a verdict's line names: the approval, or the sign-off with the asked name (DEF-107).
+enum Recorded<'a> {
+    Approval,
+    Signoff(&'a str),
+}
+
 /// Who a verdict was recorded as given by: under a delegation it is Claude, whatever was asked
-/// (FTR-028).
-fn recorded_by(resp: &str, asked: &str) -> String {
+/// (FTR-028). The record is the answer itself, or else the item's approval or the sign-off with
+/// the asked name (the latest one if a name repeats), never the item's last sign-off (DEF-107).
+fn recorded_by(resp: &str, asked: &str, which: Recorded<'_>) -> String {
     let v: Value = serde_json::from_str(resp).unwrap_or(Value::Null);
     let under = |r: &Value| -> Option<String> {
         let d = r["delegation"].as_str().filter(|d| !d.is_empty())?;
@@ -14763,19 +14770,16 @@ fn recorded_by(resp: &str, asked: &str) -> String {
             r["by"].as_str().unwrap_or("Claude")
         ))
     };
-    // The answer is the record, or the item with the record last in its list.
     under(&v)
         .or_else(|| {
             let def = &v["definition"];
-            def["signoffs"]
-                .as_array()
-                .and_then(|a| a.last())
-                .and_then(under)
-                .or_else(|| {
-                    def["approval"]
-                        .as_object()
-                        .and_then(|_| under(&def["approval"]))
-                })
+            let record = match which {
+                Recorded::Approval => Some(&def["approval"]),
+                Recorded::Signoff(name) => def["signoffs"]
+                    .as_array()
+                    .and_then(|a| a.iter().rev().find(|r| r["id"].as_str() == Some(name))),
+            };
+            record.and_then(under)
         })
         .unwrap_or_else(|| asked.to_string())
 }
@@ -17426,6 +17430,53 @@ fn board_text(project: &Project) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEF-107 R-1: the line names the record that was asked for, not the item's last sign-off.
+    /// An item whose latest earlier sign-off was delegated (design-review under DLG-001) still
+    /// reads the person for a sign-off the person just wrote.
+    #[test]
+    fn recorded_by_reads_the_named_signoff() {
+        let item = json!({
+            "definition": {
+                "approval": {"by": "person", "at": "2026-11-17T09:00:00Z", "rev": "r1"},
+                "signoffs": [
+                    {"id": "design-review", "by": "Claude", "at": "2026-11-16T09:00:00Z",
+                     "rev": "r1", "delegation": "DLG-001"},
+                    {"id": "docs-folded", "by": "person", "at": "2026-11-17T09:00:00Z",
+                     "rev": "r1"}
+                ]
+            }
+        })
+        .to_string();
+        assert_eq!(
+            recorded_by(&item, "person", Recorded::Signoff("docs-folded")),
+            "person"
+        );
+        assert_eq!(
+            recorded_by(&item, "person", Recorded::Signoff("design-review")),
+            "Claude under DLG-001"
+        );
+        assert_eq!(
+            recorded_by(&item, "person", Recorded::Signoff("absent")),
+            "person"
+        );
+    }
+
+    /// DEF-107 R-1: an approval is read from `definition.approval`, never from the sign-off list.
+    #[test]
+    fn recorded_by_reads_the_approval_not_the_last_signoff() {
+        let item = json!({
+            "definition": {
+                "approval": {"by": "person", "at": "2026-11-17T09:00:00Z", "rev": "r1"},
+                "signoffs": [
+                    {"id": "design-review", "by": "Claude", "at": "2026-11-17T08:00:00Z",
+                     "rev": "r1", "delegation": "DLG-001"}
+                ]
+            }
+        })
+        .to_string();
+        assert_eq!(recorded_by(&item, "person", Recorded::Approval), "person");
+    }
 
     /// The text between `from` and `to` in `source` (to the end when `to` is None).
     fn between<'a>(source: &'a str, from: &str, to: Option<&str>) -> &'a str {
