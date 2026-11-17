@@ -92,7 +92,9 @@ pub struct IndexItem {
     pub done: usize,
     /// Tasks in all its todo-lists.
     pub total: usize,
-    pub updated_at: String,
+    /// When it was created, to the whole second (RFC 3339): the board's newest-first order. Nothing
+    /// in the monitor reads `updated_at` from here, so it is not sent (DEF-081 T7).
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +102,9 @@ pub struct IndexItem {
 pub struct IndexMilestone {
     pub code: String,
     pub name: String,
+    /// What the milestone is for, as the milestone pages show it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 }
@@ -130,19 +135,18 @@ pub struct IndexRelease {
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+/// An ADR as the link index needs it: its id and the doc it lives in. Its title and status are on
+/// the ADR's own page, and nothing reads them from the index (DEF-081 T7).
 pub struct IndexAdr {
     pub id: String,
-    pub title: String,
-    pub status: String,
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+/// A charter goal as the link index needs it: its id. The statement is on the charter page.
 pub struct IndexGoal {
     pub id: String,
-    /// The goal's statement.
-    pub title: String,
 }
 
 /// `Some` of a string that is not empty.
@@ -152,6 +156,19 @@ fn some(s: &str) -> Option<String> {
 
 fn nonempty(s: &Option<String>) -> Option<String> {
     s.as_deref().and_then(some)
+}
+
+/// An RFC 3339 time without its fraction of a second: `2026-09-28T11:22:34.588221216Z` →
+/// `2026-09-28T11:22:34Z`. A time with no fraction is returned as it is.
+fn to_the_second(t: &str) -> String {
+    match t.find('.') {
+        Some(dot) => {
+            let rest = &t[dot + 1..];
+            let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+            format!("{}{}", &t[..dot], &rest[digits..])
+        }
+        None => t.to_string(),
+    }
 }
 
 /// Build from `load_meta` (no specs), `adr::list`, `store.list_docs`, `charter::load`, `sprints`,
@@ -202,7 +219,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
                 .unwrap_or_default(),
             done: f.done_count(),
             total: f.task_count(),
-            updated_at: f.updated_at.clone(),
+            created_at: to_the_second(&f.created_at),
         })
         .collect();
     let milestones = p
@@ -211,6 +228,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
         .map(|m| IndexMilestone {
             code: m.code.clone(),
             name: m.name.clone(),
+            description: m.description.clone(),
             depends_on: m.depends_on.clone(),
         })
         .collect();
@@ -241,8 +259,6 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
         .into_iter()
         .map(|a| IndexAdr {
             id: a.id,
-            title: a.title,
-            status: a.status,
             path: a.path,
         })
         .collect();
@@ -250,10 +266,7 @@ pub fn compact(store: &Store, project: &str) -> Result<CompactIndex> {
     let goals = crate::charter::load(store, project)?
         .goals
         .into_iter()
-        .map(|g| IndexGoal {
-            id: g.id,
-            title: g.statement,
-        })
+        .map(|g| IndexGoal { id: g.id })
         .collect();
     Ok(CompactIndex {
         project: project.to_string(),
@@ -312,7 +325,7 @@ mod tests {
         )
         .unwrap();
         let ms = store
-            .add_milestone("demo", "First", "", vec![], None)
+            .add_milestone("demo", "First", "The first cut", vec![], None)
             .unwrap()
             .code;
         let a = store
@@ -381,22 +394,25 @@ mod tests {
         assert_eq!(alpha.goals, vec!["G-1".to_string()]);
         assert_eq!(alpha.requirements, vec!["R-1".to_string()]);
         assert_eq!((alpha.done, alpha.total), (1, 2));
-        assert!(!alpha.updated_at.is_empty());
+        // Created to the whole second: the board's newest-first order, without the nanoseconds.
+        assert!(alpha.created_at.ends_with('Z'), "{}", alpha.created_at);
+        assert!(!alpha.created_at.contains('.'), "{}", alpha.created_at);
+        assert_eq!(alpha.created_at.len(), "2026-11-17T10:00:00Z".len());
         assert!(ix.config.cadence.sprints && ix.config.cadence.releases);
         assert!(!ix.config.statuses.is_empty());
         assert_eq!(ix.milestones.len(), 1);
+        assert_eq!(ix.milestones[0].description, "The first cut");
         assert_eq!(ix.sprints.len(), 1);
         assert_eq!(ix.sprints[0].name, "Sprint one");
         assert_eq!(ix.releases.len(), 1);
         assert_eq!(ix.releases[0].version, "1.0");
         assert_eq!(ix.releases[0].name.as_deref(), Some("First"));
         assert_eq!(ix.adrs.len(), 1);
-        assert_eq!(ix.adrs[0].title, "Use one table");
         assert!(ix.adrs[0].path.starts_with("decisions/"));
         assert!(ix.docs.iter().any(|d| d == "notes/plan.md"));
         assert!(ix.docs.contains(&ix.adrs[0].path));
         assert_eq!(ix.goals.len(), 1);
-        assert_eq!(ix.goals[0].title, "Sessions recover");
+        assert_eq!(ix.goals[0].id, "G-1");
         // No bodies: no spec text, history or todo-lists reach the index.
         let json = serde_json::to_string(&ix).unwrap();
         for absent in [
@@ -407,10 +423,34 @@ mod tests {
             "Alpha for the person",
             "The system shall alpha",
             "Keep the plan",
+            // Fields no page reads from the index (DEF-081 T7): an ADR's title and status, a
+            // goal's statement, an item's last change.
+            "Use one table",
+            "\"status\":\"proposed\"",
+            "Sessions recover",
+            "\"updated_at\"",
         ] {
             assert!(!json.contains(absent), "the index carries {absent}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-081 T7: the index sends creation times to the second, which orders as well and costs less.
+    #[test]
+    fn a_time_is_cut_to_the_second() {
+        assert_eq!(
+            to_the_second("2026-09-28T11:22:34.588221216Z"),
+            "2026-09-28T11:22:34Z"
+        );
+        assert_eq!(
+            to_the_second("2026-09-28T11:22:34.5+02:00"),
+            "2026-09-28T11:22:34+02:00"
+        );
+        assert_eq!(
+            to_the_second("2026-09-28T11:22:34Z"),
+            "2026-09-28T11:22:34Z"
+        );
+        assert_eq!(to_the_second(""), "");
     }
 
     /// DEF-081 R-2, L-29: an empty board answers an empty index, not an error.

@@ -3,6 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { useScrollToHash } from "../useBoardIndex";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
@@ -12,27 +14,33 @@ import {
   listFullyCompleted,
   zachmanColumns,
 } from "../types";
-import type { Feature, Requirement, Signoff, TestRef } from "../types";
+import type { CompactIndex, Feature, Requirement, Signoff, TestRef } from "../types";
 import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
   const { project = "", code = "" } = useParams();
+  // The panels below without a slice of their own re-read on every change, as before.
   const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
-  useScrollToHash(!!data);
-  const usesReleases = data?.config.cadence?.releases === true;
+  // This item alone, with its spec; the config and the known codes from the compact index. Never
+  // the whole board (DEF-081).
+  const { data: feature, error, loading } = useQuery<Feature>(
+    project,
+    urls.feature(project, code),
+    TAGS.feature(code),
+  );
+  const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
+  useScrollToHash(!!feature);
+  const usesReleases = index.data?.config.cadence.releases === true;
   const releases = useAsync(
     () => (usesReleases ? api.getReleases(project) : Promise.resolve([])),
     [project, tick, usesReleases],
   );
 
-  if (loading && !data) return <Loading />;
+  if (loading && !feature) return <Loading />;
+  if (error?.startsWith("404 ")) return <ErrorBox error={`Feature ${code} not found`} />;
   if (error) return <ErrorBox error={error} />;
-  if (!data) return null;
-
-  const feature = data.features.find((f) => f.code === code);
   if (!feature) return <ErrorBox error={`Feature ${code} not found`} />;
   const p = featureProgress(feature);
   // Nothing until the releases have loaded, so the chip never flashes "Not in a release".
@@ -77,7 +85,7 @@ export default function FeaturePage() {
         <div className="depends">
           <span className="muted small">Blocked by:</span>
           {(feature.depends_on ?? []).map((dep) => {
-            const known = data.features.some((f) => f.code === dep);
+            const known = (index.data?.items ?? []).some((f) => f.code === dep);
             return known ? (
               <Link
                 key={dep}

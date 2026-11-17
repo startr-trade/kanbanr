@@ -105,6 +105,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor shows agent scopes and who made each change": LOCAL,
             "Live updates settle before the monitor refetches": LOCAL,
             "The monitor's data cache shares reads and re-reads only changed slices": LOCAL,
+            "The monitor's pages never fetch the whole board": LOCAL,
             "The UI kit is built on the chosen design tokens": LOCAL,
             "The UI kit's renderer draws a component": LOCAL,
             "The monitor's navigation lists every page once, grouped into areas": LOCAL,

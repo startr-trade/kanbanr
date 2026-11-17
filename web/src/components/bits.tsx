@@ -74,8 +74,37 @@ export function progress(tasks: Task[]): { done: number; total: number } {
   };
 }
 
+/**
+ * What a card draws: the item's own fields and its task counts, no bodies (DEF-081). The compact
+ * index's items are already this shape; a page holding a whole `Feature` passes `toCard(f)`.
+ */
+export type CardItem = Pick<
+  Feature,
+  "code" | "title" | "milestone" | "kind" | "priority" | "assignee" | "team" | "labels" | "depends_on"
+> & { done: number; total: number };
+
+/** A whole `Feature` as a card: its fields, and its tasks counted across its todo-lists. */
+export function toCard(f: Feature): CardItem {
+  const p = featureProgress(f);
+  return {
+    code: f.code,
+    title: f.title,
+    milestone: f.milestone,
+    kind: f.kind,
+    priority: f.priority,
+    assignee: f.assignee,
+    team: f.team,
+    labels: f.labels,
+    depends_on: f.depends_on,
+    done: p.done,
+    total: p.total,
+  };
+}
+
+type BadgeFields = Pick<Feature, "kind" | "priority" | "assignee" | "team" | "labels">;
+
 /** Small badges for a feature's kind / priority / owner / labels (shared by cards + the feature page). */
-export function FeatureBadges({ feature }: { feature: Feature }) {
+export function FeatureBadges({ feature }: { feature: BadgeFields }) {
   return (
     <>
       {feature.kind && <span className="badge kind">{feature.kind}</span>}
@@ -95,10 +124,14 @@ export function FeatureBadges({ feature }: { feature: Feature }) {
 
 /**
  * Whether `feature` is blocked by a same-project dependency that isn't yet Completed (FEAT-027).
- * Computed client-side from the already-loaded sibling features. Cross-project deps (those carrying
- * a `"proj:CODE"` form) are intentionally ignored here — the board only has this project loaded.
+ * Computed client-side from the already-loaded sibling items (the compact index's are enough: a code
+ * and a status each). Cross-project deps (those carrying a `"proj:CODE"` form) are intentionally
+ * ignored here — the board only has this project loaded.
  */
-export function isBlockedBySiblings(feature: Feature, siblings: Feature[]): boolean {
+export function isBlockedBySiblings(
+  feature: Pick<Feature, "depends_on">,
+  siblings: { code: string; status: string }[],
+): boolean {
   const deps = (feature.depends_on ?? []).filter((d) => !d.includes(":"));
   if (deps.length === 0) return false;
   return deps.some((code) => {
@@ -117,14 +150,14 @@ export function FeatureCard({
   next = [],
 }: {
   project: string;
-  feature: Feature;
-  siblings?: Feature[];
+  feature: CardItem;
+  siblings?: { code: string; status: string }[];
   /** From the daemon's readiness engine; only live items have any. */
   gaps?: Gap[];
   /** The next stage and what moving there still lacks (FEAT-117, FEAT-205). */
   next?: NextStage[];
 }) {
-  const p = featureProgress(feature);
+  const p = { done: feature.done, total: feature.total };
   const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
   return (
     <Link className="card" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>

@@ -1,8 +1,9 @@
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
+import { useQuery } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
 import { ErrorBox, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
 import { featureProgress, listsNewestFirst, listFullyCompleted } from "../types";
+import type { Feature } from "../types";
 
 /**
  * A single feature status, grouped by feature item. Under each feature it shows only the
@@ -10,14 +11,18 @@ import { featureProgress, listsNewestFirst, listFullyCompleted } from "../types"
  */
 export default function StatusPage() {
   const { project = "", state = "" } = useParams();
-  const tick = useLiveTick(api.projectEvents(project));
-  const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  // Only this status's items, without specifications: the status slice (DEF-081).
+  const { data, error, loading } = useQuery<Feature[]>(
+    project,
+    urls.features(project, { status: state }),
+    TAGS.features,
+  );
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
-  const features = data.features.filter((f) => f.status === state);
+  const features = data.filter((f) => f.status === state);
 
   return (
     <div className="status-page">
