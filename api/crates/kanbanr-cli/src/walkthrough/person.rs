@@ -1504,6 +1504,26 @@ impl Page<'_> {
         }
     }
 
+    /// Make the presses in turn on this page (FTR-063): a button that asks first, then its
+    /// confirmation or Cancel. The page settles (at most 5 s) before each later press. The first
+    /// press that fails stops the list; with several, its error names its place (`press 2 of 2: `).
+    pub fn press_in_turn(&self, presses: &[(&str, Option<&str>)]) -> Result<()> {
+        let n = presses.len();
+        for (i, (button, subject)) in presses.iter().enumerate() {
+            if i > 0 {
+                self.settle(Duration::from_secs(5))?;
+            }
+            if let Err(e) = self.press(button, *subject) {
+                return Err(if n > 1 {
+                    anyhow!("press {} of {n}: {e}", i + 1)
+                } else {
+                    e
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Save the page as a PNG.
     pub fn screenshot(&self, file: &Path) -> Result<()> {
         use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
