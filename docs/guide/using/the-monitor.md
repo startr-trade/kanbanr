@@ -302,10 +302,17 @@ outside the menu, always visible.
 - **Documentation**: drill from root folders (tiles) into sub-folders and files (any depth);
   files render as markdown.
 
-Everything is **view-only** and refreshes live (a green dot shows the live connection). A
-**light/dark theme toggle** sits in the top bar (it remembers your choice and follows your OS
-preference by default), and the layout is **responsive** (on a phone the navigation is one menu,
-as above) with keyboard-focus and reduced-motion accessibility niceties.
+Everything is **view-only** and refreshes live: a green dot with the word **Live** shows the live
+connection, and while it is down the dot turns grey and says **Reconnecting…**. A **light/dark
+theme toggle** sits in the top bar (it remembers your choice and follows your OS preference by
+default), and the layout is **responsive** (on a phone the navigation is one menu, as above).
+
+The monitor meets **WCAG 2.1 AA**: every colour pair reaches 4.5:1 for text and 3:1 for borders
+and the focus ring, in both themes; no text is smaller than 13 px; the keyboard focus ring always
+shows; each page has one h1, with cards, Board columns and rows as headings; and icons are hidden
+from screen readers while every input is labelled. Checks in CI hold this bar
+(`check:a11y-contrast`, `check:a11y-type`, `check:a11y-focus` and `check:a11y-structure`), and
+motion is reduced when your system asks for it.
 
 ## What the monitor shows
 
