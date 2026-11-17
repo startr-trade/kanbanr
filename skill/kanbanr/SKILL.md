@@ -485,7 +485,7 @@ When the monitor's header warns that the board was last written by a newer kanba
 mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may
 take a verdict a delegation in force covers, with `--under DLG-n`, and nothing else. Say in one
 message what you decided and under which delegation; it waits on the Review page for them to keep
-or undo. **When an item has moved back to an earlier stage, ask the user before taking any
+or undo. The session-start summary and the board count only the person's decisions; what a delegation in force holds is listed as yours to take under it, never as waiting on the person. **When an item has moved back to an earlier stage, ask the user before taking any
 decision or making any change for it, even if a delegation would cover it**: delegations are for
 forward moves. You never change the mode, grant a delegation or review a decision: kanbanr
 refuses it.
