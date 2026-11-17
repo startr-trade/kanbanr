@@ -1,5 +1,5 @@
 # The database, its migrations, seed data and backups.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: data
   description: The database, its migrations, seed data and backups
@@ -15,41 +15,41 @@ areas:
     options:
       - id: postgresql
         label: PostgreSQL
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A relational database with strong consistency, rich SQL and wide tool support"
+        fits_when: "Relational data, more than one writer, a team that runs Postgres already"
+        costs: "A server to operate, back up and upgrade"
         mentions: [PostgreSQL, Postgres, pg]
         records:
           - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
       - id: sqlite
         label: SQLite
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A relational database in one file, inside the product's own process"
+        fits_when: "One writer at a time: desktop and local tools, small services, development and tests"
+        costs: "Writers wait on each other; no network access, so one host only"
         mentions: [SQLite, sqlite3]
         records:
           - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
       - id: mysql-mariadb
         label: MySQL or MariaDB
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A widely hosted relational database"
+        fits_when: "An organisation or host that already runs MySQL or MariaDB"
+        costs: "A server to operate, back up and upgrade; fewer SQL features than PostgreSQL in places"
         mentions: [MySQL, MariaDB]
         records:
           - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
       - id: document-store
         label: A document store
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Records are kept as documents, in MongoDB, DynamoDB or the like, without a fixed schema"
+        fits_when: "Data read and written as whole documents, or a managed store's scaling"
+        costs: "Joins and transactions across documents are limited; the schema lives in the code instead"
         mentions: [MongoDB, document store, DynamoDB]
         records:
           - {kind: constraint, text: "{label} is the database", why: "The stores the team operates, backs up and restores"}
       - id: none
         label: No database
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product keeps no database; its state lives in files"
+        fits_when: "Tools, static sites, or a product whose state is a few files"
+        costs: "Concurrent writes, queries and format changes are the code's to handle if they ever arise"
         records:
           - {kind: non_goal, text: "No database: state lives in files"}
 
@@ -62,27 +62,27 @@ areas:
     options:
       - id: job-before-rollout
         label: A job before the rollout
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A separate job applies the migrations before the new version starts"
+        fits_when: "More than one instance, or Kubernetes: a failed migration stops the rollout before new code runs"
+        costs: "A job to define for each environment; the old code must work against the new schema during the rollout"
         mentions: [migration job, init job, before the rollout]
         records:
           - {kind: constraint, text: "Migrations run as a job before the new version is rolled out (a Kubernetes Job where there is Kubernetes, an init step otherwise)"}
           - &twice {kind: practice, text: A migration is safe to run twice and never destroys data in the release that stops writing it}
       - id: at-startup
         label: At startup
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The new version applies its migrations as it starts"
+        fits_when: "One instance, such as a desktop app or a small service on SQLite"
+        costs: "Instances starting together race on the migration; a failed migration means the service does not start"
         mentions: [on startup, at start]
         records:
           - {kind: constraint, text: Migrations run when the new version starts}
           - *twice
       - id: manual
         label: By hand
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A person runs the migrations before the new version is rolled out"
+        fits_when: "Rare schema changes on a database a DBA controls"
+        costs: "A step that can be forgotten or run out of order, and that the pipeline cannot repeat"
         mentions: [by hand]
         records:
           - {kind: constraint, text: Migrations are run by hand before the new version is rolled out}
@@ -97,17 +97,17 @@ areas:
     options:
       - id: versioned-seed
         label: A versioned seed script
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Seed and sample data come from a versioned script, run after the migrations"
+        fits_when: "Demos, development and tests that need the same starting data"
+        costs: "The script must change with the schema"
         mentions: [seed script]
         records:
           - {kind: practice, text: Seed data is a versioned script that runs after the migrations}
       - id: none
         label: No seed data
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product starts with an empty database"
+        fits_when: "Products whose data comes only from their users or from an import"
+        costs: "Every developer and every test makes its own starting data"
         records:
           - {kind: non_goal, text: No seed data}
 
@@ -120,24 +120,24 @@ areas:
     options:
       - id: scheduled-with-tested-restore
         label: Scheduled, with a tested restore
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Backups run on a schedule, and a restore is rehearsed every release"
+        fits_when: "Any data the product cannot afford to lose"
+        costs: "Storage for the backups, and time each release to rehearse a restore"
         mentions: [scheduled backup, restore test]
         records:
           - &rehearsed {kind: nfr, text: A restore from backup is rehearsed every release, iso25010: [Reliability]}
           - &runbook {kind: practice, text: The backup schedule and retention are recorded in the runbook}
       - id: platform-snapshots
         label: Platform snapshots
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The platform's snapshots, of a managed database or a volume, are the backups"
+        fits_when: "A managed database or volume that offers point-in-time snapshots"
+        costs: "Restores follow the platform's limits and retention; a restore is still rehearsed"
         mentions: [snapshot]
         records:
           - *rehearsed
           - *runbook
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Nothing backs the data up yet"
+        fits_when: "Development only, or data that can be rebuilt from somewhere else"
+        costs: "Data lost to a failure or a mistake is gone"

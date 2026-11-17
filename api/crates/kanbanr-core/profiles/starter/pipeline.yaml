@@ -1,5 +1,5 @@
 # How the pipeline is shaped, where it runs, and its test tiers.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: pipeline
   description: How the pipelines are split, where they run, and the test tiers
@@ -16,17 +16,17 @@ areas:
       - id: split-by-trigger
         label: Split by trigger
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Each trigger has its own pipeline: CI on every push, scanning on a schedule and on dependency changes, the release on a tag"
+        fits_when: "Any project with scans or a release step, which is most"
+        costs: "Several workflow files to keep consistent"
         mentions: [CI on push, scanning on schedule and dependency change, release on tag]
         records:
           - {kind: practice, text: "Pipelines are split by trigger: CI on every push, dependency and image scanning on a schedule and on dependency changes, release on a tag; each job is rerunnable alone and a green result is reused until the code it covers changes"}
       - id: single-pipeline
         label: One pipeline
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "One workflow runs every stage on every trigger"
+        fits_when: "Small projects with fast checks and no separate scans"
+        costs: "Slow scans run on every push unless the cache skips them; one edit to the file affects every run"
         mentions: [one workflow]
         records:
           - {kind: practice, text: "One workflow runs every stage; stages that did not change are skipped by cache"}
@@ -42,17 +42,17 @@ areas:
       - id: hosted-runners
         label: Hosted runners
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The CI service's own machines run the jobs"
+        fits_when: "Most projects: there are no build machines to maintain"
+        costs: "The plan's minutes, machine sizes and limits; the runners reach only what the service exposes"
         mentions: [hosted runners]
         records:
-          - {kind: constraint, text: "The pipeline runs on {label}", why: "The account's limits and the secrets the runners can reach"}
+          - {kind: constraint, text: "The pipeline runs on the CI service's hosted runners", why: "The account's limits and the secrets the runners can reach"}
       - id: self-hosted-runners
         label: Self-hosted runners
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Machines the team runs execute the jobs, where the answer says"
+        fits_when: "Builds that need more power, special hardware, or access to a private network"
+        costs: "Machines to patch, secure and clean between jobs; a runner that can reach secrets must be trusted"
         mentions: [self-hosted, own runners]
         asks_value: where they run
         records:
@@ -67,16 +67,16 @@ areas:
     options:
       - id: fast-then-full
         label: A fast tier, then a full tier
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A fast tier runs on every landing, and the full tier before a release"
+        fits_when: "A test suite that takes more than a few minutes in full"
+        costs: "Deciding which tests are fast; a slow test's failure may show only before a release"
         mentions: [fast tier, full tier]
         records:
           - {kind: practice, text: "The same checks run locally (`make ci`) and in CI: the fast tier on every landing, the full tier before a release"}
       - id: single-tier
         label: One tier
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Every check runs on every landing"
+        fits_when: "A test suite fast enough to run in full every time"
+        costs: "Each landing waits longer as the suite grows"
         records:
           - {kind: practice, text: "The same checks run locally (`make ci`) and in CI, all of them on every landing"}

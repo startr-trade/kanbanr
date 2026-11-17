@@ -1,5 +1,5 @@
 # Container images, and every form the product ships in.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: containers
   description: Container images and the forms the product ships in
@@ -15,9 +15,9 @@ areas:
     options:
       - id: hardened-images
         label: Hardened images
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Images run as non-root, pin their base image and are scanned before they reach the registry the answer names"
+        fits_when: "Any image deployed where others can reach it"
+        costs: "Base image updates to track, and scan findings to fix"
         mentions: [non-root, pinned base, scanned]
         asks_value: the registry
         records:
@@ -25,9 +25,9 @@ areas:
           - {kind: practice, text: "Images run as non-root, pin their base image and are scanned before publish"}
       - id: plain-images
         label: Plain images
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Images are built and published to the registry the answer names, with no hardening rules"
+        fits_when: "Images used only for development or tests"
+        costs: "Processes run as root on an unpinned base: a changed or compromised base reaches production unnoticed"
         asks_value: the registry
         records:
           - {kind: constraint, text: "Images are published to {value}"}
@@ -42,43 +42,49 @@ areas:
     options:
       - id: container-image
         label: A container image
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product ships as a container image in a registry"
+        fits_when: "Anything that runs in containers or on Kubernetes"
+        costs: "A registry, and an image build and scan in the release stage"
         mentions: [image, Dockerfile, registry]
         detect: [Dockerfile]
-        records: &ships
-          - {kind: constraint, text: "The product ships as {label}"}
+        records:
+          - {kind: constraint, text: The product ships as a container image}
           - &same-commit {kind: practice, text: "Every packaging the baseline names is built and checked in the pipeline's release stage from the same commit, and the install guide covers each"}
       - id: compose-file
         label: A Compose file
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A Compose file ships, so the product and its services start with one command"
+        fits_when: "Self-hosted products, or a few services on one host"
+        costs: "The file is versioned and tested with every release"
         mentions: [Compose, compose.yaml]
         detect: [compose.yaml, docker-compose.yml]
-        records: *ships
+        records:
+          - {kind: constraint, text: The product ships as a Compose file}
+          - *same-commit
       - id: kubernetes-manifests
         label: Kubernetes manifests
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Manifests, a Helm chart or a Kustomize base ship for running the product on Kubernetes"
+        fits_when: "The team or its users deploy it to a cluster"
+        costs: "The manifests are tested against a cluster in the release stage"
         mentions: [chart, Kustomize, manifests]
         detect: [Chart.yaml, kustomization.yaml]
-        records: *ships
+        records:
+          - {kind: constraint, text: The product ships as Kubernetes manifests}
+          - *same-commit
       - id: iac-module
         label: An infrastructure module
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "An OpenTofu, Terraform or Pulumi module ships to provision the product"
+        fits_when: "Users deploy it into their own cloud accounts"
+        costs: "The module's inputs become a contract, tested against a real or emulated provider"
         mentions: [OpenTofu module, Terraform module, Pulumi program]
         detect: ["*.tf"]
-        records: *ships
+        records:
+          - {kind: constraint, text: The product ships as an infrastructure module}
+          - *same-commit
       - id: native-package
         label: A native package
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product ships to the package registries the answer names: crates.io, PyPI, npm, deb, rpm, msi, Homebrew"
+        fits_when: "People install it with the package manager they already use"
+        costs: "An account, a build and a publish step for each registry, under each registry's rules"
         mentions: [cargo install, pip, npm, deb, rpm, msi, brew]
         asks_value: the registries
         records:
@@ -86,15 +92,19 @@ areas:
           - *same-commit
       - id: installer-script
         label: An installer script
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A script, such as install.sh or install.ps1, downloads and installs the product"
+        fits_when: "Tools installed outside a package manager, on several operating systems"
+        costs: "Users run a script from the internet: it must check what it downloads, and be tested on each platform"
         mentions: [install.sh, install.ps1]
-        records: *ships
+        records:
+          - {kind: constraint, text: The product ships as an installer script}
+          - *same-commit
       - id: release-archive
         label: A release archive
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A tarball, zip or binary is attached to each release"
+        fits_when: "Command-line tools and binaries people download directly"
+        costs: "One archive to build per platform; updates reach users only when they download them"
         mentions: [tarball, zip, binary]
-        records: *ships
+        records:
+          - {kind: constraint, text: The product ships as a release archive}
+          - *same-commit

@@ -1,6 +1,6 @@
 # What the project is, its stack, where it runs, infrastructure as code, delivery and the practice
 # baseline (asked at setup), and the project-wide concerns every kind of project meets.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: core
   description: What the project is, its stack, where it runs and how it is delivered
@@ -15,8 +15,8 @@ areas:
       - id: service
         label: An API or backend service
         why: The product is used by other programs through an API
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        fits_when: "Other systems, apps or partners call it, and any screens belong to someone else"
+        costs: "No screens of its own: a person reaches it only through another product"
         detect:
           - {fact: parts, any: [api]}
           - openapi.yaml
@@ -24,8 +24,8 @@ areas:
       - id: screen
         label: A product used through screens
         why: People use the product through its screens
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        fits_when: "People are the main users, through a browser, a desktop app or a phone"
+        costs: "Screens need design, accessibility and browser tests; other programs cannot call it unless an API is added"
         detect:
           - {fact: parts, any: [web-ui, desktop-ui, mobile-app]}
           - {file: package.json, contains: '"react"'}
@@ -33,20 +33,20 @@ areas:
       - id: both
         label: Both screens and an API
         why: The product has screens and an API others call
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        fits_when: "The product's own screens and outside callers use the same functions"
+        costs: "Two surfaces to design, secure, version and test"
       - id: library
         label: A library or SDK
         why: Other code builds on the product; it runs inside their programs
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        fits_when: "Other developers build the product into their own code"
+        costs: "A public API to keep stable across versions, and no say in how it is run"
         detect:
           - {fact: parts, any: [library]}
       - id: cli
         label: A command-line tool
         why: People and scripts run the product from a terminal
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        fits_when: "Developers, operators or scripts use it from a terminal or a pipeline"
+        costs: "Nothing for people who avoid terminals; its flags and output become a contract scripts depend on"
         detect:
           - {fact: parts, any: [cli]}
 
@@ -57,63 +57,63 @@ areas:
     options:
       - id: rust
         label: Rust
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product is written in Rust and built with cargo"
+        fits_when: "Performance, memory safety or a single static binary matter, and the team knows Rust or will learn it"
+        costs: "Slower compiles and a steeper learning curve; CI needs caching (sccache, cargo-chef) to stay fast"
         mentions: [Rust, cargo]
         detect: [{fact: languages, any: [rust]}, Cargo.toml]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: node
         label: Node
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product is written in JavaScript or TypeScript and runs on Node"
+        fits_when: "Web products, where one language serves the screens and the server, or a team at home in the npm ecosystem"
+        costs: "A large dependency tree to keep patched; type safety only with TypeScript and its build step"
         mentions: [Node, npm, TypeScript]
         detect: [{fact: languages, any: [typescript, javascript]}, package.json]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: python
         label: Python
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product is written in Python"
+        fits_when: "Data work, automation, machine learning, or services where fast iteration matters most"
+        costs: "Slower at run time than compiled languages; packaging and dependency pinning need care"
         mentions: [Python, pip]
         detect: [{fact: languages, any: [python]}, pyproject.toml, requirements.txt]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: go
         label: Go
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product is written in Go and builds to one binary"
+        fits_when: "Network services and tools where simple concurrency, fast builds and one binary matter"
+        costs: "Fewer libraries than Java or Node in some domains, and a less expressive type system"
         mentions: [Go]
         detect: [{fact: languages, any: [go]}, go.mod]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: java-kotlin
         label: Java or Kotlin
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product runs on the JVM, written in Java or Kotlin and built with Gradle or Maven"
+        fits_when: "Large services, an organisation already on the JVM, or libraries only the JVM has"
+        costs: "More memory and a slower start; build tooling to learn and keep current"
         mentions: [Java, Kotlin, Gradle, Maven]
         detect: [{fact: languages, any: [java, kotlin]}, pom.xml, build.gradle, build.gradle.kts]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: dotnet
         label: .NET
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product is written in C# and runs on .NET"
+        fits_when: "A team or organisation already on Microsoft's stack, or a Windows-first product"
+        costs: "Tooling tied to the .NET ecosystem; fewer open-source libraries than Java or Node in some areas"
         mentions: [.NET, C#]
         detect: [{fact: languages, any: [csharp]}, "*.csproj"]
         records:
           - {kind: constraint, text: "{label} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
       - id: other
         label: Another language
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product uses a language and runtime the starter packs do not list, named in the answer"
+        fits_when: "None of the listed stacks is what the project is built in"
+        costs: "No stack-specific advice (caches, tooling) from the starter packs; a team pack can add it"
         asks_value: the language and runtime
         records:
           - {kind: constraint, text: "{value} is the implementation language and runtime", why: One toolchain the team runs and the CI caches}
@@ -127,46 +127,46 @@ areas:
     options:
       - id: containers
         label: Containers on a host
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product ships as container images run on one or more hosts, usually with Compose"
+        fits_when: "A few services on hosts the team controls, with no need for a cluster"
+        costs: "The team patches and watches the hosts; scaling and failover beyond one host are by hand"
         mentions: [Docker, Compose, container]
         detect: [{fact: production, any: [container]}, Dockerfile, compose.yaml, docker-compose.yml]
         records:
           - {kind: constraint, text: Containers on a host run the product}
-          - {kind: non_goal, text: "No Kubernetes: containers run on a host with Compose"}
+          - {kind: non_goal, text: "No Kubernetes: containers run on a host with Compose", excludes: kubernetes}
       - id: kubernetes
         label: Kubernetes
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A Kubernetes cluster schedules, scales and restarts the product's containers"
+        fits_when: "Many services, automatic scaling or failover, or an organisation that already runs a cluster"
+        costs: "A cluster to run or pay for, and manifests, ingress and probes to learn and keep up"
         mentions: [Kubernetes, k8s, Helm]
         detect: [{fact: production, any: [kubernetes]}, Chart.yaml, kustomization.yaml]
         records:
           - {kind: constraint, text: Kubernetes runs the product}
       - id: serverless
         label: Serverless functions
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A cloud provider runs the product's functions on demand; there is no server to manage"
+        fits_when: "Spiky or low traffic, event-driven work, and a team content to use one cloud's services"
+        costs: "Cold starts, per-call limits, lock-in to that cloud, and harder local testing"
         mentions: [Lambda, Functions, serverless]
         detect: [{fact: production, any: [serverless]}, serverless.yml, template.yaml]
         records:
           - {kind: constraint, text: Serverless functions run the product}
       - id: host
         label: A host or VM, without containers
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product runs as a process on a host or VM, managed by systemd or the like"
+        fits_when: "One service, a team that prefers plain processes, or a host where containers are not allowed"
+        costs: "The host's packages and runtime must match the build; rollbacks and isolation are by hand"
         mentions: [systemd, bare metal, VM]
         detect: [{fact: production, any: [server]}]
         records:
           - {kind: constraint, text: The product runs directly on a host or VM}
       - id: user-machine
         label: The user's machine
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "People install and run the product on their own computer"
+        fits_when: "Desktop apps, command-line tools and local-first products"
+        costs: "Every operating system the users have must be built and tested; updates reach users only when they install them"
         mentions: [desktop, local]
         detect: [{fact: production, any: [developer-machine]}]
         records:
@@ -182,44 +182,44 @@ areas:
     options:
       - id: opentofu
         label: OpenTofu
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The infrastructure is written in HCL and applied with OpenTofu, the open-source fork of Terraform"
+        fits_when: "Any cloud or provider, with an open licence and Terraform's ecosystem of providers"
+        costs: "State to store and lock; a provider now and then lags its Terraform release"
         mentions: [OpenTofu, tofu]
         detect: ["*.tf"]
         records:
           - {kind: constraint, text: "{label} describes the infrastructure"}
       - id: terraform
         label: Terraform
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The infrastructure is written in HCL and applied with HashiCorp's Terraform"
+        fits_when: "The organisation already runs Terraform, or needs HashiCorp's commercial tooling"
+        costs: "State to store and lock, under the Business Source Licence"
         mentions: [Terraform]
         records:
           - {kind: constraint, text: "{label} describes the infrastructure"}
       - id: pulumi
         label: Pulumi
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The infrastructure is written in a general-purpose language and applied with Pulumi"
+        fits_when: "A team that wants loops, types and tests in its infrastructure code, in a language it knows"
+        costs: "Infrastructure code becomes a program to review; a state backend, Pulumi Cloud or self-managed"
         mentions: [Pulumi]
         detect: [Pulumi.yaml]
         records:
           - {kind: constraint, text: "{label} describes the infrastructure"}
       - id: cloud-native
         label: The cloud's own templates
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The cloud's own template language describes the infrastructure: CloudFormation, Bicep or ARM"
+        fits_when: "The project lives in one cloud and wants its first-party support"
+        costs: "Locked to that cloud; nothing outside it can be described the same way"
         mentions: [CloudFormation, Bicep, ARM]
         detect: [template.yaml, "*.bicep"]
         records:
-          - {kind: constraint, text: "{label} describes the infrastructure"}
+          - {kind: constraint, text: "The cloud's own templates (CloudFormation, Bicep or ARM) describe the infrastructure"}
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The infrastructure is set up by hand for now"
+        fits_when: "One small environment early on, before a second environment exists"
+        costs: "Environments drift apart and cannot be rebuilt from the repository; every change is written down by hand"
         records:
           - {kind: practice, text: Every environment change is recorded in the runbook until infrastructure as code is adopted}
 
@@ -232,9 +232,9 @@ areas:
     options:
       - id: github-actions
         label: GitHub Actions
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Workflows under .github/workflows run the pipeline on GitHub"
+        fits_when: "The code is hosted on GitHub"
+        costs: "The plan's minutes and runner limits; workflows written in GitHub's own syntax"
         mentions: [GitHub Actions]
         detect: [.github/workflows/]
         records: &pipeline-records
@@ -247,27 +247,27 @@ areas:
           release_gates: [{stage: main, gate: ci}]
       - id: bitbucket-pipelines
         label: Bitbucket Pipelines
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "bitbucket-pipelines.yml runs the pipeline on Bitbucket"
+        fits_when: "The code is hosted on Bitbucket"
+        costs: "The plan's build minutes; one pipeline file that grows long"
         mentions: [Bitbucket Pipelines]
         detect: [bitbucket-pipelines.yml]
         records: *pipeline-records
         adds: *pipeline-adds
       - id: gitlab-ci
         label: GitLab CI
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: ".gitlab-ci.yml runs the pipeline on GitLab"
+        fits_when: "The code is hosted on GitLab, on gitlab.com or self-managed"
+        costs: "The plan's minutes or the runners the team operates; pipelines written in GitLab's own syntax"
         mentions: [GitLab CI]
         detect: [.gitlab-ci.yml]
         records: *pipeline-records
         adds: *pipeline-adds
       - id: other
         label: Another CI service
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A CI service the starter packs do not list runs the pipeline, named in the answer"
+        fits_when: "The project uses Jenkins, Buildkite, CircleCI or another service"
+        costs: "No variant of the pipeline pattern for it in the starter packs; a team pack can add one"
         asks_value: the CI service
         records:
           - {kind: constraint, text: "{value} runs the pipeline"}
@@ -277,9 +277,9 @@ areas:
         adds: *pipeline-adds
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No CI service runs the checks yet: they run on a developer's machine"
+        fits_when: "A prototype, or a project before its first shared branch"
+        costs: "Nothing checks a change unless someone runs the checks; the pipeline and review areas wait until a CI service is chosen"
 
   - id: practice-baseline
     title: The practice baseline
@@ -290,33 +290,33 @@ areas:
     options:
       - id: fifteen-factors
         label: The fifteen factors
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Every design follows the fifteen factors: the twelve-factor app plus API first, telemetry, and authentication and authorisation"
+        fits_when: "Services in the cloud, in containers or on a platform"
+        costs: "Each design names the factors it touches, with a test or a reason"
         mentions: [fifteen factors, 15-factor]
         records:
           - {kind: practice, text: "The project follows the fifteen factors; each design names the factors it touches under `### Factors` with a test or a reason"}
       - id: twelve-factors
         label: The twelve factors
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Every design follows the twelve-factor app: configuration in the environment, stateless processes, disposability and the rest"
+        fits_when: "Simpler services, or a team that already works to the twelve factors"
+        costs: "Each design names the factors it touches; API first, telemetry and security are not on the list"
         mentions: [twelve-factor, 12-factor]
         records:
           - {kind: practice, text: "The project follows the twelve factors; each design names the factors it touches under `### Factors` with a test or a reason"}
       - id: house-rules
         label: Our house rules
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Every design follows the team's own rules, kept in a board doc"
+        fits_when: "The team already has written engineering rules"
+        costs: "The rules must be kept current in that doc; each design names the rules it touches"
         asks_value: the board doc that holds them
         records:
           - {kind: practice, text: "Every design names the house rules it touches ({value})"}
       - id: none
         label: None
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No shared practice list: this baseline's own answers are the only rules"
+        fits_when: "Libraries, tools, or prototypes where the factors do not apply"
+        costs: "Designs get no checklist of cross-cutting concerns beyond the other areas"
         records:
           - {kind: non_goal, text: No practice baseline beyond this record}
 
@@ -329,9 +329,9 @@ areas:
     options:
       - id: proxy-ends-tls
         label: A reverse proxy ends TLS
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A reverse proxy such as nginx, Caddy or Traefik ends TLS and routes to the services over plain HTTP"
+        fits_when: "Several services, or a web app and its API, on hosts the team runs"
+        costs: "One more component to configure and patch; traffic behind it is unencrypted, so that network must be trusted"
         mentions: [reverse proxy, TLS ends, nginx, Caddy, Traefik]
         asks_value: the proxy
         records:
@@ -339,18 +339,18 @@ areas:
           - {kind: practice, text: "Hosts, certificates and CORS origins are configuration, never code"}
       - id: service-ends-tls
         label: Each service ends its own TLS
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Each service holds its own certificate and speaks HTTPS itself"
+        fits_when: "One service, or traffic that must stay encrypted all the way to the process"
+        costs: "Certificates to deploy and renew for every service, and TLS settings in each"
         mentions: [TLS at the service]
         records:
           - {kind: constraint, text: Each service ends its own TLS}
           - {kind: practice, text: "Hosts, certificates and CORS origins are configuration, never code"}
       - id: platform-ingress
         label: The platform's ingress ends TLS
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The platform's ingress or load balancer ends TLS and routes to the services"
+        fits_when: "Kubernetes, or a cloud platform that already provides an ingress or load balancer"
+        costs: "TLS settings follow the platform's; moving platforms means moving that configuration"
         mentions: [ingress, load balancer]
         records:
           - {kind: constraint, text: "The platform's ingress ends TLS"}
@@ -365,9 +365,9 @@ areas:
     options:
       - id: oidc-provider
         label: An identity provider (OIDC)
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Users sign in at an identity provider over OIDC, and the product trusts its tokens"
+        fits_when: "Organisations with single sign-on, or any product that should not hold passwords"
+        costs: "A provider to configure and depend on; token checks and role mapping in the product"
         mentions: [OIDC, OAuth, identity provider, SSO]
         asks_value: the provider
         records:
@@ -375,18 +375,18 @@ areas:
           - {kind: nfr, text: "A credential never appears in a log, a URL or a repository", iso25010: [Security]}
       - id: own-accounts
         label: Its own accounts
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product stores its own users and credentials and runs the sign-in itself"
+        fits_when: "Consumer products without an outside provider, or deployments cut off from one"
+        costs: "Password hashing, resets, lockout and multi-factor sign-in are the project's to build and secure"
         mentions: [own accounts, password]
         records:
           - {kind: constraint, text: The product keeps its own accounts}
           - {kind: nfr, text: "A credential never appears in a log, a URL or a repository", iso25010: [Security]}
       - id: none
         label: No accounts
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product does not tell users apart: no sign-in and no roles"
+        fits_when: "Public read-only services, local tools, or a service behind a gateway that already checks callers"
+        costs: "Nothing can be restricted per user; adding accounts later touches every route"
         records:
           - {kind: non_goal, text: "No accounts: the product tells no users apart"}
 
@@ -398,9 +398,9 @@ areas:
     options:
       - id: env-and-secret-store
         label: The environment and a secret store
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Settings come from environment variables, and secrets from a secret store such as Vault or a cloud secrets manager"
+        fits_when: "Services in containers or on a platform, deployed to more than one environment"
+        costs: "A store to run or pay for, and access rules for who can read each secret"
         mentions: [environment, secret store, Vault, secrets manager]
         asks_value: the store
         records:
@@ -408,18 +408,18 @@ areas:
           - {kind: nfr, text: A secret never appears in a log or a repository, iso25010: [Security]}
       - id: config-files
         label: Configuration files
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Settings and secrets come from files on the host, kept out of the repository"
+        fits_when: "Tools and services on hosts the team controls, with one or two environments"
+        costs: "Files to distribute and protect on each host; rotating a secret is by hand"
         mentions: [config file, settings file]
         records:
           - {kind: practice, text: "Configuration comes from files outside the repository; a secret is never committed"}
           - {kind: nfr, text: A secret never appears in a log or a repository, iso25010: [Security]}
       - id: platform-managed
         label: The platform's secrets
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The platform injects configuration and secrets: Kubernetes secrets, a cloud parameter store or the like"
+        fits_when: "A platform that already manages secrets for its workloads"
+        costs: "Secrets follow the platform's access model; moving platforms moves them too"
         mentions: [platform secrets]
         records:
           - {kind: practice, text: "Configuration comes from the environment; a secret is read from the platform's secrets and never committed"}
@@ -433,17 +433,17 @@ areas:
     options:
       - id: budgets-with-benchmarks
         label: Budgets, each with its benchmark
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Each endpoint or job has a latency and throughput budget, and a benchmark that measures it"
+        fits_when: "Anything people wait on, or a service with a promised response time"
+        costs: "Benchmarks to write and keep up, and a steady machine or environment to run them on"
         mentions: [budget, benchmark]
         records:
           - {kind: nfr, text: p95 latency and throughput budgets are named per endpoint with the benchmark that measures them, iso25010: [Performance Efficiency]}
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No performance budgets are named yet"
+        fits_when: "Early prototypes, or tools where speed has never been a concern"
+        costs: "A slowdown is found by users, not by a check"
         records:
           - {kind: non_goal, text: No performance budgets yet}
 
@@ -455,17 +455,17 @@ areas:
     options:
       - id: personal-data-handled
         label: It stores personal data
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product stores data about people, so it keeps as little as it can, can delete it, and keeps it out of logs"
+        fits_when: "Accounts, email addresses, postal addresses, or anything else that identifies a person"
+        costs: "Each design names the field, its purpose and its retention; deletion and export must be built"
         mentions: [personal data]
         records:
           - {kind: nfr, text: "Personal data is minimised, deletable on request and never in logs", iso25010: [Security]}
           - {kind: practice, text: "A design that stores personal data names the field, the purpose and the retention"}
       - id: no-personal-data
         label: No personal data
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The product stores nothing that identifies a person"
+        fits_when: "Tools, infrastructure, and products with no user records"
+        costs: "Storing personal data later needs a baseline revision first"
         records:
           - {kind: non_goal, text: No personal data is stored}

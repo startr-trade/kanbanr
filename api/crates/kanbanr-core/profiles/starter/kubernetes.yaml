@@ -1,5 +1,5 @@
 # How workloads are packaged for Kubernetes.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: kubernetes
   description: How the workloads are packaged for Kubernetes
@@ -15,24 +15,26 @@ areas:
     options:
       - id: helm
         label: Helm
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A Helm chart packages the workloads, with templates and values for each environment"
+        fits_when: "Products others install, or many environments with different settings"
+        costs: "Templates are harder to read and review than plain YAML"
         mentions: [Helm, chart]
         records: &workloads
           - {kind: constraint, text: "{label} packages the workloads"}
-          - {kind: practice, text: "Every workload sets requests and limits, a readiness probe and a non-root security context"}
+          - &requests-limits {kind: practice, text: "Every workload sets requests and limits, a readiness probe and a non-root security context"}
       - id: kustomize
         label: Kustomize
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Kustomize builds each environment's manifests from a base and overlays"
+        fits_when: "The team deploys its own workloads to a few environments"
+        costs: "Nothing packaged or versioned for others to install"
         mentions: [Kustomize]
         records: *workloads
       - id: plain-manifests
         label: Plain manifests
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Plain YAML manifests describe the workloads"
+        fits_when: "One environment and a few workloads"
+        costs: "Each environment's differences are copied by hand"
         mentions: [manifests]
-        records: *workloads
+        records:
+          - {kind: constraint, text: Plain manifests package the workloads}
+          - *requests-limits

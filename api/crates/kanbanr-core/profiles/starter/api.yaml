@@ -1,5 +1,5 @@
 # The API's style and its published contract.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: api
   description: The API's style and how its contract is published
@@ -16,36 +16,36 @@ areas:
     options:
       - id: rest-openapi
         label: REST with OpenAPI
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Resources over HTTP, described by an OpenAPI contract"
+        fits_when: "Most public and web APIs: every client and tool understands it"
+        costs: "Several calls for nested data; the contract must be written and kept in step with the code"
         mentions: [REST, OpenAPI, Swagger]
         records:
           - {kind: constraint, text: "The API is {label}"}
           - &contract {kind: practice, text: "Every endpoint is in the contract before it is built, and the contract is versioned with the code"}
       - id: grpc
         label: gRPC
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Typed calls over HTTP/2, defined in protobuf files"
+        fits_when: "Calls between services, where speed, streaming and generated clients matter"
+        costs: "Browsers need a proxy (gRPC-Web); calls are harder to inspect by hand"
         mentions: [gRPC, protobuf]
         records:
           - {kind: constraint, text: "The API is {label}"}
           - *contract
       - id: graphql
         label: GraphQL
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "One endpoint where clients ask for exactly the fields they need, defined by a schema"
+        fits_when: "Screens that need many shapes of related data from one API"
+        costs: "Caching, rate limiting and the cost of a query are harder to control than with REST"
         mentions: [GraphQL]
         records:
           - {kind: constraint, text: "The API is {label}"}
           - *contract
       - id: json-rpc
         label: JSON-RPC
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Named methods called with JSON over HTTP or a socket"
+        fits_when: "Simple internal APIs, and protocols built on it such as language servers"
+        costs: "Less tooling and no standard contract format; HTTP caching does not apply"
         mentions: [JSON-RPC]
         records:
           - {kind: constraint, text: "The API is {label}"}
@@ -61,25 +61,25 @@ areas:
       - id: served-and-rendered
         label: Served and rendered
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The server publishes its contract at /openapi.json and a readable page at /docs"
+        fits_when: "APIs that others integrate with, inside the team or outside it"
+        costs: "A docs page to serve and secure; it shows the whole API to anyone who can reach it"
         mentions: [served spec, Swagger UI, Redoc]
         records:
           - {kind: constraint, text: "The server serves its OpenAPI contract at `/openapi.json` and renders it at `/docs`"}
       - id: served-json-only
         label: Served as JSON only
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The server publishes its contract at /openapi.json, without a rendered page"
+        fits_when: "Clients generated from the contract, or a separate docs site that reads it"
+        costs: "People need their own tool to read it"
         mentions: [/openapi.json]
         records:
           - {kind: constraint, text: "The server serves its contract at `/openapi.json`"}
       - id: repository-only
         label: In the repository only
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The contract stays in the repository, and CI checks it against the code"
+        fits_when: "Internal APIs whose clients live in the same repository"
+        costs: "Outside callers are sent the file; nothing confirms that a running server matches it"
         mentions: [in the repository]
         records:
           - {kind: practice, text: The contract lives in the repository and CI checks it against the code}

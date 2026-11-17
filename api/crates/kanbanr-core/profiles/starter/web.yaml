@@ -1,5 +1,5 @@
 # The screens: their style, how the web app ships, its origins, browser tests and dev exposure.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: web
   description: UI style, web packaging, origins, browser tests and exposing a dev instance
@@ -16,9 +16,9 @@ areas:
     options:
       - id: component-library
         label: A component library
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Screens are built from a ready-made component library, named in the answer"
+        fits_when: "Products that want consistent, accessible controls quickly, without designing each one"
+        costs: "The library's look and release cycle; customising beyond its theme is work"
         mentions: [component library, MUI, Chakra, shadcn, Vuetify, Ant]
         asks_value: the library
         records:
@@ -26,27 +26,27 @@ areas:
           - &visual {kind: practice, text: "A screen's design names its components and the visual direction: the feel, colours or brand, and a site it should resemble"}
       - id: utility-classes
         label: Utility classes
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Screens are styled with utility classes, such as Tailwind's, written in the markup"
+        fits_when: "A custom look without writing stylesheets, and fast iteration"
+        costs: "Long class lists in the markup; components and accessibility are the team's to build"
         mentions: [Tailwind, utility class]
         records:
-          - {kind: constraint, text: "Screens are built with {label}"}
+          - {kind: constraint, text: Screens are built with utility classes}
           - *visual
       - id: hand-written-css
         label: Hand-written CSS
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Screens are styled with the project's own stylesheets"
+        fits_when: "Small sites, or a distinctive look with few dependencies"
+        costs: "Consistency and accessibility rest on discipline; every control is built by hand"
         mentions: [hand-written CSS, plain CSS]
         records:
-          - {kind: constraint, text: "Screens are built with {label}"}
+          - {kind: constraint, text: Screens are built with hand-written CSS}
           - *visual
       - id: design-system
         label: A design system
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Screens follow an existing design system, its tokens, components and rules, where the answer says"
+        fits_when: "An organisation with a design system its products must follow"
+        costs: "Keeping to its rules and versions; a gap in it goes to its owners"
         mentions: [design system]
         asks_value: where it lives
         records:
@@ -63,27 +63,27 @@ areas:
       - id: served-by-the-service
         label: Served by the service itself
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The service embeds the built web app and serves it on its own port"
+        fits_when: "One service with its own screens, where a simple deployment matters"
+        costs: "Every web change rebuilds and redeploys the service"
         mentions: [one process, one port, embedded assets]
         records:
           - {kind: constraint, text: The web app is served by the service itself on one port}
           - &one-port {kind: practice, text: "Every web interaction goes through the one public port; nothing else is exposed"}
       - id: separate-image
         label: Its own image
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The web app is built into its own image, usually served by nginx"
+        fits_when: "The screens and the API release on different schedules or belong to different teams"
+        costs: "Two images to build, deploy and route; a proxy must join them on one origin, or CORS is needed"
         mentions: [separate web image, nginx image]
         records:
           - {kind: constraint, text: The web app ships as its own image}
           - *one-port
       - id: static-hosting
         label: Static hosting
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The built web app is uploaded as static files to a host or CDN, named in the answer"
+        fits_when: "Screens that need no server-side rendering, served widely or cheaply"
+        costs: "A second place to deploy to; an API on another origin needs CORS or a proxy rule"
         mentions: [static hosting, CDN, object storage]
         asks_value: the host
         records:
@@ -100,26 +100,26 @@ areas:
       - id: same-origin
         label: The same origin only
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The screens and the API are served from one origin, so the browser needs no CORS"
+        fits_when: "The web app and the API ship together, or sit behind one proxy"
+        costs: "Other sites cannot call the API from a browser"
         mentions: [same origin, no CORS]
         records:
           - {kind: constraint, text: "The web app and its API share one origin; CORS is off"}
       - id: allowed-origins
         label: An allow-list of origins
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "The API answers browser calls from the listed origins only, read from configuration"
+        fits_when: "The web app is on another origin, or partner sites call the API"
+        costs: "The list must be right in every environment: a mistake either breaks the app or opens the API"
         mentions: [CORS allow-list]
         asks_value: the origins
         records:
           - {kind: constraint, text: "CORS allows {value} and nothing else, from configuration"}
       - id: public-api
         label: Any origin
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Any website may call the API from a browser"
+        fits_when: "A public API meant for other people's web apps"
+        costs: "No cookies for credentials: every call carries a token, and abuse is limited by other means"
         mentions: [any origin]
         records:
           - {kind: constraint, text: "The API answers any origin; credentials are never cookies"}
@@ -134,26 +134,26 @@ areas:
       - id: browser-tests-in-ci
         label: Browser tests in CI
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Automated browser tests drive the screens in the pipeline, with the runner the answer names"
+        fits_when: "Any product whose screens people depend on"
+        costs: "Tests to write and keep stable, and browsers in the pipeline's full tier"
         mentions: [Playwright, Cypress, browser tests]
         asks_value: the runner
         records:
           - {kind: practice, text: "Browser tests run with {value} in the pipeline's full tier and their results are captured as evidence"}
       - id: browser-tests-local-only
         label: Browser tests, run locally
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "Browser tests exist, but run by hand on a developer's machine before a release"
+        fits_when: "The pipeline cannot run browsers yet, or the suite is too slow for it"
+        costs: "A release can skip them; their results are recorded by hand"
         mentions: [local only]
         records:
           - {kind: practice, text: "Browser tests run before a release, by hand, and their results are recorded"}
       - id: none
         label: No browser tests
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No automated browser tests: a person checks the screens"
+        fits_when: "Early prototypes, or screens that change faster than tests could follow"
+        costs: "Regressions in the screens are found by people, and late"
         records:
           - {kind: non_goal, text: "No browser tests: screens are checked by a person"}
 
@@ -166,9 +166,9 @@ areas:
     options:
       - id: tunnel
         label: Through a tunnel
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A tunnel tool such as ngrok or cloudflared exposes a development instance for a while"
+        fits_when: "Testing webhooks, sign-in callbacks or a phone against a development build"
+        costs: "A development instance reachable from the internet while the tunnel runs; the runbook says how to close it"
         mentions: [ngrok, cloudflared, tunnel]
         asks_value: the tool
         records:
@@ -176,8 +176,8 @@ areas:
       - id: none
         label: Never
         recommended: true
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "A development instance is never reachable from outside the machine"
+        fits_when: "Most projects: webhooks and devices are tested against a deployed environment instead"
+        costs: "Anything that must call in from outside waits for a deployed environment"
         records:
           - {kind: non_goal, text: No development instance is exposed outside the machine}

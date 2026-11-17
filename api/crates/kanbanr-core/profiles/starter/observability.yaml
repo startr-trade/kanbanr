@@ -1,5 +1,5 @@
 # Normal and audit observability, stated separately (15 Nov 2026), and the dashboards.
-# `why`, `fits_when` and `costs` marked TODO(P12) are written by FTR-033 P12.
+# Every option teaches: its `why`, `fits_when` and `costs` are shown when the area is asked.
 profile:
   name: observability
   description: What the system shows of itself, the audit trail, and the dashboards
@@ -28,7 +28,7 @@ areas:
       - id: none-yet
         label: None yet
         why: Nothing is kept yet
-        fits_when: TODO(P12)
+        fits_when: "A prototype, or a tool that never runs unattended"
         costs: No record when something goes wrong
         records:
           - {kind: non_goal, text: "No observability yet; revisit at the first incident or the first assessor"}
@@ -131,7 +131,7 @@ areas:
           tasks: ["Provision the chosen dashboards as code and apply them in the release pipeline's publish stage"]
           release_gates: [{stage: main, gate: dashboards-provisioned}]
       - id: release-view
-        label: The release view
+        label: Release view
         why: Shows what each release changed in behaviour, which is how a bad release is caught
         fits_when: Anything with more than one release
         costs: A version label on every telemetry stream
@@ -167,6 +167,6 @@ areas:
         adds: *dashboard-adds
       - id: none-yet
         label: None yet
-        why: TODO(P12)
-        fits_when: TODO(P12)
-        costs: TODO(P12)
+        why: "No dashboards ship with the release"
+        fits_when: "A first release with logs only, or a product with no running service"
+        costs: "Incidents and bad releases are looked into without a prepared view"
