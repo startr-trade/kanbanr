@@ -250,6 +250,20 @@ with a new note or doc is recorded. A ratification repeated while an override Cl
 for one is recorded, not answered as `already_recorded`. A decision, promotion or cut asked for a second time is
 refused as before, and the refusal now names who did it first.
 
+The Review page reads its decision groups through three public routes (FTR-038):
+`GET /api/projects/{project}/review/summary` counts each group, `…/review/groups/{key}` answers
+one group's rows, and `…/review/groups/{key}/rows/{row}` one row's full evidence. A group decision
+is one write, `POST /api/write/projects/{project}/review/decide`, with the body
+`{group, action, by, target, reason, items: [{key, code, rev, spec_rev, signoff, requirement,
+test, prepared}]}` (at most 200 items). It records one verdict per item, each through the route
+that item's single button posts and pinned to the `rev` and `spec_rev` the page showed, all in one
+commit, and answers `{group, action, results: [{key, made?, error?}]}`. An item that is no longer
+in the group refuses the whole request by name; a verdict the board refuses for one item (a
+changed definition, a duplicate) is that item's `error`, and the rest still land. A decision that
+mixes verdicts, or one from Claude in any mode, is refused. The route exists only on the write
+path: `kanbanr` dispatch refuses it with "a group decision is taken through the write path, which
+records each verdict as the person".
+
 ## The OpenAPI document
 
 The document is generated, never edited by hand:

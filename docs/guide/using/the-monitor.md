@@ -421,8 +421,9 @@ histories. An item page reads that item alone, and a status page only the items 
 Every page shares one copy of each read, however many parts of it ask. The daemon answers each
 read once per change to the board and gzips it. The browser then asks again only to be told
 nothing changed. When the CLI changes the board, the daemon says which parts changed, and the
-page re-reads just those parts. The Review, Releases and Schedule pages still read the whole
-board until their own rebuilds land.
+page re-reads just those parts. The Review page reads its group counts first, then the open
+group's rows, and a row's evidence only when the row is opened. The Releases and Schedule pages
+still read the whole board until their own rebuilds land.
 
 ### Which kanbanr the monitor runs
 
@@ -509,9 +510,51 @@ same whichever you use. A read-only monitor shows the command instead.
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
   message lists every path and ref looked at.
 
+### The Review page
+
+The Review page groups what waits for you by the decision it needs (FTR-038), one tab per group,
+each with its count: **Approve**, **Ratify**, a **Sign off** group per sign-off the process names
+(**Sign off design-review**, **Sign off docs-folded**, a release's sign-off), **Which release**,
+**Manual checks**, **Delegations**, **Delegated decisions** and **Proposed ADRs**. An empty group
+has no tab. The page opens on the largest group, or on the one its link names.
+
+- **Rows.** Each row is one item on one line: its code, its title, what is being decided, and pills
+  for what needs your eye ("approval lapsed", "spec changed since sign-off", "added since
+  approval", "prepared", the batch it is in), with its release and sprint. Under it, one line says
+  what your click records. Open a row to see its evidence in place: the definition's changes since
+  you last approved, the spec diff, the diagrams, the texts Claude settled, a record Claude
+  prepared with its sources. Only an opened row's evidence is read.
+- **Selecting.** A checkbox per row and **Select all** in the group's header pick rows in that
+  group only; opening another group starts a new selection, so one confirmation is always one
+  decision. A row that cannot be decided yet says why, and who provides what is missing ("Claude
+  settles 2 texts first: ask Claude to check them"), and cannot be ticked. In the Approve and
+  Ratify groups a row can be ticked once its diagrams have been checked and parse. Rows Claude
+  prepared arrive ticked; untick any you do not want.
+- **Filter and sort.** The header's filter box searches the group by code or title, and its sort
+  orders the rows by release, last change, sprint or code. The header stays in view as the rows
+  scroll.
+- **One button, asked first.** The group's button names the action and the count, such as
+  **Approve 3** or **Sign off docs-folded 5**. A press turns the header into the question naming
+  the items ("Approve FTR-041, FTR-043 and DEF-071?"), the same button and **Cancel**. The second
+  press records the decision for each of them: one verdict per item, each pinned to the definition
+  you saw and recorded as you from the monitor, all in one commit. An item that changed since the
+  page read it is refused alone, and a line under the header says so ("approved 2 of 3; FTR-043:
+  …"); the others go through. When the selection is exactly one batch Claude prepared, the button
+  reads **Confirm all N** (and **Reject all N** for its records) and confirms the batch the same
+  way. The Delegated decisions group also has **Undo N**, and selected prepared rows have **Reject
+  N prepared**. A decision that needs a reason or your own observation stays in its row: an ADR's
+  Reject, Undo with a reason, and Passed or Failed on a manual check with nothing prepared.
+- **Links.** The group and the open rows are in the address, such as
+  `/p/<project>/review?group=docs-folded#DEF-066`, so Claude can link you to exactly the decision
+  it is asking for. Your selection is never in a link.
+- **Read-only.** A read-only monitor shows the same groups and rows with no checkboxes or
+  buttons; each row's evidence gives the command that takes the decision in your own terminal.
+
+`kanbanr review` in the terminal is unchanged.
+
 ### Manual checks
 
-A manual test that is not yet green waits on the **Review** page, under **Manual checks**: the
+A manual test that is not yet green waits on the **Review** page, in the **Manual checks** group: the
 item, the requirement and its text, the check to make, and its state ("not run", or "failed" with
 who failed it and when). Do the check, then click **Passed** or **Failed**. **Add a note** opens an
 optional note; nothing has to be typed. The click records the result as you, the same record
@@ -527,7 +570,9 @@ with no Passed or Failed, and kanbanr refuses a result for it from any page or t
 When Claude already has the evidence for a decision, it prepares the record instead of asking you
 to fill in a form (FTR-034): a sign-off's note and the doc it covered, the reason for a
 ratification, what was checked before a stage after the tag, or a CI result with its run's link.
-The Review or Releases page shows it filled in beside the decision's one button, headed "Prepared
+On the Review page the record's row sits in the group of the decision it prepares, ticked, with
+the record in its evidence; on the Releases page it sits beside the decision's one button. It is
+shown filled in, headed "Prepared
 by Claude on 12 Nov 2026 from CI run 4512, release tip 9f078bd", with each source as a link: a
 board doc or item opens here, a web link opens in a new tab, and a commit is shown as its hash.
 
@@ -548,7 +593,10 @@ never confirm or reject one.
 
 ### Decisions here
 
-The top of the Review page says where this project's decisions are taken (FTR-028):
+**Decisions here**, a collapsed section above the Review page's groups, says where this project's
+decisions are taken (FTR-028). Delegations Claude proposed and decisions Claude took under one
+are rows in the **Delegations** and **Delegated decisions** groups, each row opening to the panel
+below:
 
 - **The mode**, `monitor` or `delegated`, with **Change**. After a change the panel lists what is
   waiting and where it is taken now: here, or by Claude under a delegation that covers it.
