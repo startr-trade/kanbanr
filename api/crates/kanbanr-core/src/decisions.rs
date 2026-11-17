@@ -11,7 +11,7 @@
 //! authentication (ADR-0001).
 
 use crate::models::{Extra, FeatureItem, SignoffVerdict};
-use crate::origin::{Origin, delegation_from_body};
+use crate::origin::{Origin, delegation_from_body, pass_from_body};
 use crate::store::{Project, Store};
 use crate::{CoreError, Result};
 use serde::{Deserialize, Serialize};
@@ -437,12 +437,16 @@ pub enum Authorized {
     AsIs,
     /// Record it as `delegated`, by Claude, under this delegation.
     Delegated { delegation: String },
+    /// Record it as the conversation's, by Claude, carrying the person's answer: the pass is
+    /// matched and is consumed with the verdict (FTR-035).
+    Heard { pass: String },
 }
 
 /// Who may take what: the one table, behind [`crate::origin::verdict_refusal`], which is the only
 /// caller outside this module's tests. `Ok` says how to record the request; `Err` is the refusal,
 /// in words that name the mode, where the person decides and, for Claude, any delegation that
 /// would cover the verdict. Routes that are neither a verdict nor person-only pass as they are.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn authorize(
     d: &Decisions,
     project: &Project,
@@ -451,6 +455,7 @@ pub(crate) fn authorize(
     body: Option<&Value>,
     origin: Origin,
     now: &str,
+    pass: Option<&crate::passes::Pass>,
 ) -> std::result::Result<Authorized, String> {
     let person_only = is_person_only(method, path);
     let verdict = verdict_of(method, path);
@@ -459,11 +464,14 @@ pub(crate) fn authorize(
     }
     let mode = d.mode();
     let named = body.map(delegation_from_body).unwrap_or_default();
+    let named_pass = body.map(pass_from_body).unwrap_or_default();
     let by_the_person = matches!(origin, Origin::Monitor | Origin::Terminal);
     if person_only {
         // The person can never lock themselves out: both of their front ends, in every mode.
-        return if by_the_person && named.is_empty() {
+        return if by_the_person && named.is_empty() && named_pass.is_empty() {
             Ok(Authorized::AsIs)
+        } else if by_the_person && named.is_empty() {
+            Err("`--pass` is Claude's; a person needs none".to_string())
         } else if by_the_person {
             Err("`--under` is Claude's; a person needs none".to_string())
         } else if matches!(
@@ -491,6 +499,9 @@ pub(crate) fn authorize(
         if !named.is_empty() {
             return Err("`--under` is Claude's; a person needs none".to_string());
         }
+        if !named_pass.is_empty() {
+            return Err("`--pass` is Claude's; a person needs none".to_string());
+        }
         if mode == Mode::Conversation && verdict.is_some() && origin == Origin::Monitor {
             return Err(
                 "decisions are taken in the conversation in this project, not on the monitor"
@@ -503,7 +514,9 @@ pub(crate) fn authorize(
     let place = match mode {
         Mode::Monitor => "on the monitor's Review page",
         Mode::Delegated => "on the monitor's Review page, or by a delegation they granted",
-        Mode::Conversation => "in the conversation, which is not built yet",
+        Mode::Conversation => {
+            "in the conversation, by asking with `kanbanr decisions question <verdict> <CODE>`"
+        }
     };
     let covering = |v: &Verdict| -> String {
         project
@@ -529,6 +542,60 @@ pub(crate) fn authorize(
             mode.as_str()
         ));
     };
+    if !named_pass.is_empty() {
+        if !named.is_empty() {
+            return Err(format!(
+                "a verdict names a pass or a delegation, not both ({named_pass} and {named})"
+            ));
+        }
+        if mode != Mode::Conversation {
+            return Err(format!(
+                "this project is not in conversation mode (mode: {}), so a pass cannot be used;                  decisions are taken {place}",
+                mode.as_str()
+            ));
+        }
+        let Some(pass) = pass.filter(|p| p.id == named_pass) else {
+            return Err(format!(
+                "pass {named_pass} is unknown, already used or expired (passes last {} minutes): \
+                 ask again with `kanbanr decisions question {} {}`",
+                crate::passes::TTL_MINUTES,
+                v.name().split(':').next().unwrap_or("approve"),
+                v.code
+            ));
+        };
+        if pass.project != project.id {
+            return Err(format!("pass {} was made for another project", pass.id));
+        }
+        if pass.code != v.code {
+            return Err(format!(
+                "pass {} was made for {}, not {}",
+                pass.id, pass.code, v.code
+            ));
+        }
+        if pass.verdict != v.name() {
+            return Err(format!(
+                "pass {} was made for `{}`, not `{}`",
+                pass.id,
+                pass.verdict,
+                v.name()
+            ));
+        }
+        let rev = body
+            .and_then(|b| b.get("rev"))
+            .and_then(|r| r.as_str())
+            .map(str::trim)
+            .unwrap_or("");
+        if rev.is_empty() || rev != pass.rev {
+            return Err(
+                "a conversation verdict names the revision it was asked on: pass `--rev` as the \
+                 question's tag has it"
+                    .to_string(),
+            );
+        }
+        return Ok(Authorized::Heard {
+            pass: pass.id.clone(),
+        });
+    }
     if named.is_empty() {
         let hint = if mode == Mode::Delegated {
             covering(&v)
@@ -1005,8 +1072,8 @@ pub struct ModeChanged {
     pub waiting: Vec<Waiting>,
 }
 
-/// Record a new mode, by the person. Recording `conversation` is refused until FTR-035 builds it.
-/// A repeat of the standing mode records nothing. Either way the answer lists what waits for a
+/// Record a new mode, by the person. Leaving `conversation` drops every pass of the project
+/// (FTR-035). A repeat of the standing mode records nothing. Either way the answer lists what waits for a
 /// decision, each in its place under the mode now standing.
 pub fn set_mode(
     store: &Store,
@@ -1017,9 +1084,6 @@ pub fn set_mode(
     review_url: Option<&str>,
 ) -> Result<ModeChanged> {
     person_stamp(&stamp, "changing the decision mode")?;
-    if mode == Mode::Conversation {
-        return unsupported("conversation mode is not built yet (FTR-035)");
-    }
     let mut d = load(store, p)?;
     let now = if stamp.at.is_empty() {
         crate::now_rfc3339()
@@ -1032,6 +1096,10 @@ pub fn set_mode(
             already_recorded: true,
             waiting: waiting(store, p, None, &d, review_url, &now)?,
         });
+    }
+    // A pass is a ticket for the mode it was made in: leaving conversation mode drops them all.
+    if d.mode() == Mode::Conversation {
+        crate::passes::clear(store, p);
     }
     d.modes.push(ModeChange {
         mode,
@@ -1562,7 +1630,7 @@ mod tests {
     ) -> std::result::Result<Authorized, String> {
         let d = load(store, "demo").unwrap();
         let project = store.load("demo").unwrap();
-        authorize(&d, &project, method, path, body, origin, NOW)
+        authorize(&d, &project, method, path, body, origin, NOW, None)
     }
 
     fn grant_it(store: &Store, id: &str) -> Delegation {
@@ -1682,6 +1750,7 @@ mod tests {
                 body: None,
                 origin: None,
                 now: NOW.into(),
+                pass: None,
             };
             assert_eq!(
                 verdict_refusal(Verdict::AcceptBaseline, Taker::Person, &ctx),
@@ -1782,11 +1851,18 @@ mod tests {
             judge(&store, "POST", &approve, None, Origin::Terminal),
             Ok(Authorized::AsIs)
         );
-        assert!(judge(&store, "POST", &approve, None, Origin::Conversation).is_err());
-        // Setting that mode is refused until it is built.
-        let why =
-            set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), None).unwrap_err();
-        assert!(why.to_string().contains("not built yet"), "{why}");
+        let why = judge(&store, "POST", &approve, None, Origin::Conversation).unwrap_err();
+        assert!(
+            why.contains("mode: conversation") && why.contains("kanbanr decisions question"),
+            "{why}"
+        );
+        // Conversation mode is built (FTR-035): setting it is accepted.
+        let changed =
+            set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), None).unwrap();
+        assert!(
+            changed.already_recorded,
+            "the hand-edited mode already stands"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1868,6 +1944,343 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A board in conversation mode (set through the write path, as the person would), with a
+    /// git identity, and a defined feature and defect; returns what the pass tests need.
+    fn conversation_board() -> (Store, std::path::PathBuf, String, String) {
+        let (store, dir, defect, feature) = board();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        for code in [&defect, &feature] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Do the thing".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::commit_local(&dir, "the board");
+        (store, dir, defect, feature)
+    }
+
+    fn take(
+        store: &Store,
+        dir: &std::path::Path,
+        method: &str,
+        path: &str,
+        body: Value,
+        origin: Origin,
+    ) -> std::result::Result<crate::write::Applied, crate::write::WriteError> {
+        crate::write::apply_as(
+            store,
+            dir,
+            crate::git::PushPolicy::Off,
+            method,
+            path,
+            Some(&body),
+            None,
+            &crate::eventing::NullSender,
+            &crate::agentscope::ProcessScope::Unscoped,
+            origin,
+        )
+    }
+
+    fn rev_of(store: &Store, code: &str) -> String {
+        store
+            .load("demo")
+            .unwrap()
+            .feature(code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap()
+            .content_rev()
+    }
+
+    /// A pass for `verdict` on `code`, made as the hook makes one.
+    fn pass_for(store: &Store, code: &str, verdict: &str) -> crate::passes::Pass {
+        let signoff = verdict.strip_prefix("signoff:").unwrap_or("").to_string();
+        let tag = crate::passes::Tag {
+            verdict: verdict.into(),
+            code: code.into(),
+            signoff,
+            rev: rev_of(store, code),
+            project: "demo".into(),
+        };
+        let question = format!("Is it right, Ada? {}", crate::passes::tag_text(&tag));
+        let answered = crate::passes::Answered {
+            question,
+            answer: crate::passes::approving_label(verdict).into(),
+            tool_use_id: "toolu_01TEST".into(),
+            session_id: "session-1".into(),
+            tag,
+        };
+        crate::passes::issue(store, &answered, &crate::now_rfc3339())
+            .unwrap()
+            .unwrap()
+    }
+
+    /// FTR-035 R-2: in conversation mode Claude's verdict is recorded only with a pass that
+    /// matches the project, item, verdict and revision; the record keeps the question and the
+    /// answer, the pass is used once, and the person's own front ends need none.
+    #[test]
+    fn a_conversation_verdict_needs_a_matching_pass_and_keeps_the_question_and_answer() {
+        let (store, dir, defect, feature) = conversation_board();
+        // The person sets the mode (refused until FTR-035 built it).
+        take(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "conversation", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        assert_eq!(load(&store, "demo").unwrap().mode(), Mode::Conversation);
+        let approve = route(&feature, "approve");
+        let rev = rev_of(&store, &feature);
+        let refused =
+            |r: std::result::Result<crate::write::Applied, crate::write::WriteError>| match r {
+                Err(crate::write::WriteError::Refused(why)) => why,
+                other => panic!("not refused: {other:?}"),
+            };
+
+        // No pass: refused, and the text points to the board's question.
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("kanbanr decisions question"), "{why}");
+        // A pass that does not exist.
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": "P-000000000000"}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("unknown, already used or expired"), "{why}");
+
+        let pass = pass_for(&store, &feature, "approve");
+        // Another item, another verdict, another revision: each refused, the pass kept.
+        let other = route(&defect, "approve");
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &other,
+            json!({"by": "Ada", "rev": rev_of(&store, &defect), "pass": pass.id}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains(&feature) || why.contains("pass"), "{why}");
+        let ratify = route(&feature, "ratify");
+        refused(take(
+            &store,
+            &dir,
+            "POST",
+            &ratify,
+            json!({"by": "Ada", "rev": rev, "pass": pass.id}),
+            Origin::Conversation,
+        ));
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": "deadbeef", "pass": pass.id}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("--rev"), "{why}");
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "pass": pass.id}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("--rev"), "{why}");
+        // A pass and a delegation together.
+        refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": pass.id, "delegation": "DLG-001"}),
+            Origin::Conversation,
+        ));
+        // The terminal needs no pass, and may not offer one.
+        refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": pass.id}),
+            Origin::Terminal,
+        ));
+        assert!(crate::passes::load(&store, &pass.id, &crate::now_rfc3339()).is_some());
+        // A body that carries its own `heard` gets it stripped: the record says what the pass says.
+        take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": pass.id, "origin": "terminal",
+                   "heard": {"question": "forged", "answer": "forged", "pass": "P-1", "heard_at": "x"}}),
+            Origin::Conversation,
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let def = project
+            .feature(&feature)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        let approval = def.approval.clone().unwrap();
+        assert_eq!(approval.origin, "conversation");
+        assert_eq!(approval.by, "Ada");
+        let heard = approval.heard.expect("the answer is kept");
+        assert_eq!(heard.answer, "Approve");
+        assert_eq!(heard.pass, pass.id);
+        assert_eq!(heard.question, pass.question);
+        assert_eq!(heard.tool_use_id, "toolu_01TEST");
+        assert_eq!(heard.session_id, "session-1");
+        assert_eq!(heard.heard_at, pass.at);
+        assert_eq!(def.approvals.last().unwrap().heard.as_ref(), Some(&heard));
+        // The pass is used once: gone, and a second use is refused.
+        assert!(crate::passes::load(&store, &pass.id, &crate::now_rfc3339()).is_none());
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": pass.id}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("unknown, already used or expired"), "{why}");
+        // The commit says which pass it used.
+        let log = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%B"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log.stdout).to_string();
+        assert!(log.contains(&format!("Kanbanr-Pass: {}", pass.id)), "{log}");
+        assert!(log.contains("Kanbanr-Origin: conversation"), "{log}");
+
+        // A sign-off takes its pass the same way, named after the verdict.
+        let sign = pass_for(&store, &defect, "signoff:design-review");
+        take(
+            &store,
+            &dir,
+            "POST",
+            &route(&defect, "signoff/design-review"),
+            json!({"by": "Ada", "rev": rev_of(&store, &defect), "pass": sign.id}),
+            Origin::Conversation,
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let signed = project
+            .feature(&defect)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        let given = signed.signoffs.last().unwrap();
+        assert_eq!(given.origin, "conversation");
+        assert_eq!(
+            given.heard.as_ref().map(|h| h.pass.as_str()),
+            Some(sign.id.as_str())
+        );
+        // A pass outside conversation mode is refused.
+        take(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "monitor", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        let why = refused(take(
+            &store,
+            &dir,
+            "POST",
+            &approve,
+            json!({"by": "Ada", "rev": rev, "pass": "P-000000000000"}),
+            Origin::Conversation,
+        ));
+        assert!(why.contains("not in conversation mode"), "{why}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-035 R-2: leaving conversation mode drops every pass of the project, and only its own.
+    #[test]
+    fn leaving_conversation_mode_drops_every_pass() {
+        let (store, dir, _, feature) = conversation_board();
+        take(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "conversation", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        let now = crate::now_rfc3339();
+        let pass = pass_for(&store, &feature, "approve");
+        // A pass of another project on the same board.
+        let foreign = crate::passes::Pass {
+            id: "P-aaaaaaaaaaaa".into(),
+            project: "other".into(),
+            code: "X-1".into(),
+            verdict: "approve".into(),
+            rev: "abcdef12".into(),
+            expires: "2999-01-01T00:00:00+00:00".into(),
+            ..Default::default()
+        };
+        let folder = crate::passes::dir(&store);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("P-aaaaaaaaaaaa.json"),
+            serde_json::to_string(&foreign).unwrap(),
+        )
+        .unwrap();
+        assert!(crate::passes::load(&store, &pass.id, &now).is_some());
+        // A repeat of the standing mode drops nothing.
+        take(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "conversation", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        assert!(crate::passes::load(&store, &pass.id, &now).is_some());
+        take(
+            &store,
+            &dir,
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "delegated", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        assert!(crate::passes::load(&store, &pass.id, &now).is_none());
+        assert!(crate::passes::load(&store, "P-aaaaaaaaaaaa", &now).is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// R-2: within the delegation, and every way outside it.
     #[test]
     fn a_delegated_verdict_is_accepted_within_the_delegation_and_refused_outside_it() {
@@ -1885,6 +2298,7 @@ mod tests {
                 Some(&under),
                 Origin::Conversation,
                 now,
+                None,
             )
         };
         let g = propose(&store, "demo", defects(), who("conversation")).unwrap();
@@ -2365,19 +2779,11 @@ mod tests {
         let again = set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), url).unwrap();
         assert!(again.already_recorded && !again.waiting.is_empty());
 
-        // Conversation mode is not built yet (FTR-035): setting it is refused. Judged as if it
-        // stood, everything waits in the conversation except the reviews, which are the person's.
-        assert!(set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), url).is_err());
-        let mut d = load(&store, "demo").unwrap();
-        d.modes.push(ModeChange {
-            mode: Mode::Conversation,
-            by: "Ada".into(),
-            at: NOW.into(),
-            origin: "monitor".into(),
-            reason: String::new(),
-            extra: Extra::default(),
-        });
-        let talk = waiting(&store, "demo", None, &d, url, NOW).unwrap();
+        // Conversation mode (FTR-035): everything waits in the conversation except the reviews,
+        // which are the person's.
+        let talk = set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), url)
+            .unwrap()
+            .waiting;
         assert_eq!(
             place(&talk, &defect, "sign off design-review"),
             (Place::Conversation, None)

@@ -13,7 +13,9 @@
 use crate::agentscope::{self, ProcessScope};
 use crate::git::{self, PushPolicy};
 use crate::origin::{self, DecisionContext, Origin, Taker, Verdict};
-use crate::{CoreError, Store, activity, decisions, dispatch, eventing, prepared, reviewgroups};
+use crate::{
+    CoreError, Store, activity, decisions, dispatch, eventing, passes, prepared, reviewgroups,
+};
 use serde_json::Value;
 use std::path::Path;
 
@@ -362,7 +364,37 @@ pub fn apply_as(
         // whatever the request said.
         let mut stamped = origin::stamp(method, path, body, origin);
         let origin = match &under {
-            Some(delegation) => {
+            // The person's answer in the conversation (FTR-035): Claude records it, the person
+            // decided it; `by` stays the commit identity the request named, and the answer, the
+            // pass and the question go on the record.
+            Some(Under::Pass(pass)) => {
+                let mut b = stamped.take().unwrap_or_else(|| {
+                    body.cloned()
+                        .unwrap_or_else(|| Value::Object(Default::default()))
+                });
+                if let Some(m) = b.as_object_mut() {
+                    m.insert(
+                        "origin".into(),
+                        Value::String(Origin::Conversation.as_str().into()),
+                    );
+                    m.insert(
+                        "heard".into(),
+                        serde_json::to_value(crate::models::Heard {
+                            question: pass.question.clone(),
+                            answer: pass.answer.clone(),
+                            pass: pass.id.clone(),
+                            heard_at: pass.at.clone(),
+                            tool_use_id: pass.tool_use_id.clone(),
+                            session_id: pass.session_id.clone(),
+                            extra: Default::default(),
+                        })
+                        .unwrap_or(Value::Null),
+                    );
+                }
+                stamped = Some(b);
+                Origin::Conversation
+            }
+            Some(Under::Delegation(delegation)) => {
                 let mut b = stamped.take().unwrap_or_else(|| {
                     body.cloned()
                         .unwrap_or_else(|| Value::Object(Default::default()))
@@ -388,6 +420,22 @@ pub fn apply_as(
             body: out,
             ..Default::default()
         };
+        // The pass was used, whether the answer was recorded now or had been already (FTR-035).
+        if let Some(Under::Pass(pass)) = &under
+            && let Err(e) = passes::consume(store, &pass.id)
+        {
+            let warning = format!("pass {} could not be removed: {e}", pass.id);
+            if let Ok(Value::Object(mut m)) = serde_json::from_str::<Value>(&applied.body) {
+                if let Some(w) = m
+                    .entry("warnings")
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+                {
+                    w.push(Value::String(warning));
+                }
+                applied.body = Value::Object(m).to_string();
+            }
+        }
         // A verdict that adds nothing to the record leaves no activity entry, event or commit.
         if verdict && applied.body.contains("\"already_recorded\"") {
             let said = serde_json::from_str::<Value>(&applied.body)
@@ -459,8 +507,10 @@ pub fn apply_as(
             if verdict {
                 trailers.push(("Kanbanr-Origin", origin));
             }
-            if let Some(d) = &under {
-                trailers.push(("Kanbanr-Delegation", d.as_str()));
+            match &under {
+                Some(Under::Delegation(d)) => trailers.push(("Kanbanr-Delegation", d.as_str())),
+                Some(Under::Pass(p)) => trailers.push(("Kanbanr-Pass", p.id.as_str())),
+                None => {}
             }
             let msg = agentscope::with_trailers(&msg, &trailers);
             let msg = match scoped {
@@ -606,7 +656,7 @@ fn apply_verdict_ops(
             Err(why) => Err(why.to_string()),
             Ok(under) => {
                 let mut stamped = origin::stamp(&e.method, &e.path, Some(&e.body), origin);
-                if let Some(d) = &under
+                if let Some(Under::Delegation(d)) = &under
                     && let Some(m) = stamped
                         .get_or_insert_with(|| e.body.clone())
                         .as_object_mut()
@@ -752,8 +802,18 @@ fn decide_group(
     )
 }
 
-/// The one guard over a request (FTR-028): `Err` is its refusal; `Ok(Some(DLG-n))` says the
-/// verdict is Claude's under that delegation; `Ok(None)` records it as it stands. Only verdict and
+/// What a verdict Claude takes stands on (FTR-028, FTR-035).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Under {
+    /// A delegation in force, `DLG-n`.
+    Delegation(String),
+    /// The person's answer in the conversation: the pass it was made into.
+    Pass(Box<passes::Pass>),
+}
+
+/// The one guard over a request (FTR-028): `Err` is its refusal; `Ok(Some(Under::Delegation))`
+/// says the verdict is Claude's under that delegation, `Ok(Some(Under::Pass))` that it is the
+/// person's answer in the conversation, kept as heard; `Ok(None)` records it as it stands. Only verdict and
 /// person-only routes, and a batch that approves, read the project's decisions. A decisions file
 /// that does not parse refuses every delegated verdict and person-only route with its error, and
 /// judges the rest as `monitor` mode.
@@ -763,7 +823,7 @@ pub(crate) fn judge(
     path: &str,
     body: Option<&Value>,
     origin: Origin,
-) -> Result<Option<String>, WriteError> {
+) -> Result<Option<Under>, WriteError> {
     let Some(p) = project_of(path) else {
         return Ok(None);
     };
@@ -775,9 +835,14 @@ pub(crate) fn judge(
         return Ok(None);
     }
     let named = body.map(origin::delegation_from_body).unwrap_or_default();
+    let named_pass = body.map(origin::pass_from_body).unwrap_or_default();
     let d = match decisions::load(store, &p) {
         Ok(d) => d,
-        Err(e) if decisions::is_person_only(method, path) || !named.is_empty() => {
+        Err(e)
+            if decisions::is_person_only(method, path)
+                || !named.is_empty()
+                || !named_pass.is_empty() =>
+        {
             return Err(WriteError::Refused(format!(
                 "refused: {} could not be read, so no delegation or person-only decision can be \
                  judged: {e}",
@@ -810,6 +875,7 @@ pub(crate) fn judge(
                     body: None,
                     origin: Some(origin),
                     now: now.clone(),
+                    pass: None,
                 };
                 if let Some(why) = origin::verdict_refusal(Verdict::Approve, taker, &ctx) {
                     return Err(refuse(why));
@@ -821,6 +887,10 @@ pub(crate) fn judge(
     let Some(what) = what else {
         return Ok(None);
     };
+    // The pass the body names, when it is there and has not expired (FTR-035).
+    let pass = (!named_pass.is_empty())
+        .then(|| passes::load(store, &named_pass, &now))
+        .flatten();
     let ctx = DecisionContext {
         decisions: Some(&d),
         project: project.as_ref(),
@@ -829,9 +899,17 @@ pub(crate) fn judge(
         body,
         origin: Some(origin),
         now,
+        pass: pass.as_ref(),
     };
     if let Some(why) = origin::verdict_refusal(what, taker, &ctx) {
         return Err(refuse(why));
+    }
+    // Only an item verdict stands on a pass; the guard has refused it for any other route.
+    if taker == Taker::Claude
+        && !named_pass.is_empty()
+        && decisions::verdict_of(method, path).is_some()
+    {
+        return Ok(pass.map(|p| Under::Pass(Box::new(p))));
     }
     if taker != Taker::Claude || named.is_empty() {
         return Ok(None);
@@ -855,7 +933,7 @@ pub(crate) fn judge(
             )));
         }
     }
-    Ok(Some(named))
+    Ok(Some(Under::Delegation(named)))
 }
 
 /// The item a scope route's response is about, for tagging its activity (FEAT-214).

@@ -270,6 +270,8 @@ pub struct DecisionContext<'a> {
     /// taken from the taker.
     pub origin: Option<Origin>,
     pub now: String,
+    /// The pass the body names, when it exists and has not expired (FTR-035); `None` otherwise.
+    pub pass: Option<&'a crate::passes::Pass>,
 }
 
 impl DecisionContext<'_> {
@@ -359,8 +361,9 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
         Taker::Person => Origin::Terminal,
         Taker::Claude => Origin::Conversation,
     });
-    match crate::decisions::authorize(d, project, ctx.method, ctx.path, ctx.body, origin, &ctx.now)
-    {
+    match crate::decisions::authorize(
+        d, project, ctx.method, ctx.path, ctx.body, origin, &ctx.now, ctx.pass,
+    ) {
         Ok(_) => None,
         Err(why) if taker == Taker::Claude && !decisions_route => {
             Some(format!("{why} {PREPARE_INSTEAD}"))
@@ -570,6 +573,11 @@ pub fn stamp(method: &str, path: &str, body: Option<&Value>, origin: Origin) -> 
         _ => Value::Object(Default::default()),
     };
     v["origin"] = Value::String(origin.as_str().to_string());
+    // What the person answered is written by the write path from a pass, never taken from the
+    // request (FTR-035).
+    if let Value::Object(m) = &mut v {
+        m.remove("heard");
+    }
     Some(v)
 }
 
@@ -957,6 +965,7 @@ mod tests {
                     body: Some(&body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 let why = verdict_refusal(Verdict::GroupDecision, Taker::of_origin(origin), &ctx)
                     .unwrap_or_else(|| panic!("{mode}/{origin:?}: Claude took a group decision"));
@@ -971,6 +980,7 @@ mod tests {
                     body: Some(&body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 assert_eq!(
                     verdict_refusal(Verdict::GroupDecision, Taker::Person, &ctx),
@@ -1071,6 +1081,7 @@ mod tests {
                     body: Some(body),
                     origin: Some(origin),
                     now: "2026-11-17T00:00:00Z".into(),
+                    pass: None,
                 };
                 let got = verdict_refusal(Verdict::PlanningDecision, taker, &ctx);
                 match taker {
