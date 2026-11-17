@@ -192,3 +192,314 @@ fn a_group_decision_that_mixes_decisions_or_comes_from_claude_is_refused() {
         .send_string(&clean.to_string());
     assert_ne!(status(r), 200);
 }
+
+// ---- the reads (T2): summary, a group's slice, one row's evidence ------------------------------
+
+/// `GET {url}/api/projects/{project}{path}`: the status and the body as JSON (`Null` when the body
+/// is not JSON, such as an error's text).
+fn read(url: &str, project: &str, path: &str) -> (u16, Value) {
+    let r = ureq::get(&format!("{url}/api/projects/{project}{path}")).call();
+    let (code, body) = match r {
+        Ok(r) => (r.status(), r.into_string().unwrap()),
+        Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+        Err(e) => panic!("{e}"),
+    };
+    (code, serde_json::from_str(&body).unwrap_or(Value::Null))
+}
+
+/// Percent-encode everything but the unreserved characters, as the page encodes a row key.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// `waiting_board`, plus one approved, signed-off and finished item whose requirement is checked
+/// by hand, so the manual group has a row. Returns the data dir, the two approval codes and the
+/// manual item's code.
+fn board_with_a_manual_check(s: &Scratch) -> (std::path::PathBuf, Vec<String>, String) {
+    use kanbanr_core::models::{FeatureDefinition, Requirement, TestRef};
+    let (data, approvals, _) = waiting_board(s);
+    let store = kanbanr_core::Store::new(data.clone());
+    let f = store.add_feature("demo", "Checked", "", "M", None).unwrap();
+    store
+        .set_feature_definition(
+            "demo",
+            &f.code,
+            Some(FeatureDefinition {
+                statement: "Checked by hand".into(),
+                requirements: vec![Requirement {
+                    text: "THE SYSTEM SHALL show it".into(),
+                    tests: vec![TestRef {
+                        name: "the person sees it / on a phone".into(),
+                        kind: "manual".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    store.approve_feature("demo", &f.code, "Ada").unwrap();
+    store
+        .signoff_feature("demo", &f.code, "design-review", "Ada", "", "")
+        .unwrap();
+    store.move_feature("demo", &f.code, "Scheduled").unwrap();
+    store.move_feature("demo", &f.code, "Completed").unwrap();
+    common::git(&data, &["add", "-A"]);
+    common::git(&data, &["commit", "-q", "-m", "manual"]);
+    (data, approvals, f.code)
+}
+
+/// The shape of the generated board: `items` items, each with a definition (never approved, so
+/// each waits in the approve group), two requirements and `spec_bytes` of spec; every third one
+/// started without agreement, so it also waits in the ratify group.
+fn generated_board(
+    s: &Scratch,
+    items: usize,
+    spec_bytes: usize,
+) -> (std::path::PathBuf, Vec<String>) {
+    let data = board(s);
+    let root = std::fs::canonicalize(&data).unwrap();
+    assert!(
+        root.starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "a test board lives in the temp dir: {}",
+        root.display()
+    );
+    let store = kanbanr_core::Store::new(data.clone());
+    store
+        .init_project(
+            "shop",
+            kanbanr_core::config::ProjectConfig::default_for("shop"),
+        )
+        .unwrap();
+    let para = "The customer's cart is kept on the server and restored on the next sign-in. ";
+    let mut ops = vec![json!({"op": "milestone.add", "name": "Milestone", "code": "M1"})];
+    let codes: Vec<String> = (1..=items).map(|i| format!("FEAT-{i:03}")).collect();
+    for (i, code) in codes.iter().enumerate() {
+        let spec: String = para.repeat(spec_bytes / para.len() + 1)[..spec_bytes].to_string();
+        let requirements: Vec<Value> = (1..=2)
+            .map(|r| {
+                json!({
+                    "kind": "functional",
+                    "text": format!("WHEN the customer signs in THE SYSTEM SHALL restore cart {r}."),
+                    "tests": [{"name": format!("shop::restores_cart_{i}_{r}"), "state": "planned"}],
+                })
+            })
+            .collect();
+        ops.push(json!({
+            "op": "feature.add",
+            "code": code,
+            "title": format!("Item {i}: keep the cart when the customer signs in again"),
+            "milestone": "M1",
+            "spec": spec,
+            "definition": {
+                "statement": "Customers keep their cart across devices.",
+                "requirements": requirements,
+            },
+        }));
+        if i % 3 == 0 {
+            ops.push(
+                json!({"op": "feature.move", "code": code, "to": "Scheduled",
+                            "unapproved": "a generated fixture"}),
+            );
+        }
+    }
+    let ops: Vec<kanbanr_core::batch::BatchOp> = ops
+        .into_iter()
+        .map(|op| serde_json::from_value(op).unwrap())
+        .collect();
+    store.apply_batch("shop", ops).unwrap();
+    common::git(&data, &["add", "-A"]);
+    common::git(&data, &["commit", "-q", "-m", "generated"]);
+    (data, codes)
+}
+
+/// FTR-038 R-1: through the daemon, `GET /review/summary` answers what `reviewgroups::summary`
+/// computes — each group once, counted, in the fixed order — and a group emptied by a write is
+/// gone from the next read. An unknown group is a 404.
+#[test]
+fn the_summary_counts_each_group_and_hides_the_empty_ones() {
+    let s = Scratch::new("review-groups-summary");
+    let (data, approvals, _) = board_with_a_manual_check(&s);
+    let url = serve(&s, &data);
+    let core = |data: &Path| {
+        let store = kanbanr_core::Store::new(data.to_path_buf());
+        serde_json::to_value(kanbanr_core::reviewgroups::summary(&store, "demo", None).unwrap())
+            .unwrap()
+    };
+    let (code, summary) = read(&url, "demo", "/review/summary");
+    assert_eq!(code, 200, "{summary}");
+    assert_eq!(summary, core(&data));
+    let keys: Vec<&str> = summary
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["approve", "design-review", "manual"], "{summary}");
+    let approve = &summary[0];
+    assert_eq!(approve["count"], json!(approvals.len()), "{summary}");
+    assert_eq!(approve["action"], json!("Approve"), "{summary}");
+    for g in summary.as_array().unwrap() {
+        assert!(
+            g["count"].as_u64().unwrap() > 0,
+            "an empty group is shown: {g}"
+        );
+    }
+
+    // The group's slice is the same rows the decision takes.
+    let (code, slice) = read(&url, "demo", "/review/groups/approve");
+    assert_eq!(code, 200, "{slice}");
+    let codes: Vec<&str> = slice["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        codes,
+        approvals.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    let (code, _) = read(&url, "demo", "/review/groups/nothing");
+    assert_eq!(code, 404, "an unknown group is no such route");
+
+    // Approving both empties the group; the next read no longer lists it.
+    let (code, answer) = decide(
+        &url,
+        &json!({"group": "approve", "action": "Approve", "by": "Tester",
+                "items": items(&data, "approve")}),
+    );
+    assert_eq!(code, 200, "{answer}");
+    let (code, after) = read(&url, "demo", "/review/summary");
+    assert_eq!(code, 200, "{after}");
+    assert_eq!(after, core(&data));
+    let keys: Vec<&str> = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["design-review", "manual"], "{after}");
+}
+
+/// FTR-038 R-7: one row's evidence is read alone. `GET /review/groups/approve/rows/<CODE>` answers
+/// that item's entry and nothing else; a manual row's key, `<CODE>/<R-n>/<test>`, arrives
+/// percent-encoded; and on a generated 400-item board the row answers faster than the summary
+/// computes cold, because it reads `review::entry` for one item, never the whole queue.
+#[test]
+fn a_rows_evidence_is_read_alone() {
+    let s = Scratch::new("review-groups-row");
+    let (data, approvals, checked) = board_with_a_manual_check(&s);
+    let url = serve(&s, &data);
+    let (code, row) = read(
+        &url,
+        "demo",
+        &format!("/review/groups/approve/rows/{}", approvals[0]),
+    );
+    assert_eq!(code, 200, "{row}");
+    assert_eq!(row["entry"]["code"], json!(approvals[0]), "{row}");
+    for other in ["manual", "adr", "delegated", "delegation"] {
+        assert!(row[other].is_null(), "{other} in {row}");
+    }
+    let key = format!("{checked}/R-1/the person sees it / on a phone");
+    let (code, manual) = read(
+        &url,
+        "demo",
+        &format!("/review/groups/manual/rows/{}", encode(&key)),
+    );
+    assert_eq!(code, 200, "{manual}");
+    assert_eq!(manual["manual"]["code"], json!(checked), "{manual}");
+    assert_eq!(
+        manual["manual"]["test"],
+        json!("the person sees it / on a phone"),
+        "{manual}"
+    );
+    let (code, _) = read(
+        &url,
+        "demo",
+        &format!("/review/groups/approve/rows/{checked}"),
+    );
+    assert_eq!(code, 404, "a row not waiting in the group is no such route");
+
+    let big = Scratch::new("review-groups-row-big");
+    let (data, codes) = generated_board(&big, 400, 2_000);
+    let store = kanbanr_core::Store::new(data.clone());
+    let started = std::time::Instant::now();
+    let summary = kanbanr_core::reviewgroups::summary(&store, "shop", None).unwrap();
+    let cold = started.elapsed();
+    assert_eq!(summary[0].key, "approve");
+    assert_eq!(summary[0].count, 400, "{summary:?}");
+    let url = serve(&big, &data);
+    let started = std::time::Instant::now();
+    let (code, row) = read(
+        &url,
+        "shop",
+        &format!("/review/groups/approve/rows/{}", codes[200]),
+    );
+    let one = started.elapsed();
+    assert_eq!(code, 200, "{row}");
+    assert_eq!(row["entry"]["code"], json!(codes[200]));
+    eprintln!("summary cold {cold:?}; one row through the daemon {one:?}");
+    assert!(
+        one < cold,
+        "one row took {one:?}, the summary cold {cold:?}"
+    );
+}
+
+/// The median of `n` timed reads of `path`.
+fn median_read(url: &str, project: &str, path: &str, n: usize) -> std::time::Duration {
+    let mut times: Vec<std::time::Duration> = (0..n)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            let (code, body) = read(url, project, path);
+            let took = started.elapsed();
+            assert_eq!(code, 200, "{path}: {body}");
+            took
+        })
+        .collect();
+    times.sort();
+    times[n / 2]
+}
+
+/// FTR-038 R-8: on a generated 400-item board, the median of 20 warm reads is under 50 ms for
+/// the summary and under 150 ms for the largest group's slice.
+#[test]
+fn the_summary_and_a_group_slice_meet_their_budgets() {
+    let s = Scratch::new("review-groups-budget");
+    let (data, _) = generated_board(&s, 400, 2_000);
+    let url = serve(&s, &data);
+    // The first reads fill the memo; the budget is for warm reads.
+    let (code, summary) = read(&url, "shop", "/review/summary");
+    assert_eq!(code, 200, "{summary}");
+    let largest = summary
+        .as_array()
+        .unwrap()
+        .iter()
+        .max_by_key(|g| g["count"].as_u64().unwrap())
+        .unwrap()["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let slice_path = format!("/review/groups/{largest}");
+    let (code, slice) = read(&url, "shop", &slice_path);
+    assert_eq!(code, 200, "{slice}");
+    assert_eq!(slice["rows"].as_array().unwrap().len(), 400);
+    let summary_ms = median_read(&url, "shop", "/review/summary", 20);
+    let slice_ms = median_read(&url, "shop", &slice_path, 20);
+    eprintln!("summary median {summary_ms:?}; {largest} slice median {slice_ms:?}");
+    assert!(
+        summary_ms < std::time::Duration::from_millis(50),
+        "the summary's median warm read is {summary_ms:?}"
+    );
+    assert!(
+        slice_ms < std::time::Duration::from_millis(150),
+        "the {largest} slice's median warm read is {slice_ms:?}"
+    );
+}

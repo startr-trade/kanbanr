@@ -117,6 +117,21 @@ const CODE: Param = Param {
     kind: Kind::String,
     description: "The item's code, such as FEAT-001.",
 };
+const GROUP: Param = Param {
+    name: "key",
+    location: In::Path,
+    required: true,
+    kind: Kind::String,
+    description: "The review group's key, such as approve, docs-folded or manual.",
+};
+const ROW: Param = Param {
+    name: "row",
+    location: In::Path,
+    required: true,
+    kind: Kind::String,
+    description: "The row's key, percent-encoded: an item's code, or for a manual check \
+                  <CODE>/<R-n>/<test>.",
+};
 const DOC_PATH: Param = Param {
     name: "path",
     location: In::Query,
@@ -232,6 +247,25 @@ pub fn public_routes() -> Vec<RouteDoc> {
             summary: "What is waiting for a person's agreement, in the order to ask it",
             params: &[PROJECT],
             response: Response::Json(schema_of::<Vec<crate::review::ReviewEntry>>),
+        },
+        // The Review page's decision groups (FTR-038): counts first, then one group, then one row.
+        RouteDoc {
+            path: "/api/projects/{project}/review/summary",
+            summary: "The decision groups waiting for the person, each counted, in the page's order",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<Vec<crate::reviewgroups::GroupCount>>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/review/groups/{key}",
+            summary: "One decision group's rows, in the default order",
+            params: &[PROJECT, GROUP],
+            response: Response::Json(schema_of::<crate::reviewgroups::GroupSlice>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/review/groups/{key}/rows/{row}",
+            summary: "One row's full evidence",
+            params: &[PROJECT, GROUP, ROW],
+            response: Response::Json(schema_of::<crate::reviewgroups::RowEvidence>),
         },
         RouteDoc {
             path: "/api/projects/{project}/releases",

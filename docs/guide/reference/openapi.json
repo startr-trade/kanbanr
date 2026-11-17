@@ -271,6 +271,14 @@
         "type": "object"
       },
       "Answer": {
+        "description": "What the person answered.",
+        "enum": [
+          "confirmed",
+          "rejected"
+        ],
+        "type": "string"
+      },
+      "Answer2": {
         "description": "One answer of a revision (or of an answers file).",
         "properties": {
           "area": {
@@ -297,14 +305,6 @@
           "area"
         ],
         "type": "object"
-      },
-      "Answer2": {
-        "description": "What the person answered.",
-        "enum": [
-          "confirmed",
-          "rejected"
-        ],
-        "type": "string"
       },
       "Approval": {
         "additionalProperties": true,
@@ -2887,6 +2887,83 @@
           "label",
           "name",
           "path"
+        ],
+        "type": "object"
+      },
+      "GroupCount": {
+        "description": "One decision group, counted: a tab on the Review page.",
+        "properties": {
+          "action": {
+            "description": "The group button's verb: \"Approve\", \"Ratify\", \"Sign off\", \"Plan into\", \"Confirm\", \"Grant\",\n\"Keep\" or \"Accept\".",
+            "type": "string"
+          },
+          "count": {
+            "description": "The rows in the group.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "prepared": {
+            "description": "The rows with an open prepared record.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ready": {
+            "description": "The rows that can be decided now.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "count",
+          "action",
+          "ready",
+          "prepared"
+        ],
+        "type": "object"
+      },
+      "GroupSlice": {
+        "description": "One group's rows, in the page's default order.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "choices": {
+            "description": "The planned releases, in file order: for `which-release` only.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "action",
+          "rows",
+          "choices"
         ],
         "type": "object"
       },
@@ -5601,7 +5678,7 @@
             "type": "string"
           },
           "verdict": {
-            "$ref": "#/components/schemas/Answer2"
+            "$ref": "#/components/schemas/Answer"
           }
         },
         "required": [
@@ -5766,6 +5843,92 @@
         ],
         "type": "object"
       },
+      "ReviewRow": {
+        "description": "One row of a group: one decision waiting on one thing.",
+        "properties": {
+          "batch": {
+            "description": "That record's batch.",
+            "type": "string"
+          },
+          "blocked": {
+            "description": "Empty when the row can be decided; else one sentence naming who provides what is missing.",
+            "type": "string"
+          },
+          "changed_at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "key": {
+            "description": "Unique within the group: the item's code, `<CODE>/<R-n>/<test>` for a manual check, the\ndelegation's id, the delegated decision's id, or the ADR's id.",
+            "type": "string"
+          },
+          "pills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prepared": {
+            "description": "The open prepared record's id.",
+            "type": "string"
+          },
+          "records": {
+            "description": "What a yes records.",
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "rev": {
+            "description": "What the group decision sends back.",
+            "type": "string"
+          },
+          "signoff": {
+            "type": "string"
+          },
+          "spec_rev": {
+            "type": "string"
+          },
+          "sprint": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "what": {
+            "description": "What is waiting, in a few words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "code",
+          "title",
+          "what",
+          "records",
+          "release",
+          "sprint",
+          "changed_at",
+          "blocked",
+          "pills",
+          "prepared",
+          "batch",
+          "rev",
+          "spec_rev",
+          "signoff",
+          "requirement",
+          "test"
+        ],
+        "type": "object"
+      },
       "RevisionState": {
         "description": "Where a revision stands.",
         "enum": [
@@ -5791,7 +5954,7 @@
           "answers": {
             "default": [],
             "items": {
-              "$ref": "#/components/schemas/Answer"
+              "$ref": "#/components/schemas/Answer2"
             },
             "type": "array"
           },
@@ -5908,6 +6071,80 @@
           "portfolio",
           "counts",
           "programs"
+        ],
+        "type": "object"
+      },
+      "RowEvidence": {
+        "description": "One row's full evidence: what the row's body shows when it is opened.",
+        "properties": {
+          "adr": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Adr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delegated": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelegatedDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delegation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DelegationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "manual": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualWaiting"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prepared": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparedView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entry",
+          "manual",
+          "adr",
+          "delegated",
+          "delegation",
+          "prepared"
         ],
         "type": "object"
       },
@@ -8801,6 +9038,159 @@
           }
         },
         "summary": "What is waiting for a person's agreement, in the order to ask it"
+      }
+    },
+    "/api/projects/{project}/review/groups/{key}": {
+      "get": {
+        "operationId": "getProjectsReviewGroupsOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The review group's key, such as approve, docs-folded or manual.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSlice"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One decision group's rows, in the default order"
+      }
+    },
+    "/api/projects/{project}/review/groups/{key}/rows/{row}": {
+      "get": {
+        "operationId": "getProjectsReviewGroupsRowsOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The review group's key, such as approve, docs-folded or manual.",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The row's key, percent-encoded: an item's code, or for a manual check <CODE>/<R-n>/<test>.",
+            "in": "path",
+            "name": "row",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowEvidence"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One row's full evidence"
+      }
+    },
+    "/api/projects/{project}/review/summary": {
+      "get": {
+        "operationId": "getProjectsReviewSummary",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GroupCount"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The decision groups waiting for the person, each counted, in the page's order"
       }
     },
     "/api/projects/{project}/sprints": {

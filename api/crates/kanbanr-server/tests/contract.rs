@@ -339,6 +339,16 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(format!("{base}?status=Planned"));
             out.push(format!("{base}?milestone=M1&status=In%20Progress"));
         }
+        // The Review page's decision groups (FTR-038): FEAT-002 waits for approval.
+        "/api/projects/{project}/review/groups/{key}" => {
+            out.push(base.replace("{key}", "approve"));
+        }
+        "/api/projects/{project}/review/groups/{key}/rows/{row}" => {
+            out.push(
+                base.replace("{key}", "approve")
+                    .replace("{row}", "FEAT-002"),
+            );
+        }
         _ => out.push(base),
     }
     out
