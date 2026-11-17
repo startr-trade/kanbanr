@@ -116,14 +116,14 @@ function hashParts(hash: string): [string, string][] | null {
 }
 
 /**
- * The open ids in `hash`: the comma list under `param` (`#open=a,b`), or a plain anchor (`#DEF-066`)
- * as one id. Empty ids are dropped; a hash that is neither gives no open rows.
+ * The open ids in `hash`: the comma list under `param` (`#open=a,b`), or a plain anchor (`#DEF-066`,
+ * or `#DEF-066,FTR-041` for two) split on commas the same way. Empty ids are dropped; a hash that is neither gives no open rows.
  */
 export function parseOpen(hash: string, param = "open"): Set<string> {
   const parts = hashParts(hash);
   if (parts === null) {
-    const id = decodeId(hash.replace(/^#/, ""));
-    return new Set(id ? [id] : []);
+    // A plain anchor may name several rows (`#DEF-066,FTR-041`), as FTR-038's and FTR-041's links do.
+    return new Set(hash.replace(/^#/, "").split(",").map(decodeId).filter((id) => id !== ""));
   }
   const entry = parts.find(([key]) => key === param);
   if (!entry) return new Set();

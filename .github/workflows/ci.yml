@@ -374,6 +374,10 @@ jobs:
       # toggle, and keep the open ids in the URL hash (FTR-046).
       - name: The UI kit's accordion rows open on demand under a heading
         run: npm run check:ui-accordion
+      # The table sorts stably with nulls last, filters on every token, exports CSV quoted and with
+      # formulas neutralised, and is drawn with a caption, aria-sort and a labelled filter (FTR-046).
+      - name: The UI kit's table sorts, filters and exports correctly
+        run: npm run check:ui-table
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

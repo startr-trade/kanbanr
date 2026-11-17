@@ -61,8 +61,11 @@ export function Tabs(p: {
   return (
     <div className="ui-tabs-wrap">
       <div className="ui-tabs" role="tablist" aria-label={p.label} onKeyDown={onKeyDown}>
-        {shown.map((t) => {
+        {shown.map((t, i) => {
           const isSelected = t.key === selected;
+          // With every tab disabled nothing is selected, so the first keeps the tab stop and the
+          // list stays reachable by keyboard.
+          const isStop = isSelected || (selected === "" && i === 0);
           return (
             <button
               key={t.key}
@@ -78,7 +81,7 @@ export function Tabs(p: {
               aria-controls={panelId(t.key)}
               aria-disabled={t.disabled ? true : undefined}
               title={t.disabled || undefined}
-              tabIndex={isSelected ? 0 : -1}
+              tabIndex={isStop ? 0 : -1}
               onClick={() => {
                 if (!t.disabled) choose(t.key);
               }}

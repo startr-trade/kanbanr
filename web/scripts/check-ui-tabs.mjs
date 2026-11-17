@@ -110,6 +110,20 @@ try {
   const custom = await render("src/ui/Tabs.tsx", "Tabs", { ...props, param: "view" }, { url: "/?tab=done&view=open" });
   const pickedCustom = [...custom.document.querySelectorAll('[role="tab"][aria-selected="true"]')].map((t) => t.textContent);
   eq(problems, "param=view reads ?view", pickedCustom, ["Open 3"]);
+
+  // Every tab disabled: none is selected and no panel shows, but the first keeps tabIndex=0 so the
+  // tab list stays reachable by keyboard.
+  const allOff = await render(
+    "src/ui/Tabs.tsx",
+    "Tabs",
+    { tabs: [{ key: "a", label: "A", disabled: "not yet" }, { key: "b", label: "B", disabled: "not yet" }], label: "Off", children: (key) => `panel for ${key}` },
+    { url: "/?tab=a" },
+  );
+  const offTabs = [...allOff.document.querySelectorAll('[role="tab"]')];
+  eq(problems, "every tab disabled: the first keeps tabIndex=0", offTabs.map((t) => t.getAttribute("tabindex")), ["0", "-1"]);
+  eq(problems, "every tab disabled: none is selected", offTabs.map((t) => t.getAttribute("aria-selected")), ["false", "false"]);
+  eq(problems, "every tab disabled: each has aria-disabled", offTabs.map((t) => t.getAttribute("aria-disabled")), ["true", "true"]);
+  eq(problems, "every tab disabled: no panel", allOff.document.querySelectorAll('[role="tabpanel"]').length, 0);
   ok = report("web::check_tabs_markup_is_a_tablist_with_counts", problems) && ok;
 } catch (e) {
   ok = report("web::check_tabs_markup_is_a_tablist_with_counts", [`render failed: ${e?.stack ?? e}`]) && ok;
