@@ -754,6 +754,7 @@ summary:focus-visible,
    and the stepper, which may shrink and wraps its steps, then the next step's button and line). */
 @media (max-width: 720px) {
   .release-body .ui-table td { white-space: normal; overflow-wrap: anywhere; }
+  .release-body .ui-table td[data-col="code"], .release-body .ui-table td[data-col="status"] { white-space: nowrap; overflow-wrap: normal; }
   .release-body .ui-table td:nth-child(2) { width: auto; }
 }
 @media (max-width: 640px) {
