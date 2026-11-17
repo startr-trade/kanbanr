@@ -1,8 +1,8 @@
 //! The read memo (DEF-081): every GET under `/api` is answered once per board revision and kept in
 //! memory, keyed by its canonical path and query and stamped with what it was computed from. A
 //! request whose stamp matches is answered from memory, a browser that already holds it gets a 304,
-//! and a change to the board (a watcher event, a commit, a new day, a new code HEAD for the reads
-//! that look at the code repository) changes the stamp, so a stale body is never served.
+//! and a change to the board (a watcher event, a commit, a new day, a delegation that lapsed, a
+//! change to the code repository for the reads that look at it) changes the stamp, so a stale body is never served.
 //!
 //! Everything here is derived and in memory, and nothing is ever written (ADR-0005).
 
@@ -15,16 +15,19 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use kanbanr_core::Store;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// The memo's byte cap: every page of this board, plus a second project, without eviction.
 pub const MEMO_CAP_BYTES: usize = 64 * 1024 * 1024;
 /// The largest body that is buffered and kept; a larger one is streamed through.
 pub const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
-/// A read that uses the code repository is restamped this often, so an uncommitted edit there shows
-/// within half a minute (DEF-081 R-13).
-pub const CODE_BUCKET_SECS: u64 = 30;
+/// The code repository's fingerprint is looked at again this often, so an uncommitted edit there
+/// shows within half a minute (DEF-081 R-13). Between looks a read is served from the memo, however
+/// long it took to compute (DEF-106).
+pub const CODE_RECHECK_SECS: u64 = 30;
 
 /// Board generations: a counter per project, bumped on every change to it, and a global one for
 /// changes to every project (`*`). A root route (no project) is stamped by `of(None)`, which moves
@@ -80,9 +83,20 @@ impl Generations {
 pub struct Stamp {
     pub r#gen: u64,
     pub board_head: String,
-    pub code_head: String,
-    pub bucket: u64,
+    /// The code repository's fingerprint (HEAD, refs, working-tree status); empty for a board-only
+    /// read or a board with no code repository.
+    pub code: String,
     pub day: String,
+    /// How many granted delegations had ended: a lapse mid-day changes it (DEF-106).
+    pub ended: usize,
+}
+
+impl Stamp {
+    /// This stamp with the number of granted delegations that have ended.
+    pub fn with_ended(mut self, ended: usize) -> Self {
+        self.ended = ended;
+        self
+    }
 }
 
 /// A kept body.
@@ -127,12 +141,20 @@ pub struct Memo {
     cap_bytes: usize,
     boot: u64,
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Per code repository: its fingerprint and when it was taken.
+    code_states: Mutex<HashMap<PathBuf, (Instant, String)>>,
+    recheck: Duration,
 }
 
 impl Memo {
     /// An empty memo holding at most `cap_bytes` of bodies. The boot id comes from the operating
     /// system, so a restarted daemon's ETags differ from the last one's.
     pub fn new(cap_bytes: usize) -> Self {
+        Self::with_recheck(cap_bytes, Duration::from_secs(CODE_RECHECK_SECS))
+    }
+
+    /// As [`Memo::new`], looking at the code repository again every `recheck`.
+    pub fn with_recheck(cap_bytes: usize, recheck: Duration) -> Self {
         let mut bytes = [0u8; 8];
         getrandom::fill(&mut bytes).expect("the operating system has no random bytes to give");
         Memo {
@@ -140,7 +162,28 @@ impl Memo {
             cap_bytes,
             boot: u64::from_le_bytes(bytes),
             inflight: Mutex::new(HashMap::new()),
+            code_states: Mutex::new(HashMap::new()),
+            recheck,
         }
+    }
+
+    /// The code repository's fingerprint: the one kept if it is younger than the recheck, else a
+    /// fresh one, kept with the time. The lock is not held while the fingerprint is computed.
+    pub fn code_state(&self, repo: &Path) -> String {
+        {
+            let kept = self.code_states.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, state)) = kept.get(repo)
+                && at.elapsed() < self.recheck
+            {
+                return state.clone();
+            }
+        }
+        let state = kanbanr_core::coderepo::fingerprint(repo);
+        self.code_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(repo.to_path_buf(), (Instant::now(), state.clone()));
+        state
     }
 
     /// The weak ETag of a stamp in this process: `W/"<16 hex>"`, FNV-1a 64 over the boot id and the
@@ -148,7 +191,7 @@ impl Memo {
     pub fn etag(&self, stamp: &Stamp) -> String {
         let joined = format!(
             "{}\0{}\0{}\0{}\0{}\0{}",
-            self.boot, stamp.r#gen, stamp.board_head, stamp.code_head, stamp.bucket, stamp.day
+            self.boot, stamp.r#gen, stamp.board_head, stamp.code, stamp.day, stamp.ended
         );
         format!("W/\"{}\"", kanbanr_core::hash::stable_hash(&joined))
     }
@@ -223,32 +266,24 @@ pub fn canonical(path_and_query: &str) -> String {
     }
 }
 
-/// The stamp from its parts. `code_head` is `Some` only for a read that uses the code repository; it
-/// then also carries the 30 s bucket of `unix_secs`. A board-only read ignores both.
-pub fn stamp_at(
-    generation: u64,
-    board_head: &str,
-    code_head: Option<&str>,
-    unix_secs: u64,
-    day: &str,
-) -> Stamp {
-    let (code_head, bucket) = match code_head {
-        Some(head) => (head.to_string(), unix_secs / CODE_BUCKET_SECS),
-        None => (String::new(), 0),
-    };
+/// The stamp from its parts. `code` is `Some` only for a read that uses the code repository: its
+/// fingerprint. A board-only read ignores it. There is no time in the stamp: a body is kept for as
+/// long as nothing it was computed from has changed (DEF-106).
+pub fn stamp_at(generation: u64, board_head: &str, code: Option<&str>, day: &str) -> Stamp {
     Stamp {
         r#gen: generation,
         board_head: board_head.to_string(),
-        code_head,
-        bucket,
+        code: code.unwrap_or_default().to_string(),
         day: day.to_string(),
+        ended: 0,
     }
 }
 
 /// The stamp for a canonical key now: the project's generation (the root generation for a route
 /// with no project), the board HEAD of `store_for(st, project)` (`global_head` for a route with no
-/// project), and for the reads `reads_code_repo` names the code repository's HEAD and the time
-/// bucket; the UTC day.
+/// project), for the reads `reads_code_repo` names the code repository's fingerprint (re-checked
+/// every `CODE_RECHECK_SECS`; none when there is no repository), the UTC day, and for a project's
+/// read how many granted delegations have ended.
 pub fn stamp_for(st: &AppState, key: &str) -> Stamp {
     let project = crate::routes::project_id(key);
     let generation = st.gens.of(project.as_deref());
@@ -256,24 +291,17 @@ pub fn stamp_for(st: &AppState, key: &str) -> Stamp {
         Some(p) => kanbanr_core::git::head_commit(store_for(st, p).data_dir()).unwrap_or_default(),
         None => global_head(st, key),
     };
-    let code_head = crate::routes::reads_code_repo(key).then(|| {
+    let code = crate::routes::reads_code_repo(key).then(|| {
         crate::routes::repo_for(st, key)
-            .and_then(kanbanr_core::git::head_commit)
+            .map(|repo| st.memo.code_state(repo))
             .unwrap_or_default()
     });
-    let unix_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
     let now = kanbanr_core::now_rfc3339();
     let day = now.get(..10).unwrap_or(&now);
-    stamp_at(
-        generation,
-        &board_head,
-        code_head.as_deref(),
-        unix_secs,
-        day,
-    )
+    let ended = project.as_deref().map_or(0, |p| {
+        kanbanr_core::decisions::ended_granted(store_for(st, p), p, &now)
+    });
+    stamp_at(generation, &board_head, code.as_deref(), day).with_ended(ended)
 }
 
 /// The store holding a project's board: the first board, in order, that holds it (FTR-040, X11).
@@ -437,25 +465,25 @@ mod tests {
     use std::time::Duration;
 
     fn stamp(generation: u64) -> Stamp {
-        stamp_at(generation, "board1", None, 0, "2026-11-17")
+        stamp_at(generation, "board1", None, "2026-11-17")
     }
 
     #[test]
     fn a_stamp_changes_with_a_board_event_a_commit_or_the_day() {
         let memo = Memo::new(MEMO_CAP_BYTES);
-        let base = stamp_at(1, "board1", Some("code1"), 60, "2026-11-17");
-        let same = stamp_at(1, "board1", Some("code1"), 60, "2026-11-17");
+        let base = stamp_at(1, "board1", Some("code1"), "2026-11-17");
+        let same = stamp_at(1, "board1", Some("code1"), "2026-11-17");
         assert_eq!(memo.etag(&base), memo.etag(&same));
         let etag = memo.etag(&base);
         assert!(etag.starts_with("W/\"") && etag.ends_with('"'), "{etag}");
         assert_eq!(etag.len(), "W/\"\"".len() + 16, "{etag}");
 
         let changed = [
-            stamp_at(2, "board1", Some("code1"), 60, "2026-11-17"), // a board event
-            stamp_at(1, "board2", Some("code1"), 60, "2026-11-17"), // a board commit
-            stamp_at(1, "board1", Some("code2"), 60, "2026-11-17"), // a code commit
-            stamp_at(1, "board1", Some("code1"), 90, "2026-11-17"), // another bucket
-            stamp_at(1, "board1", Some("code1"), 60, "2026-11-18"), // the day
+            stamp_at(2, "board1", Some("code1"), "2026-11-17"), // a board event
+            stamp_at(1, "board2", Some("code1"), "2026-11-17"), // a board commit
+            stamp_at(1, "board1", Some("code2"), "2026-11-17"), // a code change
+            stamp_at(1, "board1", Some("code1"), "2026-11-18"), // the day
+            base.clone().with_ended(1),                         // a delegation lapsed mid-day
         ];
         for other in &changed {
             assert_ne!(memo.etag(&base), memo.etag(other), "{other:?}");
@@ -509,24 +537,152 @@ mod tests {
         assert!(memo.get("a", &s).is_some());
     }
 
+    /// A git repository in the temp dir with one committed file (L-41).
+    fn scratch_repo() -> std::path::PathBuf {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-memo-code-{}", u64::from_le_bytes(bytes)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "one").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "one"]);
+        dir
+    }
+
     #[test]
-    fn a_code_repository_read_is_restamped_by_its_head_and_every_thirty_seconds() {
-        let t = 1_000 * CODE_BUCKET_SECS;
-        let day = "2026-11-17";
-        let at = |head: &str, secs: u64| stamp_at(1, "board1", Some(head), secs, day);
-        assert_ne!(at("c1", t), at("c2", t), "a new code HEAD");
-        assert_eq!(at("c1", t), at("c1", t + 29), "one bucket");
-        assert_ne!(at("c1", t), at("c1", t + 30), "the next bucket");
-        // A board-only read ignores both.
-        assert_eq!(
-            stamp_at(1, "board1", None, t, day),
-            stamp_at(1, "board1", None, t + 300, day)
-        );
+    fn a_code_read_is_kept_while_the_code_repository_is_unchanged() {
+        let repo = scratch_repo();
+        let memo = Memo::with_recheck(MEMO_CAP_BYTES, Duration::ZERO);
+        let first = memo.code_state(&repo);
+        assert!(!first.is_empty(), "a repository has a fingerprint");
+        // Looked at again on every call (recheck zero): nothing changed, so the stamp holds.
+        assert_eq!(memo.code_state(&repo), first);
+        let at = |code: &str| stamp_at(1, "b", Some(code), "2026-11-17");
+        assert_eq!(at(&first), at(&memo.code_state(&repo)));
         // Which reads are which is `reads_code_repo`'s.
         assert!(crate::routes::reads_code_repo("/projects/p/readiness"));
-        assert!(crate::routes::reads_code_repo("/projects/p/scopes/drift"));
-        assert!(crate::routes::reads_code_repo("/projects/p/doctor"));
+        assert!(crate::routes::reads_code_repo("/projects/p/review/summary"));
         assert!(!crate::routes::reads_code_repo("/projects/p/index"));
+        // No repository: no fingerprint.
+        assert_eq!(memo.code_state(&repo.join("nowhere")), "");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn an_uncommitted_code_edit_changes_the_stamp_at_the_next_recheck() {
+        let repo = scratch_repo();
+        let memo = Memo::with_recheck(MEMO_CAP_BYTES, Duration::from_millis(300));
+        let before = memo.code_state(&repo);
+        std::fs::write(repo.join("a.txt"), "two, uncommitted").unwrap();
+        assert_eq!(memo.code_state(&repo), before, "kept until the recheck");
+        std::thread::sleep(Duration::from_millis(400));
+        assert_ne!(memo.code_state(&repo), before, "seen at the next recheck");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_read_slower_than_the_recheck_is_served_from_the_memo_next_time() {
+        let repo = scratch_repo();
+        let (mut st, dir) = scratch_state();
+        st.code_repo = Some(("p".to_string(), repo.clone()));
+        st.memo = Arc::new(Memo::with_recheck(
+            MEMO_CAP_BYTES,
+            Duration::from_millis(100),
+        ));
+        let count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&count);
+        let app = axum::Router::new()
+            .route(
+                "/projects/p/readiness",
+                axum::routing::get(move || {
+                    let counter = Arc::clone(&counter);
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        ([(CONTENT_TYPE, "application/json")], "{\"ok\":true}")
+                    }
+                }),
+            )
+            .layer(axum::middleware::from_fn_with_state(st.clone(), layer))
+            .with_state(st);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let first = get(addr, "/projects/p/readiness").await;
+        // The read outlived the recheck; the repository did not change.
+        let second = get(addr, "/projects/p/readiness").await;
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        assert!(second.starts_with("HTTP/1.1 200"), "{second}");
+        assert_eq!(count.load(Ordering::SeqCst), 1, "the second read is a hit");
+    }
+
+    #[test]
+    fn a_delegation_that_lapses_mid_day_changes_what_a_read_is_stamped_with() {
+        let (st, dir) = scratch_state();
+        let store = store_for(&st, "p");
+        // Two seconds from now, as an RFC 3339 UTC time (days to a civil date, after H. Hinnant).
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 2;
+        let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z.rem_euclid(146_097);
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + i64::from(m <= 2);
+        let soon = format!(
+            "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+            rest / 3_600,
+            rest % 3_600 / 60,
+            rest % 60
+        );
+        std::fs::create_dir_all(store.project_dir("p")).unwrap();
+        let stamped = "{by: Ada, at: \"2026-11-17T00:00:00Z\", origin: test}";
+        std::fs::write(
+            store.project_dir("p").join("decisions.yaml"),
+            format!(
+                "delegations:\n- id: DLG-1\n  verdicts: [approve]\n  all: true\n  until: \"{soon}\"\n  proposed: {stamped}\n  granted: {stamped}\n"
+            ),
+        )
+        .unwrap();
+        let before = stamp_for(&st, "/projects/p/review/summary");
+        assert_eq!(before.ended, 0);
+        std::thread::sleep(Duration::from_millis(2500));
+        let after = stamp_for(&st, "/projects/p/review/summary");
+        assert_eq!(
+            after.ended, 1,
+            "the lapse is counted at once, with no day change"
+        );
+        let memo = Memo::new(MEMO_CAP_BYTES);
+        assert_ne!(memo.etag(&before), memo.etag(&after));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

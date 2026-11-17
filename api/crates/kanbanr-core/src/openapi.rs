@@ -322,6 +322,12 @@ pub fn public_routes() -> Vec<RouteDoc> {
         },
         // The Review page's decision groups (FTR-038): counts first, then one group, then one row.
         RouteDoc {
+            path: "/api/projects/{project}/review/outline",
+            summary: "The Review page's decision groups from the process alone, before any is counted",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<Vec<crate::reviewgroups::GroupOutline>>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/review/summary",
             summary: "The decision groups waiting for the person, each counted, in the page's order",
             params: &[PROJECT],
