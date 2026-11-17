@@ -629,10 +629,12 @@ fn without_vitest_suffix(name: &str) -> (&str, Option<u64>) {
 /// The `test.state` operations a run's `results` call for, stamped with the project revision the
 /// run saw. Matching by test NAME rather than by "whatever item is in progress" is what makes this
 /// trustworthy: it records what ran, not what someone meant to run. A result already recorded at
-/// this revision is left alone, so a repeated run says nothing.
+/// this revision is left alone, so a repeated run says nothing, unless the run timed it: then the
+/// op carries the item's state unchanged and the duration, which the store keeps in the run's
+/// `timings/` file without rewriting the item (FTR-058).
 pub fn plan_capture(
     project: &Project,
-    results: &BTreeMap<String, bool>,
+    results: &BTreeMap<String, Timed>,
     rev: Option<&str>,
 ) -> Vec<Value> {
     let mut ops = Vec::new();
@@ -644,10 +646,12 @@ pub fn plan_capture(
                 if t.kind.eq_ignore_ascii_case("manual") {
                     continue;
                 }
-                if let Some(passed) = results.get(t.name.as_str()) {
-                    let state = if *passed { "green" } else { "red" };
+                if let Some(timed) = results.get(t.name.as_str()) {
+                    let passed = timed.passed;
+                    let state = if passed { "green" } else { "red" };
                     if t.state == TestState::parse(state).unwrap_or_default()
                         && (!passed || t.checked_rev.as_str() == rev.unwrap_or(""))
+                        && timed.ms.is_none()
                     {
                         continue; // already recorded at this revision; nothing to say
                     }
@@ -655,6 +659,9 @@ pub fn plan_capture(
                         "op": "test.state", "feature": f.code, "requirement": r.id,
                         "test": t.name, "state": state,
                     });
+                    if let Some(ms) = timed.ms {
+                        op["ms"] = json!(ms);
+                    }
                     if let Some(rev) = rev {
                         op["checked_rev"] = json!(rev);
                     }
@@ -1680,7 +1687,7 @@ test_add (tests.test_basket.BasketTests.test_add) ... ok";
              \x20     - name: b::fails\n        state: green\n        checked_rev: abc\n\
              \x20     - name: c::untracked_run\n",
         );
-        let results = parse_results("test a::passes ... ok\ntest b::fails ... FAILED\n");
+        let results = parse_timed_results("test a::passes ... ok\ntest b::fails ... FAILED\n");
         let ops = plan_capture(&p, &results, Some("abc"));
         assert_eq!(ops.len(), 1, "{ops:?}");
         assert_eq!(ops[0]["test"], "b::fails");
@@ -1704,8 +1711,12 @@ test_add (tests.test_basket.BasketTests.test_add) ... ok";
             "      - name: 'manual: looks right'\n        kind: manual\n\
              \x20     - name: a::passes\n        kind: unit\n",
         );
-        let results = parse_results("test manual: looks right ... ok\ntest a::passes ... ok\n");
-        assert_eq!(results.get("manual: looks right"), Some(&true));
+        let results =
+            parse_timed_results("test manual: looks right ... ok\ntest a::passes ... ok\n");
+        assert_eq!(
+            results.get("manual: looks right").map(|t| t.passed),
+            Some(true)
+        );
         let ops = plan_capture(&p, &results, Some("abc"));
         assert_eq!(ops.len(), 1, "{ops:?}");
         assert_eq!(ops[0]["test"], "a::passes");
@@ -1722,7 +1733,7 @@ test_add (tests.test_basket.BasketTests.test_add) ... ok";
              \x20     - name: 'manual: looks right'\n        kind: manual\n",
         );
         // A run that records it: captured, where a manual result never is.
-        let results = parse_results(
+        let results = parse_timed_results(
             "✓ walkthrough: the togaf runbook completes with zero stops\n✓ manual: looks right\n",
         );
         let ops = plan_capture(&p, &results, Some("def"));

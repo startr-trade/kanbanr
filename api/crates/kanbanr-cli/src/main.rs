@@ -6616,7 +6616,7 @@ fn capture_plan(
     rev: Option<&str>,
 ) -> Vec<Value> {
     use kanbanr_core::agentscope::{Caller, ProcessScope};
-    let results = kanbanr_core::evidence::parse_results(&capture_text(payload));
+    let results = kanbanr_core::evidence::parse_timed_results(&capture_text(payload));
     if results.is_empty() {
         return Vec::new();
     }
