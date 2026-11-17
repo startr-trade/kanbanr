@@ -22,6 +22,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
 DEPS = WORKFLOWS / "deps.yml"
+TRIVY = WORKFLOWS / "trivy.yml"
 TOOLCHAIN_FILE = ROOT / "rust-toolchain.toml"
 WORKSPACE_MANIFEST = ROOT / "api" / "Cargo.toml"
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
@@ -235,7 +236,7 @@ class Timeouts(unittest.TestCase):
     """R-2: a hung job fails within the hour instead of holding a runner for six."""
 
     def test_every_job_has_a_timeout_and_compiling_jobs_get_sixty_minutes(self) -> None:
-        for path in compiling_workflows():
+        for path in [*compiling_workflows(), TRIVY]:
             self.assertTrue(path.exists(), f"{path.name} is missing")
             for name, job in jobs(workflow(path)).items():
                 # A job that calls a reusable workflow cannot set timeout-minutes (GitHub refuses
