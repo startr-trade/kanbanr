@@ -341,6 +341,18 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
             out.push(format!("{base}?status=Planned"));
             out.push(format!("{base}?milestone=M1&status=In%20Progress"));
         }
+        // The Overview and the Needs you lines (FTR-048).
+        "/api/projects/{project}/overview" | "/api/projects/{project}/attention" => out.push(base),
+        // The Items page's list (FTR-048), whole and by each kind of filter.
+        "/api/projects/{project}/items" => {
+            out.push(base.clone());
+            out.push(format!("{base}?kind=feature&status=Planned"));
+            out.push(format!("{base}?milestone=M1&goal=G-1"));
+            out.push(format!("{base}?evidence=stale"));
+            out.push(format!(
+                "{base}?evidence=planned&sprint={sprint}&release=1.0"
+            ));
+        }
         // The Review page's decision groups (FTR-038): FEAT-002 waits for approval.
         "/api/projects/{project}/review/groups/{key}" => {
             out.push(base.replace("{key}", "approve"));

@@ -16,7 +16,8 @@
 # Budgets (DEF-081): the summary reads (the compact index and the configuration) under 50 ms, a
 # slice under 150 ms, both p95 and warm. The latest background drift result (FTR-045 R-9) under
 # 50 ms, read once the first run has finished: the script waits up to 120 s for its state to be
-# `fresh` before timing it.
+# `fresh` before timing it. The Overview and its attention lines (FTR-048) under 50 ms, and the
+# Items page's list under 150 ms, as a slice.
 #
 # Environment: KANBANR (the binary, default `kanbanr`), PROJECT (default: the copy's first
 # project), CODE (an item to read, default: the project's first item file), STATUS (the status
@@ -65,6 +66,9 @@ ROUTES=(
   "/charter 150"
   "/sprints 150"
   "/drift/latest?flags=false 50"
+  "/overview 50"
+  "/attention 50"
+  "/items?evidence=stale 150"
 )
 
 LOG="$(mktemp "${TMPDIR:-/tmp}/kanbanr-bench-serve.XXXXXX")"

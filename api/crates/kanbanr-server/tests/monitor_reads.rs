@@ -699,3 +699,80 @@ fn drift_latest_answers_from_the_last_run_without_computing() {
     }
     eprintln!("drift/latest reads (ms): {took:?}");
 }
+
+/// FTR-048 R-2: over the daemon, each review-group line the Needs you drawer shows counts what
+/// `reviewgroups::summary` counts for the same key, and no group is missing or extra.
+#[test]
+fn attention_counts_match_the_review_groups() {
+    let scratch = Scratch::new("attention");
+    let (data, _) = small_board(&scratch, &["shop"]);
+    let code = code_repo(&scratch);
+    let url = serve_with_code(&data, "shop", &code);
+    let attention = get_gz(&format!("{url}/api/projects/shop/attention")).json();
+
+    let store = kanbanr_core::Store::new(data.clone());
+    let groups = kanbanr_core::reviewgroups::summary(&store, "shop", Some(&code)).unwrap();
+    let want: Vec<(String, usize)> = groups
+        .iter()
+        .filter(|g| g.count > 0)
+        .map(|g| (g.key.clone(), g.count))
+        .collect();
+    assert!(
+        !want.is_empty(),
+        "the fixture has no review group waiting, so the test would prove nothing"
+    );
+    let got: Vec<(String, usize)> = attention["lines"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| l["section"] == "decisions")
+        .map(|l| {
+            (
+                l["kind"].as_str().unwrap().to_string(),
+                l["count"].as_u64().unwrap() as usize,
+            )
+        })
+        .collect();
+    assert_eq!(got, want, "{attention}");
+    for line in attention["lines"].as_array().unwrap() {
+        if line["section"] == "decisions" {
+            assert_eq!(
+                line["to"],
+                format!("/p/shop/review?group={}", line["kind"].as_str().unwrap()).as_str(),
+                "{line}"
+            );
+        }
+    }
+}
+
+/// FTR-048 R-11: on DEF-081's generated 400-item board the Overview and the attention lines, the
+/// two reads the landing page adds, are at most 20 KB gzip together.
+#[test]
+fn overview_and_attention_stay_small() {
+    let scratch = Scratch::new("overview-budget");
+    let data = scratch.data();
+    let shape = Shape {
+        items: 400,
+        requirements: 4,
+        spec_bytes: 6_500,
+    };
+    generate(&data, "shop", shape);
+    commit_all(&data, "fixture");
+    let code = code_repo(&scratch);
+    let url = serve_with_code(&data, "shop", &code);
+    let overview = get_gz(&format!("{url}/api/projects/shop/overview"));
+    let attention = get_gz(&format!("{url}/api/projects/shop/attention"));
+    assert!(overview.json().is_object() && attention.json().is_object());
+    let (o, a) = (overview.body.len(), attention.body.len());
+    assert!(
+        o + a <= 20 * 1024,
+        "the overview ({o} B) and attention ({a} B) are {} bytes gzipped together, over 20 KB",
+        o + a
+    );
+    eprintln!(
+        "overview {o} B gzip ({} B raw), attention {a} B gzip ({} B raw)",
+        overview.decoded().len(),
+        attention.decoded().len()
+    );
+}
