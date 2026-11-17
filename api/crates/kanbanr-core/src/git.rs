@@ -794,10 +794,12 @@ pub struct HistoryStats {
     pub walks: usize,
 }
 
-/// One view of a board's git history for judging many docs (DEF-022). The repository is opened and
-/// its history walked once, on the first doc judged; each baseline commit, each doc's blob at it
-/// and each doc's blob now are found once. Make one per evaluation and drop it with the evaluation:
-/// nothing is kept across requests, so a doc written a moment ago is seen.
+/// One view of a board's git history for judging many docs (DEF-022). The history is the shared
+/// [`PathHistory`] walk, kept per HEAD across instances (MNT-014), so a first doc judged walks only
+/// when no one has walked this HEAD; a history with merges is walked by libgit2 instead, once per
+/// instance. Each doc's blob now is read from the working tree and found once. Make one per
+/// evaluation and drop it with the evaluation: the working-tree side is never kept across
+/// requests, so a doc written a moment ago is seen.
 #[derive(Default)]
 pub struct DocHistory {
     state: std::sync::Mutex<HistoryState>,
@@ -819,6 +821,12 @@ struct HistoryState {
 enum Opened {
     /// The repository could not be opened: there is no history to judge by.
     Failed,
+    /// The shared walk of a linear history: no object is read from the repository.
+    Shared {
+        history: std::sync::Arc<PathHistory>,
+        workdir: std::path::PathBuf,
+    },
+    /// libgit2's walk, for a history with merges.
     Repo {
         repo: Repository,
         workdir: std::path::PathBuf,
@@ -847,6 +855,14 @@ impl DocHistory {
         self.judge(path, t, true)
     }
 
+    /// Whether the shared walk answers (and not libgit2's), for tests.
+    #[cfg(test)]
+    fn is_shared(&self) -> bool {
+        self.state
+            .lock()
+            .is_ok_and(|s| matches!(s.repo, Some(Opened::Shared { .. })))
+    }
+
     fn judge(&self, path: &Path, t: &str, may_fall_back: bool) -> Option<bool> {
         use time::OffsetDateTime;
         use time::format_description::well_known::Rfc3339;
@@ -862,27 +878,29 @@ impl DocHistory {
             state.stats.opens += 1;
             state.repo = Some(match Repository::discover(path.parent()?) {
                 Ok(repo) => match repo.workdir().and_then(resolved) {
-                    Some(workdir) => {
-                        state.stats.walks += 1;
-                        let commits = walk_commits(&repo);
-                        Opened::Repo {
-                            repo,
-                            workdir,
-                            commits,
+                    Some(workdir) => match shared_walk(path.parent()?) {
+                        Some((history, walked)) => {
+                            state.stats.walks += usize::from(walked);
+                            Opened::Shared { history, workdir }
                         }
-                    }
+                        None => {
+                            state.stats.walks += 1;
+                            let commits = walk_commits(&repo);
+                            Opened::Repo {
+                                repo,
+                                workdir,
+                                commits,
+                            }
+                        }
+                    },
                     None => Opened::Failed,
                 },
                 Err(_) => Opened::Failed,
             });
         }
-        let Some(Opened::Repo {
-            repo,
-            workdir,
-            commits,
-        }) = &state.repo
-        else {
-            return None;
+        let workdir = match state.repo.as_ref()? {
+            Opened::Failed => return None,
+            Opened::Shared { workdir, .. } | Opened::Repo { workdir, .. } => workdir,
         };
         let full = resolved_file(path)?;
         let Ok(rel) = full.strip_prefix(workdir) else {
@@ -893,6 +911,27 @@ impl DocHistory {
                 .flatten();
         };
         let rel = std::path::PathBuf::from(slash_joined(rel));
+        let (repo, commits) = match state.repo.as_ref()? {
+            Opened::Shared { history, .. } => {
+                if history.commits.is_empty() {
+                    // No commits at all: anything on disk is new.
+                    return Some(full.exists());
+                }
+                let rel = slash_joined(&rel);
+                let then = history
+                    .baseline(since)
+                    .and_then(|i| history.blob_at(&rel, i))
+                    .and_then(|b| git2::Oid::from_str(b).ok());
+                let now = *state.now.entry(full.clone()).or_insert_with(|| {
+                    full.is_file()
+                        .then(|| git2::Oid::hash_file(git2::ObjectType::Blob, &full).ok())
+                        .flatten()
+                });
+                return Some(then != now);
+            }
+            Opened::Repo { repo, commits, .. } => (repo, commits),
+            Opened::Failed => return None,
+        };
         if commits.is_empty() {
             // No commits at all: anything on disk is new.
             return Some(full.exists());
@@ -921,6 +960,14 @@ impl DocHistory {
         });
         Some(then != now)
     }
+}
+
+/// The shared walk of the repository holding `dir`, and whether this call walked it, when the
+/// history is linear; `None` when it has merges or cannot be walked (MNT-014).
+fn shared_walk(dir: &Path) -> Option<(std::sync::Arc<PathHistory>, bool)> {
+    let before = path_history_walks_of(dir);
+    let history = path_history(dir).ok().filter(|h| h.is_linear())?;
+    Some((history, path_history_walks_of(dir) > before))
 }
 
 /// `path` resolved through `canonicalize`, without Windows' verbatim prefix (`\\?\`), so it joins
@@ -1098,6 +1145,28 @@ fn history_err(repo: &Repository, dir: &Path) -> impl Fn(HistoryReason) -> Histo
 /// repository that cannot be read, or whose history cannot be walked, is an error naming it and
 /// why (DEF-080).
 pub fn file_versions(dir: &Path, rel: &str) -> Result<Vec<String>, HistoryError> {
+    if let Ok(history) = path_history(dir)
+        && history.is_linear()
+    {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut out = Vec::new();
+        for blob in history.touches(rel).into_iter().filter_map(|t| t.blob) {
+            if seen.contains(&blob) {
+                continue;
+            }
+            seen.push(blob);
+            if let Some(text) = history.blob_text(dir, blob) {
+                out.push(text);
+            }
+        }
+        return Ok(out);
+    }
+    file_versions_walk(dir, rel)
+}
+
+/// [`file_versions`] by walking every commit's tree: the answer for a history with merges, and the
+/// reference the shared walk is checked against (MNT-014).
+fn file_versions_walk(dir: &Path, rel: &str) -> Result<Vec<String>, HistoryError> {
     let repo = open_history(dir)?;
     let err = history_err(&repo, dir);
     let Some(walk) = history_walk(&repo, &err)? else {
@@ -1140,6 +1209,33 @@ pub struct FileVersion {
 /// listed. A path absent from the history gives an empty list; a repository that cannot be read,
 /// or whose history cannot be walked, is an error naming it and why (DEF-080).
 pub fn file_history(dir: &Path, rel: &str) -> Result<Vec<FileVersion>, HistoryError> {
+    if let Ok(history) = path_history(dir)
+        && history.is_linear()
+    {
+        let touches = history.touches(rel);
+        let mut out = Vec::new();
+        for (i, touch) in touches.iter().enumerate() {
+            let Some(blob) = touch.blob else { continue };
+            // A mode-only change leaves the blob as the next older touch had it.
+            if touches.get(i + 1).and_then(|older| older.blob) == Some(blob) {
+                continue;
+            }
+            if let Some(content) = history.blob_text(dir, blob) {
+                out.push(FileVersion {
+                    sha: touch.commit.sha.clone(),
+                    message: history.message(dir, &touch.commit.sha).unwrap_or_default(),
+                    content,
+                });
+            }
+        }
+        return Ok(out);
+    }
+    file_history_walk(dir, rel)
+}
+
+/// [`file_history`] by walking every commit's tree: the answer for a history with merges, and the
+/// reference the shared walk is checked against (MNT-014).
+fn file_history_walk(dir: &Path, rel: &str) -> Result<Vec<FileVersion>, HistoryError> {
     let repo = open_history(dir)?;
     let err = history_err(&repo, dir);
     let Some(walk) = history_walk(&repo, &err)? else {
@@ -2480,6 +2576,197 @@ mod tests {
                 &["log", "-1", "--no-merges", "--format=%cI", "--", "c.txt"]
             )
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A linear repository with an add, edits, a mode-only change, a delete and a re-add of the
+    /// same text, a rename away from a path and into another, a non-UTF-8 version, and commits in
+    /// one second (MNT-014).
+    fn shared_fixture(name: &str) -> PathBuf {
+        let dir = temp(name);
+        g(&dir, None, &["init", "-q"]);
+        let one = "l1\nl2\nl3\nl4\nl5\nl6\n";
+        let two = "l1\nl2\nl3\nl4\nl5\nl6\nl7\n";
+        let old = "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\n";
+        put(&dir, 1, "add", &[("f.md", one), ("old.md", old)]);
+        put(&dir, 2, "edit f", &[("f.md", two)]);
+        g(&dir, None, &["update-index", "--chmod=+x", "f.md"]);
+        g(
+            &dir,
+            Some("2026-01-03T10:00:00+00:00"),
+            &["commit", "-q", "-m", "mode only"],
+        );
+        put(&dir, 3, "edit f back", &[("f.md", one)]);
+        g(&dir, None, &["rm", "-q", "f.md"]);
+        g(
+            &dir,
+            Some("2026-01-04T10:00:00+00:00"),
+            &["commit", "-q", "-m", "drop f"],
+        );
+        put(&dir, 5, "re-add f", &[("f.md", two)]);
+        g(&dir, None, &["mv", "old.md", "f2.md"]);
+        g(
+            &dir,
+            Some("2026-01-06T10:00:00+00:00"),
+            &["commit", "-q", "-m", "rename old to f2"],
+        );
+        std::fs::write(
+            dir.join("f2.md"),
+            b"alpha\nbeta\ngamma\ndelta\nepsilon\n\xff\xfe\n",
+        )
+        .unwrap();
+        g(&dir, None, &["add", "-A"]);
+        g(
+            &dir,
+            Some("2026-01-07T10:00:00+00:00"),
+            &["commit", "-q", "-m", "binary f2"],
+        );
+        put(
+            &dir,
+            7,
+            "text f2 same second",
+            &[("f2.md", "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta\neta\n")],
+        );
+        dir
+    }
+
+    /// MNT-014 R-1: any number of history questions at one HEAD are one walk.
+    #[test]
+    fn one_read_walks_history_once() {
+        let dir = shared_fixture("ph-oneread");
+        let before = path_history_walks_of(&dir);
+        let t = "2026-01-04T12:00:00Z";
+        let mut stats = Vec::new();
+        for _ in 0..3 {
+            let history = DocHistory::default();
+            for i in 0..20 {
+                let doc = dir.join(if i % 2 == 0 { "f.md" } else { "f2.md" });
+                assert!(history.changed_since(&doc, t).is_some());
+            }
+            stats.push(history.stats());
+        }
+        for _ in 0..5 {
+            assert!(!file_history(&dir, "f.md").unwrap().is_empty());
+        }
+        for _ in 0..2 {
+            assert!(!file_versions(&dir, "f2.md").unwrap().is_empty());
+        }
+        assert_eq!(path_history_walks_of(&dir) - before, 1);
+        assert_eq!(stats[0], HistoryStats { opens: 1, walks: 1 });
+        assert_eq!(stats[1], HistoryStats { opens: 1, walks: 0 });
+        assert_eq!(stats[2], HistoryStats { opens: 1, walks: 0 });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: `file_history` from the shared walk is what the tree walk says.
+    #[test]
+    fn shared_walk_gives_the_answers_of_file_history() {
+        let dir = shared_fixture("ph-fh");
+        assert!(path_history(&dir).unwrap().is_linear());
+        for rel in ["f.md", "old.md", "f2.md", "never.md"] {
+            let got = file_history(&dir, rel).unwrap();
+            assert_eq!(got, file_history_walk(&dir, rel).unwrap(), "{rel}");
+            if rel == "f.md" {
+                // add, edit, edit back, re-add; the mode-only change is not a version.
+                assert_eq!(got.len(), 4, "{got:?}");
+            }
+        }
+        // A folder that is no repository, and a repository with no commit.
+        assert_eq!(
+            file_history(&temp("ph-fh-none"), "f.md")
+                .unwrap_err()
+                .reason,
+            HistoryReason::NotARepository
+        );
+        let empty = temp("ph-fh-empty");
+        g(&empty, None, &["init", "-q"]);
+        assert!(file_history(&empty, "f.md").unwrap().is_empty());
+        assert!(file_versions(&empty, "f.md").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(empty);
+    }
+
+    /// MNT-014 R-2: `file_versions` from the shared walk is what the tree walk says.
+    #[test]
+    fn shared_walk_gives_the_answers_of_file_versions() {
+        let dir = shared_fixture("ph-fv");
+        for rel in ["f.md", "old.md", "f2.md", "never.md"] {
+            assert_eq!(
+                file_versions(&dir, rel).unwrap(),
+                file_versions_walk(&dir, rel).unwrap(),
+                "{rel}"
+            );
+        }
+        // One text for the edit back and the first add.
+        assert_eq!(file_versions(&dir, "f.md").unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: `DocHistory` over the shared walk answers as the single walk does, at every
+    /// commit's time and a second either side of it.
+    #[test]
+    fn doc_history_from_the_shared_walk_matches_the_single_walk() {
+        let dir = shared_fixture("ph-dh");
+        std::fs::write(dir.join("f.md"), "edited now").unwrap();
+        let times: Vec<i64> = path_history(&dir)
+            .unwrap()
+            .commits
+            .iter()
+            .flat_map(|c| [c.unix - 1, c.unix, c.unix + 1])
+            .collect();
+        let history = DocHistory::default();
+        let mut answers = Vec::new();
+        for unix in times {
+            let at = time::OffsetDateTime::from_unix_timestamp(unix)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            for rel in ["f.md", "old.md", "f2.md", "never.md"] {
+                let doc = dir.join(rel);
+                let want = doc_changed_since_single_walk(&doc, &at);
+                assert_eq!(history.changed_since(&doc, &at), want, "{rel} at {at}");
+                answers.push(want);
+            }
+        }
+        assert!(history.is_shared());
+        assert!(answers.contains(&Some(true)) && answers.contains(&Some(false)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MNT-014 R-2: a history with a merge is answered by the tree walks, with the same answers.
+    #[test]
+    fn a_history_with_merges_falls_back_to_the_full_walk() {
+        let dir = fixture("ph-fallback");
+        assert!(!path_history(&dir).unwrap().is_linear());
+        for rel in ["docs/b.md", "c.txt", "s.txt", "d.txt"] {
+            assert_eq!(
+                file_history(&dir, rel).unwrap(),
+                file_history_walk(&dir, rel).unwrap(),
+                "{rel}"
+            );
+            assert_eq!(
+                file_versions(&dir, rel).unwrap(),
+                file_versions_walk(&dir, rel).unwrap(),
+                "{rel}"
+            );
+        }
+        let history = DocHistory::default();
+        for unix in [1_767_000_000, 1_768_000_000, 1_769_000_000, 1_770_000_000] {
+            let at = time::OffsetDateTime::from_unix_timestamp(unix)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            for rel in ["docs/b.md", "c.txt", "s.txt", "d.txt"] {
+                let doc = dir.join(rel);
+                assert_eq!(
+                    history.changed_since(&doc, &at),
+                    doc_changed_since_single_walk(&doc, &at),
+                    "{rel} at {at}"
+                );
+            }
+        }
+        assert!(!history.is_shared());
+        assert_eq!(history.stats(), HistoryStats { opens: 1, walks: 1 });
         let _ = std::fs::remove_dir_all(dir);
     }
 
