@@ -729,6 +729,15 @@ enum BuildCmd {
         #[arg(long)]
         base: Option<String>,
     },
+    /// The built web monitor for this worktree's web sources: the bundle kept on this machine
+    /// for them, else built once (`npm ci` when needed, `npm run build`, through a build slot)
+    /// and kept. Builds whose sources have a kept bundle get it as `KANBANR_UI_DIST`. Prints the
+    /// bundle's folder.
+    Web {
+        /// Build again even when a bundle is kept for these sources.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -8457,6 +8466,18 @@ fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
             let code = buildrun::check(&store, &p, &cwd, tier, base.as_deref())?;
             if code != 0 {
                 std::process::exit(code);
+            }
+            Ok(())
+        }
+        BuildCmd::Web { force } => {
+            let dist = buildrun::web(&store, &p, &cwd, *force)?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "dist": dist }))?
+                );
+            } else {
+                println!("{}", dist.display());
             }
             Ok(())
         }

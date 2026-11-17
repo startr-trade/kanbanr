@@ -440,6 +440,101 @@ pub fn parse_base_dirs(stats: &str) -> Option<Vec<PathBuf>> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The web bundle cache
+// ---------------------------------------------------------------------------------------------
+
+/// The files of the web folder at its top that the bundle is built from; with everything under
+/// [`WEB_SOURCE_DIRS`]. `*` stands for any text.
+const WEB_SOURCE_FILES: &[&str] = &[
+    "index.html",
+    "package.json",
+    "package-lock.json",
+    "tsconfig*.json",
+    "vite.config.*",
+];
+
+/// The folders of the web folder whose every file the bundle is built from.
+const WEB_SOURCE_DIRS: &[&str] = &["src", "public"];
+
+/// Does `name` match `pattern`, whose one optional `*` stands for any text?
+fn glob_match(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == name,
+        Some((head, tail)) => {
+            name.len() >= head.len() + tail.len() && name.starts_with(head) && name.ends_with(tail)
+        }
+    }
+}
+
+/// Every file under `dir`, each as its path relative to `web_dir` with `/` between components.
+fn files_under(
+    web_dir: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let path = e?.path();
+        if path.is_dir() {
+            files_under(web_dir, &path, out)?;
+        } else if path.is_file() {
+            let rel = path.strip_prefix(web_dir).unwrap_or(&path);
+            let rel: Vec<String> = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            out.push((rel.join("/"), path));
+        }
+    }
+    Ok(())
+}
+
+/// The key of the web bundle built from the web folder `web_dir` with Node `node_version`: the
+/// first 16 hex digits of a SHA-256 over each source file's path (relative to `web_dir`, `/`
+/// between components) and bytes, in path order, then `node_version`. The sources are
+/// `index.html`, `package.json`, `package-lock.json`, `tsconfig*.json`, `vite.config.*` and every
+/// file under `src/` and `public/`; `node_modules/`, `dist/` and anything else are not, so two
+/// worktrees with the same sources share one bundle.
+pub fn web_key(web_dir: &Path, node_version: &str) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    for e in std::fs::read_dir(web_dir)? {
+        let path = e?.path();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if path.is_file() && WEB_SOURCE_FILES.iter().any(|p| glob_match(p, &name)) {
+            files.push((name, path));
+        }
+    }
+    for d in WEB_SOURCE_DIRS {
+        let dir = web_dir.join(d);
+        if dir.is_dir() {
+            files_under(web_dir, &dir, &mut files)?;
+        }
+    }
+    files.sort();
+    let mut h = Sha256::new();
+    for (rel, path) in &files {
+        let bytes = std::fs::read(path)?;
+        // Each field with its length, so no two file sets hash alike by running together.
+        h.update((rel.len() as u64).to_le_bytes());
+        h.update(rel.as_bytes());
+        h.update((bytes.len() as u64).to_le_bytes());
+        h.update(&bytes);
+    }
+    h.update((node_version.len() as u64).to_le_bytes());
+    h.update(node_version.as_bytes());
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Ok(hex[..16].to_string())
+}
+
+/// Where the web bundle of `key` is kept on this machine: `<machine>/web/<key>/dist`.
+pub fn web_bundle_dir(machine: &Path, key: &str) -> PathBuf {
+    machine.join("web").join(key).join("dist")
+}
+
+// ---------------------------------------------------------------------------------------------
 // Affected checks
 // ---------------------------------------------------------------------------------------------
 
@@ -1459,6 +1554,90 @@ Max cache size                       10 GiB
             assert!(flags(&env).is_empty(), "{linker:?}");
             assert!(env.notes.is_empty());
         }
+    }
+
+    /// FTR-062 R-6: the bundle key changes with the web sources, the lockfile and the Node
+    /// version, and with nothing else: not `node_modules/`, `dist/` or `scripts/`, and not the
+    /// folder the web sources are in.
+    #[test]
+    fn the_web_bundle_key_follows_its_sources_only() {
+        let dir = scratch("web-key");
+        let write = |web: &Path, rel: &str, text: &str| {
+            let p = web.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let fixture = |web: &Path| {
+            for (rel, text) in [
+                ("index.html", "<div id=root></div>"),
+                ("package.json", r#"{"name":"web"}"#),
+                ("package-lock.json", r#"{"lockfileVersion":3}"#),
+                ("tsconfig.json", "{}"),
+                ("tsconfig.node.json", "{}"),
+                ("vite.config.ts", "export default {}"),
+                ("src/main.tsx", "render()"),
+                ("src/pages/Board.tsx", "board()"),
+                ("public/favicon.svg", "<svg/>"),
+                ("node_modules/react/index.js", "react"),
+                ("dist/index.js", "built"),
+                ("scripts/check-docs.mjs", "check()"),
+            ] {
+                write(web, rel, text);
+            }
+        };
+        let a = dir.join("wt-a").join("web");
+        let b = dir.join("wt-b").join("web");
+        fixture(&a);
+        fixture(&b);
+        let key = |web: &Path, node: &str| web_key(web, node).unwrap();
+        let k0 = key(&a, "v22.11.0");
+        assert_eq!(k0.len(), 16, "{k0}");
+        assert!(k0.chars().all(|c| c.is_ascii_hexdigit()), "{k0}");
+        assert_eq!(
+            key(&b, "v22.11.0"),
+            k0,
+            "the same sources in another worktree"
+        );
+        assert_eq!(key(&a, "v22.11.0"), k0, "stable");
+
+        // What the bundle is built from changes the key; putting it back restores it.
+        for (rel, text) in [
+            ("src/main.tsx", "render(2)"),
+            ("src/pages/Board.tsx", "board(2)"),
+            ("package-lock.json", r#"{"lockfileVersion":3,"x":1}"#),
+            ("package.json", r#"{"name":"web2"}"#),
+            ("index.html", "<div></div>"),
+            ("tsconfig.node.json", "{\"x\":1}"),
+            ("vite.config.ts", "export default {x:1}"),
+            ("public/favicon.svg", "<svg></svg>"),
+        ] {
+            let before = std::fs::read_to_string(b.join(rel)).unwrap();
+            write(&b, rel, text);
+            assert_ne!(key(&b, "v22.11.0"), k0, "{rel} changes the key");
+            write(&b, rel, &before);
+            assert_eq!(key(&b, "v22.11.0"), k0, "{rel} restored");
+        }
+        write(&b, "src/new.ts", "x");
+        assert_ne!(key(&b, "v22.11.0"), k0, "a new source file changes the key");
+        std::fs::remove_file(b.join("src/new.ts")).unwrap();
+        assert_ne!(key(&a, "v20.0.0"), k0, "the Node version changes the key");
+
+        // What the bundle is not built from leaves it alone.
+        for rel in [
+            "node_modules/react/index.js",
+            "node_modules/.package-lock.json",
+            "dist/index.js",
+            "dist/assets/x.css",
+            "scripts/check-docs.mjs",
+            "README.md",
+        ] {
+            write(&b, rel, "changed");
+        }
+        assert_eq!(key(&b, "v22.11.0"), k0, "only build inputs count");
+        assert!(
+            web_bundle_dir(Path::new("/m"), &k0).ends_with(Path::new("web").join(&k0).join("dist"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Four crates as `cargo metadata --no-deps` reports them: `lint` ← `core` ← `server` ←

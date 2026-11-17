@@ -16402,3 +16402,178 @@ fn profile_update_is_reported_and_adopted_only_on_request_with_answers_kept() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-062 R-6: a stub `npm` on `PATH` counts its builds. Two worktrees with the same web sources
+/// build the bundle once; a change to the sources builds it again; a build run in a worktree whose
+/// sources have a kept bundle gets it as `KANBANR_UI_DIST`.
+#[cfg(unix)]
+#[test]
+fn build_web_reuses_the_cached_bundle_for_unchanged_sources() {
+    use std::os::unix::fs::PermissionsExt;
+    let (base, work) = diagram_scratch("build-web");
+    let board = std::path::PathBuf::from(
+        String::from_utf8_lossy(&run_in(&base, &work, &["where"]).stdout).trim(),
+    );
+    // The test's own board, under its scratch folder (L-41); `build web` writes none.
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{}",
+        board.display()
+    );
+    let ok = |o: Output| {
+        assert!(
+            o.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    // The stub: `npm ci` installs, `npm run build` writes dist/ from the sources; each logged.
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = base.join("npm.log");
+    let stub = bin.join("npm");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\n\
+             echo \"$1 $(pwd)\" >> '{log}'\n\
+             case \"$1\" in\n\
+             ci) mkdir -p node_modules && echo '{{}}' > node_modules/.package-lock.json ;;\n\
+             run) mkdir -p dist && cat src/main.tsx > dist/index.html ;;\n\
+             esac\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let machine = base.join("machine");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let build = |dir: &std::path::Path, args: &[&str]| {
+        Command::new(cli())
+            .arg("build")
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", base.join("home"))
+            .env("PATH", &path)
+            .env("KANBANR_BUILD_DIR", &machine)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let calls = || -> Vec<String> {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| l.split(' ').next().unwrap_or("").to_string())
+            .collect()
+    };
+
+    // The web sources, committed, and a second worktree of them.
+    let web = work.join("web");
+    std::fs::create_dir_all(web.join("src")).unwrap();
+    std::fs::write(web.join("package.json"), r#"{"name":"web"}"#).unwrap();
+    std::fs::write(web.join("package-lock.json"), r#"{"lockfileVersion":3}"#).unwrap();
+    std::fs::write(web.join("index.html"), "<div id=root></div>").unwrap();
+    std::fs::write(web.join("src").join("main.tsx"), "one").unwrap();
+    ok(git_in(&base, &work, &["add", "web"]));
+    ok(git_in(&base, &work, &["commit", "-q", "-m", "web"]));
+    let wt2 = base.join("code").join("shop-wt2");
+    ok(git_in(
+        &base,
+        &work,
+        &["worktree", "add", "-q", "--detach", wt2.to_str().unwrap()],
+    ));
+
+    // First worktree: installed and built once, kept on the machine.
+    let first = ok(build(&work, &["web"])).trim().to_string();
+    assert_eq!(calls(), ["ci", "run"], "installed, then built");
+    let kept = std::path::PathBuf::from(&first);
+    assert!(
+        kept.starts_with(machine.join("web")) && kept.ends_with("dist"),
+        "{first}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(kept.join("index.html")).unwrap(),
+        "one"
+    );
+    // Again in the same worktree: the kept bundle, no npm run.
+    assert_eq!(ok(build(&work, &["web"])).trim(), first);
+    assert_eq!(calls().len(), 2);
+
+    // The second worktree, with the same sources: the same bundle, no npm run.
+    assert_eq!(ok(build(&wt2, &["web"])).trim(), first);
+    assert_eq!(
+        calls().len(),
+        2,
+        "the same sources build once: {:?}",
+        calls()
+    );
+
+    // A build there gets the kept bundle as KANBANR_UI_DIST.
+    let seen = base.join("ui-dist.txt");
+    ok(build(
+        &wt2,
+        &[
+            "run",
+            "--",
+            "sh",
+            "-c",
+            &format!("printf %s \"$KANBANR_UI_DIST\" > '{}'", seen.display()),
+        ],
+    ));
+    assert_eq!(std::fs::read_to_string(&seen).unwrap(), first);
+
+    // A change to the sources builds again, into another bundle; the first one stays.
+    std::fs::write(wt2.join("web").join("src").join("main.tsx"), "two").unwrap();
+    let second = ok(build(&wt2, &["web"])).trim().to_string();
+    assert_ne!(second, first);
+    assert_eq!(
+        calls(),
+        ["ci", "run", "ci", "run"],
+        "built again for the change"
+    );
+    assert_eq!(
+        std::fs::read_to_string(std::path::Path::new(&second).join("index.html")).unwrap(),
+        "two"
+    );
+    assert!(
+        kept.join("index.html").is_file(),
+        "the first bundle is kept"
+    );
+    // Installed packages newer than the lockfile are not installed again.
+    std::fs::write(wt2.join("web").join("src").join("main.tsx"), "three").unwrap();
+    ok(build(&wt2, &["web"]));
+    assert_eq!(
+        calls(),
+        ["ci", "run", "ci", "run", "run"],
+        "no second npm ci"
+    );
+    // --force builds even when a bundle is kept.
+    assert_eq!(ok(build(&work, &["web", "--force"])).trim(), first);
+    assert_eq!(calls().len(), 6);
+
+    // The npm runs went through the build slots and into the build log.
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(&ok(build(&work, &["log", "--json"]))).unwrap();
+    let npm: Vec<String> = rows
+        .iter()
+        .filter(|r| r["cmd"][0] == "npm")
+        .map(|r| r["cmd"][1].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(npm, ["ci", "run", "ci", "run", "run", "run"], "{rows:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
