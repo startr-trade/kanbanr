@@ -807,6 +807,11 @@ export interface PreparedView extends Prepared {
   page: string;
   /** The verdict command a person would run in their own terminal instead. */
   command: string;
+  /** The release the record is about (DEF-095), derived: a promotion's own; for a gate result,
+   * the release its commit belongs to. Absent when none. */
+  release?: string;
+  /** The release stages that ask for a gate result's gate (DEF-095). Absent when none does. */
+  required_by?: string[];
 }
 
 /** A kept manual-test result: who checked, when, from where, and any note (DEF-040). */

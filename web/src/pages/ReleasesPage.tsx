@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
@@ -7,10 +7,10 @@ import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import { releaseAction } from "../releaseAction";
 import { notesSection } from "../releaseNotes";
 import Markdown from "../components/Markdown";
-import type { PreparedView, Release, TagResult } from "../types";
+import type { PreparedView, Release, ReleasePlan, TagResult } from "../types";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { AskFirst } from "../components/AskFirst";
-import { openFor } from "../prepared";
+import { openFor, unshownFor } from "../prepared";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
@@ -31,6 +31,14 @@ export default function ReleasesPage() {
   // Promote (FEAT-185): which release is being promoted, and what came of it.
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, string>>({});
+  // The prepared records each release's forms already show (DEF-095), by version, as the release's
+  // button reports them; the rest are listed under "Prepared, not required".
+  const [shown, setShown] = useState<Record<string, string[]>>({});
+  const onShown = useCallback(
+    (version: string, ids: string[]) =>
+      setShown((s) => (s[version]?.join(",") === ids.join(",") ? s : { ...s, [version]: ids })),
+    [],
+  );
 
   if ((board.loading && !board.data) || (releases.loading && !releases.data)) return <Loading />;
   if (board.error) return <ErrorBox error={board.error} />;
@@ -197,8 +205,18 @@ export default function ReleasesPage() {
                     onPromote={promote}
                     outcome={outcome[r.version]}
                     prepared={prepared.data ?? []}
+                    onShown={onShown}
                   />
                 ) : null}
+                {/* Until the button has said what its forms show, nothing is listed twice. */}
+                {next && shown[r.version] === undefined ? null : (
+                  <PreparedNotRequired
+                    project={project}
+                    views={unshownFor(prepared.data, r.version, new Set(next ? shown[r.version] : []))}
+                    writable={writable}
+                    who={who}
+                  />
+                )}
                 {r.branch && config.cadence?.release_prepare?.notes ? (
                   <ReleaseNotesSection
                     project={project}
@@ -240,6 +258,7 @@ function ReleaseButton({
   gates,
   who,
   prepared,
+  onShown,
 }: {
   project: string;
   release: Release;
@@ -251,6 +270,7 @@ function ReleaseButton({
   onPromote: (r: Release, to: string, expect: string, note?: string, acceptUntested?: string[]) => void;
   outcome?: string;
   prepared: PreparedView[];
+  onShown: (version: string, ids: string[]) => void;
 }) {
   // A confirmation after the tag asks what the user checked before it goes (FTR-026).
   const [asking, setAsking] = useState(false);
@@ -266,6 +286,12 @@ function ReleaseButton({
   // The person's acceptance of what the cut ships untested (DEF-043), for the list the plan showed.
   const [accepted, setAccepted] = useState(false);
   const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
+  // Which prepared records this button's forms show (DEF-095), told to the page once the plan is
+  // read, so the page lists the others under "Prepared, not required". None when the plan fails.
+  const shownKey = plan.error ? "" : plan.data ? shownByButton(plan.data, writable, release.version, gates, prepared).join(",") : null;
+  useEffect(() => {
+    if (shownKey != null) onShown(release.version, shownKey ? shownKey.split(",") : []);
+  }, [shownKey, release.version, onShown]);
   if (plan.error) return <ErrorBox error={plan.error} />;
   if (!plan.data) return <Loading />;
   const action = releaseAction(plan.data, writable);
@@ -723,6 +749,95 @@ function TagPanel({
 }
 
 /**
+ * The ids of the prepared records a release's button shows (DEF-095), by the same rules it renders
+ * them: the promotion beside the button, and the gate result in the tag's and the plan's Record
+ * result forms.
+ */
+function shownByButton(plan: ReleasePlan, writable: boolean, version: string, gates: string[], prepared: PreparedView[]): string[] {
+  const action = releaseAction(plan, writable);
+  if (action.note) return [];
+  const ids: string[] = [];
+  const promotion =
+    action.confirm && !plan.awaiting ? openFor(prepared, "promotion", { release: version, stage: plan.to }) : undefined;
+  if (promotion?.id && action.button) ids.push(promotion.id);
+  if (plan.tag && plan.tag.state !== "passed" && plan.tag.gate) {
+    const v = gateResultFor(prepared, gates, plan.tag.commit);
+    if (v?.id) ids.push(v.id);
+  }
+  if (action.missing.length && action.gate) {
+    const v = gateResultFor(prepared, gates, action.gate.commit);
+    if (v?.id) ids.push(v.id);
+  }
+  return ids;
+}
+
+/**
+ * The open prepared records about a release that no form on its entry shows (DEF-095): a gate
+ * result for a gate no stage asks for, a promotion for a stage that is not the plan's next. Each is
+ * shown in its own PreparedPanel, confirmed or rejected there, so nothing waits unseen. On a
+ * read-only monitor the panel names the command.
+ */
+function PreparedNotRequired({
+  project,
+  views,
+  writable,
+  who,
+}: {
+  project: string;
+  views: PreparedView[];
+  writable: boolean;
+  who: string | null;
+}) {
+  const [said, setSaid] = useState<Record<string, { ok: boolean; text: string }>>({});
+  if (!views.length) return null;
+  const answer = async (id: string, go: () => Promise<unknown>, text: string) => {
+    try {
+      await go();
+      setSaid((s) => ({ ...s, [id]: { ok: true, text } }));
+    } catch (e) {
+      setSaid((s) => ({ ...s, [id]: { ok: false, text: e instanceof Error ? e.message : String(e) } }));
+    }
+  };
+  return (
+    <div className="small">
+      <p>
+        <strong>Prepared, not required</strong>
+      </p>
+      {views.map((view) => {
+        const id = view.id ?? "";
+        const gate = view.subject.gate ?? "";
+        const isGate = view.kind === "gate-result";
+        const passed = view.fields?.passed === true;
+        const label = isGate
+          ? `Record ${gate} ${passed ? "passed" : "failed"} on ${(view.subject.commit ?? "").slice(0, 7)}`
+          : `Promote ${view.subject.release ?? view.release ?? ""} to ${view.subject.stage ?? ""}`;
+        return (
+          <div key={id}>
+            {isGate ? (
+              <p className="muted">
+                {(view.required_by ?? []).length ? `asked for by ${(view.required_by ?? []).join(", ")}` : `no stage asks for ${gate}`}
+              </p>
+            ) : null}
+            <PreparedPanel
+              project={project}
+              view={view}
+              writable={writable && who != null}
+              busy={false}
+              label={label}
+              onConfirm={(edits) => who && answer(id, () => api.confirmPrepared(project, view, who, edits), `${label}: done`)}
+              onReject={(reason) =>
+                who && answer(id, () => api.rejectPrepared(project, id, who, reason), "rejected what Claude prepared")
+              }
+            />
+            {said[id] ? <span className={`chip ${said[id].ok ? "done" : "warn"}`}>{said[id].text}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Record what your CI said about the commit a promotion needs (FTR-002): which gate, passed or
  * failed, a link to the run and a note. kanbanr asks no server; a person records the verdict. On a
  * read-only monitor it shows the command instead.
@@ -752,9 +867,7 @@ function RecordResult({
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   // A result Claude read from the CI and prepared (FTR-034): shown filled in, confirmed with one
   // click; Edit offers the same fields as the form.
-  const view = (gates.length ? gates : ["ci"])
-    .map((g) => openFor(prepared, "gate-result", { gate: g, commit }))
-    .find((v) => v != null);
+  const view = gateResultFor(prepared, gates, commit);
   if (view) {
     const passed = view.fields?.passed === true;
     const answer = async (go: () => Promise<unknown>, text: string) => {
@@ -843,6 +956,13 @@ function RecordResult({
       </p>
     </div>
   );
+}
+
+/** The prepared gate result RecordResult shows for `commit`: the newest open one for its gates. */
+function gateResultFor(prepared: PreparedView[], gates: string[], commit: string): PreparedView | undefined {
+  return (gates.length ? gates : ["ci"])
+    .map((g) => openFor(prepared, "gate-result", { gate: g, commit }))
+    .find((v) => v != null);
 }
 
 /**

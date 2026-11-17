@@ -95,6 +95,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Milestones are listed newest first": LOCAL,
             "The header shows the running kanbanr and warns when the board is ahead": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
+            "The Releases page lists prepared records no form shows": LOCAL,
             "A disabled Approve or Ratify button says what is missing and who provides it": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,

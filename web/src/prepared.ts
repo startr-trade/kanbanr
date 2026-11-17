@@ -21,6 +21,27 @@ export function openFor(
   return found[0];
 }
 
+/**
+ * The open records about release `version` that no form on its entry shows (DEF-095): a gate
+ * result for a gate no stage asks for, or a promotion for a stage that is not the plan's next.
+ * `shown` holds the ids the entry's forms already offer. Oldest first. The Releases page lists them
+ * under "Prepared, not required".
+ */
+export function unshownFor(
+  views: PreparedView[] | null | undefined,
+  version: string,
+  shown: ReadonlySet<string>,
+): PreparedView[] {
+  const out = (views ?? []).filter(
+    (v) =>
+      v.state === "open" &&
+      (v.release === version || v.subject?.release === version) &&
+      !shown.has(v.id ?? ""),
+  );
+  out.sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "") || (a.id ?? "").localeCompare(b.id ?? ""));
+  return out;
+}
+
 /** One batch of open records (FTR-037): its name and the records, oldest first. */
 export interface Batch {
   name: string;
