@@ -744,8 +744,8 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   revision on the Baseline page alongside design-review. An answered area is never asked again:
   read it from `kanbanr baseline show`. The Design names each entry it touches under
   `### Baseline` as `- B-003: <test name or reason>`; `check` flags a design that names another
-  option of an answered area until the reason is written or a revision proposed. Whether the
-  product has screens is the baseline's `project-kind` area; write the first item as what a person
+  option of an answered area until the reason is written or a revision proposed. Ask whether the product has a user interface
+  through the baseline's `project-kind` area; write the first item as what a person
   does ("a shopper opens their basket and finds it kept"), not as a capability.
 - **Ask how a screen should look before designing it.** The styling approach is the baseline's
   `ui-style` area, asked as above the first time a screen is designed and read from the baseline
