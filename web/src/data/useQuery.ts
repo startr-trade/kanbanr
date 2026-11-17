@@ -12,6 +12,8 @@ export interface Query<T> {
   loading: boolean;
   /** A stale read being re-read; the old data stays meanwhile. */
   refreshing: boolean;
+  /** When the read in flight started (ms since the epoch), else null. */
+  since: number | null;
   reload(): void;
 }
 

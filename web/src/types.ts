@@ -390,6 +390,13 @@ export interface PendingReview {
   claudes?: boolean;
 }
 
+/** One decision group the config can have, named before any is counted (DEF-106, `GET /review/outline`). */
+export interface GroupOutline {
+  key: string;
+  label: string;
+  action: string;
+}
+
 /** One decision group, counted: a tab on the Review page (FTR-038, `GET /review/summary`). */
 export interface GroupCount {
   /** approve, ratify, design-review, docs-folded, release-signoff, signoff-<name>, which-release,

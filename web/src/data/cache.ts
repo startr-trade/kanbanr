@@ -16,6 +16,8 @@ export interface Entry<T = unknown> {
   stale: boolean;
   /** The read in flight, shared by every caller asking for this URL meanwhile. */
   inflight?: Promise<T>;
+  /** When the read in flight started (ms since the epoch); cleared when it ends. */
+  startedAt?: number;
   /** Called when the entry changes: data arrived, or it went stale. */
   subs: Set<() => void>;
   /** Whether a read has ever finished, so a `null` body is not taken for "not loaded yet". */
@@ -72,6 +74,7 @@ export class DataCache {
     e.tags = tags;
     if (e.inflight) return e.inflight;
     const epoch = e.epoch;
+    e.startedAt = Date.now();
     const run = (async () => {
       try {
         const data = await load();
@@ -85,6 +88,7 @@ export class DataCache {
         throw err;
       } finally {
         e.inflight = undefined;
+        e.startedAt = undefined;
         // A change that landed while the read ran may not be in what it read.
         e.stale = e.epoch !== epoch;
         this.notify(e);
@@ -133,6 +137,8 @@ export interface QueryState<T> {
   loading: boolean;
   /** A stale entry being re-read: the old data stays on screen meanwhile. */
   refreshing: boolean;
+  /** When the read in flight started (ms since the epoch), else null: a page says how long it has been working. */
+  since: number | null;
 }
 
 /**
@@ -141,11 +147,12 @@ export interface QueryState<T> {
  * `error` is null, so "not loaded yet" never reads as "nothing there".
  */
 export function queryState<T>(e: Entry<T> | undefined): QueryState<T> {
-  if (!e || !e.loaded) return { data: null, error: null, loading: true, refreshing: false };
+  if (!e || !e.loaded) return { data: null, error: null, loading: true, refreshing: false, since: e?.startedAt ?? null };
   return {
     data: e.data,
     error: e.error,
     loading: false,
     refreshing: e.stale || e.inflight !== undefined,
+    since: e.inflight !== undefined ? (e.startedAt ?? null) : null,
   };
 }
