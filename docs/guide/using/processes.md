@@ -426,7 +426,14 @@ is still accepted. Changing the stages of a project whose gates are still the th
 drops those gates and takes the defaults for the new stages. Every move is recorded on the release with who made it and when.
 
 - **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
-  checking it out.
+  checking it out. A `release/<VERSION>` that already exists but that the release does not record,
+  such as one made by hand, is **adopted** when its tip is exactly the integration branch's tip:
+  nothing is made or moved, the release records the branch as adopted, the plan says "adopts
+  release/v0.2.0: it is at main's tip 04fe2e7" and the promotion prints "adopted release/v0.2.0 (it was already at main's tip)".
+  `kanbanr release undo` keeps an adopted branch. A branch that differs, ahead or behind, is refused
+  with how many commits it is ahead and behind and the two ways on: delete it if it is a leftover
+  (`git branch -D release/<VERSION>`), or move it to the integration branch if it is what you mean
+  to release. Nothing is changed.
 - **A middle stage** is a board change only.
 - **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
   Nothing moves back from production.
@@ -469,7 +476,7 @@ cadence:
 
 | action | does |
 |---|---|
-| `branch` | makes `release/<V>` from the line of integration, nothing checked out |
+| `branch` | makes `release/<V>` from the line of integration, nothing checked out; adopts an existing `release/<V>` that is exactly at that line's tip, and refuses one that differs |
 | `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below); entering the stage again redoes it when the configuration changed since, which the Releases page offers as **Promote \<VERSION\> to candidate again** |
 | `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
 | `tag` | tags the release tip `<V>` ("Release <V>"); the stage holding it is the cut, and any stage after it only confirms |
