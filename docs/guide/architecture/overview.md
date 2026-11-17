@@ -169,6 +169,31 @@ is; only a board in the system temporary directory that holds none is exempt, so
 runs in an agent's worktree as anywhere else, and pointing `TMPDIR` at the real board does not
 lift its scopes.
 
+### A board write is committed or undone
+
+A write that reports success is in a commit; one that cannot commit changes nothing and says so
+(DEF-102). Under the write lock a recording write does these things in order:
+
+1. It takes the lock, waiting at most 120 seconds, and names the holder (process, method and path,
+   time) if it gives up. The lock file records its current holder.
+2. It recovers a write that died: the previous write left a journal in the board's git directory
+   (`kanbanr-write.json`, never tracked, never holding a body). If the board's HEAD moved, that write
+   committed, and only the journal is cleared. If it did not, the files it changed are put back as
+   HEAD has them, and the answer says so in its warnings. This runs before the scope checks, so a
+   dead write's leftovers never get a scoped agent refused.
+3. It writes the journal, dispatches, writes the activity and events, and commits. Git's index lock
+   is waited for up to 5 seconds, with a short backoff. If the commit still cannot be made, the files
+   are put back and the write is refused as "nothing was changed".
+4. It clears the journal, then applies the push policy and delivers events.
+
+On an unscoped board with changes made outside kanbanr, those files are committed with the write
+and named in its message and warnings; a scoped write is refused instead. Reads take no git lock
+(`GIT_OPTIONAL_LOCKS=0` for every `git` kanbanr runs), so a status read never rewrites git's index.
+Writes to the code repository, such as release promotion, are outside the journal. Both waits can be
+changed with `KANBANR_LOCK_WAIT_SECS` and `KANBANR_COMMIT_WAIT_MS` (see the
+[CLI reference](../reference/cli.md#environment-variables-for-board-writes)); a debug build can be
+stopped at each step with `KANBANR_FAULT=<step>` for the crash tests.
+
 ## The rules: one engine for what is missing
 
 Whether an item may move, what `kanbanr check` reports, what `doctor` warns about, what

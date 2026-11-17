@@ -113,6 +113,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- A board write whose commit could not be made (another program held git's index) was reported as
+  done and left its files uncommitted, so later agent writes were refused; a write now waits for
+  git, and if it still cannot commit it changes nothing and says so. A write that dies part-way is
+  put back by the next one. kanbanr's reads no longer lock git's index. A text checked for a
+  docs-folded sign-off stays checked when its item records a task or a test, and lapses only when
+  the text changes (DEF-102).
 - `kanbanr check` and the docs-folded sign-off no longer report an item's repository docs as
   unchanged once its branch is merged into the sprint: a doc counts as written when any commit for
   the item (its `Refs:` trailer) or its branch touched it since the item entered In Progress, a doc
