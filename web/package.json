@@ -46,7 +46,8 @@
     "check:ui-accordion": "node scripts/check-ui-accordion.mjs",
     "check:review-check-id": "node scripts/check-review-check-id.mjs",
     "check:ui-table": "node scripts/check-ui-table.mjs",
-    "check:ui-charts": "node scripts/check-ui-charts.mjs"
+    "check:ui-charts": "node scripts/check-ui-charts.mjs",
+    "check:ui-figures": "node scripts/check-ui-figures.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

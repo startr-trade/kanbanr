@@ -382,6 +382,10 @@ jobs:
       # weeks around today, and the stepper marks done, current and next in text (FTR-046).
       - name: The UI kit's matrix, timeline and stepper draw their data correctly
         run: npm run check:ui-charts
+      # Progress shares add up to 100, pills and tiles say their tone in text, and loading, error and
+      # empty are distinct states, the empty one offering a sentence to copy (FTR-046).
+      - name: The UI kit's figures and states say what they show in text
+        run: npm run check:ui-figures
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
