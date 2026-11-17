@@ -1946,6 +1946,44 @@ struct StaleDraft {
     ships: Vec<FeatureItem>,
 }
 
+/// The plan's warning for a stale untouched draft (DEF-078 R-4).
+fn stale_draft_warning(version: &str, branch: &str, stale: &StaleDraft) -> String {
+    let ships: Vec<String> = stale.ships.iter().map(|f| f.code.clone()).collect();
+    let list = |codes: &[String], none: &str| {
+        if codes.is_empty() {
+            none.to_string()
+        } else {
+            codes.join(", ")
+        }
+    };
+    let missing: Vec<String> = ships
+        .iter()
+        .filter(|c| !stale.drafted.contains(c))
+        .cloned()
+        .collect();
+    let gone: Vec<String> = stale
+        .drafted
+        .iter()
+        .filter(|c| !ships.contains(c))
+        .cloned()
+        .collect();
+    let mut differ: Vec<String> = Vec::new();
+    if !missing.is_empty() {
+        differ.push(format!("missing: {}", missing.join(", ")));
+    }
+    if !gone.is_empty() {
+        differ.push(format!("no longer shipping: {}", gone.join(", ")));
+    }
+    format!(
+        "the draft notes on {branch} name {}, but {} would ship ({}): they are drafted again when \
+         an item merges, or when the release is prepared again; to write them yourself, \
+         `kanbanr release notes {version} --file <file>`",
+        list(&stale.drafted, "no item"),
+        list(&ships, "nothing"),
+        differ.join("; ")
+    )
+}
+
 /// `release`'s notes at its branch tip, when they are a stale untouched draft (DEF-078). `None`
 /// when there is nothing to draft again: no notes configured or written, notes written by hand,
 /// the draft current, the release shipped or tagged.
@@ -2782,6 +2820,18 @@ fn work_out(
                         String::new()
                     }
                 ));
+            }
+            // Draft notes that no longer name what ships, said before main moves or the cut
+            // (DEF-078). The plan only reads (ADR-0005).
+            let enters_main_or_cut = entered
+                .iter()
+                .any(|&i| i == cut_stage || gates[i].1.on_enter.contains(&ReleaseAction::MoveMain));
+            if direction == Direction::Forward
+                && branch_exists
+                && enters_main_or_cut
+                && let Ok(Some(stale)) = stale_draft(store, id, &project, &releases, &release, repo)
+            {
+                warnings.push(stale_draft_warning(version, &branch, &stale));
             }
             if tags {
                 let does = if prepares {
@@ -7480,6 +7530,46 @@ pub(crate) mod tests {
             !hand.files.iter().any(|(p, _)| p == NOTES),
             "{:?}",
             hand.files
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-078 R-4: the plan to the stage that moves main says when the draft notes no longer
+    /// name what would ship; with a current draft it says nothing of them.
+    #[test]
+    fn the_plan_warns_when_the_draft_notes_are_stale() {
+        let (store, dir, repo, code) = unfinished_notes_fixture("notes-stale-plan");
+        let plan = || {
+            super::plan_promotion(
+                &store,
+                "shop",
+                "v0.2.0",
+                Some("main"),
+                "",
+                Some(&repo),
+                super::Fetch::No,
+            )
+            .unwrap()
+        };
+        let about_notes = |p: &super::ReleasePlan| -> Vec<String> {
+            p.warnings
+                .iter()
+                .filter(|w| w.contains("draft notes"))
+                .cloned()
+                .collect()
+        };
+        let current = plan();
+        assert!(about_notes(&current).is_empty(), "{:?}", current.warnings);
+        finish(&store, &code);
+        let stale = plan();
+        let said = about_notes(&stale);
+        assert_eq!(said.len(), 1, "{:?}", stale.warnings);
+        assert!(said[0].contains(&format!("missing: {code}")), "{}", said[0]);
+        assert!(
+            said[0].contains("`kanbanr release notes v0.2.0 --file <file>`"),
+            "{}",
+            said[0]
         );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
