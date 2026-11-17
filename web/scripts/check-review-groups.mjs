@@ -679,6 +679,24 @@ try {
     if (!read("../src/pages/review/ReviewRow.tsx").includes("urls.itemDiagrams(")) problems.push("useDiagramCheck does not read through the cache");
     ok = report("web::check_review_page_reads_only_through_the_cache", problems) && ok;
   }
+  {
+    // R-9 sitting finding: the disclosure arrow sits beside the title, not on a line above it.
+    const css = read("../src/ui/ui.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+    const has = (re, pred) => rules.some((r) => re.test(r.sel) && pred(r.body));
+    const problems = [];
+    if (!has(/^\.ui-row-title > button[^,]*$/, (b) => /display:\s*grid/.test(b) && /grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)/.test(b)))
+      problems.push(".ui-row-title > button is not a two-column grid (auto, minmax(0, 1fr))");
+    if (!has(/\.ui-row-title > button[^,]*::before$/, (b) => /grid-column:\s*1/.test(b) && /grid-row:\s*1/.test(b)))
+      problems.push("the arrow (::before) is not placed in column 1, row 1");
+    if (!has(/\.ui-row-title > button[^,]*> \*$/, (b) => /grid-column:\s*2/.test(b)))
+      problems.push("the button's children are not placed in column 2");
+    // Rows whose title is several inline pieces (Plan) or plain text keep their look: the grid
+    // applies only where a second line exists.
+    if (!rules.some((r) => /display:\s*grid/.test(r.body) && /\.ui-row-title > button/.test(r.sel) && /:has\(/.test(r.sel)))
+      problems.push("the grid is not limited to titles with a second line, so single-line rows would change");
+    ok = report("web::check_row_arrow_sits_beside_the_title", problems) && ok;
+  }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);
   ok = false;
