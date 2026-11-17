@@ -483,6 +483,10 @@ organisation's own process file changes what you ask with nothing changed here:
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
+When you ask the person for a decision, link the group: `/p/<project>/review?group=<key>#<CODE>`;
+the keys are approve, ratify, design-review, docs-folded, release-signoff, which-release, manual,
+delegation, delegated, adr.
+
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 

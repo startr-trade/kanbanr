@@ -25,6 +25,9 @@ All notable changes to kanbanr are documented here. The format follows
   uninstalling removes only kanbanr's own entries (FTR-059).
 - `affects_no_docs` in a definition records why an item changes no doc; the 'declares no docs'
   warning now shows in `kanbanr check` before the move and at the move, and names it (DEF-075).
+- The Review page groups waiting decisions by the decision they need, as tabs with counts; the
+  person selects within one group and records that decision for all of them with one confirmation,
+  one verdict per item in one commit (FTR-038).
 
 ### Changed
 
