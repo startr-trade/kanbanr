@@ -184,6 +184,21 @@ pub fn setup_questions(tracked: bool, git_identity: bool, has_remote: bool) -> V
          for the whole charter, not one per field; nothing is adopted before the confirmation."
             .into(),
     );
+    // FTR-033 R-1: after the charter (FTR-005 T4 later puts its facts entry before this one and
+    // its catalog entry after it).
+    ask.push(
+        "The engineering baseline: in the project folder run `kanbanr profile ask --json` (it \
+         lists the setup areas the folder does not answer, with a detected answer first and the \
+         recommended one otherwise, in dialogs of at most four, and the packs the facts suggest); \
+         ask each dialog with AskUserQuestion, 'Decide later' and 'Explain the options' always \
+         offered; write the answers to a scratch answers file and rerun `profile ask --answers \
+         <file>` until it lists nothing; the plan shows the packs to follow (core, plus each \
+         suggested pack as a yes/no) and the draft baseline (area, answer, kind, where it is \
+         recorded) and proposes it (`kanbanr profile add <pack>` for each, `kanbanr baseline \
+         propose --answers <file>`); the person accepts it on the Baseline page after setup. \
+         Never answer an area yourself: a detected answer is still confirmed."
+            .into(),
+    );
     ask
 }
 
@@ -1015,11 +1030,49 @@ mod tests {
     #[test]
     fn setup_asks_what_only_the_user_can_answer() {
         assert!(setup_questions(true, false, false).is_empty());
-        assert_eq!(setup_questions(false, true, false).len(), 5);
+        assert_eq!(setup_questions(false, true, false).len(), 6);
         let all = setup_questions(false, false, false);
-        assert_eq!(all.len(), 6);
+        assert_eq!(all.len(), 7);
         assert!(all[2].contains("sprints and releases"));
         assert!(all[4].contains("commit identity"));
+    }
+
+    /// FTR-033 R-1: the engineering baseline is asked after the charter, through `profile ask`,
+    /// and proposed for the person to accept; the repository question still precedes the charter.
+    #[test]
+    fn setup_questions_name_the_baseline_after_the_charter() {
+        let q = setup_questions(false, true, false);
+        assert_eq!(q.len(), 6, "{q:?}");
+        let charter = q.iter().position(|x| x.starts_with("The charter")).unwrap();
+        let baseline = q
+            .iter()
+            .position(|x| x.starts_with("The engineering baseline"))
+            .expect("a baseline question");
+        assert_eq!(baseline, charter + 1, "{q:?}");
+        for named in [
+            "kanbanr profile ask --json",
+            "kanbanr profile add",
+            "kanbanr baseline propose",
+            "Baseline page",
+        ] {
+            assert!(q[baseline].contains(named), "{named}: {}", q[baseline]);
+        }
+        assert!(q[baseline].contains("Never answer an area yourself"));
+
+        let with_remote = setup_questions(false, true, true);
+        let repo = with_remote
+            .iter()
+            .position(|x| x.contains("code repository"))
+            .unwrap();
+        let charter = with_remote
+            .iter()
+            .position(|x| x.starts_with("The charter"))
+            .unwrap();
+        assert!(repo < charter, "{with_remote:?}");
+        assert!(with_remote[charter + 1].starts_with("The engineering baseline"));
+
+        assert!(setup_questions(true, false, false).is_empty());
+        assert!(setup_questions(true, true, true).is_empty());
     }
     /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
     /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.

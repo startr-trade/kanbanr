@@ -194,6 +194,8 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
         scan_references(store, &project, &mut report);
     }
     scan_declared_docs(&project, &charter, &ctx, &mut report);
+    scan_profile_drift(store, &project, &mut report);
+    scan_baseline(store, &project, &mut report);
     scan_coverage(store, &project, &mut report);
     scan_catalog(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
@@ -653,6 +655,154 @@ fn scan_process_drift(store: &Store, project: &Project, report: &mut Report) {
             code: None,
             message,
         });
+    }
+}
+
+/// The practice packs a project follows whose library copy has changed since it applied them, or
+/// that are gone from their library (FTR-033 R-5): a warning per message, each naming what to run.
+/// Only reported, never applied: `kanbanr profile update` is the person's choice. A personal pack
+/// is skipped, as the daemon cannot see that library.
+fn scan_profile_drift(store: &Store, project: &Project, report: &mut Report) {
+    // A baseline that does not parse is `scan_baseline`'s to report, once.
+    if crate::baseline::load(store, &project.id).is_err() {
+        return;
+    }
+    let drift = match store.profile_drift(&project.id, None) {
+        Ok(d) => d,
+        Err(e) => {
+            report.issues.push(Issue {
+                severity: Severity::Error,
+                project: project.id.clone(),
+                code: None,
+                message: format!("the practice packs this project follows cannot be read: {e}"),
+            });
+            return;
+        }
+    };
+    for message in drift.iter().flat_map(|d| d.messages()) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message,
+        });
+    }
+}
+
+/// The baseline's own consistency (FTR-033 R-5): a proposed revision still waiting for the
+/// person, a constraint in force without its ADR, an ADR recording an entry that is not in force,
+/// and a release stage edited away from a gate an entry in force promised.
+fn scan_baseline(store: &Store, project: &Project, report: &mut Report) {
+    use crate::baseline::RevisionState;
+    let mut push = |severity: Severity, message: String| {
+        report.issues.push(Issue {
+            severity,
+            project: project.id.clone(),
+            code: None,
+            message,
+        });
+    };
+    let b = match crate::baseline::load(store, &project.id) {
+        Ok(b) => b,
+        Err(e) => {
+            push(
+                Severity::Error,
+                format!(
+                    "{} does not parse: {e}; kanbanr never rewrites it, so fix it by hand",
+                    crate::baseline::BASELINE_FILE
+                ),
+            );
+            return;
+        }
+    };
+    for r in b
+        .revisions
+        .iter()
+        .filter(|r| r.state() == RevisionState::Proposed)
+    {
+        let since = r.proposed.at.get(..10).unwrap_or(&r.proposed.at);
+        push(
+            Severity::Warning,
+            format!(
+                "{} has waited since {since} for the person to accept it on the Baseline page; \
+                 the gates read no baseline from it",
+                r.id
+            ),
+        );
+    }
+    let adrs = crate::adr::list(store, &project.id).unwrap_or_default();
+    for e in crate::baseline::in_force(&b)
+        .into_iter()
+        .filter(|e| e.kind == crate::profile::Kind::Constraint)
+    {
+        let found = !e.adr.is_empty() && adrs.iter().any(|a| a.id.eq_ignore_ascii_case(&e.adr));
+        if !found {
+            let why = if e.adr.is_empty() {
+                "baseline.yaml names none".to_string()
+            } else {
+                format!("{} is not among the ADRs", e.adr)
+            };
+            push(
+                Severity::Error,
+                format!(
+                    "baseline entry {} is an accepted constraint with no ADR ('{}'): {why}",
+                    e.id, e.text
+                ),
+            );
+        }
+    }
+    let accepted: BTreeSet<&str> = b
+        .revisions
+        .iter()
+        .filter(|r| r.state() == RevisionState::Accepted)
+        .map(|r| r.id.as_str())
+        .collect();
+    for a in adrs
+        .iter()
+        .filter(|a| a.status == "accepted" && !a.baseline.is_empty())
+    {
+        match b
+            .entries
+            .iter()
+            .find(|e| e.id.eq_ignore_ascii_case(&a.baseline))
+        {
+            Some(e) if accepted.contains(e.revision.as_str()) => {}
+            Some(e) => push(
+                Severity::Error,
+                format!(
+                    "{} records baseline entry {}, but {}, which adds it, is not accepted: \
+                     accept {} again",
+                    a.id, e.id, e.revision, e.revision
+                ),
+            ),
+            None => push(
+                Severity::Error,
+                format!(
+                    "{} records baseline entry {}, which the baseline does not hold",
+                    a.id, a.baseline
+                ),
+            ),
+        }
+    }
+    // With releases off no stage gate is written (it applies once releases are on).
+    let cadence = &project.config.cadence;
+    if cadence.releases {
+        let followed = crate::baseline::followed_in_force(&b);
+        for (stage, gate, from) in crate::baseline::promised_gates(&followed) {
+            let held = cadence
+                .release_gates
+                .get(&stage)
+                .is_some_and(|g| g.gates.iter().any(|s| s.gate == gate && s.from == from));
+            if !held {
+                push(
+                    Severity::Warning,
+                    format!(
+                        "stage {stage} no longer requires `{gate}`, which {from} promised; a \
+                         release can enter {stage} without it"
+                    ),
+                );
+            }
+        }
     }
 }
 
@@ -3321,6 +3471,159 @@ mod tests {
         assert!(observable_said.contains("'sha256sum'"), "{observable_said}");
         assert!(observable_said.contains("integration"), "{observable_said}");
         assert_eq!(of(&clean), None, "a clean item is not reported");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- FTR-033 P6: the practice packs and the baseline ------------------------------------
+
+    fn issues_of(f: impl Fn(&mut Report)) -> Vec<Issue> {
+        let mut report = Report::default();
+        f(&mut report);
+        report.issues
+    }
+
+    fn write_baseline(store: &Store, b: &crate::baseline::Baseline) {
+        std::fs::write(
+            store
+                .project_dir("demo")
+                .join(crate::baseline::BASELINE_FILE),
+            crate::yaml::to_string(b).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// FTR-033 R-5: a pack whose board copy moved on is reported with its new areas and changed
+    /// recommendation, a current one is not; a revision waiting for the person is a warning and
+    /// a constraint in force without its ADR an error.
+    #[test]
+    fn doctor_reports_a_newer_profile_and_its_new_areas() {
+        use crate::baseline::tests::{
+            SCAN_PACK, STORE_PACK, accept_it, answer, board, propose_answers, stamp,
+        };
+        use crate::profile::ProfileFile;
+        let (store, dir, _) = board(true);
+        let v1 = store
+            .save_profile("store", ProfileFile::from_yaml(STORE_PACK).unwrap(), None)
+            .unwrap();
+        crate::baseline::add_pack(
+            &store,
+            "demo",
+            "store",
+            &v1,
+            crate::config::Library::Board,
+            stamp(),
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let current = issues_of(|r| scan_profile_drift(&store, &project, r));
+        assert!(current.is_empty(), "a current pack: {current:?}");
+
+        let mut v2 = v1.clone();
+        v2.areas[0].options[0].recommended = false;
+        v2.areas[0].options[1].recommended = true;
+        v2.areas
+            .push(ProfileFile::from_yaml(SCAN_PACK).unwrap().areas[0].clone());
+        store.save_profile("store", v2, None).unwrap();
+        let drift = issues_of(|r| scan_profile_drift(&store, &project, r));
+        assert_eq!(drift.len(), 1, "{drift:?}");
+        let said = &drift[0].message;
+        assert_eq!(drift[0].severity, Severity::Warning);
+        assert!(said.contains("'store'"), "{said}");
+        assert!(said.contains("1 new area to answer (scanning)"), "{said}");
+        assert!(
+            said.contains("1 recommendation changed (database)"),
+            "{said}"
+        );
+        assert!(said.contains("kanbanr profile update store"), "{said}");
+
+        // A proposed revision waits on the person; once accepted, nothing is said.
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        let waiting = issues_of(|r| scan_baseline(&store, &project, r));
+        assert_eq!(waiting.len(), 1, "{waiting:?}");
+        assert_eq!(waiting[0].severity, Severity::Warning);
+        assert!(
+            waiting[0].message.contains(
+                "REV-001 has waited since 2026-11-17 for the person to accept it on the Baseline page"
+            ),
+            "{waiting:?}"
+        );
+        accept_it(&store, &v);
+        // The acceptance wrote the stage gate into the config: read the project again.
+        let project = store.load("demo").unwrap();
+        let accepted = issues_of(|r| scan_baseline(&store, &project, r));
+        assert!(accepted.is_empty(), "{accepted:?}");
+
+        // The constraint's ADR link lost by hand: an error naming the entry.
+        let mut b = crate::baseline::load(&store, "demo").unwrap();
+        let adr = std::mem::take(&mut b.entries[0].adr);
+        assert!(!adr.is_empty());
+        write_baseline(&store, &b);
+        let lost = issues_of(|r| scan_baseline(&store, &project, r));
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        assert_eq!(lost[0].severity, Severity::Error);
+        assert!(lost[0].message.contains("B-001"), "{lost:?}");
+        assert!(lost[0].message.contains("no ADR"), "{lost:?}");
+
+        // Its revision's acceptance removed by hand: the ADR records an entry not in force.
+        b.entries[0].adr = adr.clone();
+        b.revisions[0].accepted = None;
+        write_baseline(&store, &b);
+        let unaccepted = issues_of(|r| scan_baseline(&store, &project, r));
+        let errors: Vec<_> = unaccepted
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .collect();
+        assert_eq!(errors.len(), 1, "{unaccepted:?}");
+        assert!(errors[0].message.contains(&adr), "{errors:?}");
+        assert!(
+            errors[0].message.contains("accept REV-001 again"),
+            "{errors:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-033 R-5: a stage gate an entry in force promised, removed from the stage by hand, is
+    /// reported naming the stage, the gate and the entry.
+    #[test]
+    fn a_stage_edited_away_from_the_baseline_is_reported() {
+        use crate::baseline::tests::{
+            STORE_PACK, accept_it, answer, board, follow, propose_answers,
+        };
+        let (store, dir, _) = board(true);
+        follow(&store, STORE_PACK);
+        let v = propose_answers(&store, "", vec![answer("database", &["postgresql"])]);
+        accept_it(&store, &v);
+        let project = store.load("demo").unwrap();
+        let held = issues_of(|r| scan_baseline(&store, &project, r));
+        assert!(held.is_empty(), "{held:?}");
+
+        let mut config = project.config.clone();
+        config
+            .cadence
+            .release_gates
+            .get_mut("main")
+            .unwrap()
+            .gates
+            .clear();
+        store.save_config("demo", &config).unwrap();
+        let project = store.load("demo").unwrap();
+        let edited = issues_of(|r| scan_baseline(&store, &project, r));
+        assert_eq!(edited.len(), 1, "{edited:?}");
+        assert_eq!(edited[0].severity, Severity::Warning);
+        assert!(
+            edited[0]
+                .message
+                .contains("stage main no longer requires `migrations-check`, which B-001 promised"),
+            "{edited:?}"
+        );
+
+        // Releases turned off by hand: nothing is held, so nothing is reported.
+        let mut config = project.config.clone();
+        config.cadence.releases = false;
+        store.save_config("demo", &config).unwrap();
+        let project = store.load("demo").unwrap();
+        let off = issues_of(|r| scan_baseline(&store, &project, r));
+        assert!(off.is_empty(), "{off:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -45,6 +45,8 @@ pub struct Waiting {
     pub adrs: Vec<String>,
     /// Prepared records to confirm.
     pub prepared: usize,
+    /// Proposed baseline revisions (FTR-033).
+    pub baseline: usize,
 }
 
 /// Everything [`render`] needs, gathered by the CLI.
@@ -64,7 +66,8 @@ pub struct Inputs {
     /// The release line(s), when a release is planned.
     pub release: Option<String>,
     /// The brief form's tail, in priority order (dropped last-first): `Hooks`, `Agents at work`,
-    /// `The project's process`, `Lessons`, `Recent activity`. An empty section is skipped.
+    /// `The project's process`, `The project's practice packs`, `Lessons`, `Recent activity`. An
+    /// empty section is skipped.
     pub optional: Vec<Section>,
     /// The closing paragraph.
     pub footer: String,
@@ -80,6 +83,31 @@ const OFFER_REVIEW: &str = "Offer to review them here, one question each — see
 const READ_MORE: &str = "`kanbanr board` lists every item; `kanbanr ready` what can start; \
 `kanbanr review --pending` what waits; `kanbanr activity` the recent changes; \
 `kanbanr lessons --for <CODE>` before starting an item.";
+
+/// The line under "Waiting for the user" when baseline revisions wait (FTR-033).
+pub fn baseline_line(n: usize) -> String {
+    format!("{n} baseline revision(s) wait on the Baseline page.")
+}
+
+/// The title of the practice-packs section (FTR-033 R-5).
+pub const PACKS_TITLE: &str = "The project's practice packs";
+
+/// The practice-packs section: each drifted pack's messages and the rule to ask once; `None`
+/// when every pack the project follows is current (FTR-033 R-5).
+pub fn packs_section(drift: &[crate::profile::Drift]) -> Option<Section> {
+    let lines: Vec<String> = drift.iter().flat_map(|d| d.messages()).collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    body.push_str(
+        "Mention it and ask once whether to update; never run `kanbanr profile update` unasked.",
+    );
+    Some(Section {
+        title: PACKS_TITLE.to_string(),
+        body,
+    })
+}
 
 /// How far the in-progress lines are shortened.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -157,7 +185,7 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
     ));
 
     let w = &i.waiting;
-    if !w.items.is_empty() || !w.adrs.is_empty() || w.prepared > 0 {
+    if !w.items.is_empty() || !w.adrs.is_empty() || w.prepared > 0 || w.baseline > 0 {
         let list = |ids: &[String]| -> String {
             if ids.is_empty() {
                 return String::new();
@@ -168,7 +196,7 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
                 format!(" ({})", ids.join(", "))
             }
         };
-        let body = format!(
+        let mut body = format!(
             "{} item(s) to approve or sign off{}, {} proposed decision(s){}, {} prepared \
              record(s) to confirm. {OFFER_REVIEW}",
             w.items.len(),
@@ -177,6 +205,10 @@ fn mandatory(i: &Inputs, titles: Titles, cut_waiting: bool) -> (String, String) 
             list(&w.adrs),
             w.prepared
         );
+        if w.baseline > 0 {
+            body.push('\n');
+            body.push_str(&baseline_line(w.baseline));
+        }
         head.push_str(&section("Waiting for the person", &body));
     }
 
@@ -259,6 +291,7 @@ mod tests {
                 items: vec!["FTR-002".into()],
                 adrs: vec!["ADR-0009".into()],
                 prepared: 2,
+                baseline: 0,
             },
             sprint: Some(
                 "Sprint SP-004 \"ship\", 2026-11-10 to 2026-11-24: 3/9 items finished.".into(),
@@ -388,5 +421,44 @@ mod tests {
             .collect();
         let out = render(&i, MIN_BUDGET);
         assert!((0..400).all(|n| out.contains(&format!("FTR-{n:03}"))));
+    }
+
+    /// FTR-033 R-5: a proposed baseline revision is one line under what waits, and a drifted pack
+    /// is an optional section that obeys the budget like the others.
+    #[test]
+    fn the_baseline_waits_and_drifted_packs_are_an_optional_section() {
+        let mut i = base();
+        i.waiting.baseline = 2;
+        let out = render(&i, DEFAULT_BUDGET);
+        assert!(
+            out.contains("\n2 baseline revision(s) wait on the Baseline page."),
+            "{out}"
+        );
+
+        let drift = crate::profile::Drift {
+            source: crate::profile::ProfileSource {
+                name: "web".into(),
+                library: crate::config::Library::Builtin,
+                version: 1,
+                rev: "r1".into(),
+            },
+            newer: Some(2),
+            gone: false,
+            new_areas: vec!["ui-style".into()],
+            changed_recommendations: vec![],
+        };
+        assert!(packs_section(&[]).is_none());
+        let s = packs_section(&[drift]).unwrap();
+        assert_eq!(s.title, PACKS_TITLE);
+        assert!(s.body.contains("kanbanr profile update web"), "{}", s.body);
+        assert!(
+            s.body
+                .ends_with("never run `kanbanr profile update` unasked.")
+        );
+        i.optional.insert(3, s.clone());
+        let out = render(&i, DEFAULT_BUDGET);
+        assert!(out.contains(&format!("### {PACKS_TITLE}\n")), "{out}");
+        let tight = out.len() - section(&s.title, &s.body).len() - 1;
+        assert!(render(&i, tight).len() <= tight);
     }
 }
