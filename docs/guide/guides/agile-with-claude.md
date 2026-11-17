@@ -91,16 +91,16 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 | **Design** | Drafts the definition: statement, goals and requirements | **Approve** |
 | **Develop** | Writes the design and its task list, names a test for each requirement, and starts the item's branch | **Sign off design-review** |
 | **Test** | Builds on the item's branch and commits | Nothing |
-| **Review** | Records the green tests and updates the docs | **Sign off docs-folded**, once every requirement has a green test: a manual check counts once you click **Passed** under **Manual checks** |
+| **Review** | Records the green tests and updates the docs | **Sign off docs-folded**, once every requirement has a green test |
 | **Released** | Nothing: the cut moves it here | Nothing |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**A manual check comes before docs-folded.** When only a person can judge a requirement, Claude
-names one manual check for the item. It waits on the Review page under **Manual checks**, with what
-to check. Do the check and click **Passed** or **Failed**. **Sign off docs-folded** is offered only
-after it is Passed, so if you are waiting for the sign-off, look there first.
+**A judgement check never holds an item.** When only a person can judge a requirement, Claude
+writes it as the item's one judgement test. You are asked it at the release's cut, among the
+requirements you accept untested, or when you see the thing in a walkthrough; click **Passed** under
+**Manual checks** on the Review page when you have judged it.
 
 **Claude's overrides come to you.** If Claude moves an item past a gate, it says why and the move
 waits on the Review page with that reason, even on an item you approved. **Ratify** it there; until

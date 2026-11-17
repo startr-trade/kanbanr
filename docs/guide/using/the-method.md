@@ -109,11 +109,13 @@ an approved test lapses the approval. A test you name keeps the kind and the wor
 remote; your product's own pages and behaviour are proved by your project's own tests. A name
 reported more than once in a run is green only if every line passed. A green recorded at
 an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
-it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
-only when a person really did it.
-`kanbanr check` names each manual test that is not yet green, as `manual test not run: R-4: <name>`
-(`open_manual` in `--json`). It is a note, not a gap: readiness and the exit status do not change,
-but an unrun check is seen before you call the item done.
+it. Mark a check only a person can judge as `kind: manual`, named `manual: <what the person
+judges>`: the item's one judgement test, exempt from the rot sweep. `kanbanr feature define` refuses
+a second one, and one whose wording names something a run can check, naming the kind to use.
+`kanbanr check` names each judgement test that is not yet green, as
+`judgement test open: R-4: <name> (asked at the release's cut, or in a walkthrough)`
+(`open_manual` in `--json`). It is a note, not a gap: a judgement test never holds an item, and
+the person is asked it at the release's cut.
 
 A manual test that is not green also waits on the monitor's **Review** page, under **Manual
 checks**, with its requirement and the check to make. The person who did the check clicks Passed

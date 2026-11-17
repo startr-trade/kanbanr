@@ -9087,9 +9087,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         );
                     }
                 }
-                // A manual test nobody ran: a note, not a gap (DEF-003).
+                // A judgement test not yet judged: a note, not a gap (DEF-003, FTR-039 R-3).
                 for open in r["open_manual"].as_array().into_iter().flatten() {
-                    println!("    manual test not run: {}", open.as_str().unwrap_or(""));
+                    println!(
+                        "    judgement test open: {} (asked at the release's cut, or in a walkthrough)",
+                        open.as_str().unwrap_or("")
+                    );
                 }
                 // Manual tests that break the judgement rule (FTR-039): the doctor's warning, as a note.
                 if let Some(line) = r["code"]

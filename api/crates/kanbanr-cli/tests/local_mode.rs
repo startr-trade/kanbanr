@@ -3700,7 +3700,10 @@ fn check_names_an_open_manual_test() {
     let out = ok(run_in(&base, &work, &["check", "FEAT-001"]));
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(
-        said.contains("manual test not run: R-1: manual: Edit and Save reads clearly"),
+        said.contains(
+            "judgement test open: R-1: manual: Edit and Save reads clearly \
+             (asked at the release's cut, or in a walkthrough)"
+        ),
         "{said}"
     );
     let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
@@ -15459,6 +15462,130 @@ fn config_build_shows_and_sets_the_build_settings() {
     assert!(line(&cleared, "linker").contains("set"), "{cleared}");
     ok(&["config", "build", "--linker", ""]);
     assert!(!config().contains("build:"), "absent again: {}", config());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-039 R-3: `kanbanr finish` completes an item whose only open test is a judgement (manual)
+/// test, without `--unapproved` or an override, and `check` names that test as asked at the cut.
+#[test]
+fn finish_completes_an_item_whose_only_open_test_is_a_judgement_test() {
+    let base =
+        std::env::temp_dir().join(format!("kanbanr-judgement-finish-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let v: serde_json::Value = serde_json::from_str(&run(&["--json", "where"])).unwrap();
+    let board = PathBuf::from(v["data_dir"].as_str().unwrap());
+    // L-41: the board is this test's own, in the temp dir, before the first write to it.
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{board:?}"
+    );
+    // The gate is the subject here, not the method (FEAT-193).
+    run(&["config", "method", "--off"]);
+    // An adopted charter is what makes finishing ask for green tests (FEAT-156).
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: Release notes a newcomer reads\ngoals:\n  - id: G-1\n    statement: A newcomer understands a release\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Release notes",
+        "--milestone",
+        "MS-001",
+    ]);
+    let judgement =
+        "manual: the person judges whether the release notes read clearly to a newcomer";
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        format!(
+            "statement: Write release notes a newcomer understands\ngoals: [G-1]\n\
+             zachman:\n  what: release notes\n  how: written at the cut\n  where: the book\n  \
+             when: at each release\n  who: newcomers\n  why: a newcomer cannot tell what changed\n\
+             requirements:\n  - kind: functional\n    text: \"THE SYSTEM SHALL write release notes.\"\n\
+             \x20   tests:\n      - name: \"{judgement}\"\n        kind: manual\n        state: planned\n"
+        ),
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    run(&["approve", "FEAT-001"]);
+    run(&["move", "FEAT-001", "In Progress"]);
+
+    let done = exec(&["finish", "FEAT-001"]);
+    assert!(
+        done.status.success(),
+        "an open judgement test does not hold the item: {}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    let said = String::from_utf8_lossy(&done.stdout);
+    assert!(said.contains("FEAT-001 -> Completed"), "{said}");
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    assert_eq!(exported["status"], "Completed", "{exported}");
+    let overridden = exported["history"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|t| t["override_reason"].as_str().is_some_and(|r| !r.is_empty()));
+    assert!(!overridden, "no override was recorded: {exported}");
+
+    let checked = String::from_utf8_lossy(&exec(&["check", "FEAT-001"]).stdout).to_string();
+    assert!(
+        checked.contains(&format!(
+            "judgement test open: R-1: {judgement} (asked at the release's cut, or in a walkthrough)"
+        )),
+        "{checked}"
+    );
+    assert!(!checked.contains("manual test not run"), "{checked}");
     let _ = std::fs::remove_dir_all(&base);
 }
 
