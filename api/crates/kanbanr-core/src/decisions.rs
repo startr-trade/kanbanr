@@ -401,6 +401,13 @@ pub const ACCEPT_BASELINE_REFUSAL: &str = "accepting a baseline revision is the 
      terminal: no mode or delegation lets Claude take it. Propose it (`kanbanr baseline \
      propose`) and tell the person where it waits.";
 
+/// Why Claude may not accept the system baseline (FTR-006): the person's in every mode; Claude
+/// prepares the acceptance for them. Shared by the guard and the write path.
+pub const ACCEPT_SYSTEM_BASELINE_REFUSAL: &str = "a verdict is the person's own, recorded on the \
+     monitor, never by Claude (FTR-024). The system baseline is accepted by the person on the \
+     Review page. If they agreed to it, prepare it: `kanbanr prepare system-baseline --note \"…\" \
+     --source \"doc:architecture/context.md\"`.";
+
 /// Is this a route only the person may use: the mode, a grant, a review, the answer to a
 /// prepared record (FTR-034), and accepting a baseline revision (FTR-033)?
 pub fn is_person_only(method: &str, path: &str) -> bool {
@@ -412,6 +419,8 @@ pub fn is_person_only(method: &str, path: &str) -> bool {
                 ["projects", _, "baseline", "revisions", _, "accept"]
             )
             | ("POST", ["projects", _, "prepared", _, "confirm" | "reject"])
+            // The system baseline's acceptance (FTR-006).
+            | ("POST", ["projects", _, "catalog", "baseline", "accept"])
             | (
                 "POST",
                 ["projects", _, "decisions", "delegations", _, "grant"]
@@ -456,6 +465,11 @@ pub(crate) fn authorize(
             Ok(Authorized::AsIs)
         } else if by_the_person {
             Err("`--under` is Claude's; a person needs none".to_string())
+        } else if matches!(
+            segments(path).as_slice(),
+            ["projects", _, "catalog", "baseline", "accept"]
+        ) {
+            Err(ACCEPT_SYSTEM_BASELINE_REFUSAL.to_string())
         } else if matches!(segments(path).as_slice(), ["projects", _, "baseline", ..]) {
             Err(ACCEPT_BASELINE_REFUSAL.to_string())
         } else if matches!(segments(path).as_slice(), ["projects", _, "prepared", ..]) {

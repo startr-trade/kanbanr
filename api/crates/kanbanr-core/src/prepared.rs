@@ -255,6 +255,9 @@ pub enum RevOf {
     Commit,
     /// The commit the person checked, a field of the record (a manual test's result).
     CheckedRev,
+    /// The system baseline's pins now (`systembaseline::pins_rev`), read without a code
+    /// repository so the monitor and the terminal agree (FTR-006).
+    SystemBaselinePins,
 }
 
 /// A kind of prepared record: its subject's required keys, its fields and its `rev`.
@@ -354,6 +357,14 @@ pub const KINDS: &[KindSpec] = &[
             fixed("check", false),
         ],
         rev: RevOf::CheckedRev,
+    },
+    // The person's acceptance of the system baseline (FTR-006): `target` is always
+    // `system-baseline`, one record for the project's one baseline.
+    KindSpec {
+        kind: "system-baseline",
+        subject: &["target"],
+        fields: &[text("note", false)],
+        rev: RevOf::SystemBaselinePins,
     },
 ];
 
@@ -704,6 +715,16 @@ pub fn prepare(
         }
         plan = Some(worked);
     }
+    // The system baseline is the project's one: its target is fixed (FTR-006).
+    if kind_name == "system-baseline" {
+        if subject.target.is_empty() {
+            subject.target = "system-baseline".into();
+        } else if subject.target != "system-baseline" {
+            return Err(unsupported(
+                "a prepared system-baseline's target is system-baseline".into(),
+            ));
+        }
+    }
     let missing: Vec<&str> = spec
         .subject
         .iter()
@@ -896,6 +917,28 @@ pub fn prepare(
             plan.release_tip.clone()
         }
         "text-check" => checked_rev,
+        "system-baseline" => {
+            let st = crate::systembaseline::state(store, &project, None)?;
+            match st.kind {
+                crate::systembaseline::StateKind::NotInitialised => {
+                    return Err(unsupported(
+                        "no system baseline: `kanbanr catalog baseline init` first".into(),
+                    ));
+                }
+                crate::systembaseline::StateKind::Accepted => {
+                    return Err(unsupported(
+                        "the system baseline is accepted and no source changed since: there is \
+                         nothing to prepare"
+                            .into(),
+                    ));
+                }
+                _ => {}
+            }
+            if !st.can_accept {
+                return Err(unsupported(st.cannot_accept_why));
+            }
+            st.pins_rev
+        }
         _ => String::new(),
     };
     let origin = crate::origin::from_body(body);
@@ -1294,6 +1337,10 @@ pub fn equivalent_command(r: &Prepared) -> String {
             ]);
             flag(&mut words, "note", field_text(r, "checked"));
         }
+        "system-baseline" => {
+            words.extend(["catalog".into(), "baseline".into(), "accept".into()]);
+            flag(&mut words, "note", field_text(r, "note"));
+        }
         _ => return String::new(),
     }
     words.join(" ")
@@ -1456,6 +1503,30 @@ pub fn still_waiting(
                 if tip != r.rev {
                     return Err("the release branch moved after it was prepared".into());
                 }
+            }
+            Ok(())
+        }
+        "system-baseline" => {
+            // Read without a repository, as the record was pinned (FTR-006).
+            let st =
+                crate::systembaseline::state(store, project, None).map_err(|e| e.to_string())?;
+            if st.kind == crate::systembaseline::StateKind::NotInitialised {
+                return Err("the project no longer has a system baseline".into());
+            }
+            if let Some(a) = &st.accepted
+                && crate::cmp_instants(&a.at, &r.at) == std::cmp::Ordering::Greater
+            {
+                return Err(format!(
+                    "the system baseline was accepted by {} on {} after this was prepared",
+                    a.by,
+                    a.at.chars().take(10).collect::<String>()
+                ));
+            }
+            if st.pins_rev != r.rev {
+                return Err("a pinned source changed after it was prepared".into());
+            }
+            if st.kind == crate::systembaseline::StateKind::Accepted {
+                return Err("the system baseline is already accepted as prepared".into());
             }
             Ok(())
         }
@@ -1816,6 +1887,10 @@ pub fn expand(
             }
             return finish_manual(p, s, v, id, by, origin, changed);
         }
+        "system-baseline" => (
+            format!("/projects/{p}/catalog/baseline/accept"),
+            serde_json::json!({"by": by, "note": text("note"), "prepared": id}),
+        ),
         "promotion" => (
             format!("/projects/{p}/releases/{}/promote", s.release),
             serde_json::json!({"by": by, "stage": s.stage, "reason": text("checked")}),
@@ -2611,6 +2686,169 @@ mod tests {
             .project_dir("demo")
             .join(format!("prepared/{id}.resolved.yaml"));
         crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// FTR-006 R-3: a prepared system baseline carries the project's one target, reads open while
+    /// the baseline waits, confirms into the acceptance route as the person with `prepared` set,
+    /// and reads stale once a pinned source changes after it was prepared (or once the baseline
+    /// is accepted some other way). Claude is refused the acceptance itself.
+    #[test]
+    fn a_prepared_system_baseline_confirms_into_the_acceptance_route_and_goes_stale_when_a_source_changes()
+     {
+        use crate::catalog::{Catalog, Level, Row, Source as CatSource, SourceKind};
+        let (store, dir, _code) = board_with_item(false);
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let body = |note: &str| {
+            serde_json::json!({"kind": "system-baseline", "fields": {"note": note},
+                "sources": [{"label": "the context doc", "url": "doc:architecture/context.md"}]})
+        };
+        // No baseline yet: nothing to prepare.
+        let mut b = body("agreed in the call");
+        b["origin"] = Value::String("conversation".into());
+        let e = prepare(&store, "demo", &b, None).unwrap_err().to_string();
+        assert!(e.contains("catalog baseline init"), "{e}");
+        crate::catalog::save(
+            &store,
+            "demo",
+            &Catalog {
+                schema: crate::catalog::SCHEMA,
+                rows: vec![Row {
+                    id: "context".into(),
+                    title: "context".into(),
+                    answers: vec!["what".into()],
+                    for_: vec!["architect".into()],
+                    level: Level::System,
+                    source: CatSource {
+                        kind: SourceKind::Written,
+                        path: "architecture/context.md".into(),
+                        ..CatSource::default()
+                    },
+                    ..Row::default()
+                }],
+                ..Catalog::default()
+            },
+        )
+        .unwrap();
+        crate::systembaseline::init(&store, "demo").unwrap();
+        // The doc is missing: the baseline cannot be accepted, so it is not prepared either.
+        let e = prepare(&store, "demo", &b, None).unwrap_err().to_string();
+        assert!(e.contains("context"), "{e}");
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# Context\n\nThe system.\n",
+            )
+            .unwrap();
+        // A wrong target is refused; the right one is the default.
+        let mut wrong = body("x");
+        wrong["origin"] = Value::String("conversation".into());
+        wrong["subject"] = serde_json::json!({"target": "elsewhere"});
+        assert!(prepare(&store, "demo", &wrong, None).is_err());
+
+        let id = prepare_as_claude(&store, body("agreed in the call"));
+        let view = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(view[0].state, State::Open, "{view:#?}");
+        assert_eq!(view[0].record.subject.target, "system-baseline");
+        assert_eq!(view[0].page, "review");
+        assert!(
+            view[0]
+                .command
+                .starts_with("kanbanr catalog baseline accept --note"),
+            "{}",
+            view[0].command
+        );
+        // Preparing changed nothing the gates read.
+        let st = crate::systembaseline::state(&store, &store.load("demo").unwrap(), None).unwrap();
+        assert_eq!(st.kind, crate::systembaseline::StateKind::Awaiting);
+        assert_eq!(view[0].record.rev, st.pins_rev);
+
+        // A pinned source changes after it was prepared: the record is stale and cannot be
+        // confirmed; a fresh one supersedes it and confirms.
+        store
+            .write_doc(
+                "demo",
+                "architecture/context.md",
+                "# Context\n\nThe system, changed.\n",
+            )
+            .unwrap();
+        let all = ListQuery {
+            all: true,
+            ..Default::default()
+        };
+        let v = list(&store, "demo", &all, None).unwrap();
+        assert_eq!(v[0].state, State::Stale, "{v:#?}");
+        assert!(
+            v[0].stale_why.contains("pinned source changed"),
+            "{}",
+            v[0].stale_why
+        );
+        assert!(confirm(&store, &dir, &id, serde_json::json!({"by": "Ada L"})).is_err());
+
+        let fresh = prepare_as_claude(&store, body("agreed again"));
+        // Claude cannot confirm it, nor accept the baseline itself.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                &format!("/projects/demo/prepared/{fresh}/confirm"),
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/catalog/baseline/accept",
+                serde_json::json!({"by": "Claude"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        assert!(
+            crate::systembaseline::load(&store, "demo")
+                .unwrap()
+                .unwrap()
+                .accepted
+                .is_empty()
+        );
+        confirm(&store, &dir, &fresh, serde_json::json!({"by": "Ada L"})).unwrap();
+        let file = crate::systembaseline::load(&store, "demo")
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.accepted.len(), 1);
+        let a = &file.accepted[0];
+        assert_eq!(
+            (
+                a.by.as_str(),
+                a.origin.as_str(),
+                a.prepared.as_str(),
+                a.note.as_str()
+            ),
+            ("Ada L", "monitor", fresh.as_str(), "agreed again")
+        );
+        assert_eq!(a.pins.len(), 1);
+        let r = resolution_of(&store, &fresh);
+        assert_eq!(r.verdict, Answer::Confirmed);
+        assert_eq!(r.made, "POST /projects/demo/catalog/baseline/accept");
+        // Accepted as it stands: nothing is left to prepare.
+        let e = prepare(
+            &store,
+            "demo",
+            &{
+                let mut b = body("again");
+                b["origin"] = Value::String("conversation".into());
+                b
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("nothing to prepare"), "{e}");
     }
 
     /// FTR-037 R-5: records prepared together carry their batch; the listing shows it; one

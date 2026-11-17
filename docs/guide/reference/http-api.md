@@ -38,6 +38,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/charter` | — | JSON `Charter` | The project's charter: purpose, goals, scope and constraints |
 | `GET /api/projects/{project}/facts` | — | JSON `any` | The project's facts (FTR-005): its languages, runtimes, where it runs, its parts and its data; `{}` when no facts record is set |
 | `GET /api/projects/{project}/catalog` | — | JSON `CatalogStatus` | The project's content catalog (FTR-005): each row with whether it applies and why, its source's state and its protections, and the (question, perspective) cells no applying row fills; no rows with no catalog |
+| `GET /api/projects/{project}/catalog/baseline` | — | JSON `SystemBaselineReview` | The system baseline (FTR-006): where it stands (not initialised, awaiting acceptance, accepted or changed since), the rows that changed against the latest acceptance, and the prepared acceptance waiting on the person |
 | `GET /api/projects/{project}/readiness` | — | JSON `ProjectReadiness` | What each live item is missing, and its next stages, keyed by code |
 | `GET /api/projects/{project}/features/{code}/readiness` | — | JSON `ReadinessView` | What one item is missing, and what its next stages ask |
 | `GET /api/projects/{project}/features/{code}/diagrams` | — | JSON `ItemDiagrams` | The Mermaid blocks of an item's spec and affects_docs, with the lint's findings |

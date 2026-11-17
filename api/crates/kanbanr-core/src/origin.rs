@@ -111,6 +111,8 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
             | ["projects", _, "prepared", _, "confirm" | "reject"]
             | ["projects", _, "prepared", "batch", _, "confirm" | "reject"]
             | ["projects", _, "review", "decide"]
+            // Accepting the system baseline (FTR-006); initialising it is not a verdict.
+            | ["projects", _, "catalog", "baseline", "accept"]
             // A planning decision from a page (FTR-049); declining one is not a verdict.
             | ["projects", _, "planning"]
     )
@@ -193,6 +195,9 @@ pub enum Verdict {
     /// Accepting a proposed revision of the project's engineering baseline (FTR-033). The
     /// person's alone in every mode: no delegation covers it.
     AcceptBaseline,
+    /// Accepting the project's system baseline, the pinned system-level catalog rows (FTR-006).
+    /// The person's alone in every mode: no delegation covers it. Claude prepares it instead.
+    AcceptSystemBaseline,
     /// Planning items into a sprint or a release, or out of their sprint, from a monitor page
     /// (FTR-049). The person's alone in every mode; Claude carries it out or declines it.
     PlanningDecision,
@@ -200,7 +205,7 @@ pub enum Verdict {
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 20] = [
+    pub const ALL: [Verdict; 21] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -220,6 +225,7 @@ impl Verdict {
         Verdict::ReviewDecision,
         Verdict::GroupDecision,
         Verdict::AcceptBaseline,
+        Verdict::AcceptSystemBaseline,
         Verdict::PlanningDecision,
     ];
 
@@ -310,6 +316,14 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
     if verdict == Verdict::AcceptBaseline && taker == Taker::Claude {
         return Some(crate::decisions::ACCEPT_BASELINE_REFUSAL.to_string());
     }
+    // The system baseline's acceptance is the person's in every mode (FTR-006): treated as a
+    // manual test's result is, with a record to prepare instead.
+    if verdict == Verdict::AcceptSystemBaseline {
+        return match taker {
+            Taker::Person => None,
+            Taker::Claude => Some(crate::decisions::ACCEPT_SYSTEM_BASELINE_REFUSAL.to_string()),
+        };
+    }
     // A group decision is the person's in every mode (FTR-038): no delegation covers it as a
     // whole, and each verdict it expands into is judged on its own by the write path.
     if verdict == Verdict::GroupDecision {
@@ -394,6 +408,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         ("POST", ["projects", _, "review", "decide"]) => Verdict::GroupDecision,
         // Accepting a baseline revision (FTR-033).
         ("POST", ["projects", _, "baseline", "revisions", _, "accept"]) => Verdict::AcceptBaseline,
+        // Accepting the system baseline (FTR-006).
+        ("POST", ["projects", _, "catalog", "baseline", "accept"]) => Verdict::AcceptSystemBaseline,
         // A planning decision from a page (FTR-049).
         ("POST", ["projects", _, "planning"]) => Verdict::PlanningDecision,
         _ => return None,
@@ -537,6 +553,8 @@ pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {
         ["gate", "record"] => Some(Verdict::GateResult),
         // Accepting a baseline revision is the person's (FTR-033).
         ["baseline", "accept"] => Some(Verdict::AcceptBaseline),
+        // Accepting the system baseline is the person's (FTR-006).
+        ["catalog", "baseline", "accept"] => Some(Verdict::AcceptSystemBaseline),
         _ => None,
     }
 }
@@ -755,6 +773,54 @@ mod tests {
         assert_eq!(Taker::of_origin(Origin::Monitor), Taker::Person);
         assert_eq!(Taker::of_origin(Origin::Terminal), Taker::Person);
         let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // FTR-006 R-3: the system baseline's acceptance is a stamped verdict route and command,
+        // refused to Claude with the text that names `prepare system-baseline`, and judged by
+        // the one guard in every origin.
+        let accept = "/projects/p/catalog/baseline/accept";
+        assert!(is_verdict_route("POST", accept));
+        assert!(stamps_origin("POST", accept));
+        assert!(crate::decisions::is_person_only("POST", accept));
+        assert_eq!(
+            verdict_of_route("POST", accept),
+            Some(Verdict::AcceptSystemBaseline)
+        );
+        assert_eq!(
+            verdict_of_command(&["catalog", "baseline", "accept"], &w(&["catalog"])),
+            Some(Verdict::AcceptSystemBaseline)
+        );
+        // Initialising it, and reading it, are no verdicts.
+        assert!(!is_verdict_route(
+            "POST",
+            "/projects/p/catalog/baseline/init"
+        ));
+        assert_eq!(
+            verdict_of_route("POST", "/projects/p/catalog/baseline/init"),
+            None
+        );
+        assert_eq!(verdict_of_route("GET", accept), None);
+        assert_eq!(
+            verdict_of_command(&["catalog", "baseline"], &w(&["catalog"])),
+            None
+        );
+        let why = verdict_refusal(
+            Verdict::AcceptSystemBaseline,
+            Taker::Claude,
+            &DecisionContext::monitor_mode(),
+        )
+        .unwrap();
+        assert!(why.contains("kanbanr prepare system-baseline"), "{why}");
+        for o in [Origin::Conversation, Origin::Delegated] {
+            let ctx = DecisionContext {
+                origin: Some(o),
+                method: "POST",
+                path: accept,
+                ..DecisionContext::monitor_mode()
+            };
+            assert!(
+                verdict_refusal(Verdict::AcceptSystemBaseline, Taker::of_origin(o), &ctx).is_some(),
+                "{o:?}"
+            );
+        }
         assert_eq!(
             verdict_of_command(&["signoff"], &w(&["signoff", "F", "x", "--withdraw"])),
             Some(Verdict::WithdrawSignoff)

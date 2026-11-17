@@ -332,6 +332,33 @@ pub fn docs_folded_left(entry: &ReviewEntry) -> usize {
     entry.to_check.as_ref().map_or(0, Vec::len)
 }
 
+/// The system baseline as the Review page and `GET /projects/{p}/catalog/baseline` show it
+/// (FTR-006): where it stands, and the prepared acceptance waiting on the person, if one is.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SystemBaselineReview {
+    pub state: crate::systembaseline::State,
+    /// The open `system-baseline` prepared record, newest first; `None` when none waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared: Option<crate::prepared::Prepared>,
+}
+
+/// The system baseline's state with its open prepared record (`repo` is the code repository the
+/// surface has). Reads only.
+pub fn system_baseline_review(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+) -> Result<SystemBaselineReview> {
+    let project = store.load_meta(p)?;
+    let state = crate::systembaseline::state(store, &project, repo)?;
+    let prepared = crate::prepared::list(store, p, &crate::prepared::ListQuery::default(), repo)?
+        .into_iter()
+        .find(|v| v.record.kind == "system-baseline")
+        .map(|v| v.record);
+    Ok(SystemBaselineReview { state, prepared })
+}
+
 /// What every entry of one project is judged with, loaded once per request.
 struct Inputs {
     project: crate::Project,
