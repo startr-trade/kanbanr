@@ -18,7 +18,6 @@ const src = join(dirname(fileURLToPath(import.meta.url)), "../src");
  * item removes its entry.
  */
 const EXEMPT = new Map([
-  ["pages/ReviewPage.tsx", "rebuilt by FTR-038"],
   ["pages/ReleasesPage.tsx", "rebuilt by FTR-041"],
   ["pages/SchedulePage.tsx", "removed by FTR-043"],
   ["pages/GanttPage.tsx", "removed by FTR-043"],

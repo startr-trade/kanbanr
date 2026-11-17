@@ -1,0 +1,372 @@
+/**
+ * One decision group of the Review page (FTR-038): its rows, the person's selection inside it, and
+ * the one group action, asked first (R-3) and recorded as one verdict per selected row in one
+ * commit (`POST /review/decide`).
+ *
+ * The header is sticky at the top of the open group (R-9): the group's sentence, select-all, the
+ * filter and the sort (kept in the URL as `?r.q=`, `?r.sort=`, `?r.dir=`), and the action button,
+ * neutral until something is selected. Each row is a `ReviewRow` (an `AccordionRow`, so its header
+ * is a heading, R-10); its body, the row's evidence, is drawn by the page only while it is open.
+ * A row that cannot be decided says why beside a disabled checkbox (R-2); in the approve and ratify
+ * groups a row is selectable only once its diagram check has finished clean.
+ *
+ * The selection is never in the URL: a link never carries a pending decision.
+ */
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { api } from "../../api";
+import { AskFirst } from "../../components/AskFirst";
+import { blockedSentence } from "../../diagramCheck";
+import { guardInFlight } from "../../inFlight";
+import { useQuery } from "../../data/useQuery";
+import { urls } from "../../data/urls";
+import type { Tag } from "../../data/cache";
+import {
+  TABLE_STATE_KEY,
+  actionLabel,
+  askText,
+  decisionBody,
+  emptySelection,
+  preselected,
+  select,
+  selectAll,
+  type Selection,
+} from "../../reviewGroups";
+import { Empty, ErrorState, LoadingState, filterRows, sortRows, useOpenRows, useUrlState, type Column } from "../../ui";
+import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
+import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
+
+/**
+ * What the Review page's reads depend on. A waiting decision follows from items, their specs
+ * (`spec:<CODE>`, which no single tag covers), sign-offs, gates, prepared records, manual tests,
+ * delegations, ADRs, releases and sprints, so any change of the board re-reads them.
+ */
+export const REVIEW_TAGS: readonly Tag[] = ["*"];
+
+/** A group action's word once done: "approved 4 of 5". */
+const PAST: Record<string, string> = {
+  approve: "approved",
+  ratify: "ratified",
+  "sign off": "signed off",
+  "plan into": "planned",
+  confirm: "confirmed",
+  grant: "granted",
+  keep: "kept",
+  accept: "accepted",
+  undo: "undone",
+  reject: "rejected",
+};
+const past = (action: string) => PAST[action.toLowerCase()] ?? `${action.toLowerCase()}: done`;
+
+/** The group's sentence above its rows: what its action records. */
+function sentenceOf(slice: GroupSlice): string {
+  switch (slice.key) {
+    case "approve":
+      return "Approving records agreement pinned to the definition below: change or remove approved text afterwards and the approval lapses; added text is reviewed at the next decision.";
+    case "ratify":
+      return "Ratifying agrees, after the fact, to work built under a recorded bypass, and the record says so. One ratification closes every override waiting on that item.";
+    case "which-release":
+      return "Each selected item is planned into the release you choose, as `kanbanr release plan` plans it.";
+    case "manual":
+      return "Confirming records the result Claude prepared as yours. A check with nothing prepared is your own observation: do it, then record it in its row.";
+    case "delegation":
+      return "Granting lets Claude take the verdicts a delegation names, within its scope and until its date.";
+    case "delegated":
+      return "Keep lets a decision Claude took under a delegation stand; Undo withdraws it. To give a reason, open the row.";
+    case "adr":
+      return "Accepting needs every section answered. Rejecting needs a reason, so it is done in the row.";
+    default:
+      return `Signing off records the ${slice.label.replace(/^Sign off /, "")} sign-off for each selected item, pinned to the definition and spec as shown.`;
+  }
+}
+
+/** The sort choices: the slice's own order first, then by release, last change, sprint or code. */
+const SORTS: { key: string; label: string; value(r: Row): string | null }[] = [
+  { key: "release", label: "Release", value: (r) => r.release || null },
+  { key: "changed", label: "Last changed", value: (r) => r.changed_at || null },
+  { key: "sprint", label: "Sprint", value: (r) => r.sprint || null },
+  { key: "code", label: "Code", value: (r) => r.code || r.key },
+];
+const COLUMNS: Column<Row>[] = [
+  ...SORTS.map((s) => ({ key: s.key, label: s.label, value: s.value, sortable: true })),
+  { key: "title", label: "Title", value: (r) => r.title },
+  { key: "what", label: "What", value: (r) => r.what },
+  { key: "pills", label: "Pills", value: (r) => r.pills.join(" ") },
+];
+
+/** The outcome under the header once a decision returned. */
+interface GroupOutcome {
+  ok: boolean;
+  text: string;
+  failed: { key: string; error: string }[];
+}
+
+function outcomeOf(answer: GroupDecisionAnswer, word: string, n: number): GroupOutcome {
+  const failed = answer.results.filter((r) => r.error).map((r) => ({ key: r.key, error: r.error ?? "" }));
+  const made = answer.results.length - failed.length;
+  return { ok: failed.length === 0, text: `${word} ${made} of ${n}`, failed };
+}
+
+/** The open group, read through the shared cache; a read that fails says so, never "empty". */
+export function GroupView(p: {
+  project: string;
+  group: string;
+  writable: boolean;
+  who: string | null;
+  tick: number;
+  body(row: Row, slice: GroupSlice): ReactNode;
+  onDecided?(): void;
+}): JSX.Element {
+  const q = useQuery<GroupSlice>(p.project, urls.reviewGroup(p.project, p.group), REVIEW_TAGS);
+  if (q.error && !q.data) return <ErrorState error={`This group could not be read: ${q.error}`} retry={q.reload} />;
+  if (!q.data) return <LoadingState label="Reading the group…" />;
+  const reload = q.reload;
+  return (
+    <GroupPanel
+      project={p.project}
+      slice={q.data}
+      writable={p.writable}
+      who={p.who}
+      tick={p.tick}
+      body={(row) => p.body(row, q.data as GroupSlice)}
+      onDecided={() => {
+        reload();
+        p.onDecided?.();
+      }}
+    />
+  );
+}
+
+/** The group drawn from its slice: the sticky header, the rows, and the decision. */
+export function GroupPanel(p: {
+  project: string;
+  slice: GroupSlice;
+  /** The monitor may write, as a known identity, outside conversation mode. */
+  writable: boolean;
+  who: string | null;
+  tick: number;
+  body(row: Row): ReactNode;
+  onDecided?(): void;
+}): JSX.Element {
+  const { slice } = p;
+  const needsDiagrams = slice.key === "approve" || slice.key === "ratify";
+  const verb = slice.key === "ratify" ? "Ratify" : "Approve";
+  const [checks, setChecks] = useState<Record<string, DiagramState>>({});
+  const onCheck = useCallback((key: string, state: DiagramState) => setChecks((c) => ({ ...c, [key]: state })), []);
+
+  // Rows whose diagram check has not finished clean cannot be selected yet.
+  const pending = useMemo(() => {
+    if (!needsDiagrams) return new Set<string>();
+    return new Set(
+      slice.rows
+        .filter((r) => {
+          const c = checks[r.key];
+          return !c || c.loading || c.failed != null || c.problems.length > 0;
+        })
+        .map((r) => r.key),
+    );
+  }, [needsDiagrams, slice.rows, checks]);
+  const reasonFor = (row: Row): string => {
+    if (row.blocked) return row.blocked;
+    if (!needsDiagrams) return "";
+    const c = checks[row.key];
+    if (!c || c.loading) return "checking diagrams…";
+    return blockedSentence(verb, c) ?? "";
+  };
+
+  const [sel, setSel] = useState<Selection>(() => preselected(slice, pending));
+  // A live update re-reads the slice; the selection is kept, minus rows no longer selectable.
+  useEffect(() => {
+    setSel((s) => {
+      const keep = [...s.keys].filter((k) => slice.rows.some((r) => r.key === k && r.blocked === "") && !pending.has(k));
+      return keep.length === s.keys.size ? s : { group: s.group, keys: new Set(keep) };
+    });
+  }, [slice, pending]);
+
+  const [table, setTable] = useUrlState({ sort: "", dir: "asc", q: "" }, TABLE_STATE_KEY);
+  const shown = useMemo(() => {
+    const filtered = filterRows(slice.rows, COLUMNS, table.q);
+    const col = COLUMNS.find((c) => c.key === table.sort);
+    return col ? sortRows(filtered, col, table.dir === "desc" ? "desc" : "asc") : filtered;
+  }, [slice.rows, table.q, table.sort, table.dir]);
+  const [openRows, setOpen] = useOpenRows();
+
+  const [target, setTarget] = useState(slice.choices[0] ?? "");
+  const [inFlight, setInFlight] = useState(false);
+  const [outcome, setOutcome] = useState<GroupOutcome | null>(null);
+  // One call at a time (DEF-090): a second press while the first is in flight is dropped.
+  const guard = useRef<ReturnType<typeof guardInFlight<[() => Promise<void>]>> | null>(null);
+  if (!guard.current) guard.current = guardInFlight((call: () => Promise<void>) => call());
+
+  // The second press of an ask-first step: one decision over the chosen rows.
+  const send = (action: string, chosen: Selection) => {
+    const body = decisionBody(slice, chosen, slice.rows, p.who ?? "", target, action);
+    const n = body.items.length;
+    void guard.current?.run(async () => {
+      setInFlight(true);
+      try {
+        const answer = await api.decideGroup(p.project, body);
+        setOutcome(outcomeOf(answer, past(action), n));
+        setSel(emptySelection(slice.key));
+        p.onDecided?.();
+      } catch (e) {
+        setOutcome({ ok: false, text: e instanceof Error ? e.message : String(e), failed: [] });
+      } finally {
+        setInFlight(false);
+      }
+    });
+  };
+
+  const n = [...sel.keys].filter((k) => slice.rows.some((r) => r.key === k)).length;
+  const selectable = shown.filter((r) => reasonFor(r) === "");
+  const allOn = selectable.length > 0 && selectable.every((r) => sel.keys.has(r.key));
+  const preparedSel: Selection = {
+    group: sel.group,
+    keys: new Set([...sel.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
+  };
+  const nothing = n === 0 ? "Select the rows to decide first" : "Recording…";
+  const plan = slice.key === "which-release";
+
+  return (
+    <div className="review-group">
+      <div className="review-group-head">
+        <p className="muted small review-group-sentence">{sentenceOf(slice)}</p>
+        <div className="review-group-tools">
+          {p.writable ? (
+            <label className="review-select-all">
+              <input
+                type="checkbox"
+                checked={allOn}
+                disabled={selectable.length === 0 ? true : undefined}
+                onChange={(e) => setSel((s) => selectAll(s, shown, e.currentTarget.checked, pending))}
+              />{" "}
+              Select all
+            </label>
+          ) : null}
+          <input
+            className="review-reason review-group-filter"
+            type="search"
+            placeholder="Filter"
+            aria-label={`Filter ${slice.label}`}
+            value={table.q}
+            onChange={(e) => setTable({ q: e.target.value })}
+          />
+          <label className="small">
+            Sort{" "}
+            <select value={table.sort} onChange={(e) => setTable({ sort: e.target.value })} aria-label="Sort the rows">
+              <option value="">Release in flight first</option>
+              {SORTS.map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {table.sort ? (
+            <button
+              type="button"
+              className="btn"
+              aria-label={table.dir === "desc" ? "Sort ascending" : "Sort descending"}
+              onClick={() => setTable({ dir: table.dir === "desc" ? "asc" : "desc" })}
+            >
+              {table.dir === "desc" ? "↓" : "↑"}
+            </button>
+          ) : null}
+          {p.writable && plan ? (
+            <label className="small">
+              Into{" "}
+              <select value={target} onChange={(e) => setTarget(e.target.value)} aria-label="The release to plan into">
+                {slice.choices.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {p.writable ? (
+            <span className="review-group-actions">
+              <AskFirst
+                label={actionLabel(slice, sel, target)}
+                ask={askText(slice, sel, slice.rows, target)}
+                className={n > 0 ? "btn btn-primary" : "btn"}
+                disabled={n === 0 || inFlight || (plan && target === "")}
+                disabledWhy={plan && target === "" ? "No release is planned: ask Claude to add one" : nothing}
+                onConfirm={() => send(slice.action, sel)}
+              />
+              {slice.key === "delegated" ? (
+                <AskFirst
+                  label={`Undo ${n}`}
+                  ask={askText({ ...slice, action: "Undo" }, sel, slice.rows)}
+                  className="btn"
+                  disabled={n === 0 || inFlight}
+                  disabledWhy={nothing}
+                  onConfirm={() => send("undo", sel)}
+                />
+              ) : null}
+              {preparedSel.keys.size > 0 ? (
+                <AskFirst
+                  label={`Reject ${preparedSel.keys.size} prepared`}
+                  ask={askText({ ...slice, action: "Reject what Claude prepared for" }, preparedSel, slice.rows)}
+                  className="btn"
+                  disabled={inFlight}
+                  disabledWhy="Recording…"
+                  onConfirm={() => send("reject", preparedSel)}
+                />
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+        {outcome ? (
+          <div className={`review-group-outcome ${outcome.ok ? "done" : "warn"}`} role="status">
+            <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span>
+            {outcome.failed.length > 0 ? (
+              <ul className="small">
+                {outcome.failed.map((f) => (
+                  <li key={f.key}>
+                    {f.key}: {f.error}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="review-group-rows">
+        {slice.rows.length === 0 ? (
+          <Empty title="Nothing is waiting in this group." />
+        ) : shown.length === 0 ? (
+          <Empty title="No row matches the filter." />
+        ) : (
+          shown.map((row) => {
+            const why = reasonFor(row);
+            return (
+              <Fragment key={row.key}>
+                {needsDiagrams ? (
+                  <DiagramWatch project={p.project} rowKey={row.key} code={row.code} tick={p.tick} onState={onCheck} />
+                ) : null}
+                <ReviewRow
+                  project={p.project}
+                  row={row}
+                  open={openRows.has(row.key)}
+                  onToggle={(o) => setOpen(row.key, o)}
+                  select={
+                    p.writable
+                      ? {
+                          checked: sel.keys.has(row.key),
+                          disabled: why || undefined,
+                          onChange: (v) => setSel((s) => select(s, slice.key, row.key, v, slice.rows, pending)),
+                        }
+                      : undefined
+                  }
+                >
+                  {() => p.body(row)}
+                </ReviewRow>
+              </Fragment>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

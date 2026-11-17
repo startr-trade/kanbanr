@@ -1,0 +1,134 @@
+/**
+ * One row of a Review group (FTR-038, R-9, R-10): FTR-046's `AccordionRow`, so its header is a
+ * heading holding the toggle. One line: the code and title (cut with an ellipsis), what is waiting,
+ * and the row's properties as pills (prepared, its batch, the release and the sprint); the
+ * `records` line, what a yes records, sits under the title in small muted text and is the only
+ * second line. The body is the row's evidence, drawn only while the row is open.
+ *
+ * Also here: the diagram check the approve and ratify rows wait on (FEAT-200), shared by the row's
+ * group and the brief in its body.
+ */
+import { useEffect, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../../api";
+import { useAsync } from "../../live";
+import { checkBlocks, type DiagramProblem } from "../../diagramCheck";
+import { AccordionRow } from "../../ui";
+import type { ReviewRow as Row } from "../../types";
+
+export function ReviewRow(p: {
+  project: string;
+  row: Row;
+  open: boolean;
+  onToggle(open: boolean): void;
+  /** The row's checkbox; absent on a read-only monitor. `disabled` is why it cannot be selected. */
+  select?: { checked: boolean; disabled?: string; onChange(v: boolean): void };
+  children: () => ReactNode;
+}): JSX.Element {
+  const { row } = p;
+  const enc = encodeURIComponent;
+  // A delegation, a delegated decision and an ADR are not items; their code links nowhere.
+  const isItem = /^[A-Z][A-Z0-9]*-\d+$/.test(row.code) && !/^(DLG|ADR)-/.test(row.code);
+  const pills = [...row.pills, ...(row.release ? [row.release] : []), ...(row.sprint ? [row.sprint] : [])];
+  return (
+    <AccordionRow
+      id={row.key}
+      open={p.open}
+      onToggle={p.onToggle}
+      select={p.select}
+      title={
+        <>
+          <span className="review-row-title">
+            <code className="taskkey">{row.code}</code> {row.title}
+          </span>
+          <span className="review-row-records">{row.records}</span>
+        </>
+      }
+      meta={
+        <>
+          <span className="review-row-what">{row.what}</span>
+          {pills.map((text, i) => (
+            <span className="ui-pill ui-pill-neutral" key={`${i}-${text}`}>
+              {text}
+            </span>
+          ))}
+        </>
+      }
+      actions={
+        isItem ? (
+          <Link className="small" to={`/p/${enc(p.project)}/feature/${enc(row.code)}`} aria-label={`open ${row.code}`}>
+            open
+          </Link>
+        ) : undefined
+      }
+    >
+      {p.children}
+    </AccordionRow>
+  );
+}
+
+/** Where an item's diagram check stands: still running, could not run, or its problems. */
+export interface DiagramState {
+  problems: DiagramProblem[];
+  failed: string | null;
+  loading: boolean;
+}
+
+/**
+ * Pele's parse of every diagram an item's brief covers — its spec and each doc in `affects_docs`
+ * (FEAT-200) — re-run on the live tick, so fixing the spec re-enables Approve without a reload.
+ */
+export function useDiagramCheck(project: string, code: string, tick: number): DiagramState & { done: boolean } {
+  const diagrams = useAsync(() => api.getItemDiagrams(project, code), [project, code, tick]);
+  const [parsed, setParsed] = useState<{ problems: DiagramProblem[]; failed: string | null; done: boolean }>({
+    problems: [],
+    failed: null,
+    done: false,
+  });
+  useEffect(() => {
+    const d = diagrams.data;
+    if (diagrams.error) {
+      setParsed({ problems: [], failed: diagrams.error, done: true });
+      return;
+    }
+    if (!d) return;
+    setParsed((p) => ({ ...p, done: false }));
+    let cancelled = false;
+    import("pele")
+      .then(({ parse }) => {
+        if (!cancelled) setParsed({ problems: checkBlocks(d, parse), failed: null, done: true });
+      })
+      .catch((e) => {
+        if (!cancelled) setParsed({ problems: [], failed: String(e), done: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diagrams.data, diagrams.error]);
+  // Fails closed: a refetch in flight counts as loading, so a spec broken since the last check is
+  // never approved on the strength of the check before it.
+  const loading = diagrams.loading || !parsed.done;
+  return { ...parsed, loading };
+}
+
+/**
+ * Runs one row's diagram check and reports it (approve and ratify groups): the group keeps a row
+ * unselectable until its check has finished clean. Draws nothing.
+ */
+export function DiagramWatch(p: {
+  project: string;
+  rowKey: string;
+  code: string;
+  tick: number;
+  onState(key: string, state: DiagramState): void;
+}): null {
+  const check = useDiagramCheck(p.project, p.code, p.tick);
+  const { onState, rowKey } = p;
+  const signature = `${check.loading}|${check.failed ?? ""}|${check.problems.length}`;
+  useEffect(() => {
+    onState(rowKey, { problems: check.problems, failed: check.failed, loading: check.loading });
+    // Reported when what it says changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowKey, signature]);
+  return null;
+}
