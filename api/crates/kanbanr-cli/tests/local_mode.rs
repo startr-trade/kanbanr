@@ -16704,3 +16704,393 @@ fn build_web_reuses_the_cached_bundle_for_unchanged_sources() {
     assert_eq!(npm, ["ci", "run", "ci", "run", "run", "run"], "{rows:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The folder under `base` that holds `projects/<project>/` (the board `init` made), for tests
+/// that read the board's files directly.
+fn board_data_dir(base: &std::path::Path, project: &str) -> std::path::PathBuf {
+    fn walk(dir: &std::path::Path, project: &str, depth: usize) -> Option<std::path::PathBuf> {
+        if dir.join("projects").join(project).is_dir() {
+            return Some(dir.to_path_buf());
+        }
+        if depth == 0 {
+            return None;
+        }
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = e.path();
+            if path.is_dir()
+                && path.file_name().is_some_and(|n| n != ".git")
+                && let Some(found) = walk(&path, project, depth - 1)
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(base, project, 4).expect("the board init made")
+}
+
+/// A board for FTR-061's tests: `shop` with sprints on, one item with tasks T1 (4 h, api/a.rs),
+/// T2 after T1 (2 h, api/b.rs), T3 (1 h, web/c.ts) and T4 (no estimate, docs/d.md), and one item
+/// with no tasks. Returns (base, work, the tasked item's code, the untasked one's).
+fn flow_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, String, String) {
+    let (base, work) = togaf_scratch(tag);
+    // The test's own board, never the repository's (L-41).
+    assert!(work.starts_with(std::env::temp_dir()));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let git = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&work)
+        .status()
+        .unwrap();
+    assert!(git.success());
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on", "--git-model", "off"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    let add = |title: &str| {
+        let made = ok(run_in(
+            &base,
+            &work,
+            &[
+                "--json",
+                "feature",
+                "add",
+                "--title",
+                title,
+                "--milestone",
+                "MS-001",
+            ],
+        ));
+        let made: serde_json::Value = serde_json::from_str(&made).unwrap();
+        made["code"].as_str().unwrap().to_string()
+    };
+    let (tasked, untasked) = (add("Checkout"), add("Not broken down"));
+    let bundle = base.join("tasks.json");
+    std::fs::write(
+        &bundle,
+        serde_json::json!({"operations": [
+            {"op": "todo.add", "ref": "t", "feature": tasked, "description": "Build", "code": "TL-001"},
+            {"op": "task.add", "feature": tasked, "todo": "t", "key": "T1", "text": "core",
+             "writes": ["api/a.rs"], "estimate_h": 4.0},
+            {"op": "task.add", "feature": tasked, "todo": "t", "key": "T2", "text": "cli",
+             "depends_on": ["T1"], "writes": ["api/b.rs"], "estimate_h": 2.0},
+            {"op": "task.add", "feature": tasked, "todo": "t", "key": "T3", "text": "web",
+             "writes": ["web/c.ts"], "estimate_h": 1.0},
+            {"op": "task.add", "feature": tasked, "todo": "t", "key": "T4", "text": "docs",
+             "writes": ["docs/d.md"]},
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["batch", "--file", bundle.to_str().unwrap()],
+    ));
+    (base, work, tasked, untasked)
+}
+
+/// FTR-061 R-5: `kanbanr plan` prints what runs, what is ready, what each blocked task waits on,
+/// the critical path and a forecast per lane count (the sprint's own lanes among them), in hours,
+/// with the only date the one a person set; `--json` carries the flow plan's keys, `--actuals`
+/// each task's actuals from the task log.
+#[test]
+fn plan_shows_running_ready_blocked_the_critical_path_and_the_forecast() {
+    let (base, work, code, untasked) = flow_board("plan-flow");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let today = kanbanr_core::sprints::today().to_string();
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", &today, "--lanes", "3"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", &code, &untasked],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", &code, "TL-001", "T1", "in-progress"],
+    ));
+
+    let t = |k: &str| format!("{code}/TL-001/{k}");
+    // Before the item is at its build stage its open tasks are blocked on that.
+    let early = ok(run_in(&base, &work, &["plan"]));
+    assert!(
+        early.contains(&format!("{code} is in ")) && early.contains("not at the build stage"),
+        "{early}"
+    );
+    let data = board_data_dir(&base, "shop");
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let store = kanbanr_core::Store::new(data);
+    let build = store
+        .load_meta("shop")
+        .unwrap()
+        .config
+        .role_status(kanbanr_core::config::Role::Build)
+        .expect("a build stage");
+    store.move_feature("shop", &code, &build).unwrap();
+
+    // The running sprint is the default scope.
+    let out = ok(run_in(&base, &work, &["plan"]));
+    assert!(out.contains("Plan for sprint:SP-001"), "{out}");
+    assert!(
+        out.contains("Remaining 8.0 agent-h · critical path 6.0 h over 2 tasks"),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("Critical path: {} → {}", t("T1"), t("T2"))),
+        "{out}"
+    );
+    let block = |name: &str| -> String {
+        let start = out
+            .find(&format!("\n{name}\n"))
+            .unwrap_or_else(|| panic!("no {name} block: {out}"));
+        let rest = &out[start + name.len() + 2..];
+        rest[..rest.find("\n\n").unwrap_or(rest.len())].to_string()
+    };
+    let running = block("Running");
+    assert!(running.contains(&t("T1")), "{running}");
+    assert!(running.contains("of 4.0 h"), "{running}");
+    let ready = block("Ready");
+    assert!(
+        ready.contains(&t("T3")) && ready.contains(&t("T4")),
+        "{out}"
+    );
+    let blocked = block("Blocked");
+    assert!(blocked.contains(&t("T2")), "{blocked}");
+    assert!(
+        blocked.contains(&format!("waits on {}", t("T1"))),
+        "{blocked}"
+    );
+    let forecast = block("Forecast (hours from now)");
+    for lanes in ["1 lane · ", "3 lanes · ", "4 lanes · ", "8 lanes · "] {
+        assert!(forecast.contains(lanes), "{lanes}: {forecast}");
+    }
+    assert!(forecast.contains("critical path 6.0 h"), "{forecast}");
+    assert!(
+        out.contains(&format!(
+            "1 task has no estimate (counted as 1 h): {}",
+            t("T4")
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!("1 item has no tasks: {untasked}")),
+        "{out}"
+    );
+    assert!(out.contains("build share 0.25 (assumed)"), "{out}");
+    assert!(out.contains("SP-001 ends "), "{out}");
+    assert!(out.contains("(set by the person)"), "{out}");
+    assert!(!out.contains(" day"), "no calendar days: {out}");
+
+    // --json: the flow plan's keys; the sprint's lanes are among the forecasts.
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "plan"]))).unwrap();
+    for key in [
+        "scope",
+        "total_h",
+        "done_h",
+        "remaining_h",
+        "critical_path",
+        "critical_h",
+        "widest",
+        "profile",
+        "running",
+        "ready",
+        "blocked",
+        "forecasts",
+        "build_share",
+        "build_share_measured",
+        "unestimated",
+        "untasked_items",
+        "outside",
+        "ratios",
+        "dates",
+    ] {
+        assert!(json.get(key).is_some(), "{key}: {json}");
+    }
+    let lanes: Vec<u64> = json["forecasts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["lanes"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lanes, [1, 3, 4, 8]);
+    assert!(json.get("actuals").is_none());
+
+    // --actuals: each task's actuals; T1 is running.
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "plan", "--actuals"]))).unwrap();
+    assert!(
+        json["actuals"][t("T1")]["running_since"].is_string(),
+        "{json}"
+    );
+    let text = ok(run_in(&base, &work, &["plan", "--actuals"]));
+    assert!(text.contains("Actuals (task log)"), "{text}");
+    assert!(text.contains(&format!("{}  agent ", t("T1"))), "{text}");
+
+    // Another scope, given lanes and slots; two scopes at once are refused.
+    let open = ok(run_in(
+        &base,
+        &work,
+        &["plan", "--open", "--lanes", "2", "--slots", "1"],
+    ));
+    assert!(open.contains("Plan for open"), "{open}");
+    assert!(open.contains("2 lanes · 1 build slot → "), "{open}");
+    let both = run_in(&base, &work, &["plan", "--open", "--sprint", "SP-001"]);
+    assert!(!both.status.success());
+    let none = run_in(&base, &work, &["plan", "--sprint", "SP-404"]);
+    assert!(!none.status.success());
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-061 R-3: completing a task with `--tokens`, `--cost-usd` and `--model` keeps them in the
+/// task log, with the totals of the builds this repository's build log holds for the task since it
+/// last went in progress; an earlier build and another task's are not counted.
+#[test]
+fn task_state_records_tokens_and_build_time_on_completion() {
+    use kanbanr_core::buildplan::{self, BuildRow};
+    use kanbanr_core::models::TaskState;
+    let (base, work, code, _) = flow_board("task-report");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let id = format!("{code}/TL-001/T1");
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", &code, "TL-001", "T1", "in-progress"],
+    ));
+
+    // The build log of this repository: two builds of T1 since it went in progress, one before,
+    // and one of another task.
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let dir = buildplan::repo_dir(std::path::Path::new(
+        String::from_utf8(common.stdout).unwrap().trim(),
+    ));
+    let now = kanbanr_core::now_rfc3339();
+    let row = |at: &str, task: &str, exit: i32, run_ms: u64, queued_ms: u64| BuildRow {
+        at: at.into(),
+        task: Some(task.into()),
+        kind: "test".into(),
+        exit,
+        run_ms,
+        queued_ms,
+        ..BuildRow::default()
+    };
+    for r in [
+        row("2000-01-01T00:00:00Z", &id, 0, 99_000, 99),
+        row(&now, &id, 0, 1_000, 200),
+        row(&now, &id, 1, 3_000, 50),
+        row(&now, &format!("{code}/TL-001/T3"), 0, 7_000, 7),
+    ] {
+        buildplan::append_row(&dir, &r).unwrap();
+    }
+
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "task",
+            "state",
+            &code,
+            "TL-001",
+            "T1",
+            "completed",
+            "--tokens",
+            "1234",
+            "--cost-usd",
+            "0.42",
+            "--model",
+            "claude-test",
+        ],
+    ));
+
+    let data = board_data_dir(&base, "shop");
+    assert!(
+        data.starts_with(std::env::temp_dir()),
+        "the test's own board"
+    );
+    let events: Vec<_> = kanbanr_core::tasklog::read_all(&data, "shop")
+        .into_iter()
+        .filter(|e| e.task_id() == id)
+        .collect();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(
+        (events[0].from, events[0].to),
+        (TaskState::NotStarted, TaskState::InProgress)
+    );
+    assert_eq!(events[0].tokens, None);
+    assert_eq!(events[0].build, None);
+    let done = &events[1];
+    assert_eq!(
+        (done.from, done.to),
+        (TaskState::InProgress, TaskState::Completed)
+    );
+    assert_eq!(done.tokens, Some(1234));
+    assert_eq!(done.cost_usd, Some(0.42));
+    assert_eq!(done.model.as_deref(), Some("claude-test"));
+    let build = done.build.expect("the build totals");
+    assert_eq!(
+        (build.runs, build.red, build.run_ms, build.wait_ms),
+        (2, 1, 4_000, 250)
+    );
+
+    // A task with no builds since it started sends none.
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", &code, "TL-001", "T4", "in-progress"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", &code, "TL-001", "T4", "completed"],
+    ));
+    let t4 = kanbanr_core::tasklog::read_all(&data, "shop")
+        .into_iter()
+        .rfind(|e| e.task_id() == format!("{code}/TL-001/T4"))
+        .unwrap();
+    assert_eq!(t4.to, TaskState::Completed);
+    assert_eq!((t4.build, t4.tokens), (None, None));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
