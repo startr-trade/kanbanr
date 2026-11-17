@@ -22,6 +22,7 @@
     "check:sprint-filter": "node scripts/check-sprint-filter.mjs",
     "check:prepared": "node scripts/check-prepared.mjs",
     "check:baseline": "node scripts/check-baseline.mjs",
+    "check:catalog": "node scripts/check-catalog.mjs",
     "check:releases-prepared": "node scripts/check-releases-prepared.mjs",
     "check:review-blocked": "node scripts/check-review-blocked.mjs",
     "check:texts-to-check": "node scripts/check-texts-to-check.mjs",
