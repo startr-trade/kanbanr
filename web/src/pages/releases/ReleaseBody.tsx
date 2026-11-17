@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
-import type { PreparedView, Release, ReleaseItemRow } from "../../types";
+import type { CompactIndex, PreparedView, Release, ReleaseItemRow } from "../../types";
+import { PlanningAction } from "../../components/PlanningAction";
+import { planTargets } from "../../planTabs";
 import { PreparedPanel } from "../../components/PreparedPanel";
 import { useQuery } from "../../data/useQuery";
-import { urls } from "../../data/urls";
+import { TAGS, urls } from "../../data/urls";
 import { DataTable, ErrorState, LoadingState, filterRows, type Column } from "../../ui";
 import { ITEM_COLUMNS } from "../../releaseTabs";
 import { to as link } from "../../overviewLinks";
@@ -69,17 +71,23 @@ export function ReleaseBody({
   const { project } = ctx;
   const items = useQuery<ReleaseItemRow[]>(project, urls.releaseItems(project, r.version), ["releases", "items"]);
   const base = `/p/${encodeURIComponent(project)}`;
-  const columns = itemColumns(project);
+  // The other planned releases an item can be moved to (FTR-049), read only for a monitor that may
+  // record a decision, and only for a release whose scope is not frozen.
+  const open = ctx.writable && r.state === "planned" && !r.stage;
+  const index = useQuery<CompactIndex>(project, open ? urls.index(project) : null, TAGS.index);
+  const moveTargets = open
+    ? planTargets([], index.data?.releases ?? []).filter((t) => t.key !== `release:${r.version}`)
+    : [];
   return (
     <div className="release-body">
       {items.data ? (
-        <DataTable
+        <ReleaseItems
+          project={project}
+          release={r}
           rows={filterRows(items.data, ITEM_COLUMNS, ctx.q)}
-          columns={columns}
-          rowKey={(row) => row.code}
-          stateKey="t."
-          csvName={`${r.version}-items`}
-          caption={`Items in ${r.version}`}
+          writable={ctx.writable}
+          who={ctx.who}
+          targets={moveTargets}
           empty={ctx.q ? `No item in ${r.version} matches "${ctx.q}".` : `No items in ${r.version} yet.`}
         />
       ) : items.error ? (
@@ -137,6 +145,71 @@ export function ReleaseBody({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A release's item table with the person's "Move to…" (FTR-049): a checkbox per item and one
+ * `PlanningAction` for the selection, targets = the other planned releases. The move records the
+ * person's decision; it changes no plan until Claude carries it out. With no target, or on a
+ * read-only monitor, it is the plain table. Exported so the checks render it without a daemon.
+ */
+export function ReleaseItems({
+  project,
+  release: r,
+  rows,
+  writable,
+  who,
+  targets,
+  empty,
+}: {
+  project: string;
+  release: Release;
+  rows: ReleaseItemRow[];
+  writable: boolean;
+  who: string | null;
+  targets: { key: string; label: string }[];
+  empty: string;
+}): JSX.Element {
+  const [selected, setSelected] = useState<string[]>([]);
+  const selectable = writable && who != null && targets.length > 0;
+  const chosen = rows.map((i) => i.code).filter((c) => selected.includes(c));
+  const columns = itemColumns(project);
+  if (selectable) {
+    columns.unshift({
+      key: "select",
+      label: "Select",
+      value: () => null,
+      render: (row: ReleaseItemRow) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${row.code}`}
+          checked={selected.includes(row.code)}
+          onChange={(e) =>
+            setSelected((s) => (e.target.checked ? [...s.filter((c) => c !== row.code), row.code] : s.filter((c) => c !== row.code)))
+          }
+        />
+      ),
+      narrow: "keep",
+    });
+  }
+  return (
+    <>
+      <DataTable
+        rows={rows}
+        columns={columns}
+        rowKey={(row) => row.code}
+        stateKey="t."
+        csvName={`${r.version}-items`}
+        caption={`Items in ${r.version}`}
+        empty={empty}
+      />
+      {selectable && rows.length > 0 ? (
+        <p className="release-move">
+          <PlanningAction project={project} items={chosen} targets={targets} writable={writable} who={who ?? ""} />
+        </p>
+      ) : null}
+    </>
   );
 }
 

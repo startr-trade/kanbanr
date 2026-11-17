@@ -203,6 +203,24 @@ const base = { project: "demo", items: ["FTR-044", "DEF-076"], targets, writable
   const ro = await render("src/pages/plan/RowItems.tsx", "RowItemsBody", { ...row, planning: { ...planning, writable: false } }, { url: "/p/demo/plan" });
   ok(R3, "read-only: the pills, no selection or action", ro.document.querySelectorAll('input[type="checkbox"], .plan-planning').length === 0 && ro.document.body.textContent.includes("pending: into SP-004 (PD-1)"), ro.html.slice(0, 400));
 }
+
+// ---- R-1: "Move to…" on the Releases page's item table (FTR-049 T7) ----
+{
+  const rel = { version: "v0.8.0", state: "planned", items: [] };
+  const rows = [
+    { code: "FTR-044", title: "Forty-four", kind: "feature", status: "Planned", sprint: "", tests_green: 0, tests_named: 0, approval: "none", signoff: "" },
+    { code: "DEF-076", title: "Seventy-six", kind: "defect", status: "Planned", sprint: "", tests_green: 0, tests_named: 0, approval: "none", signoff: "" },
+  ];
+  const props = { project: "demo", release: rel, rows, writable: true, who: "Ada", targets: [{ key: "release:v0.9.0", label: "v0.9.0" }], empty: "none" };
+  const at = (p) => render("src/pages/releases/ReleaseBody.tsx", "ReleaseItems", p, { url: "/p/demo/releases" });
+  const { document } = await at(props);
+  expect(R1, "releases: a checkbox per item", [...document.querySelectorAll('table input[type="checkbox"]')].map((c) => c.getAttribute("aria-label")), ["Select FTR-044", "Select DEF-076"]);
+  expect(R1, "releases: one action, Move to the other release", [...document.querySelectorAll(".release-move button")].map((b) => b.textContent), ["Move to v0.9.0"]);
+  const ro = await at({ ...props, writable: false });
+  ok(R1, "releases: read-only shows the plain table", ro.document.querySelectorAll('input[type="checkbox"], .release-move').length === 0 && ro.document.querySelectorAll("table").length === 1, ro.html.slice(0, 300));
+  const alone = await at({ ...props, targets: [] });
+  ok(R1, "releases: no other planned release, no selection", alone.document.querySelectorAll('input[type="checkbox"], .release-move').length === 0, alone.html.slice(0, 300));
+}
 await closeRender();
 
 // ---- the components, rendered in jsdom and pressed ----
