@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, viaOrigin } from "../api";
+import { api, viaOrigin, type Meta } from "../api";
 import { isReadOnly } from "../runtimeConfig";
-import { useAsync, useLiveTick } from "../live";
 import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { useScrollToHash } from "../useBoardIndex";
@@ -14,15 +13,13 @@ import {
   listFullyCompleted,
   zachmanColumns,
 } from "../types";
-import type { CompactIndex, Feature, Requirement, Signoff, TestRef } from "../types";
+import type { Activity, AgentScope, CompactIndex, Feature, Lesson, PendingReview, Release, Requirement, ScopeDrift, Signoff, TestRef } from "../types";
 import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
   const { project = "", code = "" } = useParams();
-  // The panels below without a slice of their own re-read on every change, as before.
-  const tick = useLiveTick(api.projectEvents(project));
   // This item alone, with its spec; the config and the known codes from the compact index. Never
   // the whole board (DEF-081).
   const { data: feature, error, loading } = useQuery<Feature>(
@@ -33,10 +30,7 @@ export default function FeaturePage() {
   const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
   useScrollToHash(!!feature);
   const usesReleases = index.data?.config.cadence.releases === true;
-  const releases = useAsync(
-    () => (usesReleases ? api.getReleases(project) : Promise.resolve([])),
-    [project, tick, usesReleases],
-  );
+  const releases = useQuery<Release[]>(project, usesReleases ? urls.releases(project) : null, TAGS.releases);
 
   if (loading && !feature) return <Loading />;
   if (error?.startsWith("404 ")) return <ErrorBox error={`Feature ${code} not found`} />;
@@ -44,7 +38,7 @@ export default function FeaturePage() {
   if (!feature) return <ErrorBox error={`Feature ${code} not found`} />;
   const p = featureProgress(feature);
   // Nothing until the releases have loaded, so the chip never flashes "Not in a release".
-  const line = releases.data ? releaseLine(feature, releases.data, usesReleases) : null;
+  const line = usesReleases && releases.data ? releaseLine(feature, releases.data, true) : null;
   const lists = listsNewestFirst(feature.todo_lists);
 
   return (
@@ -102,7 +96,7 @@ export default function FeaturePage() {
       )}
 
       <Provenance feature={feature} />
-      <Definition feature={feature} project={project} tick={tick} />
+      <Definition feature={feature} project={project} />
       <LessonsFor project={project} code={feature.code} />
 
       <section className="section">
@@ -153,9 +147,9 @@ export default function FeaturePage() {
         )}
       </section>
 
-      <FeatureAgents project={project} code={feature.code} tick={tick} />
+      <FeatureAgents project={project} code={feature.code} />
 
-      <FeatureActivity project={project} code={feature.code} tick={tick} />
+      <FeatureActivity project={project} code={feature.code} />
     </div>
   );
 }
@@ -164,9 +158,10 @@ export default function FeaturePage() {
  * The agents that worked or work on this item (FEAT-214): a banner for each scope in force, then
  * the item's scope history, expired and revoked ones included. Issued and revoked from the CLI.
  */
-function FeatureAgents({ project, code, tick }: { project: string; code: string; tick: number }) {
-  const scopes = useAsync(() => api.getScopes(project), [project, tick]);
-  const drift = useAsync(() => api.getScopeDrift(project).catch(() => []), [project, tick]);
+function FeatureAgents({ project, code }: { project: string; code: string }) {
+  const scopes = useQuery<AgentScope[]>(project, urls.scopes(project), TAGS.scopes);
+  // Needs the code repository; a daemon started elsewhere refuses it, and no drift is shown.
+  const drift = useQuery<ScopeDrift[]>(project, urls.scopeDrift(project), TAGS.scopeDrift);
   const mine = (scopes.data ?? []).filter((s) => s.item === code);
   if (mine.length === 0) return null;
   const now = Date.now();
@@ -214,7 +209,7 @@ const day = (ts?: string | null) => (ts ?? "").slice(0, 10);
  * which is where `kanbanr lessons --for <CODE>` puts it on the command line.
  */
 function LessonsFor({ project, code }: { project: string; code: string }) {
-  const lessons = useAsync(() => api.getLessonsFor(project, code), [project, code]);
+  const lessons = useQuery<Lesson[]>(project, urls.lessons(project, { for: code }), TAGS.lessonsFor(code));
   const matched = lessons.data ?? [];
   if (matched.length === 0) return null;
   return (
@@ -235,14 +230,14 @@ function LessonsFor({ project, code }: { project: string; code: string }) {
   );
 }
 
-function Definition({ feature, project, tick }: { feature: Feature; project: string; tick: number }) {
+function Definition({ feature, project }: { feature: Feature; project: string }) {
   const def = feature.definition;
   const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const meta = useAsync(() => api.getMeta(), []);
+  const meta = useQuery<Meta>(null, urls.meta(), TAGS.meta, () => api.getMeta());
   const who = api.approver(meta.data ?? null);
   if (!def) return null;
   const approval =
@@ -389,7 +384,6 @@ function Definition({ feature, project, tick }: { feature: Feature; project: str
           project={project}
           writable={meta.data?.writes === true}
           who={who}
-          tick={tick}
         />
         <div className="tiles">
           {zachmanColumns(def.zachman).map(({ column, answer }) => (
@@ -515,8 +509,8 @@ function Provenance({ feature }: { feature: Feature }) {
 }
 
 /** This feature's recent activity (the changelog filtered to its code). */
-function FeatureActivity({ project, code, tick }: { project: string; code: string; tick: number }) {
-  const { data } = useAsync(() => api.getActivity(project, `?ref=${encodeURIComponent(code)}`), [project, code, tick]);
+function FeatureActivity({ project, code }: { project: string; code: string }) {
+  const { data } = useQuery<Activity[]>(project, urls.activity(project, { ref: code }), TAGS.activity);
   if (!data || data.length === 0) return null;
   return (
     <section className="activity">
@@ -545,18 +539,16 @@ function Signoffs({
   project,
   writable,
   who,
-  tick,
 }: {
   feature: Feature;
   project: string;
   writable: boolean;
   who: string | null;
-  tick: number;
 }) {
   const entries = feature.definition?.signoffs ?? [];
   // Whether a sign-off's spec changed is the review queue's answer, so the rule lives in one place
   // (FTR-023).
-  const queue = useAsync(() => api.getPendingReviews(project).catch(() => []), [project, tick]);
+  const queue = useQuery<PendingReview[]>(project, urls.pendingReviews(project), TAGS.pendingReviews);
   const specChanged = (queue.data ?? []).find(
     (e) => e.code === feature.code && e.approval === "spec_changed",
   )?.spec?.signoff;

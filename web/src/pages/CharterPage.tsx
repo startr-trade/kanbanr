@@ -1,6 +1,4 @@
 import { useParams } from "react-router-dom";
-import { api } from "../api";
-import { useAsync, useLiveTick } from "../live";
 import { useQuery } from "../data/useQuery";
 import { TAGS, urls } from "../data/urls";
 import { useScrollToHash } from "../useBoardIndex";
@@ -21,9 +19,7 @@ export default function CharterPage() {
   const charter = useQuery<Charter>(project, urls.charter(project), TAGS.charter);
   // The goal counts come from the compact index's items, never the whole board (DEF-081).
   const index = useQuery<CompactIndex>(project, urls.index(project), TAGS.index);
-  // Lessons have no slice of their own yet: re-read on every change, as before.
-  const tick = useLiveTick(api.projectEvents(project));
-  const lessons = useAsync(() => api.getLessons(project), [project, tick]);
+  const lessons = useQuery<Lesson[]>(project, urls.lessons(project), TAGS.lessons);
   useScrollToHash(!!charter.data);
 
   if (charter.loading && !charter.data) return <Loading />;

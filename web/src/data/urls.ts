@@ -31,6 +31,26 @@ export const urls = {
   sprint: (p: string, s: string) => apiUrl(`${project(p)}/sprints/${enc(s)}`),
   gitModel: (p: string) => apiUrl(`${project(p)}/git/model`),
   docTree: (p: string) => apiUrl(`${project(p)}/docs`),
+  /** The lessons in force, or those that bear on one item when `for` is given. */
+  lessons: (p: string, q: { for?: string } = {}) => apiUrl(`${project(p)}/lessons${query([["for", q.for]])}`),
+  /** The project's agent scopes with their state (FEAT-214). */
+  scopes: (p: string) => apiUrl(`${project(p)}/scopes`),
+  /** Agent branches ahead of their items' tasks (FEAT-214); reads the code repository. */
+  scopeDrift: (p: string) => apiUrl(`${project(p)}/scopes/drift`),
+  releases: (p: string) => apiUrl(`${project(p)}/releases`),
+  /** The workflow as a mermaid state diagram: text, not JSON. */
+  workflowDiagram: (p: string) => apiUrl(`${project(p)}/workflow?format=mermaid`),
+  process: (p: string) => apiUrl(`${project(p)}/process`),
+  gates: (p: string) => apiUrl(`${project(p)}/gates`),
+  /** The git model a cadence gives, with no repository read (FEAT-194). */
+  gitModelPreview: (p: string, sprints: boolean, releases: boolean) =>
+    apiUrl(`${project(p)}/git/model?sprints=${sprints ? "on" : "off"}&releases=${releases ? "on" : "off"}`),
+  gitDoctor: (p: string) => apiUrl(`${project(p)}/git/doctor`),
+  guards: (p: string) => apiUrl(`${project(p)}/guards`),
+  /** Items whose definition is not currently agreed (FEAT-067). */
+  pendingReviews: (p: string) => apiUrl(`${project(p)}/review`),
+  /** What this daemon can do; a root read, so no board change re-reads it. */
+  meta: () => apiUrl(`/meta`),
   /** The Review page's decision groups, counted (FTR-038). */
   reviewSummary: (p: string) => apiUrl(`${project(p)}/review/summary`),
   /** One review group's rows (FTR-038). */
@@ -74,6 +94,27 @@ export const TAGS = {
   charter: ["charter"],
   sprints: ["sprints", "items"],
   docTree: ["docs"],
+  lessons: ["lessons"],
+  /** `lessons?for=`: matched against the item's labels, kind and goals. */
+  lessonsFor: (c: string) => ["lessons", `item:${c}`],
+  scopes: ["scopes"],
+  releases: ["releases", "items"],
+  workflowDiagram: ["config"],
+  /** The config against the packs it follows. */
+  process: ["config", "baseline"],
+  gates: ["config"],
+  gitModelPreview: ["config", "sprints"],
+  /**
+   * Reads that answer from the code repository, which sends no events: re-read on every change to
+   * the board, as before DEF-081.
+   */
+  scopeDrift: ["*"],
+  gitModel: ["*"],
+  gitDoctor: ["*"],
+  guards: ["*"],
+  pendingReviews: ["*"],
+  /** A root read: never invalidated by a project's change. */
+  meta: [],
   /** Sent only by the daemon's background worker, after a drift run (FTR-045). */
   driftLatest: ["drift"],
   /** The Needs-you badge and drawer (FTR-048). */
