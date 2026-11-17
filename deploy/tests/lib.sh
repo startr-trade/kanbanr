@@ -11,6 +11,8 @@
 #   ensure_image                  the kanbanr:e2e image: on GitHub Actions the one
 #                                 buildx loaded; elsewhere always rebuilt from
 #                                 docker/Dockerfile, so a stale image is never tested
+#                                 (under ~/.cache/heavy-build.lock, unless the caller
+#                                 holds it: KANBANR_HEAVY_LOCK_HELD=1)
 #   board_cli <dir> <project> <args...>
 #                                 run the image's kanbanr CLI on the board <dir>
 #   make_board <dir> <project>    a new board in <dir>: a git repository on main
@@ -67,7 +69,9 @@ ensure_image() {
         return 0
     fi
     local build=(docker build -q -f "$LIB_REPO/docker/Dockerfile" -t "$E2E_IMAGE" "$LIB_REPO")
-    if command -v flock >/dev/null 2>&1; then
+    # make ci runs this whole step under the lock and says so in KANBANR_HEAVY_LOCK_HELD; a
+    # second flock on the same file would wait forever on the one its caller holds.
+    if [ "${KANBANR_HEAVY_LOCK_HELD:-}" != 1 ] && command -v flock >/dev/null 2>&1; then
         mkdir -p "$HOME/.cache"
         flock "$HOME/.cache/heavy-build.lock" "${build[@]}" >/dev/null
     else

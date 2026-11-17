@@ -566,6 +566,55 @@ class HeavySteps(unittest.TestCase):
             self.assertNotIn("flock", wrapped)
             self.assertEqual(wrapped[-3:], cmd)
 
+    def test_the_deploy_e2e_steps_hold_the_lock_and_their_image_build_does_not_wait_on_it(self) -> None:
+        """FTR-030 T8: kind and compose runs load the machine like a build, so they hold the lock.
+
+        Their image build takes the lock itself (deploy/tests/lib.sh ensure_image) when run by hand;
+        under make ci the step already holds it, and a second flock on the same file would wait forever.
+        """
+        self.assertTrue(ci_local.is_heavy("deploy/tests/e2e-kind.sh"))
+        self.assertTrue(ci_local.is_heavy("deploy/tests/compose-smoke.sh"))
+        self.assertFalse(ci_local.is_heavy("deploy/tests/validate.sh"))
+        self.assertFalse(ci_local.is_heavy("deploy/tests/compose-config.sh"))
+        with self.which("flock"), \
+                mock.patch.object(ci_local.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, "")) as run:
+            ci_local.sh(["bash", "-c", "deploy/tests/e2e-kind.sh"], ci_local.ROOT, {"PATH": "/bin"}, heavy=True)
+            self.assertEqual(run.call_args.args[0][0], "flock")
+            self.assertEqual(run.call_args.kwargs["env"].get("KANBANR_HEAVY_LOCK_HELD"), "1")
+            ci_local.sh(["bash", "-c", "python3 -V"], ci_local.ROOT, {"PATH": "/bin"})
+            self.assertNotIn("KANBANR_HEAVY_LOCK_HELD", run.call_args.kwargs["env"])
+        with self.which(), \
+                mock.patch.object(ci_local.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, "")) as run:
+            ci_local.sh(["bash", "-c", "deploy/tests/e2e-kind.sh"], ci_local.ROOT, {"PATH": "/bin"}, heavy=True)
+            self.assertNotIn("KANBANR_HEAVY_LOCK_HELD", run.call_args.kwargs["env"])
+
+    @unittest.skipIf(os.name == "nt", "deploy/tests/lib.sh is bash; the deploy checks run on Linux")
+    def test_lib_sh_ensure_image_takes_the_lock_unless_its_caller_holds_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir, log = Path(tmp) / "bin", Path(tmp) / "calls.log"
+            bin_dir.mkdir()
+            for tool in ("flock", "docker"):
+                stub = bin_dir / tool
+                stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$STUB_LOG"\n'
+                                + ('shift; exec "$@"\n' if tool == "flock" else "exit 0\n"))
+                stub.chmod(0o755)
+            lib = ci_local.ROOT / "deploy" / "tests" / "lib.sh"
+
+            def ensure_image(**extra: str) -> list[str]:
+                log.write_text("")
+                env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": tmp, "STUB_LOG": str(log), **extra}
+                subprocess.run(["bash", "-c", f'. "{lib}" && ensure_image'], env=env, check=True, timeout=30)
+                return log.read_text().splitlines()
+
+            calls = ensure_image()
+            self.assertTrue(calls[0].startswith("flock "), calls)
+            self.assertTrue(any(c.startswith("docker build") for c in calls), calls)
+            calls = ensure_image(KANBANR_HEAVY_LOCK_HELD="1")
+            self.assertFalse(any(c.startswith("flock") for c in calls), calls)
+            self.assertTrue(any(c.startswith("docker build") for c in calls), calls)
+
 
 if __name__ == "__main__":
     unittest.main()

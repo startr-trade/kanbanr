@@ -1,0 +1,64 @@
+name: Deploy
+
+# The hosted read-only site (FTR-030): the OpenTofu/Terraform module under deploy/modules, its
+# example root, the sync and serve scripts and the compose files.
+#   - static: the settings keep secrets out of git, the scripts' unit tests, the module validates
+#     and its tests pass under both tools, and the compose file validates in both modes.
+#   - kind: the site on a throwaway kind cluster shows a pushed board change within one interval,
+#     and compose mode (b) serves a local board read-only. Heavy suites never gate a pull request,
+#     so it runs on main and on demand; make ci, the release gate, runs it locally.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "docker/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: The deploy settings keep secrets out of git
+        run: python3 -m unittest -q deploy/tests/test_check_tfvars.py && python3 deploy/tests/check_tfvars.py
+      - name: The sync and serve scripts do what they say
+        run: python3 -m unittest -q deploy/tests/test_sync_sh.py deploy/tests/test_serve_sh.py
+      - name: The module validates and its tests pass under OpenTofu and Terraform
+        run: deploy/tests/validate.sh
+      - name: The compose file validates in both modes
+        run: deploy/tests/compose-config.sh
+
+  kind:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image the site runs
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: kanbanr:e2e
+          cache-from: type=gha,scope=deploy-e2e
+          cache-to: type=gha,scope=deploy-e2e,mode=max
+      - name: Install kind and kubectl
+        run: deploy/tests/lib.sh install-tools
+      - name: The hosted site shows a pushed board change within one interval
+        run: deploy/tests/e2e-kind.sh
+      - name: Mode (b) of the compose file serves a local board read-only
+        run: deploy/tests/compose-smoke.sh

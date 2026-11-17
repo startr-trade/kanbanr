@@ -17,7 +17,7 @@ HOW IT STAYS HONEST:
   * It ends by listing what it could not verify, so "all passed" never overstates.
 
 Needs: bash, git, python3 with PyYAML, cargo, node/npm, docker (actionlint, PowerShell), gh
-(authenticated, for resolving action references), mdbook, shellcheck.
+(authenticated, for resolving action references), mdbook, shellcheck, kind, kubectl.
 """
 
 from __future__ import annotations
@@ -252,6 +252,19 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Publish mermaid-lint": "publishes to crates.io",
         },
     },
+    "deploy.yml": {
+        "static": {
+            "The deploy settings keep secrets out of git": LOCAL,
+            "The sync and serve scripts do what they say": LOCAL,
+            "The module validates and its tests pass under OpenTofu and Terraform": LOCAL,
+            "The compose file validates in both modes": LOCAL,
+        },
+        "kind": {
+            "Install kind and kubectl": "installs tools on the runner; make ci uses this machine's kind and kubectl",
+            "The hosted site shows a pushed board change within one interval": LOCAL,
+            "Mode (b) of the compose file serves a local board read-only": LOCAL,
+        },
+    },
 }
 
 results: list[tuple[str, bool, str]] = []
@@ -273,7 +286,12 @@ def say(name: str, ok: bool, detail: str = "") -> None:
 LOCK = Path.home() / ".cache/heavy-build.lock"
 MEMINFO = Path("/proc/meminfo")
 # scripts/test.sh runs cargo nextest or cargo test (MNT-010); the Test steps name only the script.
-HEAVY = re.compile(r"\bcargo\b|\bdocker build\b|\bnpm (ci|run build)\b|\bscripts/test\.sh\b")
+# The hosted site's kind e2e and compose smoke build the image and run a cluster (FTR-030).
+HEAVY = re.compile(r"\bcargo\b|\bdocker build\b|\bnpm (ci|run build)\b|\bscripts/test\.sh\b"
+                   r"|\bdeploy/tests/(e2e-kind|compose-smoke)\.sh\b")
+# Set for a step that runs under the lock, so a script that takes the lock itself when run by hand
+# (deploy/tests/lib.sh ensure_image) does not wait forever on the one its caller holds.
+LOCK_HELD = "KANBANR_HEAVY_LOCK_HELD"
 
 
 def memory_cap() -> str:
@@ -332,6 +350,8 @@ def sh(cmd: list[str] | str, cwd: Path, env: dict[str, str] | None = None,
         wrap_env = env if env is not None else dict(os.environ)
         cmd = _wrap_heavy(cmd, wrap_env)
         capped = cmd[0] == "systemd-run"
+        if str(LOCK) in cmd:
+            env = {**wrap_env, LOCK_HELD: "1"}
     proc = subprocess.run(
         cmd,
         cwd=cwd,
