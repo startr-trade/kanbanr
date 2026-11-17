@@ -479,7 +479,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; plan it into the running sprint, or start its sprint today; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
-| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and each board doc the Design links under `Affects docs`, as built (a doc the Design only reads is marked `unchanged` on its line and needs no change), and draft that fold-in into the definition, saying which docs change; if the item names none and links none, ask whether it really changes no architecture doc |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and each board doc the Design links under `Affects docs`, as built (a doc the Design only reads is marked `unchanged` on its line and needs no change), and draft that fold-in into the definition, saying which docs change; if the item names none and links none — `kanbanr check` then warns 'declares no docs' on the next stage — ask the person, before the move, whether it changes no doc. If they confirm, record their reason as `affects_no_docs` in the definition (`kanbanr feature define <CODE>`); otherwise name the docs |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
@@ -495,7 +495,9 @@ own conditions too (a statement, goals and requirements), so draft those once. M
 asked for like one the person asks for: draft its statement, goal and one EARS invariant, and put
 them to the person as **one** AskUserQuestion (confirm, or change) before
 `kanbanr feature add --kind chore`; never file a chore with a blank definition. The approval and the sign-offs the stage it enters asks for
-stay the user's, as ever.
+stay the user's, as ever. A chore usually changes no doc, so ask at its design or build stage, not
+at the move, whether it changes none; if the person confirms, record their reason as
+`affects_no_docs` in its definition, and the 'declares no docs' warning stops.
 
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
 Whatever a process calls its stages, the design is due before the build role's stage, and code is

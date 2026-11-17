@@ -23,6 +23,8 @@ All notable changes to kanbanr are documented here. The format follows
   is judged and captured as the bare command; `doctor`, `git status` and the session start name a
   kanbanr hook another tool replaced or a hook manager redirected, with the fix that keeps both;
   uninstalling removes only kanbanr's own entries (FTR-059).
+- `affects_no_docs` in a definition records why an item changes no doc; the 'declares no docs'
+  warning now shows in `kanbanr check` before the move and at the move, and names it (DEF-075).
 
 ### Changed
 
