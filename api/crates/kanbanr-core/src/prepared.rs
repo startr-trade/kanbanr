@@ -1187,6 +1187,14 @@ pub struct PreparedView {
     pub page: String,
     /// The equivalent verdict command, for a person's own terminal.
     pub command: String,
+    /// The release the record is about (DEF-095), derived: a promotion's own; for a gate result,
+    /// the release its commit belongs to. Empty when none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release: String,
+    /// The release stages that ask for a gate result's gate (DEF-095), derived. Empty when none
+    /// does, so the person sees it under "Prepared, not required".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<String>,
 }
 
 /// Which records [`list`] answers.
@@ -1425,10 +1433,54 @@ pub fn still_waiting(
     }
 }
 
+/// A release's code branch: the one it was given, else `release/<V>`.
+fn branch_of(release: &crate::releases::Release) -> String {
+    if release.branch.is_empty() {
+        format!("release/{}", release.version)
+    } else {
+        release.branch.clone()
+    }
+}
+
+/// The release a gate result's commit belongs to: the release whose `tag_commit` is `sha`; else,
+/// with a repository, the first unshipped release (in board order) whose branch tip is `sha`,
+/// then the first whose branch contains it. None otherwise (DEF-095). A branch git cannot read
+/// names nothing.
+fn gate_release(
+    releases: &[crate::releases::Release],
+    repo: Option<&std::path::Path>,
+    sha: &str,
+) -> Option<String> {
+    if sha.is_empty() {
+        return None;
+    }
+    if let Some(r) = releases.iter().find(|r| r.tag_commit == sha) {
+        return Some(r.version.clone());
+    }
+    let repo = repo?;
+    let tips: Vec<(&crate::releases::Release, String)> = releases
+        .iter()
+        .filter(|r| r.state != crate::releases::ReleaseState::Shipped)
+        .filter_map(|r| {
+            crate::coderepo::rev_parse(repo, &branch_of(r))
+                .ok()
+                .map(|tip| (r, tip))
+        })
+        .collect();
+    if let Some((r, _)) = tips.iter().find(|(_, tip)| tip == sha) {
+        return Some(r.version.clone());
+    }
+    tips.iter()
+        .find(|(_, tip)| crate::coderepo::is_ancestor(repo, sha, tip))
+        .map(|(r, _)| r.version.clone())
+}
+
 /// Every record with where it stands, oldest first.
 fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<PreparedView>> {
     let (all, _) = read_all(store, p)?;
     let project = store.load(p)?;
+    let releases = crate::releases::load(store, p).unwrap_or_default();
+    let cadence = &project.config.cadence;
     let mut out = Vec::with_capacity(all.len());
     for (i, (r, answer)) in all.iter().enumerate() {
         let newer_open = all[i + 1..]
@@ -1441,6 +1493,21 @@ fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Ve
             Ok(())
         };
         let (state, stale_why) = state_of(r, answer.as_ref(), newer_open, waiting);
+        // Derived, never stored (ADR-0005). An answered record asks git nothing: only its tag
+        // commit names its release, which keeps the listing cheap (DEF-095).
+        let (release, required_by) = match r.kind.as_str() {
+            "gate-result" => (
+                gate_release(
+                    &releases,
+                    if answer.is_none() { repo } else { None },
+                    &r.subject.commit,
+                )
+                .unwrap_or_default(),
+                cadence.stages_asking_gate(&r.subject.gate),
+            ),
+            "promotion" => (r.subject.release.clone(), Vec::new()),
+            _ => (String::new(), Vec::new()),
+        };
         out.push(PreparedView {
             record: r.clone(),
             state,
@@ -1448,6 +1515,8 @@ fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Ve
             stale_why,
             page: page_of(&r.kind).to_string(),
             command: equivalent_command(r),
+            release,
+            required_by,
         });
     }
     Ok(out)
@@ -1470,7 +1539,7 @@ pub fn list(
             && query
                 .release
                 .as_ref()
-                .is_none_or(|x| &v.record.subject.release == x)
+                .is_none_or(|x| &v.record.subject.release == x || &v.release == x)
     });
     views.reverse();
     Ok(views)
@@ -3500,5 +3569,120 @@ mod tests {
         let edited = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
         assert_eq!(edited[0].edits.len(), 1);
         assert!(!settles(&got, &edited[0]));
+    }
+
+    // ---- DEF-095: a prepared gate result no stage asks for -----------------------------------
+
+    /// A board in releases whose production stage asks for `ci` through `gate_passed`, with v1
+    /// added, beside a scratch code repository whose `release/v1` is one commit past `main`. The
+    /// store, its folder, the repository, and the shas of `main` and of `release/v1`'s tip.
+    fn release_board(tag: &str) -> (Store, PathBuf, PathBuf, String, String) {
+        let (store, dir) = scratch();
+        let cadence: crate::config::Cadence = crate::yaml::from_str(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release, pushed, gate_passed], on_enter: [tag] }\n\
+             commit_gates: [ci]\n",
+        )
+        .unwrap();
+        store.set_cadence("demo", None, cadence).unwrap();
+        let stored = store.load("demo").unwrap().config.cadence;
+        assert_eq!(stored.stages_asking_gate("ci"), ["production"]);
+        crate::releases::add(&store, "demo", "v1", "", "").unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(&format!("def095-{tag}"));
+        let base = crate::coderepo::rev_parse(&repo, "main").unwrap();
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", "release/v1"]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "fix", "fixed\n", "fix on the release");
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let tip = crate::coderepo::rev_parse(&repo, "release/v1").unwrap();
+        (store, dir, repo, base, tip)
+    }
+
+    /// A prepared gate result for `gate` on `commit`, written at `at`; its id.
+    fn gate_on(store: &Store, gate: &str, commit: &str, at: &str) -> String {
+        let mut r = gate_record(at);
+        r.subject.gate = gate.into();
+        r.subject.commit = commit.into();
+        r.rev = commit.into();
+        let path = write_record(store, "demo", &r).unwrap();
+        path.file_stem().unwrap().to_string_lossy().to_string()
+    }
+
+    fn every(
+        store: &Store,
+        release: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Vec<PreparedView> {
+        list(
+            store,
+            "demo",
+            &ListQuery {
+                all: true,
+                release: release.map(str::to_string),
+                ..Default::default()
+            },
+            repo,
+        )
+        .unwrap()
+    }
+
+    /// DEF-095 R-2: a gate result's view names the release its commit belongs to (the branch tip,
+    /// else a branch that contains it, else the tag commit) and the stages that ask for its gate;
+    /// `list`'s release filter finds it by that release.
+    #[test]
+    fn a_gate_result_is_listed_with_its_release_and_the_stages_that_ask_for_it() {
+        let (store, _dir, repo, base, tip) = release_board("listed");
+        let ci = gate_on(&store, "ci", &tip, "2026-11-16T10:00:00Z");
+        let local = gate_on(&store, "local", &tip, "2026-11-16T10:01:00Z");
+        let older = gate_on(&store, "ci", &base, "2026-11-16T10:02:00Z");
+        let view = |views: &[PreparedView], id: &str| {
+            views.iter().find(|v| v.record.id == id).cloned().unwrap()
+        };
+        let views = every(&store, None, Some(&repo));
+        let v = view(&views, &ci);
+        assert_eq!(v.release, "v1", "{v:#?}");
+        assert_eq!(v.required_by, ["production"]);
+        let v = view(&views, &local);
+        assert_eq!(v.release, "v1");
+        assert!(v.required_by.is_empty(), "{v:#?}");
+        // A commit the branch contains belongs to the release too.
+        assert_eq!(view(&views, &older).release, "v1");
+        // The release filter matches the derived release.
+        let mut ids: Vec<String> = every(&store, Some("v1"), Some(&repo))
+            .into_iter()
+            .map(|v| v.record.id)
+            .collect();
+        ids.sort();
+        let mut want = vec![ci.clone(), local.clone(), older.clone()];
+        want.sort();
+        assert_eq!(ids, want);
+        assert!(every(&store, Some("v2"), Some(&repo)).is_empty());
+        // The open listing serializes both fields; an empty one is left out.
+        let json = serde_json::to_value(view(&views, &local)).unwrap();
+        assert_eq!(json["release"], "v1");
+        assert!(json.get("required_by").is_none(), "{json}");
+        // Without a repository only the tag commit names a release.
+        assert_eq!(view(&every(&store, None, None), &ci).release, "");
+        let path = store.project_dir("demo").join("releases.yaml");
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[0].tag_commit = tip.clone();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        let none = every(&store, None, None);
+        assert_eq!(view(&none, &ci).release, "v1");
+        assert_eq!(view(&none, &older).release, "");
+        // A promotion's view carries its own release.
+        let mut promo = gate_record("2026-11-16T10:03:00Z");
+        promo.kind = "promotion".into();
+        promo.subject = Subject {
+            release: "v1".into(),
+            stage: "main".into(),
+            ..Default::default()
+        };
+        promo.fields = Map::new();
+        let promo = write_record(&store, "demo", &promo).unwrap();
+        let promo = promo.file_stem().unwrap().to_string_lossy().to_string();
+        let v = view(&every(&store, None, None), &promo);
+        assert_eq!(v.release, "v1");
+        assert!(v.required_by.is_empty());
     }
 }

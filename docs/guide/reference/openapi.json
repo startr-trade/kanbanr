@@ -5018,6 +5018,17 @@
             "description": "The monitor page its decision is taken on: `review` or `releases`.",
             "type": "string"
           },
+          "release": {
+            "description": "The release the record is about (DEF-095), derived: a promotion's own; for a gate result,\nthe release its commit belongs to. Empty when none.",
+            "type": "string"
+          },
+          "required_by": {
+            "description": "The release stages that ask for a gate result's gate (DEF-095), derived. Empty when none\ndoes, so the person sees it under \"Prepared, not required\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "resolution": {
             "anyOf": [
               {
