@@ -7335,7 +7335,10 @@ fn capture_ops(
         return ops;
     }
     match scope {
-        ProcessScope::Scoped(s) => kanbanr_core::agentscope::retain_permitted(s, ops).0,
+        // A scope issued under an earlier code of the item still covers it (FTR-056).
+        ProcessScope::Scoped(s) => {
+            kanbanr_core::agentscope::retain_permitted(&s.resolved(project), ops).0
+        }
         ProcessScope::Refused { .. } => Vec::new(),
         ProcessScope::Unscoped => ops,
     }
@@ -10623,7 +10626,19 @@ fn scoped_commit_refusal(
     }
     let root = coderepo::repo_root_in(dir).unwrap_or_else(|| dir.to_path_buf());
     let facts = coderepo::repo_facts(&root, message);
-    kanbanr_core::agentscope::commit_verdict(&scope, &facts, &kanbanr_core::now_rfc3339()).refusal
+    let now = kanbanr_core::now_rfc3339();
+    let board = match &scope {
+        kanbanr_core::agentscope::ProcessScope::Scoped(s) => {
+            client.store().load_meta(&s.project).ok()
+        }
+        _ => None,
+    };
+    match &board {
+        Some(project) => {
+            kanbanr_core::agentscope::commit_verdict_on(&scope, &facts, &now, project).refusal
+        }
+        None => kanbanr_core::agentscope::commit_verdict(&scope, &facts, &now).refusal,
+    }
 }
 
 /// An agent's worktree whose board cannot be read: its scope cannot be checked, so a commit or a
@@ -17848,6 +17863,22 @@ Refs: kanbanr:FEAT-082/R-1""#;
             may_claim: false,
         };
         assert!(capture_plan(&run, &p, &dead, Caller::Agent, Some("abc")).is_empty());
+    }
+
+    /// FTR-056 R-2: a scope issued for an item's earlier code still covers the item's captured
+    /// tests, which the board names by its current code.
+    #[test]
+    fn an_earlier_code_in_the_scope_still_records_the_items_tests() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let mut p = capture_project();
+        p.features[0].code = "DEF-900".into();
+        p.features[0].aliases = vec!["FEAT-001".into()];
+        let mut run = test_run();
+        run["agent_id"] = json!("a1");
+        let scope = ProcessScope::Scoped(build_scope("FEAT-001"));
+        let ops = capture_plan(&run, &p, &scope, Caller::Agent, Some("abc"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(ops[0]["feature"], "DEF-900");
     }
 
     /// FTR-058 R-6: an agent's capture keeps only its own item's durations: another item's timed

@@ -211,7 +211,7 @@ fn build(
         .filter(|f| {
             sprint_report
                 .as_ref()
-                .is_none_or(|r| r.items.contains(&f.code))
+                .is_none_or(|r| r.items.iter().any(|c| f.answers_to(c)))
         })
         .collect();
 
@@ -721,6 +721,37 @@ mod tests {
     fn complete(store: &Store, code: &str) {
         store.move_feature("demo", code, "Scheduled").unwrap();
         store.move_feature("demo", code, "Completed").unwrap();
+    }
+
+    /// FTR-056 R-2: a sprint retro holds an item the sprint carried out under a code it has since
+    /// left.
+    #[test]
+    fn a_sprint_retro_finds_a_carried_item_under_its_earlier_code() {
+        let (store, dir) = fixture();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"sprints": true})),
+        )
+        .unwrap();
+        let item = store
+            .add_feature("demo", "The work", "", "MS-1", None)
+            .unwrap();
+        crate::sprints::add(&store, "demo", "today", Some(5), "", None, "", None, None).unwrap();
+        crate::sprints::plan(&store, "demo", "SP-001", std::slice::from_ref(&item.code)).unwrap();
+        crate::sprints::start(&store, "demo", "SP-001").unwrap();
+        crate::sprints::close(&store, "demo", "SP-001", Some("backlog")).unwrap();
+        store
+            .edit_feature("demo", &item.code, None, None, None, Some("DEF-900".into()))
+            .unwrap();
+        let wave = Wave {
+            sprint: Some("SP-001".into()),
+            ..Default::default()
+        };
+        let retro = run(&store, "demo", &wave).unwrap();
+        assert_eq!(retro.items, 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

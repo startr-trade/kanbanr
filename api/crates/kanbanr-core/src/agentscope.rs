@@ -1468,6 +1468,26 @@ pub fn check(scope: &Scope, req: &[Requested], now: &str) -> std::result::Result
 /// A commit under `p` (R-5): on the scope's branch, naming its item, under a build scope in force.
 /// The message is judged where it is known; `None` leaves it to the commit-msg hook.
 pub fn commit_verdict(p: &ProcessScope, facts: &RepoFacts, now: &str) -> Verdict {
+    commit_verdict_with(p, facts, now, None)
+}
+
+/// [`commit_verdict`] with the board at hand: a commit naming an earlier code of the scope's item,
+/// or a scope issued under one, still names the item (FTR-056).
+pub fn commit_verdict_on(
+    p: &ProcessScope,
+    facts: &RepoFacts,
+    now: &str,
+    project: &Project,
+) -> Verdict {
+    commit_verdict_with(p, facts, now, Some(project))
+}
+
+fn commit_verdict_with(
+    p: &ProcessScope,
+    facts: &RepoFacts,
+    now: &str,
+    project: Option<&Project>,
+) -> Verdict {
     let s = match p {
         ProcessScope::Unscoped => return Verdict::allow(),
         ProcessScope::Refused { why, .. } => return Verdict::refuse(why.clone()),
@@ -1497,9 +1517,16 @@ pub fn commit_verdict(p: &ProcessScope, facts: &RepoFacts, now: &str) -> Verdict
         ));
     }
     if let Some(message) = facts.message.as_deref() {
+        let current = |code: &str| {
+            project
+                .and_then(|pr| crate::aliases::current(pr, code))
+                .unwrap_or(code)
+                .to_string()
+        };
+        let item = current(&s.item);
         let names = crate::scm::parse_refs(message)
             .iter()
-            .any(|r| r.code() == s.item);
+            .any(|r| r.code() == s.item || current(r.code()) == item);
         if !names {
             return Verdict::refuse(format!(
                 "refused by agent scope {} (build, {}): a commit under this scope must name {} \
@@ -2832,6 +2859,48 @@ mod tests {
             Path::new("/other/.claude/worktrees/agent-1"),
             root
         ));
+    }
+
+    /// FTR-056 R-2: a commit under a scope issued for an item's earlier code, or naming it, still
+    /// names the item the scope covers.
+    #[test]
+    fn commit_verdict_accepts_an_earlier_code_of_the_scoped_item() {
+        let item: crate::FeatureItem = serde_json::from_value(serde_json::json!({
+            "code": "DEF-214", "aliases": ["FEAT-214"], "title": "t", "status": "Planned",
+            "milestone": "MS-001", "created_at": "2026-10-21T00:00:00Z",
+            "updated_at": "2026-10-21T00:00:00Z"
+        }))
+        .unwrap();
+        let project = Project {
+            id: "demo".into(),
+            config: crate::ProjectConfig::default_for("demo"),
+            features: vec![item],
+            milestones: Vec::new(),
+        };
+        let on = "feat/DEF-214-agent-scopes";
+        let facts = |msg: &str| RepoFacts {
+            branch: Some(on.to_string()),
+            default_branch: "main".into(),
+            merging: false,
+            has_commits: true,
+            message: Some(msg.to_string()),
+            setup_pending: false,
+            staged: None,
+            block_refresh: false,
+        };
+        let mut s = scope(Role::Build);
+        s.item = "FEAT-214".into();
+        s.branch = Some(on.to_string());
+        let p = ProcessScope::Scoped(s);
+        for refs in ["FEAT-214/R-5", "DEF-214/R-5"] {
+            let v = commit_verdict_on(
+                &p,
+                &facts(&format!("x\n\nRefs: kanbanr:{refs}")),
+                NOW,
+                &project,
+            );
+            assert!(v.is_allowed(), "{refs}: {:?}", v.refusal);
+        }
     }
 
     /// FEAT-214 R-5: a commit under a build scope lands only on its branch, names its item, and

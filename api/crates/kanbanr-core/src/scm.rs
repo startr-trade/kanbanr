@@ -532,11 +532,7 @@ pub struct TrailerReport {
 /// rule exists: with it, nothing else has to ask what is being worked on.
 pub fn branch_item(project: &Project, branch: Option<&str>) -> Option<String> {
     let code = item_code_from_branch(project.config.branch_pattern(), branch?)?;
-    project
-        .features
-        .iter()
-        .any(|f| f.code == code)
-        .then_some(code)
+    crate::aliases::current(project, &code).map(str::to_string)
 }
 
 /// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
@@ -1027,6 +1023,23 @@ mod tests {
             ))
             .contains("not on the board")
         );
+    }
+
+    /// FTR-056 R-2: a branch cut under an earlier code still names the item, by its current code.
+    #[test]
+    fn a_branch_under_an_earlier_code_names_the_item() {
+        let mut p = board(false);
+        p.features[0].code = "DEF-001".into();
+        p.features[0].aliases = vec!["FEAT-001".into()];
+        assert_eq!(
+            branch_item(&p, Some("feat/FEAT-001-t")).as_deref(),
+            Some("DEF-001")
+        );
+        assert_eq!(
+            branch_item(&p, Some("feat/DEF-001-t")).as_deref(),
+            Some("DEF-001")
+        );
+        assert_eq!(branch_item(&p, Some("feat/FEAT-002-t")), None);
     }
 
     /// FEAT-217 R-8: a kind-prefixed code round-trips through its `fix/` branch and its trailer,
