@@ -50,6 +50,14 @@ export interface Task {
   key: string;
   text: string;
   state: TaskState;
+  /** The tasks it waits on: `T3`, `TL-002/T3`, `CODE/TL-001/T3` (FTR-060). */
+  depends_on?: string[];
+  /** The files it writes, repository-relative; a folder ends in `/` (FTR-060). */
+  writes?: string[];
+  /** The files it only reads (FTR-060). */
+  reads?: string[];
+  /** Its estimate in agent-hours (FTR-060). */
+  estimate_h?: number;
 }
 
 export interface TodoList {
