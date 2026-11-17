@@ -19,6 +19,10 @@ All notable changes to kanbanr are documented here. The format follows
   one set of design tokens, shown together at /ui (FTR-046).
 - A walkthrough step can press several buttons in turn on one page, such as a button that asks
   first and then its confirmation or Cancel (FTR-063).
+- kanbanr keeps its rules beside other tools' hooks: a command run through a wrapper such as `rtk`
+  is judged and captured as the bare command; `doctor`, `git status` and the session start name a
+  kanbanr hook another tool replaced or a hook manager redirected, with the fix that keeps both;
+  uninstalling removes only kanbanr's own entries (FTR-059).
 
 ### Changed
 

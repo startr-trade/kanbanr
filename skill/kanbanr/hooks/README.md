@@ -224,3 +224,36 @@ Both hooks read the agent scopes in force:
 `kanbanr git install-hooks` also installs a `pre-push` hook (`kanbanr git check-push`) beside the
 commit hooks: in an agent's worktree it refuses every push. Re-run it on an existing install
 (it is idempotent); `kanbanr scope issue` refuses until it is there.
+
+## Beside other tools' hooks (FTR-059)
+
+Other tools register the same events: katalogr, command wrappers such as `rtk`, hook managers
+(husky, lefthook, the pre-commit framework) and your own hooks. Claude Code may run one event's
+hooks in parallel and in any order. kanbanr's rules hold whatever the others do (ADR-0024,
+"kanbanr's rules never depend on being the only hook"):
+
+- **Deny or stay silent.** kanbanr's `PreToolUse` hooks (`kanbanr git guard`, `kanbanr claude
+  guard`) only ever deny a call or print nothing. They never allow one and never rewrite its input,
+  so another hook's answer cannot undo theirs. Every commit rule the guard applies, the git hooks
+  apply too, so a rewrite that steps around the guard still meets them; the one rule only the guard
+  sees is the refusal of `--no-verify`.
+- **The wrapper list.** The guard and `kanbanr capture` read a command past these leading words,
+  compared as whole words: `rtk`, `rtk proxy`, `sudo` (and its flags), `env` (and its flags and
+  assignments), `command`, `exec`, `nohup`, `time`, `nice`, and `NAME=value` assignments. So
+  `rtk git commit …` is judged as `git commit …`. A wrapper not on the list is read as the command
+  itself: the guard says nothing, and the git hooks still decide. `rtk` also condenses a command's
+  output, so a test run through it may lose results: capture says how many it read and asks for the
+  run bare or as `rtk proxy …`.
+- **The Stop rule.** `stop-check.sh` exits at once when `stop_hook_active` is true, before every
+  reminder, and stamps each reminder per session. It blocks at most once per stop for one reason,
+  and never loops with another tool's blocking Stop hook.
+- **The matching rule.** `kanbanr hooks install` and `uninstall` touch only kanbanr's own entries:
+  a CLI hook by its exact command, a script hook by its file name inside a `kanbanr/hooks` folder.
+  Every other entry, a user's own `kanbanr-…` script included, stays as it was and in its place.
+- **Health.** `kanbanr doctor`, `kanbanr git status` and the session start name a kanbanr git hook
+  that is missing, replaced by another tool's, or bypassed by a `core.hooksPath` pointing where
+  kanbanr's hooks are not, and a Claude Code event no settings file registers. Each comes with the
+  fix that keeps the other tool's hook: `kanbanr git install-hooks --force` keeps it as
+  `<name>.pre-kanbanr` and runs it first; a hook manager can instead call
+  `kanbanr git check-msg "$1"`, `kanbanr git check-branch` and `kanbanr git check-push` from its own
+  hooks.

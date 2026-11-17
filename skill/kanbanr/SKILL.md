@@ -1114,6 +1114,11 @@ itself, unless that status's gate isn't met.
   merged code — `kanbanr finish` refuses them.
 - `kanbanr git install-hooks` puts the checks in the repo (an existing hook is kept and chained
   with `--force`). The board's own data folder is exempt: kanbanr authors those commits itself.
+- Other tools use the same hooks. When `kanbanr doctor`, `kanbanr git status` or the session start
+  names a kanbanr hook another tool replaced, a hook manager's `core.hooksPath` bypassed, or a
+  Claude Code hook dropped from the settings, run the fix it names and tell the person. Never
+  delete the other tool's hook: `install-hooks --force` keeps it as `<name>.pre-kanbanr` and runs
+  it first.
 
 ## Tests are evidence, not intentions
 
@@ -1150,7 +1155,10 @@ project revision it was observed at. So:
   image build) under the machine's build lock (`flock ~/.cache/heavy-build.lock`) and a memory cap
   (`systemd-run --user --scope`, 60% of memory unless `KANBANR_CI_MEMORY_MAX` says otherwise), with
   `CARGO_BUILD_JOBS` leaving two CPUs free: a second heavy build on the machine waits for it rather
-  than racing it. Start it bare, never wrapped in `rtk proxy`: a wrapped run records nothing.
+  than racing it. Start it bare.
+- A test run through `rtk` is read only when run bare or as `rtk proxy …`: plain `rtk` condenses
+  the output, and the hook then says how many results it read and that the rest may have been
+  cut. Rerun it in one of those two forms; never set the missing tests by hand.
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed
