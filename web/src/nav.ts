@@ -74,7 +74,8 @@ export const NAV: NavArea[] = [
     entries: [
       { key: "charter", label: "Charter", path: (p) => `${base(p)}/charter` },
       { key: "docs", label: "Docs", path: (p) => `${base(p)}/docs`, match: ["/docs/"] },
-      // FTR-005 T6 adds Catalog here.
+      // What the project must document, by question and perspective (FTR-005 R-13).
+      { key: "catalog", label: "Catalog", path: (p) => `${base(p)}/catalog` },
     ],
   },
 ];

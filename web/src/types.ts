@@ -1947,3 +1947,92 @@ export interface PortfolioPlan {
   today: string;
   lanes: PortfolioLane[];
 }
+
+// ---- The project's facts and its content catalog (FTR-005): `GET /projects/{p}/facts`, `…/catalog` ----
+
+/** What the project is: its answers to the five facts questions (`kanbanr facts vocabulary`). */
+export interface Facts {
+  schema: number;
+  languages: string[];
+  runtimes: string[];
+  production: string[];
+  parts: string[];
+  data: string[];
+  /** When the record was last saved. */
+  set_at?: string;
+}
+
+/**
+ * `GET /projects/{p}/facts`: the facts record, or `{}` when none is set. Read it through
+ * `catalogView.ts`'s `hasFacts`.
+ */
+export type FactsOrEmpty = Facts | {};
+
+/** A (question, perspective) pair no applying row answers. */
+export interface Cell {
+  question: string;
+  perspective: string;
+}
+
+/** Whether a row applies, why not, and what decided it: `always`, `facts` or `override`. */
+export interface CatalogApplicability {
+  applies: boolean;
+  why?: string;
+  by: string;
+}
+
+/** Where a row's content comes from: a written doc, a generated view, or an enforcing test. */
+export interface CatalogSource {
+  kind: "written" | "generated" | "enforced";
+  /** Written: a board doc, a board folder ending `/`, or `repo:<path>`. */
+  path?: string;
+  /** Generated: `kanbanr:<view>` or `katalogr:<op>`. */
+  generator?: string;
+  /** Enforced: the test or rule that keeps the content true. */
+  test?: string;
+}
+
+/** What a row's source holds right now. A written folder carries how many docs sit under it. */
+export type SourceState =
+  | "present"
+  | "stub"
+  | "missing"
+  | { folder: { docs: number } }
+  | "available"
+  | "needs_katalogr"
+  | "declared"
+  | "no_repository";
+
+/** One protection of a row and whether the project has it in force. */
+export interface ProtectionStatus {
+  name: string;
+  in_force: boolean;
+  why?: string;
+}
+
+/** One catalog row with its derived state. */
+export interface RowStatus {
+  id: string;
+  title: string;
+  level: "system" | "component" | "item";
+  answers: string[];
+  for: string[];
+  /** Free text; the starter uses prose, table, mermaid, bpmn, openapi, yaml, adr, code. */
+  notation?: string;
+  source: CatalogSource;
+  state: SourceState;
+  applies: CatalogApplicability;
+  protections: ProtectionStatus[];
+  href?: string;
+}
+
+/** `GET /projects/{p}/catalog`: every row's state, the cells no applying row fills, and what is wrong. */
+export interface CatalogStatus {
+  facts_rev: string;
+  /** The starter version the catalog began from; 0 with no catalog. */
+  starter: number;
+  rows: RowStatus[];
+  gaps: Cell[];
+  problems?: string[];
+  docs_read: number;
+}

@@ -289,6 +289,7 @@ flowchart LR
   Base["Baseline — the engineering baseline"]
   Charter["Charter"]
   Docs["Docs — folders as tiles, files as links"]
+  Cat["Catalog — what the project must document"]
   Status["Status page"]
   Feature["Feature page"]
   MsOne["Milestone page"]
@@ -306,6 +307,7 @@ flowchart LR
   Arch --> Base
   Rec --> Charter
   Rec --> Docs
+  Rec --> Cat
   Board --> Status --> Feature
   Board --> Feature
   Ms --> MsOne --> Feature
@@ -471,6 +473,20 @@ that name it; the charter's own constraints under **Also in the charter**; and t
 accepted revisions. **Accept** on a proposed revision is the page's one decision, and a revision
 can be withdrawn with a reason. On a read-only monitor the panel names the command instead
 (`kanbanr baseline accept REV-n`). See [The engineering baseline](baseline.md).
+
+### The Catalog page
+
+The Catalog page, under **Records** after Docs, shows the project's content catalog (FTR-005): what
+the project must document, by question and perspective. The **gaps** come first, in one sentence
+("Nobody answers: when for the operator; who for the builder"). Then the rows, grouped **System**,
+**Components** and **Items**, each on a line with chips: whether it applies (a row switched off
+says `off:` and its reason, greyed), its source's state (present, stub, missing, available, needs
+katalogr), its notations, and each protection, in force or not configured, with the reason as its
+title. A written source links to its doc (a folder to the Docs page at that folder); a generated
+source links to the page that shows it, such as the Charter, Gantt or Releases. A repository doc
+shows its path. With no facts the page says so and names `kanbanr facts set`; with no catalog it
+names `kanbanr catalog init`. The page is read-only: Claude keeps the catalog. See
+[Living architecture docs](living-docs.md#what-a-project-documents-the-content-catalog).
 
 ### How the monitor stays fast
 

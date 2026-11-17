@@ -13,6 +13,7 @@ import MilestonePage from "./pages/MilestonePage";
 import SchedulePage from "./pages/SchedulePage";
 import GanttPage from "./pages/GanttPage";
 import CharterPage from "./pages/CharterPage";
+import CatalogPage from "./pages/CatalogPage";
 import ReviewPage from "./pages/ReviewPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import BaselinePage from "./pages/BaselinePage";
@@ -40,6 +41,7 @@ const routes: RouteObject[] = [
       { path: "p/:project/schedule", element: <SchedulePage /> },
       { path: "p/:project/gantt", element: <GanttPage /> },
       { path: "p/:project/charter", element: <CharterPage /> },
+      { path: "p/:project/catalog", element: <CatalogPage /> },
       { path: "p/:project/review", element: <ReviewPage /> },
       { path: "p/:project/items", element: <ItemsPage /> },
       { path: "p/:project/releases", element: <ReleasesPage /> },

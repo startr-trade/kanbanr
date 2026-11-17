@@ -2,6 +2,7 @@ import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
 import type { BaselineRevision, BaselineView, ProfileStatus } from "./types";
+import type { CatalogStatus, FactsOrEmpty } from "./types";
 import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { PlanScope, PlanSlice, PlanSummary, PortfolioPlan, RowBody } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
@@ -453,6 +454,11 @@ export const api = {
       "withdraw a baseline revision",
       `kanbanr baseline withdraw ${revision} --reason "…"`,
     ) as Promise<BaselineRevision>,
+  // The project's facts and its content catalog (FTR-005): read by the Catalog page only.
+  /** The catalog's derived status: every row with its source state and protections, and the gaps. */
+  getCatalog: (id: string) => getJson<CatalogStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/catalog`)),
+  /** The project's facts record, or `{}` when none is set. */
+  getFacts: (id: string) => getJson<FactsOrEmpty>(apiUrl(`/projects/${encodeURIComponent(id)}/facts`)),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`

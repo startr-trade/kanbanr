@@ -74,6 +74,19 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr baseline accept <REV-n> [--rev HASH]` | accept a proposed revision as it stands now (or as `--rev` pins it): its constraints get their ADRs, the release stages it names require their gates. The person's own, on the Baseline page or in their terminal: refused inside a Claude session |
 | `kanbanr baseline withdraw <REV-n> --reason "…"` | withdraw a proposed revision; the record stays |
 
+**The project's facts and its content catalog** (FTR-005)
+
+| Command | What it does |
+|---|---|
+| `kanbanr facts [show] [--json]` | the project's facts record: its languages, runtimes, where it runs, its parts and its data; or `no project facts` and the command that sets them |
+| `kanbanr facts set --languages L --runtimes R --production P --parts P --data D` | replace the whole facts record, each key a comma list of vocabulary words or `other:<text>`; `--from-file F` takes the record as YAML. Refused, naming each problem, for an unknown word or a record with every list empty |
+| `kanbanr facts vocabulary` | the five questions and the words that answer them |
+| `kanbanr catalog [show] [--json]` | the catalog's status: the gaps first (`gap: when × operator — no row answers it`), then each row by level with whether it applies (`off (why)` when switched off), its source's state and its protections. Derived on every read, never stored |
+| `kanbanr catalog init [--force] [--print]` | write the starter catalog; refused when the project has one unless `--force`; `--print` prints the starter and writes nothing |
+| `kanbanr catalog set --from-file F` | replace the catalog from YAML (a mapping with `rows`, or a bare list of rows); refused, naming the row, when a row is invalid |
+| `kanbanr catalog add <row>` | copy one row of the starter catalog into the project's catalog |
+| `kanbanr catalog off <row> --why "…"` / `kanbanr catalog on <row>` | switch a row off with the reason it does not apply, or back on, so its `when` clause decides again |
+
 **Sprints and releases** (projects with cadence switched on)
 
 | Command | What it does |
