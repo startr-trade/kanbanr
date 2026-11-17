@@ -137,9 +137,11 @@ pub struct Answered {
 pub enum Listened {
     /// Nothing for kanbanr, with why (for the debug log).
     Quiet(String),
-    /// Tagged questions the person answered with the approving option.
-    Answered(Vec<Answered>),
-    /// Tagged questions answered with anything else, with the answer ("" when none).
+    /// Tagged questions the person answered with the approving option, and beside them the ones
+    /// they answered with anything else (empty when none), each in payload order.
+    Answered(Vec<Answered>, Vec<(Tag, String)>),
+    /// Tagged questions answered with anything else, with the answer ("" when none), when the
+    /// payload holds no approved question.
     Declined(Vec<(Tag, String)>),
 }
 
@@ -151,7 +153,8 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 /// no sub-agent, with no pre-set `tool_input.answers` (a question answered by a PreToolUse hook is
 /// not the person's), and at least one single-select tagged question. A question whose trimmed
 /// answer is its tag's approving label, offered among its options, is `Answered`; any other
-/// answer, or none, is `Declined`. When a payload holds both, the answered questions are given.
+/// answer, or none, is declined. When a payload holds both, both are given, in payload order within
+/// each list (DEF-110).
 pub fn listen(payload: &Value) -> Listened {
     if text(payload, "hook_event_name") != "PostToolUse" {
         return Listened::Quiet("not a PostToolUse payload".into());
@@ -213,12 +216,28 @@ pub fn listen(payload: &Value) -> Listened {
         }
     }
     if !answered.is_empty() {
-        Listened::Answered(answered)
+        Listened::Answered(answered, declined)
     } else if !declined.is_empty() {
         Listened::Declined(declined)
     } else {
         Listened::Quiet("no single-select tagged question".into())
     }
+}
+
+/// What Claude is told of a tagged question the person did not approve (`answer` is "" when they
+/// gave none).
+pub fn declined_line(tag: &Tag, answer: &str) -> String {
+    let heard = if answer.is_empty() {
+        "they gave no answer".to_string()
+    } else {
+        format!("they answered: \"{answer}\"")
+    };
+    format!(
+        "kanbanr: the person did not choose {} for {} ({heard}); nothing is recorded, nothing is \
+         pending",
+        approving_label(&tag.verdict),
+        tag.code
+    )
 }
 
 /// A one-time pass, one JSON file under [`dir`].
@@ -622,8 +641,42 @@ mod tests {
 
     fn answered(v: &Value) -> Vec<Answered> {
         match listen(v) {
-            Listened::Answered(a) => a,
+            Listened::Answered(a, _) => a,
             other => panic!("expected an answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_payload_that_approves_one_and_declines_one_gives_both() {
+        let (_store, _root, code) = board(Mode::Conversation);
+        let tag = Tag {
+            verdict: "approve".into(),
+            code: code.clone(),
+            signoff: String::new(),
+            rev: "0".repeat(16),
+            project: "demo".into(),
+        };
+        let question = format!("Approve {code} as it stands? {}", tag_text(&tag));
+        let yes = payload(&question, &["Approve", "Not yet"], "Approve");
+        let mut mixed = yes.clone();
+        let second = question.replace(&code, "FEAT-9");
+        for part in ["tool_input", "tool_response"] {
+            let mut q = mixed[part]["questions"][0].clone();
+            q["question"] = json!(second);
+            mixed[part]["questions"].as_array_mut().unwrap().push(q);
+        }
+        mixed["tool_response"]["answers"][second.as_str()] = json!("Not yet");
+        match listen(&mixed) {
+            Listened::Answered(a, d) => {
+                assert_eq!(a.len(), 1);
+                assert_eq!(a[0].tag, tag);
+                assert_eq!(d.len(), 1);
+                assert_eq!(
+                    (d[0].0.code.as_str(), d[0].1.as_str()),
+                    ("FEAT-9", "Not yet")
+                );
+            }
+            other => panic!("expected both, got {other:?}"),
         }
     }
 
@@ -738,7 +791,7 @@ mod tests {
         assert!(matches!(listen(&pre), Listened::Quiet(_)));
         let mut empty_pre = yes.clone();
         empty_pre["tool_input"]["answers"] = json!({});
-        assert!(matches!(listen(&empty_pre), Listened::Answered(_)));
+        assert!(matches!(listen(&empty_pre), Listened::Answered(..)));
         // Nor for a sub-agent's question.
         let mut agent = yes.clone();
         agent["agent_id"] = json!("a1b2");

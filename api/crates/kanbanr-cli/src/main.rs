@@ -15003,21 +15003,9 @@ fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()
         Listened::Quiet(_) => return Ok(()),
         Listened::Declined(declined) => declined
             .iter()
-            .map(|(tag, answer)| {
-                let heard = if answer.is_empty() {
-                    "they gave no answer".to_string()
-                } else {
-                    format!("they answered: \"{answer}\"")
-                };
-                format!(
-                    "kanbanr: the person did not choose {} for {} ({heard}); nothing is \
-                     recorded, nothing is pending",
-                    passes::approving_label(&tag.verdict),
-                    tag.code
-                )
-            })
+            .map(|(tag, answer)| passes::declined_line(tag, answer))
             .collect(),
-        Listened::Answered(answers) => {
+        Listened::Answered(answers, declined) => {
             let Some(client) = client else {
                 return Ok(());
             };
@@ -15028,7 +15016,8 @@ fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()
             }
             let here = project::resolve_project(cli.project.as_deref());
             let now = kanbanr_core::now_rfc3339();
-            answers
+            // The passes come first, then what was refused (DEF-110).
+            let mut lines: Vec<String> = answers
                 .iter()
                 .map(|a| match passes::issue(store, a, &now) {
                     Ok(Ok(pass)) => {
@@ -15047,7 +15036,13 @@ fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()
                     Ok(Err(why)) => format!("kanbanr: no pass was made: {why}"),
                     Err(e) => format!("kanbanr: no pass was made: {e}"),
                 })
-                .collect()
+                .collect();
+            lines.extend(
+                declined
+                    .iter()
+                    .map(|(tag, answer)| passes::declined_line(tag, answer)),
+            );
+            lines
         }
     };
     if !lines.is_empty() {

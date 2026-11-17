@@ -20330,6 +20330,65 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     assert!(why.contains("unknown, already used or expired"), "{why}");
 }
 
+/// DEF-110 R-1: one payload that approves one tagged question and declines another makes the
+/// pass for the first and reports the second as it is reported alone.
+#[test]
+fn decisions_heard_reports_a_declined_question_beside_an_approved_one() {
+    let (base, work) = conversation_board("def110-mixed");
+    let q = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    );
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+    let q: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    let rev = q["rev"].as_str().unwrap().to_string();
+
+    // The approved question for FEAT-002, plus a second one for FEAT-001 answered "Not yet".
+    let mut payload: serde_json::Value = serde_json::from_str(&ask_user_question_payload(
+        "shop", "FEAT-002", &rev, "Approve",
+    ))
+    .unwrap();
+    let first = payload["tool_response"]["questions"][0].clone();
+    let first_text = first["question"].as_str().unwrap().to_string();
+    let second_text = first_text.replace("FEAT-002", "FEAT-001");
+    assert_ne!(first_text, second_text);
+    let mut second = first.clone();
+    second["question"] = serde_json::json!(second_text);
+    for part in ["tool_input", "tool_response"] {
+        payload[part]["questions"]
+            .as_array_mut()
+            .unwrap()
+            .push(second.clone());
+    }
+    payload["tool_response"]["answers"][second_text.as_str()] = serde_json::json!("Not yet");
+
+    let heard = run_heard_hook(&base, &work, &payload.to_string());
+    assert!(heard.status.success());
+    let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let lines: Vec<&str> = context.lines().collect();
+    assert_eq!(lines.len(), 2, "{context}");
+    assert!(
+        lines[0].contains("--pass P-") && lines[0].contains("FEAT-002"),
+        "{context}"
+    );
+    assert!(
+        lines[1].contains("did not choose Approve for FEAT-001")
+            && lines[1].contains("nothing is recorded, nothing is pending"),
+        "{context}"
+    );
+    let data = run_in(&base, &work, &["where"]);
+    let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
+    let made = std::fs::read_dir(data.join(".git/kanbanr/passes"))
+        .map(|d| d.count())
+        .unwrap_or(0);
+    assert_eq!(made, 1, "exactly one pass file");
+}
+
 /// Does the folder hold nothing, or not exist?
 fn is_empty_or_missing(dir: &std::path::Path) -> bool {
     std::fs::read_dir(dir).map_or(true, |mut d| d.next().is_none())
