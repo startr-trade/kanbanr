@@ -13,6 +13,23 @@
 //   web::check_board_last_look_is_kept_in_this_browser (R-13, model half)
 //   web::check_board_groups_order_by_closeness_newest_or_priority (R-15)
 //   web::check_board_renders_450_items_within_budget (R-19, the 20 ms half)
+// and the components' markup, rendered without a daemon (T7):
+//   web::check_board_groups_are_disclosure_buttons (R-5)
+//   web::check_board_closed_group_shows_its_count_and_oldest (R-5)
+//   web::check_board_lane_bar_has_a_table_and_filters (R-7)
+//   web::check_board_card_draws_tasks_and_the_next_stage_checks (R-10)
+//   web::check_board_cards_say_it_in_words (R-11)
+//   web::check_board_card_fact_follows_the_priority_order (R-12, render half)
+//   web::check_board_quiet_groups_draw_one_line_rows (R-14)
+//   web::check_board_is_keyboard_and_screen_reader_friendly (R-20)
+// and the page (T8), rendered over what it would have read:
+//   web::check_board_every_item_is_in_exactly_one_group (R-1, render half)
+//   web::check_board_has_no_pager (R-1)
+//   web::check_board_state_lives_in_the_url (R-6)
+//   web::check_board_last_look_is_kept_in_this_browser (R-13, source half)
+//   web::check_board_offers_no_move (R-16)
+//   web::check_board_reads_an_older_daemon (R-17)
+//   web::check_board_renders_450_items_within_budget (R-19, the render half)
 //
 // Usage: npm run check:board
 import {
@@ -35,6 +52,8 @@ import {
   SEEN_AFTER_MS,
 } from "../src/boardModel.ts";
 import { nextStageHint } from "../src/cardText.ts";
+import { readFileSync } from "node:fs";
+import { closeRender, load, render } from "./lib/render.mjs";
 
 let ok = true;
 function report(name, problems) {
@@ -475,6 +494,429 @@ function makeBoard(n) {
   report("web::check_board_model_helpers", problems);
 }
 
+// ---- T7: the components' markup -------------------------------------------------------------
+const text = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+/** The text of an element's children, each on its own as a reader announces them (static markup has no gaps). */
+const spoken = (el) => [...(el?.children ?? [])].map(text).filter(Boolean).join(" ");
+const CHECKS = [
+  { family: "definition", asked: true, missing: 0 },
+  { family: "approval", asked: false, missing: 0 },
+  { family: "signoffs", asked: true, missing: 3 },
+  { family: "tests", asked: true, missing: 9 },
+  { family: "docs", asked: true, missing: 6 },
+];
+const WITH_CHECKS = next({ status: "Completed", missing: 18, signoffs: ["design-review", "docs-folded"], checks: CHECKS });
+const GROUP = "src/pages/board/LaneGroups.tsx";
+const noop = () => {};
+/** The In Progress lane of a small board: you, ready, building (older first) and a stalled one. */
+function activeFixture() {
+  const items = [
+    item("B-1", "In Progress", { entered_on: day(2), done: 1, total: 4 }),
+    item("B-2", "In Progress", { entered_on: day(5) }),
+    item("B-3", "In Progress", { entered_on: day(23) }),
+    item("B-4", "In Progress", { entered_on: day(4) }),
+    item("B-5", "Completed"),
+  ];
+  const r = { "B-1": card([WAITING]), "B-2": card([READY]), "B-3": card([NEEDS]), "B-4": card([NEEDS]) };
+  const idx = index(items, { milestones: [{ code: "MS-1", name: "A pleasant developer path to a release" }] });
+  const lanes = boardLanes(input(idx, r));
+  return { idx, lanes, lane: laneOf(lanes, "In Progress") };
+}
+const groupProps = (lane, idx, over = {}) => ({ project: "p", lane, index: idx, open: new Set(), shut: new Set(), only: new Set(), onToggle: noop, onClear: noop, ...over });
+
+// R-5: each group is an h3 holding a disclosure button; attention open, quiet closed with no body.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx));
+  const heads = [...document.querySelectorAll("h3")];
+  eq(problems, "one h3 per group", heads.length, lane.groups.length);
+  for (const h of heads) {
+    const b = h.querySelector("button[aria-expanded][aria-controls]");
+    if (!b) problems.push(`no disclosure button in "${text(h)}"`);
+  }
+  const state = (key) => document.querySelector(`#${groupId("In Progress", key)}-head`)?.getAttribute("aria-expanded");
+  eq(problems, "you (attention) is open", state("you"), "true");
+  eq(problems, "ready (attention) is open", state("ready"), "true");
+  eq(problems, "building (quiet) is closed", state("building"), "false");
+  eq(problems, "a closed group has no body", text(document.getElementById(`${groupId("In Progress", "building")}-body`)), "");
+  if (document.querySelector(".pager")) problems.push("a pager is drawn");
+  report("web::check_board_groups_are_disclosure_buttons", problems);
+}
+
+// R-5: a closed group's header says its count and its oldest; an open list is a focusable region.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx));
+  const head = spoken(document.getElementById(`${groupId("In Progress", "building")}`)?.querySelector(".ui-row-head"));
+  if (!/Building · 2\b/.test(head)) problems.push(`the closed header lacks its count: "${head}"`);
+  if (!/oldest B-3, 23 days in In Progress/.test(head)) problems.push(`the closed header lacks its oldest: "${head}"`);
+  const opened = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open: new Set([groupId("In Progress", "building")]) }));
+  const region = opened.document.querySelector(`#${groupId("In Progress", "building")}-body [role="region"]`);
+  if (!region) problems.push("an open group's list is not role=region");
+  else {
+    eq(problems, "region name", region.getAttribute("aria-label"), "Building, 2 items");
+    eq(problems, "region tabindex", region.getAttribute("tabindex"), "0");
+  }
+  report("web::check_board_closed_group_shows_its_count_and_oldest", problems);
+}
+
+// R-7: the bar is a named picture, the legend entries are buttons, and a table gives the counts.
+{
+  const problems = [];
+  const { lane } = activeFixture();
+  const props = { lane, only: new Set(), onFilter: noop };
+  const { document } = await render("src/pages/board/LaneBar.tsx", "LaneBar", props);
+  const bar = document.querySelector('[role="img"]');
+  eq(problems, "the bar's name", bar?.getAttribute("aria-label"), "In Progress by group: Waiting on you 1, Ready to move 1, Building 2, of 4");
+  const legend = [...document.querySelectorAll(".board-legend button[aria-pressed]")].map(text);
+  eq(problems, "legend entries", legend.map((t) => t.replace(/^\S+ /, "")), ["Waiting on you 1", "Ready to move 1", "Building 2"]);
+  if (document.querySelector("table")) problems.push("the table is drawn before it is asked for");
+  const toggle = [...document.querySelectorAll("button")].find((b) => text(b) === "Show as table");
+  if (!toggle || toggle.getAttribute("aria-pressed") !== "false") problems.push("no unpressed 'Show as table' button");
+  // The pressed state of a filter.
+  const pressed = await render("src/pages/board/LaneBar.tsx", "LaneBar", { ...props, only: new Set([groupId("In Progress", "ready")]) });
+  eq(problems, "pressed entries", [...pressed.document.querySelectorAll(".board-legend button[aria-pressed=true]")].map((b) => text(b).replace(/^\S+ /, "")), ["Ready to move 1"]);
+  // The table view, through the component's own markup (state is local, so render it forced open).
+  const src = (await import("node:fs")).readFileSync(new URL("../src/pages/board/LaneBar.tsx", import.meta.url), "utf8");
+  if (!/<caption>\{name\}<\/caption>/.test(src) || !/Group<\/th>[\s\S]*Items<\/th>[\s\S]*Oldest \(days\)/.test(src)) problems.push("the table has no caption or its three columns");
+  report("web::check_board_lane_bar_has_a_table_and_filters", problems);
+}
+
+// R-10: the card draws its tasks and the next stage's checks in words.
+const CARD = "src/pages/board/BoardCard.tsx";
+const boardItem = (over = {}, itemOver = {}) => ({
+  item: item("C-1", "In Progress", { done: 3, total: 8, milestone: "MS-1", ...itemOver }),
+  card: card([WITH_CHECKS], { req_proven: 7, req_total: 9 }),
+  next: WITH_CHECKS,
+  known: true,
+  daysIn: 3,
+  blockedBy: null,
+  blockedByStatus: null,
+  agent: null,
+  critical: false,
+  idle: false,
+  changed: false,
+  ...over,
+});
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const { document } = await render(CARD, "BoardCard", { project: "p", b: boardItem(), index: idx, usual: 4 });
+  const tasks = document.querySelector('[role="img"]');
+  eq(problems, "tasks bar", tasks?.getAttribute("aria-label"), "Tasks: Done 3, Open 5, of 8");
+  const steps = [...document.querySelectorAll("ol.ui-stepper li")].map((li) => spoken(li));
+  eq(problems, "five steps", steps.length, 5);
+  eq(problems, "step words", steps, ["Definition met", "Approval not asked", "Sign-offs 3 to do", "Tests green 9 to do", "Docs 6 to do"]);
+  eq(problems, "stepper name", document.querySelector("ol.ui-stepper")?.getAttribute("aria-label"), "Checks for Completed");
+  eq(problems, "head line", text(document.querySelector(".board-next-head")), "Next: Completed · 18 checks left");
+  eq(problems, "head title", document.querySelector(".board-next-head")?.getAttribute("title"), "18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs");
+  eq(problems, "what is left", spoken(document.querySelector("details")), "What is left 18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs Sign-offs: design-review, docs-folded");
+  const ready = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: { ...WITH_CHECKS, missing: 0, checks: CHECKS.map((c) => ({ ...c, missing: 0 })) } }), index: idx, usual: 4 });
+  eq(problems, "ready head", text(ready.document.querySelector(".board-next-head")), "Next: Completed · nothing left but the move");
+  const none = await render(CARD, "BoardCard", { project: "p", b: boardItem({}, { total: 0, done: 0 }), index: idx, usual: 4 });
+  if (!/No tasks yet/.test(none.html)) problems.push("a card with no tasks does not say so");
+  const old = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: next({ missing: 4, ends: false, status: "In Progress" }) }), index: idx, usual: 4 });
+  if (old.document.querySelector("ol.ui-stepper")) problems.push("a stepper is drawn without checks");
+  if (!old.document.querySelector(".hint")) problems.push("without checks the card keeps nextStageHint's text");
+  report("web::check_board_card_draws_tasks_and_the_next_stage_checks", problems);
+}
+
+// R-11: words, not codes.
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const long = { ...idx, milestones: [{ code: "MS-1", name: "P6.1 — A pleasant developer path to a release that goes on and on and on and on" }] };
+  const b = boardItem({}, { priority: "High", assignee: "ana", labels: ["cart"], kind: "Feature" });
+  const { document } = await render(CARD, "BoardCard", { project: "p", b, index: long, usual: 4 });
+  const badges = [...document.querySelectorAll(".board-badge")].map(text);
+  eq(problems, "badges", badges, ["feature", "high priority", "assigned to ana", "label: cart"]);
+  eq(problems, "badge titles", [...document.querySelectorAll(".board-badge")].map((e) => e.getAttribute("title")), ["Kind", "Priority", "Assignee", "Label"]);
+  const ms = document.querySelector(".board-milestone");
+  if (/MS-1/.test(text(ms))) problems.push(`the milestone's code shows: "${text(ms)}"`);
+  if (!/^Milestone: P6\.1 — A pleasant developer path/.test(text(ms)) || !text(ms).endsWith("…")) problems.push(`the milestone is not named and cut: "${text(ms)}"`);
+  if (!ms?.getAttribute("title")?.endsWith("on and on and on and on")) problems.push("the full name is not in the title");
+  eq(problems, "the card's one link", [...document.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["/p/p/feature/C-1"]);
+  report("web::check_board_cards_say_it_in_words", problems);
+}
+
+// R-12: one fact on the card, by priority.
+{
+  const problems = [];
+  const { idx } = activeFixture();
+  const all = boardItem({ critical: true, blockedBy: "B-9", blockedByStatus: "In Progress", agent: { id: "SC-1" }, daysIn: 30, changed: true, card: card([WITH_CHECKS], { req_proven: 7, req_total: 9, doing: { task: "TL-001/T3", text: "Build the route" } }) });
+  const expect = [
+    ["critical", "On the critical path"],
+    ["blocked", "Waiting on B-9 (In Progress)"],
+    ["agent", "An agent is on it: T3 Build the route"],
+    ["stalled", "30 days in In Progress; the lane's usual is 4"],
+    ["changed", "Changed since you last looked"],
+    ["proof", "Requirements proven 7 of 9"],
+  ];
+  const drop = { critical: { critical: false }, blocked: { blockedBy: null }, agent: { agent: null }, stalled: { daysIn: 2 }, changed: { changed: false } };
+  let b = all;
+  for (const [kind, words] of expect) {
+    const { document } = await render(CARD, "BoardCard", { project: "p", b, index: idx, usual: 4 });
+    const facts = [...document.querySelectorAll(".board-fact")];
+    eq(problems, `${kind}: one fact`, facts.length, 1);
+    eq(problems, `${kind}: words`, text(facts[0]).replace(/^\S+ /, ""), words);
+    const icon = facts[0]?.querySelector("span");
+    if (icon?.getAttribute("aria-hidden") !== "true") problems.push(`${kind}: the icon is not aria-hidden`);
+    if (drop[kind]) b = { ...b, ...drop[kind] };
+  }
+  const bare = await render(CARD, "BoardCard", { project: "p", b: boardItem({ card: card([WITH_CHECKS]) }), index: idx, usual: 4 });
+  if (bare.document.querySelector(".board-fact")) problems.push("a fact is drawn when none holds");
+  report("web::check_board_card_fact_follows_the_priority_order", problems);
+}
+
+// R-14: attention groups draw cards, quiet groups (opened) and the finished lane draw rows.
+{
+  const problems = [];
+  const { idx, lanes, lane } = activeFixture();
+  const open = new Set([groupId("In Progress", "building")]);
+  const { document } = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open }));
+  const inGroup = (key, sel) => document.querySelectorAll(`#${groupId("In Progress", key)}-body ${sel}`).length;
+  eq(problems, "you cards", [inGroup("you", "article.board-card"), inGroup("you", "li.board-row")], [1, 0]);
+  eq(problems, "ready cards", [inGroup("ready", "article.board-card"), inGroup("ready", "li.board-row")], [1, 0]);
+  eq(problems, "building rows", [inGroup("building", "article.board-card"), inGroup("building", "li.board-row")], [0, 2]);
+  const row = spoken(document.querySelector(`#${groupId("In Progress", "building")}-body li.board-row`));
+  if (!/^B-3 Title B-3 4 checks left 23 days$/.test(row)) problems.push(`a row is not one line of facts: "${row}"`);
+  const done = laneOf(lanes, "Completed");
+  const fin = await render(GROUP, "LaneGroups", groupProps(done, idx, { open: new Set([groupId("Completed", "done")]) }));
+  eq(problems, "finished rows", [fin.document.querySelectorAll("article.board-card").length, fin.document.querySelectorAll("li.board-row").length], [0, 1]);
+  report("web::check_board_quiet_groups_draw_one_line_rows", problems);
+}
+
+// R-20: every control is a button, link, select, summary or focusable region, and has a name.
+{
+  const problems = [];
+  const { idx, lane } = activeFixture();
+  const withInsight = { ...lane, insight: { rule: "idle", text: "3 of 4 have had no change in 7 days.", group: "blocked" } };
+  const header = await render("src/pages/board/LaneHeader.tsx", "LaneHeader", { lane: withInsight, only: new Set(), onFilter: noop });
+  const groups = await render(GROUP, "LaneGroups", groupProps(lane, idx, { open: new Set([groupId("In Progress", "building")]) }));
+  for (const [what, { document }] of [["header", header], ["groups", groups]]) {
+    for (const el of document.querySelectorAll("button, a, summary, select, input, [tabindex], [role=region]")) {
+      const tag = el.tagName.toLowerCase();
+      const okTag = ["button", "summary", "select"].includes(tag) || (tag === "a" && el.hasAttribute("href")) || el.getAttribute("tabindex") === "0";
+      if (!okTag) problems.push(`${what}: <${tag}> is not a keyboard control`);
+      const name = el.getAttribute("aria-label") || text(el);
+      if (!name) problems.push(`${what}: <${tag}> has no accessible name`);
+    }
+  }
+  const pill = header.document.querySelector(".ui-pill");
+  if (!/warning/i.test(text(pill))) problems.push(`the warn pill does not say its tone: "${text(pill)}"`);
+  const steps = await render(CARD, "BoardCard", { project: "p", b: boardItem(), index: idx, usual: 4 });
+  for (const li of steps.document.querySelectorAll("li.ui-step")) if (!li.querySelector(".ui-step-state")?.textContent) problems.push("a step has no word");
+  report("web::check_board_is_keyboard_and_screen_reader_friendly", problems);
+}
+
+// ---- T8: the page ---------------------------------------------------------------------------
+const PAGE = "src/pages/BoardPage.tsx";
+const pageSource = readFileSync(new URL("../src/pages/BoardPage.tsx", import.meta.url), "utf8");
+const viewProps = (idx, lanes, over = {}) => ({
+  project: "p",
+  index: idx,
+  lanes,
+  config: idx.config,
+  sprintPicker: null,
+  sort: "close",
+  onSort: noop,
+  open: new Set(),
+  shut: new Set(),
+  onToggle: noop,
+  filters: new Set(),
+  onFilter: noop,
+  notice: null,
+  otherStates: null,
+  activity: null,
+  ...over,
+});
+const allQuiet = (lanes) => new Set(lanes.flatMap((l) => l.groups.map((g) => groupId(l.status, g.key))));
+
+// R-1 (render half): every item of every lane is drawn once, the rest line says the others; no pager.
+{
+  const problems = [];
+  const { items, readiness } = makeBoard(450);
+  const idx = index(items);
+  const lanes = boardLanes(input(idx, readiness));
+  const { document } = await render(PAGE, "BoardView", viewProps(idx, lanes, { open: allQuiet(lanes) }));
+  for (const lane of lanes) {
+    const section = [...document.querySelectorAll("section.column")].find((s) => text(s.querySelector("h2")).startsWith(lane.status));
+    const links = [...(section?.querySelectorAll('a[href*="/feature/"]') ?? [])].map((a) => a.getAttribute("href"));
+    const unique = new Set(links);
+    if (links.length !== unique.size) problems.push(`${lane.status}: an item is drawn more than once`);
+    const inGroups = lane.groups.reduce((n, g) => n + g.items.length, 0);
+    eq(problems, `${lane.status} drawn items`, links.length, inGroups);
+    eq(problems, `${lane.status} drawn plus the rest line`, links.length + (lane.rest?.count ?? 0), items.filter((f) => f.status === lane.status).length);
+    eq(problems, `${lane.status} count in the heading`, text(section?.querySelector("h2")), `${lane.status} ${lane.total}`);
+  }
+  report("web::check_board_every_item_is_in_exactly_one_group", problems);
+}
+
+// R-1: no pager, no "Per page", no page key.
+{
+  const problems = [];
+  const { items, readiness } = makeBoard(450);
+  const idx = index(items);
+  const { document, html } = await render(PAGE, "BoardView", viewProps(idx, boardLanes(input(idx, readiness))));
+  if (document.querySelector(".pager")) problems.push("a .pager is drawn");
+  if (/per page/i.test(text(document.body))) problems.push('"Per page" is drawn');
+  if ([...document.querySelectorAll("button")].some((b) => /(next|previous) page/i.test(`${b.getAttribute("aria-label") ?? ""} ${text(b)}`))) problems.push("a page button is drawn");
+  if (/kanbanr-board-page-size|PAGE_SIZES|initialPageSize/.test(pageSource)) problems.push("BoardPage.tsx still reads the page size");
+  if (!/Order/.test(html)) problems.push("the Order select is missing");
+  report("web::check_board_has_no_pager", problems);
+}
+
+// R-6: sort, open and shut groups, and the bar filter come from the URL; the toggle rule.
+{
+  const problems = [];
+  const items = [
+    item("U-1", "Planned"),
+    item("U-2", "Planned", { priority: "low", entered_on: day(9) }),
+    item("U-3", "Planned", { priority: "high", entered_on: day(2) }),
+    item("U-4", "Planned", { priority: "medium", entered_on: day(5) }),
+    item("U-5", "In Progress", { depends_on: ["U-1"] }),
+    item("U-6", "In Progress"),
+  ];
+  const r = { "U-1": card([WAITING]), "U-2": card([NEEDS]), "U-3": card([NEEDS]), "U-4": card([NEEDS]), "U-5": card([NEEDS]), "U-6": card([NEEDS]) };
+  const idx = index(items);
+  const { cache } = await load("src/data/cache.ts");
+  const { urls } = await load("src/data/urls.ts");
+  // The page reads its project from the route, which a bare render has none of: the empty project.
+  const seed = async (url, data) => cache.fetch(url, [], async () => data);
+  await seed(urls.index(""), idx);
+  await seed(urls.readiness(""), r);
+  await seed(urls.scopes(""), []);
+  await seed(urls.criticalPath(""), { critical_path: [] });
+  const url = "/?bsort=priority#shut=g-planned-you&open=g-planned-define&only=g-in-progress-blocked";
+  const { document } = await render(PAGE, "default", {}, { url });
+  const state = (key, lane) => document.querySelector(`#${groupId(lane, key)}-head`)?.getAttribute("aria-expanded") ?? null;
+  eq(problems, "Order select", document.querySelector("select option[selected]")?.getAttribute("value") ?? document.querySelector("select")?.value, "priority");
+  eq(problems, "shut attention group", state("you", "Planned"), "false");
+  eq(problems, "opened quiet group", state("define", "Planned"), "true");
+  eq(problems, "the filtered lane shows one group", [...document.querySelectorAll("section.column")].map((s) => [...s.querySelectorAll("h3")].length), [2, 1, 0].slice(0, 3));
+  eq(problems, "the filtered group is open", state("blocked", "In Progress"), "true");
+  if (state("building", "In Progress") !== null) problems.push("the filtered lane still draws another group");
+  if (![...document.querySelectorAll("button")].some((b) => text(b) === "Show every group")) problems.push('no "Show every group" button');
+  const define = [...document.querySelectorAll(`#${groupId("Planned", "define")}-body li.board-row .board-code`)].map(text);
+  eq(problems, "priority order inside a group", define, ["U-3", "U-4", "U-2"]);
+  // Without the URL the defaults hold.
+  const plain = await render(PAGE, "default", {}, { url: "/" });
+  eq(problems, "default: define closed", plain.document.querySelector(`#${groupId("Planned", "define")}-head`)?.getAttribute("aria-expanded"), "false");
+  eq(problems, "default: you open", plain.document.querySelector(`#${groupId("Planned", "you")}-head`)?.getAttribute("aria-expanded"), "true");
+  // The pure rule.
+  const g = (attention) => ({ key: attention ? "you" : "define", attention });
+  const none = new Set();
+  eq(problems, "attention default open", isGroupOpen("Planned", g(true), none, none), true);
+  eq(problems, "attention shut", isGroupOpen("Planned", g(true), none, new Set(["g-planned-you"])), false);
+  eq(problems, "quiet default closed", isGroupOpen("Planned", g(false), none, none), false);
+  eq(problems, "quiet opened", isGroupOpen("Planned", g(false), new Set(["g-planned-define"]), none), true);
+  const t1 = toggleGroup(none, none, "g-planned-you", false, true);
+  eq(problems, "shutting an attention group writes shut", [[...t1.open], [...t1.shut]], [[], ["g-planned-you"]]);
+  const t2 = toggleGroup(none, t1.shut, "g-planned-you", true, true);
+  eq(problems, "reopening it clears shut", [[...t2.open], [...t2.shut]], [[], []]);
+  const t3 = toggleGroup(none, none, "g-planned-define", true, false);
+  eq(problems, "opening a quiet group writes open", [[...t3.open], [...t3.shut]], [[ "g-planned-define"], []]);
+  report("web::check_board_state_lives_in_the_url", problems);
+}
+
+// R-13 (source half): the last look is written to this browser only after a while or on leaving.
+{
+  const problems = [];
+  const writes = pageSource.match(/localStorage\.setItem\(/g) ?? [];
+  eq(problems, "one localStorage write", writes.length, 1);
+  if (!/localStorage\.setItem\(\s*seenKey\(project\)/.test(pageSource)) problems.push("the write is not under seenKey(project)");
+  if (!/window\.setTimeout\(\s*write\s*,\s*SEEN_AFTER_MS\s*\)/.test(pageSource)) problems.push("the write does not wait SEEN_AFTER_MS");
+  if (!/addEventListener\(\s*"pagehide"\s*,\s*write\s*\)/.test(pageSource)) problems.push("the write is not made on pagehide");
+  if (!/localStorage\.getItem\(\s*seenKey\(project\)/.test(pageSource)) problems.push("the last visit is not read on arrival");
+  if (/\bapi\.|postJson|putJson|method:\s*["'](POST|PUT|PATCH|DELETE)/.test(pageSource)) problems.push("the page calls a write API");
+  // Rendering writes nothing.
+  const sets = [];
+  globalThis.localStorage = { getItem: () => null, setItem: (k, v) => sets.push([k, v]) };
+  const { items, readiness } = makeBoard(30);
+  const idx = index(items);
+  await render(PAGE, "BoardView", viewProps(idx, boardLanes(input(idx, readiness))));
+  delete globalThis.localStorage;
+  eq(problems, "writes while rendering", sets, []);
+  report("web::check_board_last_look_is_kept_in_this_browser", problems);
+}
+
+// R-16: nothing on the Board moves an item; every item link goes to its page.
+{
+  const problems = [];
+  const { items, readiness } = makeBoard(60);
+  const idx = index(items);
+  const lanes = boardLanes(input(idx, readiness));
+  const { document } = await render(PAGE, "BoardView", viewProps(idx, lanes, { open: allQuiet(lanes) }));
+  for (const b of document.querySelectorAll("button")) {
+    const t = text(b);
+    if (/^(move|approve|sign off)\b/i.test(t) || idx.config.statuses.includes(t)) problems.push(`a button offers "${t}"`);
+  }
+  const feature = [...document.querySelectorAll("article.board-card h4 a, li.board-row a")].map((a) => a.getAttribute("href"));
+  if (feature.length === 0) problems.push("no card or row links drawn");
+  for (const h of feature) if (!/^\/p\/p\/feature\/FTR-\d+$/.test(h)) problems.push(`a card links to ${h}`);
+  if (document.querySelector("form, input[type=submit]")) problems.push("a form is drawn");
+  report("web::check_board_offers_no_move", problems);
+}
+
+// R-17: an older daemon: no ages, no checks, no updated_at; every item grouped and one notice.
+{
+  const problems = [];
+  const { items, readiness } = makeBoard(90);
+  const oldItems = items.map(({ entered_on, ...rest }) => rest);
+  const oldReadiness = Object.fromEntries(Object.entries(readiness).map(([k, c]) => [k, { gaps: c.gaps, next: c.next }]));
+  const idx = index(oldItems);
+  const lanes = boardLanes(input(idx, oldReadiness));
+  const notice = (await load(PAGE)).olderDaemonNotice(idx, oldReadiness);
+  if (!notice || !/does not report how long items have been in their stage/.test(notice)) problems.push(`no notice: ${notice}`);
+  if ((await load(PAGE)).olderDaemonNotice(index(items), readiness) !== null) problems.push("a current daemon earns the notice");
+  const { document } = await render(PAGE, "BoardView", viewProps(idx, lanes, { notice, open: allQuiet(lanes) }));
+  eq(problems, "notice lines", [...document.querySelectorAll(".board-notice")].map(text), [notice]);
+  const drawn = document.querySelectorAll("article.board-card, li.board-row").length;
+  const rest = lanes.reduce((n, l) => n + (l.rest?.count ?? 0), 0);
+  eq(problems, "every item still drawn", drawn + rest, 90);
+  if (document.querySelector("ol.ui-stepper")) problems.push("a stepper is drawn without checks");
+  if (!document.querySelector("article.board-card .hint")) problems.push("a card does not keep nextStageHint's text");
+  if (/\d+ days? in /.test(text(document.body))) problems.push("an age is drawn without entered_on");
+  report("web::check_board_reads_an_older_daemon", problems);
+}
+
+// R-19 (render half): 450 items render in under 250 ms (median of 5) and at most 2,500 elements.
+{
+  const problems = [];
+  const items = [];
+  const readiness = {};
+  for (let i = 0; i < 450; i++) {
+    const code = `FTR-${String(i + 1).padStart(3, "0")}`;
+    const status = i % 9 < 2 ? "Planned" : i % 9 < 5 ? "In Progress" : "Completed";
+    items.push(item(code, status, { entered_on: day(i % 40), created_at: iso(60 - (i % 50)), done: i % 5, total: i % 5 ? 6 : 0, milestone: "MS-1" }));
+    const nx = status === "Planned" ? (i % 20 === 0 ? WAITING : i % 20 === 1 ? READY : NEEDS) : i % 40 === 3 ? WAITING : i % 30 === 4 ? READY : NEEDS;
+    readiness[code] = card([{ ...nx, checks: CHECKS }], { updated_at: iso(i % 9) });
+  }
+  const idx = index(items);
+  const lanes = boardLanes(input(idx, readiness));
+  const { BoardView } = await load(PAGE);
+  const [React, { renderToStaticMarkup }, { MemoryRouter }] = await Promise.all([import("react"), import("react-dom/server"), import("react-router-dom")]);
+  const h = React.createElement ?? React.default.createElement;
+  const run = () => {
+    const t = performance.now();
+    const html = renderToStaticMarkup(h(MemoryRouter, {}, h(BoardView, viewProps(idx, lanes))));
+    return [performance.now() - t, html];
+  };
+  const quiet = console.error;
+  console.error = (m, ...r) => (typeof m === "string" && m.includes("useLayoutEffect does nothing") ? undefined : quiet(m, ...r));
+  run();
+  const runs = Array.from({ length: 5 }, run);
+  console.error = quiet;
+  const times = runs.map((r) => r[0]).sort((a, b) => a - b);
+  const elements = (await render(PAGE, "BoardView", viewProps(idx, lanes))).document.querySelectorAll("body *").length;
+  console.log(`web::check_board_renders_450_items_within_budget — BoardView render median of 5: ${times[2].toFixed(1)} ms, ${elements} elements`);
+  if (times[2] >= 250) problems.push(`BoardView took ${times[2].toFixed(0)} ms (median of 5), the budget is 250 ms`);
+  if (elements > 2500) problems.push(`BoardView drew ${elements} elements, the budget is 2,500`);
+  report("web::check_board_renders_450_items_within_budget (render half)", problems);
+}
+
 // ---- R-19: 450 items within 20 ms -----------------------------------------------------------
 {
   const problems = [];
@@ -493,4 +935,5 @@ function makeBoard(n) {
   report("web::check_board_renders_450_items_within_budget", problems);
 }
 
+await closeRender();
 process.exit(ok ? 0 : 1);

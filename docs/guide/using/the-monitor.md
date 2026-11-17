@@ -334,7 +334,8 @@ outside the menu, always visible.
   (with counts), and a **Documentation** link.
 - **Overview**: the project's landing page, at `/p/<project>`; see
   [The Overview and Needs you](#the-overview-and-needs-you).
-- **Board**: at `/p/<project>/board`: one column per state in `displayed_states`; click a card → that feature's page.
+- **Board**: at `/p/<project>/board`: one column per state in `displayed_states`, each grouped by what its items need
+  next (see [The Board](#the-board)); click a card's title → that feature's page.
   A card names the one stage the item reaches next, with the same count `kanbanr check` gives for
   it, sign-offs included: "Migration needs 6, 1 yours" means six things stand between the item and
   Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
@@ -467,6 +468,48 @@ offers **All items** and **Unscheduled**, the items not yet in any sprint:
 |---|---|---|
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
+
+### The Board
+
+The Board never pages. Each column is split into groups by what its items need next, and the groups
+that want you are open while the quiet ones are closed to one line.
+
+**The groups.** The first column that is not finished (Planned) has four groups: *Waiting on you*
+(an approval or a sign-off is all the next stage lacks), *Ready to start* (every check is met and
+nothing it depends on is open), *Needs definition or design* and *Waiting on another item*. Every
+other column that is not finished (In Progress) has five: *Waiting on you*, *Ready to move* (all
+checks met), *An agent is on it now*, *Blocked or stalled* (it waits on an open item, or nothing
+about it has changed in 7 days) and *Building*. An item is in the first group whose rule it meets, so
+an item waiting on you is shown as that even if it also depends on something open. The finished
+column shows only the current window: the chosen sprint, else the running sprint, else the release in
+progress, else the last 14 days. One line under it, such as "320 finished earlier, across 7 releases
+→", leads to the rest. The groups that want you or something from you (*Waiting on you*, *Ready*, *An
+agent is on it now*, *Blocked or stalled*) open with full cards; the others show a count and their
+oldest item, for example "Building · 23 — oldest FTR-012, 23 days in In Progress", and open in place
+as one-line rows. A long group scrolls inside itself; nothing is hidden behind a page number.
+
+**A column that explains itself.** Under its name each column draws a bar of its groups. Each entry
+in the legend shows that group alone, and "Show as table" gives the same counts as a table. A line
+says how many items came in and went out over the last 7 days and how long the oldest has been
+there. At most one more line says what stands out, chosen by fixed rules: a share of the column with
+no change in 7 days; the column holding at least twice what the last sprint finished; at least five
+items in and twice as many as out; or at least three items ready with nothing but the move left. A
+quiet column says nothing.
+
+**A card that tells its story.** A card shows its code, what each badge means in words ("high
+priority", "assigned to …"), the title, a bar of its tasks, the milestone's name and the next stage's
+checks. The five steps are Definition, Approval, Sign-offs, Tests green and Docs, each saying *met*,
+*to do* (with how many) or *not asked*; hover the line above them, or open "What is left", for the
+sentence: "18 checks left before Completed: 9 tests to turn green, 6 docs, 3 sign-offs". A card shows
+at most one curious fact, the first that holds: on the critical path, waiting on a named item, an
+agent working on it (and on which task), longer in its stage than the column's usual, changed since
+you last looked, or requirements proven (7 of 9).
+
+**Order and what the page keeps.** Within a group the closest to its next stage come first, with
+*Newest* and *Priority* one choice away in the Order list. The order, the groups you opened or closed
+and the group a legend entry is showing alone are kept in the page's address, so a link or a reload
+opens the Board as you left it. When you last looked is kept in this browser only and is never sent
+to the board. The Board only shows; it moves, approves and signs off nothing.
 
 ### The Charter page
 
