@@ -249,6 +249,24 @@ fn run_planned(
     req: &RunRequest,
     exec: &dyn Fn(&[String], &Env) -> std::io::Result<i32>,
 ) -> anyhow::Result<(i32, BuildRow)> {
+    run_planned_as(plan, req, exec, None)
+}
+
+/// A bench run's extras: the row's note starts with `label` (`cold/after`), and with
+/// `cache_stats` the project's cache server's hits and misses for this run alone are recorded
+/// (its counters are zeroed first, so only a run with no other build beside it asks for them).
+struct BenchRun<'a> {
+    label: &'a str,
+    cache_stats: bool,
+}
+
+/// [`run_planned`], for the bench when `bench` is given.
+fn run_planned_as(
+    plan: &Plan,
+    req: &RunRequest,
+    exec: &dyn Fn(&[String], &Env) -> std::io::Result<i32>,
+    bench: Option<&BenchRun>,
+) -> anyhow::Result<(i32, BuildRow)> {
     let asked = Instant::now();
     let at = kanbanr_core::now_rfc3339();
     let slot = wait_for_slot(plan, &req.cmd)?;
@@ -269,6 +287,13 @@ fn run_planned(
     {
         notes.push(n);
     }
+    let measure = bench.is_some_and(|b| b.cache_stats)
+        && is_cargo(&req.cmd)
+        && plan.effective.sccache
+        && plan.sccache.is_some();
+    if measure {
+        let _ = server_call(plan, "--zero-stats");
+    }
     let started = Instant::now();
     let result = exec(&req.cmd, &env.set);
     let run_ms = millis(started.elapsed());
@@ -279,6 +304,17 @@ fn run_planned(
             127
         }
     };
+    let (cache_hits, cache_misses) = if measure {
+        let stats = server_call(plan, "--show-stats").unwrap_or_default();
+        let count =
+            |label: &str| buildplan::stats_value(&stats, label).and_then(|v| v.parse::<u64>().ok());
+        (count("Cache hits"), count("Cache misses"))
+    } else {
+        (None, None)
+    };
+    if let Some(b) = bench {
+        notes.insert(0, b.label.to_string());
+    }
     let note = notes.join("; ");
     let row = BuildRow {
         at,
@@ -297,8 +333,8 @@ fn run_planned(
         queued_ms,
         run_ms,
         exit,
-        cache_hits: None,
-        cache_misses: None,
+        cache_hits,
+        cache_misses,
         mem_available_mib,
         note,
     };
@@ -382,16 +418,73 @@ fn server_env(plan: &Plan, base_dirs: &std::ffi::OsStr) -> Vec<(String, std::ffi
 /// succeeded. The server's settings go with every call, so a server that `--show-stats` starts on
 /// its own starts with them.
 fn sccache_call(sccache: &Path, env: &[(String, std::ffi::OsString)], arg: &str) -> Option<String> {
-    let out = std::process::Command::new(sccache)
-        .arg(arg)
+    let mut c = std::process::Command::new(sccache);
+    c.arg(arg)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    close_inherited_fds(&mut c);
+    let out = c.output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `sccache <arg>` against the project's server with its settings, when sccache is on and found.
+fn server_call(plan: &Plan, arg: &str) -> Option<String> {
+    let sccache = plan.sccache.as_deref().filter(|_| plan.effective.sccache)?;
+    let wanted = buildplan::base_dirs(&plan.main_root, &worktree_roots(&plan.main_root));
+    let joined = std::env::join_paths(&wanted).ok()?;
+    sccache_call(sccache, &server_env(plan, &joined), arg)
+}
+
+/// Any call may start the server, which outlives kanbanr: it must not inherit a descriptor beyond
+/// stdio. A lock a wrapper (`flock`) or a parent left open without close-on-exec, a build slot
+/// among them, would otherwise stay held by the server for as long as it runs, and every build
+/// would wait for it. kanbanr's own files are opened close-on-exec; this closes the rest in the
+/// child, before `sccache` starts.
+#[cfg(unix)]
+fn close_inherited_fds(c: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure only calls `close_range` or `close`, which are async-signal-safe, and
+    // allocates nothing.
+    unsafe {
+        c.pre_exec(|| {
+            close_from(3);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn close_inherited_fds(_: &mut std::process::Command) {}
+
+/// Close every descriptor from `low` up: `close_range` where Linux has it, else one by one up to
+/// the process's limit.
+#[cfg(unix)]
+fn close_from(low: libc::c_int) {
+    #[cfg(target_os = "linux")]
+    // SAFETY: a plain system call on descriptors this process owns; no memory is touched.
+    unsafe {
+        if libc::syscall(
+            libc::SYS_close_range,
+            low as libc::c_uint,
+            libc::c_uint::MAX,
+            0 as libc::c_uint,
+        ) == 0
+        {
+            return;
+        }
+    }
+    // SAFETY: `sysconf` and `close` touch no memory of ours; a descriptor that is not open is
+    // refused with EBADF, which is ignored.
+    unsafe {
+        let max = libc::sysconf(libc::_SC_OPEN_MAX);
+        let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
+        for fd in low..max {
+            libc::close(fd);
+        }
+    }
 }
 
 /// Make sure the project's sccache server runs with the main checkout and every worktree as its
@@ -1047,6 +1140,7 @@ fn repo_shape(root: &Path, line_check: Option<Vec<String>>) -> RepoShape {
         docs_checks,
         script_tests: root.join("scripts").join("tests").is_dir(),
         line_check,
+        workspace: root.join(buildplan::CARGO_DIR).is_dir(),
     }
 }
 
@@ -1125,6 +1219,321 @@ pub fn check(
         results.len()
     );
     Ok(i32::from(failed > 0))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The bench
+// ---------------------------------------------------------------------------------------------
+
+/// The bench's scenarios, in the order they run.
+pub const BENCH_SCENARIOS: [&str; 4] = ["cold", "warm", "task", "slots"];
+
+/// The crate the bench checks and tests: kanbanr's own core.
+const BENCH_CRATE: &str = "kanbanr-core";
+/// The file the warm scenario touches (a comment line appended, then the file restored).
+const BENCH_TOUCH: &str = "api/crates/kanbanr-core/src/lib.rs";
+/// The slots × jobs the slots scenario compares: the shipped default, then the alternative.
+const BENCH_SLOTS: [(u32, u32); 2] = [(2, 5), (3, 3)];
+
+/// A bench worktree, `.claude/worktrees/bench-<n>`, detached at the bench's commit: removed
+/// (forced) when dropped, on every path.
+struct BenchTree {
+    main_root: PathBuf,
+    path: PathBuf,
+}
+
+impl BenchTree {
+    fn add(main_root: &Path, commit: &str) -> anyhow::Result<BenchTree> {
+        let parent = main_root.join(".claude").join("worktrees");
+        std::fs::create_dir_all(&parent)?;
+        // A number not used before in this run either, so every worktree of a bench is new by
+        // name as well as by content, and its rows tell them apart.
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let path = std::iter::repeat_with(|| NEXT.fetch_add(1, Ordering::Relaxed))
+            .map(|n| parent.join(format!("bench-{n}")))
+            .find(|p| !p.exists())
+            .expect("a free bench folder");
+        coderepo::git(
+            main_root,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                &path.to_string_lossy(),
+                commit,
+            ],
+        )?;
+        Ok(BenchTree {
+            main_root: main_root.to_path_buf(),
+            path,
+        })
+    }
+}
+
+impl Drop for BenchTree {
+    fn drop(&mut self) {
+        let _ = coderepo::git(
+            &self.main_root,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                &self.path.to_string_lossy(),
+            ],
+        );
+        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = coderepo::git(&self.main_root, &["worktree", "prune"]);
+    }
+}
+
+/// Run `cmd` in `dir` as [`spawn_in`] does, but always into the worktree's own target folder:
+/// a target folder set in the environment would let one bench run warm the next.
+fn spawn_bench(dir: &Path, cmd: &[String], env: &Env) -> std::io::Result<i32> {
+    // The command's own output goes to stderr, so `bench --json` prints the rows alone.
+    let status = std::process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .current_dir(dir)
+        .stdout(std::io::stderr())
+        .status()?;
+    Ok(exit_code(status))
+}
+
+/// A scenario's command in a bench worktree.
+fn bench_cmd(scenario: &str) -> Vec<String> {
+    let args: &[&str] = match scenario {
+        "task" | "slots" => &[
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            BENCH_CRATE,
+            "--lib",
+            "models::",
+        ],
+        _ => &["cargo", "check", "--locked", "-p", BENCH_CRATE],
+    };
+    args.iter().map(|s| s.to_string()).collect()
+}
+
+/// A "before" run: plain, with the environment as it is, no slot and no project cache server;
+/// recorded as a `bench` row (slot 0, no wait) like every other.
+fn bench_before(plan: &Plan, dir: &Path, cmd: &[String], label: &str) -> BuildRow {
+    let at = kanbanr_core::now_rfc3339();
+    let mem_available_mib = plan.machine_waits.then(mem_available_mib).flatten();
+    let started = Instant::now();
+    let result = spawn_bench(dir, cmd, &[]);
+    let run_ms = millis(started.elapsed());
+    let mut note = label.to_string();
+    let exit = match result {
+        Ok(c) => c,
+        Err(e) => {
+            note.push_str(&format!("; could not start: {e}"));
+            127
+        }
+    };
+    let row = BuildRow {
+        at,
+        worktree: plan.worktree.clone(),
+        branch: plan.branch.clone(),
+        task: None,
+        scope: plan.scope.clone(),
+        kind: "bench".into(),
+        tier: None,
+        cmd: cmd.to_vec(),
+        slot: 0,
+        queued_ms: 0,
+        run_ms,
+        exit,
+        cache_hits: None,
+        cache_misses: None,
+        mem_available_mib,
+        note,
+    };
+    if let Some(dir) = &plan.repo_dir
+        && let Err(e) = buildplan::append_row(dir, &row)
+    {
+        eprintln!("warning: the build log could not be written ({e}); the run is not recorded");
+    }
+    row
+}
+
+/// The scenarios asked for, in run order: none means all; `warm` and `task` run in the `cold`
+/// scenario's worktree, so either brings `cold` with it. An unknown name is refused.
+pub fn bench_scenarios(asked: &[String]) -> anyhow::Result<Vec<&'static str>> {
+    for a in asked {
+        if !BENCH_SCENARIOS.contains(&a.as_str()) {
+            anyhow::bail!(
+                "unknown bench scenario '{a}': one of {}",
+                BENCH_SCENARIOS.join(", ")
+            );
+        }
+    }
+    let has = |s: &str| asked.is_empty() || asked.iter().any(|a| a == s);
+    Ok(BENCH_SCENARIOS
+        .into_iter()
+        .filter(|s| has(s) || (*s == "cold" && (has("warm") || has("task"))))
+        .collect())
+}
+
+/// `kanbanr build bench`: each scenario of `scenarios` (all when empty) run before (plain cargo,
+/// the environment as it is) and after (through the build slots, the build environment and the
+/// project's cache server), each mode in a fresh detached worktree at `HEAD`, so neither warms the
+/// other. `cold` checks the core crate, `warm` touches its `lib.rs` and checks again, `task` runs
+/// one module's tests, and `slots` starts that task check in three fresh worktrees at once under
+/// 2 slots × 5 jobs and under 3 slots × 3 jobs. Every row (kind `bench`, note
+/// `<scenario>/<before|after>` or `slots/<slots>x<jobs>`) goes to the build log and is returned;
+/// the bench worktrees are removed.
+pub fn bench(
+    store: &Store,
+    project: &str,
+    repo: &Path,
+    scenarios: &[String],
+) -> anyhow::Result<Vec<BuildRow>> {
+    let chosen = bench_scenarios(scenarios)?;
+    let facts = coderepo::worktree_facts(repo)
+        .ok_or_else(|| anyhow::anyhow!("not in a git repository: the bench builds a checkout"))?;
+    let head = coderepo::rev_parse(&facts.root, "HEAD")?;
+    if chosen.contains(&"warm") && !facts.root.join(BENCH_TOUCH).is_file() {
+        anyhow::bail!(
+            "the warm scenario touches {BENCH_TOUCH}, which {} does not have",
+            facts.root.display()
+        );
+    }
+    let main_root = facts.main_root.clone();
+    let mut rows = Vec::new();
+    let sequence: Vec<&str> = chosen.iter().copied().filter(|s| *s != "slots").collect();
+    for mode in ["before", "after"] {
+        if sequence.is_empty() {
+            break;
+        }
+        let tree = BenchTree::add(&main_root, &head)?;
+        let plan = plan(store, project, &tree.path, &RunRequest::default())?;
+        let api = tree.path.join(buildplan::CARGO_DIR);
+        if mode == "after" {
+            // The new worktree joins the cache server's base directories before the first build.
+            let _ = ensure_cache_server(&plan, u32::MAX);
+        }
+        for scenario in &sequence {
+            let label = format!("{scenario}/{mode}");
+            eprintln!("bench: {label}");
+            let cmd = bench_cmd(scenario);
+            let touched = tree.path.join(BENCH_TOUCH);
+            let original = if *scenario == "warm" {
+                let text = std::fs::read(&touched)?;
+                let mut changed = text.clone();
+                changed.extend_from_slice(b"\n// kanbanr build bench: warm\n");
+                std::fs::write(&touched, changed)?;
+                Some(text)
+            } else {
+                None
+            };
+            let row = if mode == "before" {
+                bench_before(&plan, &api, &cmd, &label)
+            } else {
+                let req = RunRequest {
+                    cmd,
+                    task: None,
+                    kind: "bench".into(),
+                    tier: None,
+                };
+                let b = BenchRun {
+                    label: &label,
+                    cache_stats: true,
+                };
+                run_planned_as(&plan, &req, &|c, env| spawn_bench(&api, c, env), Some(&b))?.1
+            };
+            if let Some(text) = original {
+                std::fs::write(&touched, text)?;
+            }
+            rows.push(row);
+        }
+        drop(tree);
+    }
+    if chosen.contains(&"slots") {
+        for (slots, jobs) in BENCH_SLOTS {
+            let label = format!("slots/{slots}x{jobs}");
+            eprintln!("bench: {label}, three task checks at once");
+            let trees = (0..3)
+                .map(|_| BenchTree::add(&main_root, &head))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let mut plans = Vec::new();
+            for t in &trees {
+                let mut p = plan(store, project, &t.path, &RunRequest::default())?;
+                p.effective.slots = slots;
+                p.effective.jobs = jobs;
+                plans.push(p);
+            }
+            let _ = ensure_cache_server(&plans[0], u32::MAX);
+            let results: Vec<anyhow::Result<(i32, BuildRow)>> = std::thread::scope(|s| {
+                let handles: Vec<_> = plans
+                    .iter()
+                    .zip(&trees)
+                    .map(|(p, t)| {
+                        let label = label.as_str();
+                        let api = t.path.join(buildplan::CARGO_DIR);
+                        s.spawn(move || {
+                            let req = RunRequest {
+                                cmd: bench_cmd("slots"),
+                                task: None,
+                                kind: "bench".into(),
+                                tier: None,
+                            };
+                            let b = BenchRun {
+                                label,
+                                cache_stats: false,
+                            };
+                            run_planned_as(p, &req, &|c, env| spawn_bench(&api, c, env), Some(&b))
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| {
+                        h.join()
+                            .unwrap_or_else(|_| Err(anyhow::anyhow!("a bench run panicked")))
+                    })
+                    .collect()
+            });
+            for r in results {
+                rows.push(r?.1);
+            }
+            drop(trees);
+        }
+    }
+    // The cache's size after the runs, against its cap (the Configuration's cache_gib).
+    if let Ok(p) = plan(store, project, repo, &RunRequest::default()) {
+        let c = cache_view(&p);
+        if c.running {
+            eprintln!(
+                "bench: the project's compiler cache holds {} of {} ({})",
+                c.size.as_deref().unwrap_or("?"),
+                c.max_size.as_deref().unwrap_or("?"),
+                c.dir
+            );
+        }
+    }
+    Ok(rows)
+}
+
+/// The slots scenario's rule (FTR-062's Configuration): the median wall time (wait plus run) of
+/// the three concurrent task checks under each of 2 × 5 and 3 × 3, and whether 3 × 3 is at least
+/// 10 % lower, which makes `jobs_per_slot` 3 the default. `None` without both sets of rows.
+pub fn slots_rule(rows: &[BuildRow]) -> Option<(u64, u64, bool)> {
+    let median = |label: &str| {
+        let mut v: Vec<u64> = rows
+            .iter()
+            .filter(|r| r.kind == "bench" && r.note.split(';').next() == Some(label))
+            .map(|r| r.queued_ms + r.run_ms)
+            .collect();
+        (!v.is_empty()).then(|| percentile(&mut v, 50))
+    };
+    let [(s1, j1), (s2, j2)] = BENCH_SLOTS;
+    let wide = median(&format!("slots/{s1}x{j1}"))?;
+    let narrow = median(&format!("slots/{s2}x{j2}"))?;
+    Some((wide, narrow, narrow * 10 <= wide * 9))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1557,6 +1966,74 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// FTR-062 R-4 (the coordinator, 17 Nov): the cache server outlives the build that starts it,
+    /// so it must hold none of that build's locks: neither a lock a wrapper left open without
+    /// close-on-exec (cbuild's `flock`) nor the build's own slot. Once the build gives them back,
+    /// both can be taken while the server still runs.
+    #[cfg(unix)]
+    #[test]
+    fn the_cache_server_holds_no_lock_of_the_build_that_started_it() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::fs::canonicalize(scratch("sccache-fds")).unwrap();
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git_ok(&main, &["init", "-q"]);
+        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        // The stub's server is a background process that lives on, as sccache's does.
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("sccache");
+        let pid = dir.join("server.pid");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$1\" in\n\
+                 --show-stats) exit 2 ;;\n\
+                 --start-server) sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{pid}' ;;\n\
+                 esac\n",
+                pid = pid.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut plan = plan_in(&dir, 2, Priority::None, None);
+        plan.main_root = main.clone();
+        plan.sccache = Some(stub.clone());
+
+        // A wrapper's lock, inheritable as `flock` leaves it.
+        let wrapper = dir.join("wrapper.lock");
+        let held = open_lock(&wrapper).unwrap();
+        held.lock_exclusive().unwrap();
+        // SAFETY: fcntl on a descriptor this test owns.
+        unsafe {
+            let fd = held.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            assert!(flags >= 0);
+            assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC), 0);
+        }
+        let slot = wait_for_slot(&plan, &["cargo".to_string()]).unwrap();
+        let n = slot.n;
+        assert_eq!(ensure_cache_server(&plan, n), None);
+        let server: u32 = std::fs::read_to_string(&pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        drop(slot);
+        drop(held);
+
+        let free = |p: &Path| open_lock(p).unwrap().try_lock_exclusive().is_ok();
+        let wrapper_free = free(&wrapper);
+        let slot_free = free(&slot_lock(&plan.machine, n));
+        let _ = std::process::Command::new("kill")
+            .arg(server.to_string())
+            .status();
+        assert!(wrapper_free, "the server kept the wrapper's lock");
+        assert!(slot_free, "the server kept the build slot");
     }
 
     /// FTR-062 R-4: a stub `sccache` logs each call. With no server, the first cargo build starts

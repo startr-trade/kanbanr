@@ -8,6 +8,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- `kanbanr build`: build slots with a priority queue that serves critical-path tasks first, a
+  per-project sccache server whose base directories make the vendored C build shareable across
+  worktrees, an opt-in mold linker, a content-keyed cache of the built monitor, checks chosen by
+  what a change touches, a merge queue that integrates one checked batch at a time, and a bench that
+  keeps before-and-after timings (FTR-062).
 - A practice profile asks the stack and engineering questions once, at setup or at the first
   design that needs each; the answers form the project's engineering baseline, accepted by the
   person on the Baseline page, named by every design that touches an entry, and kept in step with

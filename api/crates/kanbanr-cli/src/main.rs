@@ -799,6 +799,15 @@ enum BuildCmd {
     /// merged onto the last in the queue's own worktree, so parallel work does not break the line.
     #[command(subcommand)]
     Queue(QueueCmd),
+    /// Time builds before (plain cargo) and after (slots, build environment, the project's cache
+    /// server), each in a fresh worktree at HEAD, and keep every row in the build log: cold (check
+    /// the core crate), warm (touch its lib.rs, check again), task (one module's tests), slots
+    /// (three task checks at once under 2 slots × 5 jobs and 3 × 3). A heavy job: run it alone.
+    Bench {
+        /// cold | warm | task | slots; repeatable. Default: all. warm and task bring cold.
+        #[arg(long, value_parser = ["cold", "warm", "task", "slots"])]
+        scenario: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2853,6 +2862,12 @@ fn command_access(cmd: &Command) -> Access {
             | ScopeCmd::Revoke { .. }
             | ScopeCmd::Renew { .. } => Core,
         },
+        // A queue run moves a line or main (update-ref, fast-forward, `move`): no agent scope's to
+        // do (FTR-062 T7, Q1). Adding to, listing and taking from the queue touch only its file.
+        Command::Build(BuildCmd::Queue(QueueCmd::Run { .. })) => Outside(
+            "`kanbanr build queue run` moves the queue's targets (a line or main) outside the \
+             board's write path",
+        ),
         // Builds keep their state on the machine and in the git directory, never on the board,
         // and agents are meant to run them (FTR-062).
         Command::Build(_) => Read,
@@ -8999,6 +9014,40 @@ fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
                 Ok(())
             }
         },
+        BuildCmd::Bench { scenario } => {
+            let rows = buildrun::bench(&store, &p, &cwd, scenario)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(());
+            }
+            for r in &rows {
+                let cache = match (r.cache_hits, r.cache_misses) {
+                    (Some(h), Some(m)) => format!("  cache {h} hits, {m} misses"),
+                    _ => String::new(),
+                };
+                println!(
+                    "{:<14} waited {:>8}  ran {:>8}  exit {}{cache}  {}",
+                    r.note.split(';').next().unwrap_or(""),
+                    ms(r.queued_ms),
+                    ms(r.run_ms),
+                    r.exit,
+                    r.worktree
+                );
+            }
+            if let Some((wide, narrow, switch)) = buildrun::slots_rule(&rows) {
+                println!(
+                    "slots: median wall time {} under 2 × 5, {} under 3 × 3: {}",
+                    ms(wide),
+                    ms(narrow),
+                    if switch {
+                        "3 × 3 is at least 10 % faster, so jobs_per_slot 3 becomes the default"
+                    } else {
+                        "3 × 3 is not 10 % faster, so jobs_per_slot stays 5"
+                    }
+                );
+            }
+            Ok(())
+        }
     }
 }
 

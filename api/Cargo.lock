@@ -1199,6 +1199,7 @@ dependencies = [
  "git2",
  "kanbanr-core",
  "kanbanr-server",
+ "libc",
  "regex",
  "serde",
  "serde_json",

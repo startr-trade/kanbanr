@@ -276,6 +276,52 @@ write carries its agent and a trailer, so an unattributed change stands out in t
 A board that holds scopes is governed wherever it is, so setting `TMPDIR` does not make it look
 like a test board; only a board in the temporary directory that holds no scopes is exempt.
 
+## Running several agents
+
+When Claude runs several build agents at once, each in its own worktree, their builds share one
+machine. kanbanr co-ordinates them (FTR-062), so you can ask for more agents without the machine
+grinding to a halt or every worktree compiling everything from scratch. Nothing of this goes on
+the board: the state is on the machine and in the repository's git directory.
+
+**Build slots.** Agents run their cargo and npm commands through `kanbanr build run`. A command
+waits for one of the project's build slots, then runs with that slot's share of the CPUs. By
+default kanbanr keeps 2 vCPUs free and gives each slot 5 jobs, so a 12-vCPU machine runs two
+builds at once. When builds wait, a task on the critical path goes first, then the others in the
+order they asked. On Linux a build also waits while the machine's load or free memory says it is
+busy (another project's builds count too); on macOS and Windows those two waits are skipped.
+Ask Claude "how are the builds doing?" and it reads `kanbanr build status` (who holds each slot,
+who waits) and `kanbanr build stats` (how long builds waited and ran).
+
+**Caches.** Each worktree builds into its own `api/target`, so removing a worktree removes its
+build. What they share is the project's own compiler cache: kanbanr starts one sccache server per
+project, with the main checkout and every worktree as its base directories, so the vendored C
+libraries are compiled once and served to every new worktree. The server is restarted for a new
+worktree only when no build is running. The built monitor is kept on the machine under a key of
+its sources, so a worktree whose web sources are unchanged gets the bundle without running
+`npm run build` again. The mold linker is used only when you switch it on.
+
+**Only the checks a change needs.** Before marking a task done, an agent runs `kanbanr build
+check`: formatting and lints of the crates it changed, a compile of the crates that depend on
+them, the tests of the modules it touched, and the web or docs checks when those changed. A change
+to the lockfile, the toolchain or a build script runs the full suite. The full suite also runs
+when branches are merged into the line, and `make ci` stays the release gate, once per release.
+
+**The merge queue.** Instead of merging branches by hand, Claude queues each finished one. The
+queue merges a batch of up to four branches for the same target onto its current tip, in its own
+worktree, checks the result, and moves the target only when the check is green and nobody moved it
+meanwhile. A red batch is split and each branch checked alone; a branch that conflicts or fails is
+refused with the reason, and the line is left as it was. The queue never pushes. Only the
+coordinator runs the queue: an agent's scope lets it add its branch, never run it.
+
+**Measured.** `kanbanr build bench` times a cold build, a warm one and a typical task's check,
+before and after these measures, each in a fresh worktree, and keeps every row in the build log.
+It is a heavy job; Claude runs it alone, with nothing else building.
+
+A build is not stopped when kanbanr alone is killed (Ctrl-C reaches both); it keeps running,
+outside the slots, until it ends. Settings are per project:
+ask Claude to change the number of slots, the jobs per slot, the memory reserve or the linker,
+and it runs `kanbanr config build`.
+
 ## Why it asks what it asks
 
 Claude asks the board, `kanbanr check <CODE> --json`, what each possible next stage still lacks.
