@@ -162,6 +162,16 @@ moves are delegated: when an item has moved back to an earlier stage, Claude ask
 deciding or changing anything for it, even if a delegation would cover it. You grant them on the
 Review page after setup, or don't.
 
+**In the conversation.** In **conversation** mode you take approvals, ratifications and sign-offs
+in Claude's question dialog instead of on the Review page, which stays read-only for them. Claude
+asks with the board's own question, which ends in a bracketed tag: the exact command your answer
+records. Choose **Approve** (or **Ratify**, or **Sign off**) and Claude Code's hook makes a pass
+that lets Claude record that one verdict, once, within 15 minutes; choose **Not yet** and nothing
+is recorded. kanbanr keeps the question and your answer with the verdict, and `kanbanr feature
+show` prints them. Claude cannot make a pass or change the mode; you switch it under **Decisions
+here**. Run `kanbanr hooks install` once so the hook is registered; `kanbanr hooks status` warns
+if another hook could answer questions for you.
+
 **Auto mode.** If Claude Code runs in auto mode, its safety check can stop a delegated command such
 as `kanbanr signoff … --under DLG-001` before kanbanr sees it, because the check cannot know you
 granted the delegation. When you grant a delegation in delegated mode, kanbanr offers the one

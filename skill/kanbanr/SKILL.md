@@ -469,7 +469,8 @@ for it; the release stage does. Say so when the person approves. Never override 
 the user's and is taken on the monitor: approve, ratify, sign off, withdraw, accept or reject a
 decision (Review page), promote or cut a release and confirm each stage after the tag (Releases
 page). **You never record a verdict, and never ask for one in a plan or a question.** kanbanr's
-guard refuses the commands if you try. **Never hand the user a kanbanr command that writes as the
+guard refuses the commands if you try. (The one exception is a project in `conversation` mode,
+below: there the person answers the board's own question, and that answer is the verdict.) **Never hand the user a kanbanr command that writes as the
 way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `adr accept`,
 `test … --manual` or `release promote`. Name the page and the button. If they ask for the terminal
 form, the page names it. Your part is one message saying what is waiting and where:
@@ -490,6 +491,19 @@ forward moves. You never change the mode, grant a delegation or review a decisio
 refuses it.
 You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
 grants it on the Review page.
+
+**In `conversation` mode** (FTR-035) the person takes the verdict in the conversation, not on the
+monitor, and the one exception to "never ask for one" applies, in this mode only. Ask with the
+board's own question: `kanbanr decisions question <approve|ratify|signoff> <CODE> [<NAME>] --json`
+prints it, and you pass it to AskUserQuestion verbatim, tag included (the tag is the command the
+answer stands in for). Never reword it, never make up a question of your own, and never ask it in
+any other mode. When the person chooses the approving option, Claude Code's hook makes a one-time
+pass, matched to the project, item, verdict and revision, valid for 15 minutes, and tells you the
+command: run exactly that, `kanbanr approve|ratify|signoff … --rev <REV> --pass P-n`. The verdict
+is recorded as the person's, with their question and answer kept on the record. If they answer
+`Not yet` or anything else, nothing is recorded: ask what to change. You cannot make a pass
+(`kanbanr decisions heard` is the hook's), you never change the mode, and kanbanr refuses a verdict
+from you without a matching pass.
 
 **Auto mode** (DEF-060). Claude Code's auto-mode safety check can stop a delegated command
 (`kanbanr signoff … --under DLG-n`) before kanbanr sees it. When a delegation is granted and the
@@ -1832,8 +1846,11 @@ kanbanr decisions show                            # the mode, delegations, deleg
 kanbanr decisions propose --verdict signoff:<name>|approve|ratify [--step S] [--item CODE] [--kind K] [--milestone MS] [--all] [--until YYYY-MM-DD] [--note …]   # yours: inert until the user grants it
 kanbanr decisions revoke DLG-001 --reason "…"     # yours or the user's
 kanbanr decisions defaults [--process <name> --dry-run]   # yours: propose the process's default delegations
-kanbanr decisions mode monitor|delegated | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when Claude runs it
+kanbanr decisions mode monitor|delegated|conversation | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when Claude runs it
 kanbanr approve|ratify|signoff … --under DLG-001  # yours, in delegated mode, only for what a delegation in force covers
+kanbanr decisions question <approve|ratify|signoff> <CODE> [<NAME>] [--json]   # conversation mode: the board's question to ask the person verbatim
+kanbanr approve|ratify|signoff … --pass P-n       # yours, in conversation mode, with the pass the hook made from the person's answer
+kanbanr decisions heard                           # the hook's; never run it
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default

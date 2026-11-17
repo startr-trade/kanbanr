@@ -908,8 +908,11 @@ decisions are taken (FTR-028). Delegations Claude proposed and decisions Claude 
 are rows in the **Delegations** and **Delegated decisions** groups, each row opening to the panel
 below:
 
-- **The mode**, `monitor` or `delegated`, with **Change**. After a change the panel lists what is
+- **The mode**, `monitor`, `delegated` or `conversation`, with **Change**. After a change the panel lists what is
   waiting and where it is taken now: here, or by Claude under a delegation that covers it.
+  In `conversation` mode the item verdicts (approve, ratify, sign-off) are taken in Claude's
+  question dialog, so this page shows them as waiting there and hides their buttons; you record
+  the rest here as always (FTR-035).
 - **Delegations.** A proposal from Claude is shown like a prepared record, with what it covers and
   until when: **Grant** grants it exactly as shown (if it changed since the page loaded, the grant
   is refused), **Reject** discards it. A granted one shows its end and **Revoke**, which needs a
