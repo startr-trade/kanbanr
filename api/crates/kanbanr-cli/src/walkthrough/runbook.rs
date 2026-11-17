@@ -1698,8 +1698,8 @@ steps:
 
     /// The two guide runbooks that ship as fixtures (the board copies are made from them): each
     /// parses, lints clean, and places every check it defines — SPK-004's MT-1 to MT-5 and DEF-056's
-    /// MT-9 for TOGAF, MT-1 to MT-8 for agile; a marker on several steps is one check — and names
-    /// no person, account or server.
+    /// MT-9 for TOGAF, MT-1 to MT-8 for agile, the v0.6.0 checks, counted without FTR-054's MT-10
+    /// (DEF-087); a marker on several steps is one check — and names no person, account or server.
     #[test]
     fn the_guide_runbooks_parse_and_lint_clean_with_their_eight_checks() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1713,7 +1713,11 @@ steps:
             let rb = Runbook::parse(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
             assert_eq!(rb.process, process);
             assert_eq!(rb.model, "sonnet");
-            assert_eq!(rb.checks.len(), markers, "{file}");
+            assert_eq!(
+                rb.checks.keys().filter(|k| *k != "MT-10").count(),
+                markers,
+                "{file}"
+            );
             let mut used = rb.check_markers();
             used.sort();
             used.dedup();
@@ -2161,5 +2165,123 @@ steps:
         assert!(has("b", "names no `expect.offer`"), "{all:?}");
         assert!(has("c", "names its subject"), "{all:?}");
         assert!(has("d", "not 'board'"), "{all:?}");
+    }
+
+    fn guide_runbook(file: &str) -> Runbook {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/walkthroughs")
+            .join(file);
+        Runbook::parse(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// DEF-087 R-3: the agile runbook's MT-6 reads the style question over steps 2.1 to its own,
+    /// which comes before the design-review sign-off.
+    #[test]
+    fn the_agile_runbook_measures_the_style_question_over_its_span() {
+        let rb = guide_runbook("agile.md");
+        let at = rb
+            .steps
+            .iter()
+            .position(|s| s.check.as_deref() == Some("MT-6"))
+            .expect("a step checks MT-6");
+        assert_eq!(
+            rb.steps
+                .iter()
+                .filter(|s| s.check.as_deref() == Some("MT-6"))
+                .count(),
+            1
+        );
+        let talk = rb.steps[at]
+            .expect
+            .as_ref()
+            .and_then(|e| e.talk.as_ref())
+            .expect("MT-6's step claims a question");
+        assert!(talk.asked.is_some());
+        assert_eq!(talk.since.as_deref(), Some("2.1"));
+        let review = rb
+            .steps
+            .iter()
+            .position(|s| {
+                matches!(&s.decide, Some(Decision::Signoff { item, name })
+                    if *item == ItemSel::Named("basket".into()) && name == "design-review")
+            })
+            .expect("the basket's design-review sign-off");
+        assert!(
+            at < review,
+            "MT-6 at {} is after design-review",
+            rb.steps[at].id
+        );
+        assert_eq!(rb.steps[at].id, "3.3");
+    }
+
+    /// DEF-087 R-3: the agile runbook's MT-7 reads "no question about push order or the Record
+    /// result form" over the release, steps 6.1 to 6.15.
+    #[test]
+    fn the_agile_runbook_measures_mt7_over_its_release_span() {
+        let rb = guide_runbook("agile.md");
+        let step = rb.step("6.15").expect("step 6.15");
+        assert_eq!(step.check.as_deref(), Some("MT-7"));
+        let talk = step
+            .expect
+            .as_ref()
+            .and_then(|e| e.talk.as_ref())
+            .expect("6.15 claims no question");
+        assert!(talk.not_asked.is_some());
+        assert_eq!(talk.since.as_deref(), Some("6.1"));
+        // No other MT-7 step reads questions on its own.
+        for s in rb
+            .steps
+            .iter()
+            .filter(|s| s.check.as_deref() == Some("MT-7"))
+        {
+            if let Some(t) = s.expect.as_ref().and_then(|e| e.talk.as_ref()) {
+                assert_eq!(t.since.as_deref(), Some("6.1"), "step {}", s.id);
+            }
+        }
+    }
+
+    /// DEF-087 R-3 (FTR-054's runbook task): each guide runbook defines MT-10 for FTR-054 R-1 with
+    /// its exact test name, on the step right after its cut, claiming the cut's stage.
+    #[test]
+    fn both_guide_runbooks_check_that_they_reach_their_cut() {
+        for (file, cut, stage) in [
+            ("togaf.md", "6.20", "tag"),
+            ("agile.md", "6.16", "production"),
+        ] {
+            let rb = guide_runbook(file);
+            assert_eq!(
+                rb.checks.get("MT-10"),
+                Some(&CheckRef {
+                    item: "FTR-054".into(),
+                    requirement: "R-1".into(),
+                    test: "walkthrough: the togaf and agile runbooks complete headlessly with zero stops and prepare the eight v0.6.0 checks".into(),
+                }),
+                "{file}"
+            );
+            let at = rb.steps.iter().position(|s| s.id == cut).unwrap();
+            let cutting = &rb.steps[at];
+            assert!(
+                matches!(&cutting.decide, Some(Decision::Promote { to: Some(t), .. }) if t == stage),
+                "{file}: {cut} cuts the release"
+            );
+            let next = &rb.steps[at + 1];
+            assert_eq!(next.check.as_deref(), Some("MT-10"), "{file}");
+            assert_eq!(
+                next.expect.as_ref().and_then(|e| e.board.clone()),
+                Some(BoardClaim::Release {
+                    version: "v0.1.0".into(),
+                    stage: stage.into()
+                }),
+                "{file}"
+            );
+            assert_eq!(
+                rb.steps
+                    .iter()
+                    .filter(|s| s.check.as_deref() == Some("MT-10"))
+                    .count(),
+                1,
+                "{file}"
+            );
+        }
     }
 }

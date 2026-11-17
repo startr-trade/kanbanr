@@ -24,6 +24,7 @@ checks:
   MT-4: {item: DEF-040, requirement: R-2, test: "manual: on a walkthrough board, a manual test is recorded from the Review page with no terminal command"}
   MT-5: {item: DEF-045, requirement: R-1, test: "manual: in a walkthrough, a release fix reaches the line with no command run by the person"}
   MT-9: {item: DEF-056, requirement: R-1, test: "walkthrough: the first release proposes release-prepare and the pipeline"}
+  MT-10: {item: FTR-054, requirement: R-1, test: "walkthrough: the togaf and agile runbooks complete headlessly with zero stops and prepare the eight v0.6.0 checks"}
 answers:
   - {match: "confirm (this|the) (draft|charter|plan)|what would you change", pick: "I confirm it as drafted."}
   - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "Nothing yet: finish the setup, and I'll tell you what to build in a later step."}
@@ -62,7 +63,8 @@ steps:
   - id: "2.1"
     say: "Start the first sprint. A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Put that in the sprint, for the first release."
     expect: {board: {sprint: active}}
-    names: {basket: {new_item: {title_matches: "\\bbasket\\b"}}}
+    # The shopper's item, wherever Claude filed it: setup may already have made it (agile run of 16 Nov bound a chore titled "…for the basket program").
+    names: {basket: {title_matches: "\\bshoppers?\\b|\\bsaved basket\\b"}}
     answers:
     - {match: "what would you like to (build|scope)|what (do you want|should (i|we)) (to )?(build|built|scope)|(build|scope) first|\\bfirst item\\b", pick: "A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there."}
   - id: "2.2"
@@ -180,7 +182,7 @@ steps:
     say: "Move every item in v0.1.0 on to Migration, if it has not moved already."
   - id: "6.4"
     decide: {promote: {release: v0.1.0, to: candidate}}
-    offer: {page: releases, button: "Promote v0.1.0 to candidate"}
+    offer: {page: releases, button: "Promote to candidate"}
     expect: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.5"
     say: "Write the release notes and the changelog for readers."
@@ -200,6 +202,15 @@ steps:
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.9"
     say: "Move the defect on as far as it goes. Tell me what waits for me on the Review page."
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
+  # Under TOGAF a defect passes System Design too: its design-review comes before the build
+  # (the release run of 16 Nov waited at 6.10 for it).
+  - id: "6.9a"
+    decide: {signoff: {item: {named: defect}, name: design-review}}
+    offer: {page: review, button: "Sign off design-review", subject: {item: {named: defect}}}
+    only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
+  - id: "6.9b"
+    say: "Build the defect yourself and take it as far as it goes. Tell me what waits for me on the Review page."
     only_if: {board: {release: {version: v0.1.0, stage: candidate}}}
   - id: "6.10"
     decide: {signoff: {item: {named: defect}, name: docs-folded}}
@@ -234,7 +245,7 @@ steps:
     say: "Prepare the release again if the release files changed, then tell me whether Promote to main is offered."
   - id: "6.17"
     decide: {promote: {release: v0.1.0, to: main}}
-    offer: {page: releases, button: "Promote v0.1.0 to main"}
+    offer: {page: releases, button: "Promote to main"}
     expect: {board: {release: {version: v0.1.0, stage: main}}}
   - id: "6.18"
     push: {repo: code, refspec: main}
@@ -248,6 +259,10 @@ steps:
     offer: {page: releases, button: "Cut v0.1.0"}
     expect: {board: {release: {version: v0.1.0, stage: tag}}}
     check: MT-1
+  # MT-10 (FTR-054 R-1): the run reached its cut; a run that stopped never gets here.
+  - id: "6.20a"
+    expect: {board: {release: {version: v0.1.0, stage: tag}}}
+    check: MT-10
   - id: "6.21"
     push: {repo: code, refspec: v0.1.0}
     expect: {truth: {tag: {release: v0.1.0}}}
