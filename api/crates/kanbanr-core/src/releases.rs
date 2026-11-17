@@ -9380,11 +9380,26 @@ pub(crate) mod tests {
             refs.dedup();
             refs
         };
+        let held = |store: &Store| -> Vec<String> {
+            let mut refs: Vec<String> = crate::manual::waiting(store, "shop")
+                .unwrap()
+                .into_iter()
+                .filter(|w| w.holds == "Promote v1 to main")
+                .map(|w| format!("{}/{}", w.code, w.requirement))
+                .collect();
+            refs.sort();
+            refs
+        };
         let plan = plan_to(&store, &repo, "main");
         assert_eq!(plan.button, "Promote v1 to main");
         let c = condition(&plan, LaterTestsGreen).expect("main waits for it");
         assert_eq!(c.refs, [format!("{code}/R-2")]);
         assert_eq!(due_refs(&store), c.refs);
+        assert_eq!(
+            held(&store),
+            c.refs,
+            "the manual list marks what the plan waits for"
+        );
         let stages: Vec<String> = ["candidate", "main", "production"].map(String::from).into();
         assert_eq!(super::button_text(&stages, 2, 2, "v1", 1), plan.button);
         store
@@ -9400,6 +9415,7 @@ pub(crate) mod tests {
         let plan = plan_to(&store, &repo, "main");
         assert!(condition(&plan, LaterTestsGreen).is_none());
         assert!(due_refs(&store).is_empty());
+        assert!(held(&store).is_empty());
         clean(&dir, &repo);
     }
 
