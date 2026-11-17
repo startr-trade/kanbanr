@@ -67,7 +67,7 @@ export default function DocsPage() {
         <div className="tiles">
           {folder.folders.map((sub) => (
             <Link className="tile folder-tile" key={sub.path} to={`${base}/folder/${sub.path}`}>
-              <span className="folder-icon">📁</span>
+              <span className="folder-icon" aria-hidden="true">📁</span>
               <span className="tile-title">{sub.name}</span>
               {sub.description && <p className="tile-desc">{sub.description}</p>}
               <span className="muted small">
@@ -83,7 +83,7 @@ export default function DocsPage() {
         <ul className="doc-files">
           {folder.docs.map((d) => (
             <li key={d.path}>
-              <Link to={`${base}/file/${d.path}`}>📄 {d.title}</Link>
+              <Link to={`${base}/file/${d.path}`}><span aria-hidden="true">📄</span> {d.title}</Link>
             </li>
           ))}
         </ul>

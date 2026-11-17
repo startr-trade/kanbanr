@@ -41,6 +41,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- The monitor meets WCAG 2.1 AA contrast in both themes, draws no text under 13 px, always shows
+  the keyboard focus ring, has one h1 per page and headings on cards and columns, and writes 'Live'
+  or 'Reconnecting…' beside its live dot (DEF-082).
 - A walkthrough's talk expectation can cover a span of steps (`since:`), so a question Claude asks
   while scoping counts for the check that expects it (DEF-087); both guide runbooks now check that
   they reach their cut (MT-10, for FTR-054).

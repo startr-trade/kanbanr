@@ -151,6 +151,9 @@ summary:focus-visible,
 .spacer { flex: 1; }
 .build { font-size: var(--fs-1); color: var(--muted); white-space: nowrap; }
 
+/* The live dot writes its state beside it (DEF-082): "Live", or "Reconnecting…" with a grey dot. */
+.livedot-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-1); color: var(--text-muted); }
+.livedot-status.reconnecting .livedot { background: var(--text-subtle); box-shadow: none; animation: none; }
 .livedot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--good); display: inline-block;
@@ -240,7 +243,10 @@ summary:focus-visible,
 }
 .card:hover { border-color: var(--accent); text-decoration: none; }
 .card-code { font-size: var(--fs-1); color: var(--muted); font-family: ui-monospace, monospace; }
-.card-title { font-weight: 600; margin: 2px 0 6px; }
+/* A card's title is its h3, and a column's header its h2 (DEF-082); both keep the look they had
+   as plain text, so the size and margins are set here, not by the heading's defaults. */
+.card-title { font-size: var(--fs-2); font-weight: 600; margin: 2px 0 6px; }
+.col-title { font-size: var(--fs-2); font-weight: inherit; margin: 0; }
 .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .chip {

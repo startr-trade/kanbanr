@@ -113,6 +113,7 @@ export default function BoardPage() {
         </label>
         <input
           className="board-search"
+          aria-label="Filter items"
           placeholder="Filter… (text · kind · priority · label)"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -131,9 +132,11 @@ export default function BoardPage() {
           const shown = pageSize === "all" ? all : all.slice((page - 1) * size, page * size);
           return (
             <section className="column" key={state}>
-              <Link className="column-head" to={`/p/${encodeURIComponent(project)}/state/${encodeURIComponent(state)}`}>
-                {state} <span className="count">{total}</span>
-              </Link>
+              <h2 className="col-title">
+                <Link className="column-head" to={`/p/${encodeURIComponent(project)}/state/${encodeURIComponent(state)}`}>
+                  {state} <span className="count">{total}</span>
+                </Link>
+              </h2>
               <div className="column-body">
                 {shown.map((f) => (
                   <FeatureCard
