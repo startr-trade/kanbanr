@@ -132,6 +132,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Docs are read at the position you pick": LOCAL,
             "Several boards are grouped and cross-board dependencies are external": LOCAL,
             "The item page shows why an item changes no docs": LOCAL,
+            "An item's tests show their last duration": LOCAL,
             "Planning decisions from the pages": LOCAL,
             "The Plan page": LOCAL,
             "The Releases page has tabs and accordions": LOCAL,

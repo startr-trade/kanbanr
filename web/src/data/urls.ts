@@ -108,6 +108,8 @@ export const urls = {
   plan: (p: string, scope: PlanScope) => apiUrl(`${project(p)}/plan?scope=${enc(scope)}`),
   /** One Plan row's items, read when the row is opened (FTR-043); the key `sprint:SP-004` is one segment. */
   planRow: (p: string, key: string) => apiUrl(`${project(p)}/plan/rows/${enc(key)}`),
+  /** The last kept duration of each test, of one item when `code` is given (FTR-058). */
+  timings: (p: string, code?: string) => apiUrl(`${project(p)}/timings${query([["code", code]])}`),
   /** The flow plan in agent-hours: the running sprint's, else the open work's, unless `scope` names one (FTR-061). */
   planFlow: (p: string, scope?: string) => apiUrl(`${project(p)}/plan/flow${query([["scope", scope]])}`),
   /** The portfolio's timeline, one row per project (FTR-043); a root read. */
@@ -174,4 +176,6 @@ export const TAGS = {
   plan: ["sprints", "releases", "milestones", "items"],
   /** The Flow panel (FTR-061): the items' tasks, the sprints and releases it scopes by, and the task log. */
   planFlow: ["items", "sprints", "releases", "tasklog"],
+  /** The kept test durations: the watcher maps `timings/*` to this tag (FTR-058). */
+  timings: ["timings"],
 } as const;

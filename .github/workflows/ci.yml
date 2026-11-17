@@ -443,6 +443,10 @@ jobs:
       # The item page says why an item changes no doc, as a plain line under Affects docs (DEF-075).
       - name: The item page shows why an item changes no docs
         run: npm run check:feature-no-docs
+      # The item page shows each test's last kept duration as muted `· 4 ms`, none for an untimed one
+      # (FTR-058).
+      - name: An item's tests show their last duration
+        run: npm run check:test-durations
       # A planning action asks first and records one decision as the person's; a declined one offers
       # the nearest valid move on one press (FTR-049).
       - name: Planning decisions from the pages
