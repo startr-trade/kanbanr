@@ -144,7 +144,9 @@
 .ui-row-body { padding: var(--sp-2) var(--sp-2) var(--sp-4); white-space: normal; overflow-wrap: anywhere; }
 
 /* Tables (R-3): tools above, a caption, button headers carrying the sort. */
-.ui-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; }
+/* The frame: the table scrolls inside it, and `position: relative` keeps absolutely placed
+   descendants (the visually-hidden text) from widening the page. */
+.ui-table-wrap { overflow-x: auto; max-width: 100%; min-width: 0; position: relative; }
 .ui-table-tools {
   display: flex;
   flex-wrap: wrap;
@@ -174,6 +176,15 @@
 }
 .ui-table th { color: var(--text-muted); font-size: var(--fs-1); font-weight: 600; white-space: nowrap; }
 .ui-table .ui-end { text-align: right; }
+/* Codes and status stay on one line; a title takes two lines at most, then clamps (UX-18). */
+.ui-table td[data-col="code"], .ui-table td[data-col="status"] { white-space: nowrap; }
+.ui-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
 .ui-sort {
   background: transparent;
   border: 0;

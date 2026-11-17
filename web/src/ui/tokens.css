@@ -90,6 +90,8 @@
   --page-pad: 24px;
   --prose-max: 80ch;
   --row-h: 36px;
+  /* Review's reason column: none until a group has reasons (review.css sets 16rem there). */
+  --review-reason-w: 0;
 
   /* Severity (R-10): a pill's text is its tone's fg; its background is that fg at 12% over the
      surface. */

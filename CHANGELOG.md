@@ -109,12 +109,20 @@ All notable changes to kanbanr are documented here. The format follows
   the revision they were last green at and a likely rename), greens at a revision that never held
   the test, tests never run, open manual checks per item and per release, and finished items with
   no definition; `kanbanr doctor` and the monitor's Workflow page carry the counts (MNT-001).
+- Review: nothing is preselected; a prepared batch has its own **Select these N** button; Select all shows part-selection and the count (FTR-038).
 - The Releases page has Current, Planned and Released tabs, newest first; each release is an
   accordion whose header carries its chips, stage stepper and next step, and whose body is a
   full-width, sortable table of its items, loaded only when opened (FTR-041).
 
 ### Fixed
 
+- No page scrolls sideways at 390 px: the top bar keeps one row, wide tables scroll inside their own frame, codes and status stay on one line and a title clamps at two lines with the full title on hover (FTR-047).
+- The Overview names each milestone with its code and progress, and item codes no longer wrap (FTR-048).
+- Review rows keep fixed columns and nothing is clipped (FTR-038).
+- The Plan page's Flow panel draws its markdown and folds its long ID lists (FTR-061).
+- A release's reason is shown once, and its filter has one style (FTR-041).
+- The Board's Completed lane counts items finished on a config with no terminal states (FTR-078).
+- The hosted-site module takes an optional image_pull_secret, the name of an existing Secret, so a site can pull its images from a private registry (FTR-030).
 - The Review page's Manual checks group says what it is for and no longer mixes the release being cut with checks nobody will judge: a line on top ("A manual check is one only you can judge. An item ships when its check is recorded passed."), the release being shipped open first, then collapsed sections "Shipped without a judgement", "Later releases" and "Not planned". A check left on a release that has already shipped can be retired, several at once with one reason: a retirement is your own verdict on the Review page, is kept with its reason, never counts as passed, and takes the check out of the group. Claude can only prepare one (`kanbanr prepare test … --retired --note …`) for you to confirm (DEF-113).
 - The Review page's Approve group draws a "tests only" pill on a row whose approval lapsed or grew through an edit to its tests alone, and offers "Select tests only (N)" to tick those rows together (DEF-111).
 - A Review row names its state once: when its "approval lapsed", "added since approval" or "spec changed since sign-off" text is also one of its pills, the row draws the pill and leaves the text out; the served row and the What column are unchanged (DEF-112).
