@@ -9919,6 +9919,99 @@ fn release_notes_and_the_changelog_section_are_updated_together() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-088 R-2: `release notes <V> --changelog C` on a changelog that holds the version's section
+/// three times leaves one, and says it removed the two later copies.
+#[test]
+fn release_notes_changelog_says_it_removed_duplicate_sections() {
+    let (base, work) = release_scratch("release-notes-copies");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(board.starts_with(std::fs::canonicalize(&base).unwrap()));
+    std::fs::write(
+        work.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+    )
+    .unwrap();
+    ok(git_in(&base, &work, &["add", "CHANGELOG.md"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] changelog"],
+    ));
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--changelog",
+            "CHANGELOG.md",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    // The changelog as the walkthrough left it: the section three times on release/v1.0.0.
+    let copy = "## [1.0.0] - 2026-11-16\n\n### Added\n- x\n\n";
+    ok(git_in(&base, &work, &["checkout", "-q", "release/v1.0.0"]));
+    std::fs::write(
+        work.join("CHANGELOG.md"),
+        format!(
+            "# Changelog\n\n## [Unreleased]\n\n{copy}{copy}{copy}## [0.0.1] - 2026-01-01\n- old\n"
+        ),
+    )
+    .unwrap();
+    ok(git_in(&base, &work, &["add", "CHANGELOG.md"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] three copies"],
+    ));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let section = base.join("section.md");
+    std::fs::write(&section, "## [1.0.0] - 2026-11-16\n\n### Fixed\n- y\n").unwrap();
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    ));
+    assert!(
+        said.contains("changelog: removed 2 later copies of ## [1.0.0] from CHANGELOG.md"),
+        "{said}"
+    );
+    let changelog = ok(git_in(
+        &base,
+        &work,
+        &["show", "release/v1.0.0:CHANGELOG.md"],
+    ));
+    assert_eq!(
+        changelog
+            .lines()
+            .filter(|l| l.starts_with("## [1.0.0]"))
+            .count(),
+        1,
+        "{changelog}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-216 R-3: `release notes <V>` shows the notes on release/<V> and where they are, `--json`
 /// carries them, and `--file` (or `--edit`) commits new text onto the branch with nothing checked
 /// out.
