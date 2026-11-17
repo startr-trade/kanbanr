@@ -109,7 +109,31 @@
         }
         root.appendChild(div);
       }
-      if (!entries.length) root.textContent = "Nothing waits for a decision.";
+      if (!entries.length) {
+        root.textContent = "Nothing waits for a decision.";
+        return;
+      }
+      // The group's selection (FTR-063 T7, for FTR-038's group view): a "Select all" checkbox in
+      // its label, as GroupView renders it, and the group's button, which reads "Approve N" once
+      // N items are ticked. It follows the cards, so a press on a card's Approve is unchanged.
+      const waiting = entries.filter((e) => ["missing", "lapsed", "added"].includes(e.approval));
+      const group = document.createElement("div");
+      group.className = "review-group-tools";
+      const label = document.createElement("label");
+      const all = document.createElement("input");
+      all.type = "checkbox";
+      label.appendChild(all);
+      label.appendChild(document.createTextNode(" Select all"));
+      group.appendChild(label);
+      const act = document.createElement("button");
+      act.hidden = true;
+      all.onchange = () => {
+        const n = all.checked ? waiting.length : 0;
+        act.textContent = "Approve " + n;
+        act.hidden = n === 0;
+      };
+      group.appendChild(act);
+      root.appendChild(group);
     })();
   </script>
 </body>
