@@ -83,6 +83,7 @@ pub mod refs;
 pub mod releasegates;
 pub mod releaseprep;
 pub mod releases;
+pub mod repodocs;
 mod repoform;
 pub mod report;
 pub mod retro;
