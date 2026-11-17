@@ -3562,7 +3562,7 @@ fn ref_label(r: &kanbanr_core::refs::Ref) -> String {
         } => format!("{code}/{req}"),
         Ref::Item { code, .. } | Ref::Milestone { code } => code.clone(),
         Ref::Adr { id } | Ref::Goal { id } => id.clone(),
-        Ref::Doc { path } => path.clone(),
+        Ref::Doc { path } | Ref::RepoDoc { path } => path.clone(),
     }
 }
 

@@ -157,6 +157,23 @@ const DOC_PATH: Param = Param {
     kind: Kind::String,
     description: "The document's path under the project's docs, forward-slashed.",
 };
+const REPO_PATH: Param = Param {
+    name: "path",
+    location: In::Query,
+    required: true,
+    kind: Kind::String,
+    description: "The file's path in the code repository, forward-slashed, such as \
+                  docs/guide/intro.md.",
+};
+const AT_PICK: Param = Param {
+    name: "at",
+    location: In::Query,
+    required: false,
+    kind: Kind::String,
+    description: "The position to read at: main (the default), worktree, an item code, a sprint \
+                  code, a release version, a commit or a position text. One the repository \
+                  cannot resolve is a 400 saying why; a commit it lacks, or no repository, a 409.",
+};
 
 /// The public v1 routes, in the order the document lists them.
 pub fn public_routes() -> Vec<RouteDoc> {
@@ -735,6 +752,41 @@ pub fn public_routes() -> Vec<RouteDoc> {
                 },
             ],
             response: Response::Json(schema_of::<crate::views::ViewAnswer>),
+        },
+        // ---- docs at a position you pick (FTR-004) ----
+        RouteDoc {
+            path: "/api/projects/{project}/positions",
+            summary: "The positions the picker offers: main, the working tree, each sprint and \
+                      each release, with whether each resolves in the code repository and why not",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<Vec<crate::picks::PickView>>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/positions/resolve",
+            summary: "A pick resolved to a position: its commit, where a read takes its bytes \
+                      from, the banner label and the rule used",
+            params: &[PROJECT, AT_PICK],
+            response: Response::Json(schema_of::<crate::picks::Picked>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/repo-docs",
+            summary: "The markdown files under the code repository's docs/ at a pick, read with \
+                      nothing checked out",
+            params: &[PROJECT, AT_PICK],
+            response: Response::Json(schema_of::<crate::repodocs::RepoTree>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/repo-docs/content",
+            summary: "A repository doc at a pick: its text and blob, the position it was read at \
+                      and from where, or why it is missing there and whether main has it",
+            params: &[PROJECT, REPO_PATH, AT_PICK],
+            response: Response::Json(schema_of::<crate::repodocs::RepoDoc>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/repo-docs/raw",
+            summary: "A repository file's bytes at a pick, such as an image",
+            params: &[PROJECT, REPO_PATH, AT_PICK],
+            response: Response::Bytes,
         },
         RouteDoc {
             path: "/api/projects/{project}/docs/content",

@@ -229,6 +229,10 @@ async fn serve(
         .route("/projects/:project/docs", get(routes::list_docs))
         .route("/projects/:project/docs/content", get(routes::get_doc))
         .route("/projects/:project/docs/raw", get(routes::get_doc_raw))
+        .route(
+            "/projects/:project/repo-docs/raw",
+            get(routes::get_repo_doc_raw),
+        )
         .route("/projects/:project/activity", get(routes::project_activity))
         .route("/projects/:project/events", get(routes::project_events))
         .route("/projects/:project/drift/latest", get(routes::drift_latest))

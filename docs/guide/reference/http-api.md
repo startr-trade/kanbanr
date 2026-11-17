@@ -72,6 +72,11 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/docs` | — | JSON `DocFolder` | The project's documentation tree |
 | `GET /api/projects/{project}/position` | — | JSON `PositionAnswer` | The live position of the code repository the daemon was started in: its commit plus a hash of the uncommitted changes, and the changed paths |
 | `GET /api/projects/{project}/views/docs` | `root` (optional), `max-nodes` (optional), `at` (optional) | JSON `ViewAnswer` | The markdown docs under a folder, drawn at the live position or at `at`, with an ID that repeats while the position, the board and the question repeat; an ID only when the answer is exact |
+| `GET /api/projects/{project}/positions` | — | JSON `PickView[]` | The positions the picker offers: main, the working tree, each sprint and each release, with whether each resolves in the code repository and why not |
+| `GET /api/projects/{project}/positions/resolve` | `at` (optional) | JSON `Picked` | A pick resolved to a position: its commit, where a read takes its bytes from, the banner label and the rule used |
+| `GET /api/projects/{project}/repo-docs` | `at` (optional) | JSON `RepoTree` | The markdown files under the code repository's docs/ at a pick, read with nothing checked out |
+| `GET /api/projects/{project}/repo-docs/content` | `path`, `at` (optional) | JSON `RepoDoc` | A repository doc at a pick: its text and blob, the position it was read at and from where, or why it is missing there and whether main has it |
+| `GET /api/projects/{project}/repo-docs/raw` | `path`, `at` (optional) | the file's bytes | A repository file's bytes at a pick, such as an image |
 | `GET /api/projects/{project}/docs/content` | `path` | `text/markdown` | A document's text |
 | `GET /api/projects/{project}/docs/raw` | `path` | the file's bytes | A documentation file's bytes, such as an image |
 | `GET /api/projects/{project}/drift/latest` | `flags` (optional) | JSON `Latest` | The latest background drift result, with its revisions and age |

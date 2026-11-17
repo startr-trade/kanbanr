@@ -491,7 +491,8 @@ impl Snapshot {
                         }
                         keys.insert(Key::Doc(path));
                     }
-                    Ref::Milestone { .. } | Ref::Goal { .. } => {}
+                    // A repository doc is not a board artifact a coverage rule counts (FTR-004).
+                    Ref::Milestone { .. } | Ref::Goal { .. } | Ref::RepoDoc { .. } => {}
                 }
             }
             snap.sources.insert(source, keys);

@@ -161,6 +161,12 @@ pub fn run(store: &Store) -> Result<Report> {
 /// Scan a single project (cross-project dependency resolution still consults the whole store, so
 /// a dangling ref into another project is still detected).
 pub fn run_project(store: &Store, id: &str) -> Result<Report> {
+    run_project_in(store, id, None)
+}
+
+/// [`run_project`], with the project's code repository when the caller has one (FTR-004): the
+/// specs' repository doc links are then checked at each item's position.
+pub fn run_project_in(store: &Store, id: &str, repo: Option<&std::path::Path>) -> Result<Report> {
     let mut report = Report::default();
     let project = store.load(id)?;
     let mut existing: BTreeSet<String> = BTreeSet::new();
@@ -212,7 +218,90 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     scan_judgement(&project, &mut report);
+    if project.config.method.is_on(crate::method::Part::Links) {
+        scan_repository_links(store, &project, repo, &mut report);
+    }
     Ok(report)
+}
+
+/// Report a spec's link to a repository doc that is not in the code repository at the item's
+/// position (FTR-004, ADR-0014): the item's merge commit, else its branch, else main (an item with
+/// no branch yet is judged against main, and the message says so). Without a repository, one
+/// warning says how many links were not checked; nothing is said when no spec links one (L-4). A
+/// position or tree that cannot be read steps aside (ADR-0004).
+fn scan_repository_links(
+    store: &Store,
+    project: &Project,
+    repo: Option<&std::path::Path>,
+    report: &mut Report,
+) {
+    use crate::picks::{Pick, resolve};
+    let Ok(index) = crate::refs::BoardIndex::of(store, project) else {
+        return;
+    };
+    let mut links: Vec<(&str, Vec<(usize, String)>)> = Vec::new();
+    for f in &project.features {
+        let found: Vec<(usize, String)> = crate::refs::find(&f.specification, &index)
+            .into_iter()
+            .filter_map(|found| match found.reference {
+                crate::refs::Ref::RepoDoc { path } => Some((found.line, path)),
+                _ => None,
+            })
+            .collect();
+        if !found.is_empty() {
+            links.push((f.code.as_str(), found));
+        }
+    }
+    let n: usize = links.iter().map(|(_, l)| l.len()).sum();
+    if n == 0 {
+        return;
+    }
+    let Some(repo) = repo else {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message: format!(
+                "{n} repository doc links were not checked: run doctor from the project folder"
+            ),
+        });
+        return;
+    };
+    let mut trees: std::collections::BTreeMap<String, BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for (code, found) in links {
+        let at = match resolve(store, &project.id, repo, &Pick::Item(code.to_string())) {
+            Ok(at) => at,
+            Err(_) => match resolve(store, &project.id, repo, &Pick::Main) {
+                Ok(mut main) => {
+                    main.label = format!("{} (no branch yet)", main.label);
+                    main
+                }
+                Err(_) => continue,
+            },
+        };
+        let key = at.state.position.text();
+        if !trees.contains_key(&key) {
+            let Ok(files) = crate::position::tree_at(repo, &at.state, "docs/") else {
+                continue;
+            };
+            trees.insert(key.clone(), files.into_iter().map(|(p, _)| p).collect());
+        }
+        let files = &trees[&key];
+        for (line, path) in found {
+            if !files.contains(&path) {
+                report.issues.push(Issue {
+                    severity: Severity::Error,
+                    project: project.id.clone(),
+                    code: Some(code.to_string()),
+                    message: format!(
+                        "{code} spec:{line} links {path}, which is not in the code repository at {}",
+                        at.label
+                    ),
+                });
+            }
+        }
+    }
 }
 
 /// Report an item whose manual tests break the judgement rule (FTR-039): more than one, or one
@@ -1333,7 +1422,7 @@ fn describe(r: &crate::refs::Ref) -> String {
         } => format!("{code}/{req}"),
         Ref::Item { code, .. } | Ref::Milestone { code } => code.clone(),
         Ref::Adr { id } | Ref::Goal { id } => id.clone(),
-        Ref::Doc { path } => path.clone(),
+        Ref::Doc { path } | Ref::RepoDoc { path } => path.clone(),
     }
 }
 
@@ -2242,6 +2331,167 @@ mod tests {
             }));
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The repository doc link messages a report holds (FTR-004).
+    fn repo_link_messages(report: &Report) -> Vec<(Severity, String)> {
+        report
+            .issues
+            .iter()
+            .filter(|i| i.message.contains("in the code repository at"))
+            .map(|i| (i.severity, i.message.clone()))
+            .collect()
+    }
+
+    /// FTR-004 R-6: a spec's repository doc link is judged at the item's position: a doc on its
+    /// branch and not on main is no error; a doc absent from its branch is, naming the position;
+    /// an item with no branch is judged at main, and the message says so.
+    #[test]
+    fn a_repository_link_is_checked_at_the_items_position() {
+        use crate::coderepo::git;
+        use crate::coderepo::tests::{commit_file, scratch_repo};
+        let (store, dir) = fixture();
+        assert!(store.data_dir().starts_with(std::env::temp_dir()));
+        let repo = scratch_repo("doctor-repo-links");
+        assert!(repo.starts_with(std::env::temp_dir()));
+        std::fs::create_dir_all(repo.join("docs/guide")).unwrap();
+        commit_file(&repo, "docs/guide/main.md", "# on main\n", "main doc");
+        let a = store
+            .add_feature("demo", "On a branch", "", "M", None)
+            .unwrap();
+        let b = store
+            .add_feature("demo", "Not started", "", "M", None)
+            .unwrap();
+        let branch = format!("feat/{}-on-a-branch", a.code);
+        git(&repo, &["checkout", "-q", "-b", &branch, "main"]).unwrap();
+        commit_file(
+            &repo,
+            "docs/guide/new.md",
+            "# on the branch\n",
+            "branch doc",
+        );
+        let tip = crate::coderepo::rev_parse(&repo, "HEAD").unwrap();
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &a.code,
+                None,
+                Some("See [new](docs/guide/new.md).\nAnd [gone](docs/guide/gone.md).".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &b.code,
+                None,
+                Some("See [main](docs/guide/main.md) and [new](./docs/guide/new.md).".into()),
+                None,
+                None,
+            )
+            .unwrap();
+
+        let report = run_project_in(&store, "demo", Some(&repo)).unwrap();
+        let main = crate::coderepo::rev_parse(&repo, "main").unwrap();
+        assert_eq!(
+            repo_link_messages(&report),
+            vec![
+                (
+                    Severity::Error,
+                    format!(
+                        "{a} spec:2 links docs/guide/gone.md, which is not in the code repository \
+                         at {a} · {branch} @ {}",
+                        &tip[..7],
+                        a = a.code
+                    )
+                ),
+                (
+                    Severity::Error,
+                    format!(
+                        "{b} spec:1 links docs/guide/new.md, which is not in the code repository \
+                         at main @ {} (no branch yet)",
+                        &main[..7],
+                        b = b.code
+                    )
+                ),
+            ]
+        );
+        // None of them is a broken board doc.
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| i.message.contains("which this board does not have")),
+            "{:?}",
+            report.issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-004 R-6: without the code repository, one warning says how many repository doc links
+    /// were not checked; none when no spec links one (L-29).
+    #[test]
+    fn repository_links_are_not_checked_without_a_repository_and_doctor_says_so_once() {
+        let (store, dir) = fixture();
+        let warned = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("repository doc links were not checked"))
+                .map(|i| {
+                    assert_eq!(i.severity, Severity::Warning);
+                    assert_eq!(i.code, None);
+                    i.message
+                })
+                .collect()
+        };
+        let a = store.add_feature("demo", "Links", "", "M", None).unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &a.code,
+                None,
+                Some(
+                    "No repository doc here: [d](architecture/data.md), `docs/guide/x.md`.".into(),
+                ),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(warned(&store), Vec::<String>::new());
+        let b = store.add_feature("demo", "More", "", "M", None).unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &a.code,
+                None,
+                Some("[x](docs/guide/x.md)\n[y](docs/guide/y.md)".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &b.code,
+                None,
+                Some("[z](docs/system/z.md)".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            warned(&store),
+            vec![
+                "3 repository doc links were not checked: run doctor from the project folder"
+                    .to_string()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-181: a link to an item, requirement or doc the board does not have is reported, with
