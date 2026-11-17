@@ -42,6 +42,12 @@ pub enum Ref {
     Doc {
         path: String,
     },
+    /// A code repository doc, by its path in the repository (`docs/guide/using/x.md`): a relative
+    /// link under `docs/` (FTR-004). The board cannot judge it; doctor checks it at the item's
+    /// position, and the monitor builds its link from the position picked.
+    RepoDoc {
+        path: String,
+    },
 }
 
 /// A reference found in a text: what it points at, the line it is on (1-based), and whether it
@@ -126,12 +132,15 @@ impl BoardIndex {
             Ref::Adr { id } => self.adrs.contains_key(id),
             Ref::Goal { id } => self.goals.contains(id),
             Ref::Doc { path } => self.docs.contains(path),
+            // The board cannot judge a repository doc: doctor checks it at a position (FTR-004).
+            Ref::RepoDoc { .. } => true,
         }
     }
 
     /// The monitor path a reference links to, when the board has it.
     pub fn href(&self, r: &Ref) -> Option<String> {
-        if !self.resolves(r) {
+        // A repository doc's link depends on the position picked, which the monitor knows.
+        if !self.resolves(r) || matches!(r, Ref::RepoDoc { .. }) {
             return None;
         }
         let p = &self.project;
@@ -144,6 +153,7 @@ impl BoardIndex {
             Ref::Goal { id } => format!("/p/{p}/charter#{id}"),
             Ref::Adr { id } => format!("/p/{p}/docs/file/{}", self.adrs[id]),
             Ref::Doc { path } => format!("/p/{p}/docs/file/{path}"),
+            Ref::RepoDoc { .. } => return None,
         })
     }
 
@@ -313,6 +323,13 @@ fn target_ref(target: &str, index: &BoardIndex) -> Option<Ref> {
         return None;
     }
     let path = target.split('#').next().unwrap_or(target);
+    // A relative link under `docs/` is the code repository's (FTR-004).
+    let relative = path.trim_start_matches("./");
+    if relative.starts_with("docs/") {
+        return Some(Ref::RepoDoc {
+            path: relative.to_string(),
+        });
+    }
     path.ends_with(".md").then(|| Ref::Doc {
         path: doc_key(path),
     })
@@ -473,6 +490,7 @@ mod tests {
             Ref::Adr { id } => ("adr".into(), id.clone()),
             Ref::Goal { id } => ("goal".into(), id.clone()),
             Ref::Doc { path } => ("doc".into(), path.clone()),
+            Ref::RepoDoc { path } => ("repo_doc".into(), path.clone()),
         }
     }
 
@@ -518,5 +536,58 @@ mod tests {
             Some("/p/shop/docs/file/decisions/0005-carts.md")
         );
         assert_eq!(index.href(&Ref::Goal { id: "G-9".into() }), None);
+    }
+
+    /// FTR-004 R-6: a relative link under `docs/` is a repository doc, never a broken board doc;
+    /// `architecture/data.md` and the monitor's `/p/…/docs/file/…` stay board docs.
+    #[test]
+    fn a_relative_link_under_docs_is_a_repository_doc() {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../../../web/scripts/refs-fixture.json"))
+                .unwrap();
+        let index = index_of(&fixture.index);
+        let found = find(
+            "See [x](docs/guide/using/x.md), [y](./docs/system/store.md#top), \
+             [data](architecture/data.md) and [b](/p/shop/docs/file/docs/guide/guide.md).",
+            &index,
+        );
+        let got: Vec<(Ref, bool)> = found
+            .iter()
+            .map(|f| (f.reference.clone(), index.is_broken(f)))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (
+                    Ref::RepoDoc {
+                        path: "docs/guide/using/x.md".into()
+                    },
+                    false
+                ),
+                (
+                    Ref::RepoDoc {
+                        path: "docs/system/store.md".into()
+                    },
+                    false
+                ),
+                (
+                    Ref::Doc {
+                        path: "architecture/data.md".into()
+                    },
+                    false
+                ),
+                (
+                    Ref::Doc {
+                        path: "docs/guide/guide.md".into()
+                    },
+                    true
+                ),
+            ]
+        );
+        let repo_doc = Ref::RepoDoc {
+            path: "docs/guide/using/x.md".into(),
+        };
+        assert!(index.resolves(&repo_doc));
+        assert_eq!(index.href(&repo_doc), None);
     }
 }

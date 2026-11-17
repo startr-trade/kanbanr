@@ -1153,7 +1153,8 @@ fn dispatch_routes(
         // The board's README (FEAT-201): written now, keeping its owner's text.
         ("POST", ["readme"]) => ser(&json!({ "changed": crate::boardreadme::write(store)? })),
         ("GET", ["projects", p, "doctor"]) => {
-            let mut report = crate::doctor::run_project(store, p)?;
+            // Repository doc links are checked at each item's position (FTR-004).
+            let mut report = crate::doctor::run_project_in(store, p, repo)?;
             // With the git model on, the branches are checked against the board too (FEAT-191).
             if store.load_meta(p)?.config.cadence.git_model {
                 report.issues.extend(git_drift(store, p, repo));
