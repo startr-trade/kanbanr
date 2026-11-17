@@ -118,14 +118,22 @@ fn holding_of(project: &Project, releases: &[crate::releases::Release]) -> Vec<S
         .unwrap_or_default()
 }
 
+/// What one holding release's next forward promotion waits for.
+struct Held {
+    version: String,
+    /// That promotion's button, e.g. "Promote v0.8.0 to main".
+    button: String,
+    /// The due tests, as (code, requirement, test).
+    due: Vec<(String, String, String)>,
+}
+
 /// The tests each holding release's next forward promotion waits for, with that promotion's
-/// button: (version, button, the due tests as (code, requirement, test)). One
-/// [`crate::releases::tests_due`] per holding release.
+/// button. One [`crate::releases::tests_due`] per holding release.
 fn held_by(
     project: &Project,
     releases: &[crate::releases::Release],
     holding: &[String],
-) -> Vec<(String, String, Vec<(String, String, String)>)> {
+) -> Vec<Held> {
     let cadence = &project.config.cadence;
     let stages = cadence.stages();
     if stages.is_empty() {
@@ -153,7 +161,11 @@ fn held_by(
             .map(|d| (d.code, d.requirement, d.test))
             .collect();
         let button = crate::releases::button_text(&stages, cut, last, version, next);
-        out.push((version.clone(), button, due));
+        out.push(Held {
+            version: version.clone(),
+            button,
+            due,
+        });
     }
     out
 }
@@ -377,13 +389,13 @@ pub fn waiting(store: &Store, id: &str) -> Result<Vec<ManualWaiting>> {
                     release: f.release.clone().unwrap_or_default(),
                     holds: held
                         .iter()
-                        .find(|(v, _, due)| {
-                            f.release.as_deref() == Some(v.as_str())
-                                && due.iter().any(|(c, req, test)| {
+                        .find(|h| {
+                            f.release.as_deref() == Some(h.version.as_str())
+                                && h.due.iter().any(|(c, req, test)| {
                                     *c == f.code && *req == r.id && *test == t.name
                                 })
                         })
-                        .map(|(_, button, _)| button.clone())
+                        .map(|h| h.button.clone())
                         .unwrap_or_default(),
                 });
             }
