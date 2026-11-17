@@ -436,4 +436,115 @@ mod tests {
         assert_eq!(plan.rev, recode_plan(&p).rev);
         assert!(recode_plan(&project(Vec::new())).renames.is_empty());
     }
+
+    /// Copy the shipped example board into a scratch folder under the temp dir (L-41), so loading
+    /// it can never touch a real board.
+    fn example_board(name: &str, strip_aliases: bool) -> std::path::PathBuf {
+        fn copy(from: &std::path::Path, to: &std::path::Path, strip: bool) {
+            std::fs::create_dir_all(to).unwrap();
+            for e in std::fs::read_dir(from).unwrap().flatten() {
+                let (src, dst) = (e.path(), to.join(e.file_name()));
+                if src.is_dir() {
+                    copy(&src, &dst, strip);
+                } else if src.extension().is_some_and(|x| x == "yaml") && strip {
+                    let text = std::fs::read_to_string(&src).unwrap();
+                    let mut out = String::new();
+                    let mut in_aliases = false;
+                    for line in text.lines() {
+                        if line == "aliases:" {
+                            in_aliases = true;
+                        } else if in_aliases && line.starts_with("- ") {
+                        } else {
+                            in_aliases = false;
+                            out.push_str(line);
+                            out.push('\n');
+                        }
+                    }
+                    std::fs::write(&dst, out).unwrap();
+                } else {
+                    std::fs::copy(&src, &dst).unwrap();
+                }
+            }
+        }
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-aliases-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/testdata/aliases-v1");
+        copy(&src, &dir, strip_aliases);
+        dir
+    }
+
+    /// R-8: each reference in the shipped example resolves as the documented rules say. A
+    /// reference is `kanbanr:<CODE>[/R-n | /TL-n/Tn]`, `<CODE> R-n`, `/p/<project>/feature/<CODE>`
+    /// or `<project>:<CODE>`; the code in it may be an earlier code.
+    #[test]
+    fn the_contract_example_resolves_as_documented() {
+        let dir = example_board("contract", false);
+        let store = crate::store::Store::new(dir.clone());
+        let project = store.load("demo").unwrap();
+        let expected: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/testdata/aliases-v1/expected.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let code_of = |text: &str| -> String {
+            let t = text
+                .strip_prefix("kanbanr:")
+                .or_else(|| text.rsplit_once("/feature/").map(|(_, c)| c))
+                .map(str::to_string)
+                .unwrap_or_else(|| text.to_string());
+            let t = t.rsplit_once(':').map_or(t.as_str(), |(_, c)| c);
+            t.split(['/', ' ']).next().unwrap().to_string()
+        };
+        let refs = expected["references"].as_object().unwrap();
+        assert!(refs.len() >= 10, "the example covers every form");
+        for (text, want) in refs {
+            let got = current(&project, &code_of(text));
+            assert_eq!(got, want.as_str(), "{text}");
+        }
+        // Rule 1: every code and earlier code is distinct.
+        let all: Vec<String> = project
+            .features
+            .iter()
+            .flat_map(|f| f.codes().map(str::to_string))
+            .collect();
+        assert_eq!(all.len(), taken(&project).len());
+        // Rule 5: the spec file is named by the current code.
+        assert!(
+            dir.join("projects/demo/features/Planned/features-spec/DEF-095.md")
+                .is_file()
+        );
+        assert_eq!(
+            project.feature("BUG-001").unwrap().aliases,
+            ["FEAT-001", "BUG-001"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-10: no schema bump. The example is stamped with the version a board without aliases has,
+    /// and loads; so does a copy with every `aliases` removed, as a 0.7.0 board reads.
+    #[test]
+    fn an_aliased_board_needs_no_new_schema_version() {
+        assert_eq!(
+            ProjectConfig::default_for("demo").required_schema_version(),
+            5
+        );
+        for (strip, name) in [(false, "schema-with"), (true, "schema-without")] {
+            let dir = example_board(name, strip);
+            let store = crate::store::Store::new(dir.clone());
+            let project = store.load("demo").unwrap();
+            assert_eq!(project.config.schema_version, 5);
+            assert_eq!(
+                project.config.schema_version,
+                project.config.required_schema_version()
+            );
+            assert_eq!(project.features.len(), 2);
+            let with = project.features.iter().any(|f| !f.aliases.is_empty());
+            assert_eq!(with, !strip, "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }

@@ -121,7 +121,13 @@ pub fn run(store: &Store) -> Result<Report> {
     }
     let existing: BTreeSet<String> = projects
         .iter()
-        .flat_map(|p| p.features.iter().map(move |f| qualify(&p.id, &f.code)))
+        .flat_map(|p| {
+            // An earlier code still names its item (FTR-056).
+            p.features
+                .iter()
+                .flat_map(|f| f.codes())
+                .map(move |c| qualify(&p.id, c))
+        })
         .collect();
 
     for project in &projects {
@@ -173,7 +179,9 @@ pub fn run_project_in(store: &Store, id: &str, repo: Option<&std::path::Path>) -
     for pid in store.list_projects()? {
         if let Ok(p) = store.load(&pid) {
             for f in &p.features {
-                existing.insert(qualify(&p.id, &f.code));
+                for c in f.codes() {
+                    existing.insert(qualify(&p.id, c));
+                }
             }
         }
     }
@@ -1576,6 +1584,59 @@ fn scan_unverified(project: &Project, report: &mut Report) {
     }
 }
 
+/// Is `s` shaped as an item code: `^[A-Z][A-Z0-9]*-[0-9]+$`?
+fn code_shaped(s: &str) -> bool {
+    let Some((prefix, number)) = s.rsplit_once('-') else {
+        return false;
+    };
+    let mut chars = prefix.chars();
+    chars.next().is_some_and(|c| c.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The alias contract's rule 1 (FTR-056): within a project every item's code and every earlier code
+/// is distinct, and an earlier code is shaped as a code. One error per break.
+fn scan_aliases(project: &Project, report: &mut Report) {
+    let mut error = |code: &str, message: String| {
+        report.issues.push(Issue {
+            severity: Severity::Error,
+            project: project.id.clone(),
+            code: Some(code.to_string()),
+            message,
+        });
+    };
+    for (i, a) in project.features.iter().enumerate() {
+        for x in &a.aliases {
+            if !code_shaped(x) {
+                error(
+                    &a.code,
+                    format!("{}'s earlier code '{x}' is not shaped as a code", a.code),
+                );
+                continue;
+            }
+            for b in &project.features {
+                if b.code == *x {
+                    error(
+                        &a.code,
+                        format!("{}'s earlier code {x} is {}'s code", a.code, b.code),
+                    );
+                }
+            }
+            // Both items carry it: reported once, from the first of the two.
+            for b in &project.features[i + 1..] {
+                if b.aliases.contains(x) {
+                    error(
+                        &a.code,
+                        format!("{x} is an earlier code of both {} and {}", a.code, b.code),
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Report) {
     let pid = &project.id;
 
@@ -1610,6 +1671,7 @@ fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Rep
     }
 
     scan_unverified(project, report);
+    scan_aliases(project, report);
 
     let milestones: BTreeSet<&str> = project.milestones.iter().map(|m| m.code.as_str()).collect();
 
@@ -1693,6 +1755,78 @@ mod tests {
             "{:?}",
             report.issues
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-056 R-9: each way to break "a code names one item for ever" is one error; a renamed
+    /// board and a reference through an earlier code are clean.
+    #[test]
+    fn an_alias_that_breaks_one_code_one_item_is_reported() {
+        let (store, dir) = fixture();
+        for t in ["A", "B", "C"] {
+            store.add_feature("demo", t, "", "M", None).unwrap();
+        }
+        store
+            .edit_feature("demo", "FEAT-001", None, None, None, Some("DEF-001".into()))
+            .unwrap();
+        let issues = |project: &Project| {
+            let mut r = Report::default();
+            scan_aliases(project, &mut r);
+            r.issues.into_iter().map(|i| i.message).collect::<Vec<_>>()
+        };
+        let mut project = store.load("demo").unwrap();
+        assert!(issues(&project).is_empty(), "{:?}", issues(&project));
+        // A dependency written under the earlier code is not dangling.
+        let mut dep = project.clone();
+        dep.features
+            .iter_mut()
+            .find(|f| f.code == "FEAT-002")
+            .unwrap()
+            .depends_on = vec!["FEAT-001".into()];
+        let existing: BTreeSet<String> = dep
+            .features
+            .iter()
+            .flat_map(|f| f.codes())
+            .map(|c| qualify("demo", c))
+            .collect();
+        let mut r = Report::default();
+        scan_project(&dep, &existing, &mut r);
+        assert!(
+            !r.issues.iter().any(|i| i.message.contains("dangling")),
+            "{:?}",
+            r.issues
+        );
+
+        let set = |p: &mut Project, code: &str, aliases: &[&str]| {
+            p.features
+                .iter_mut()
+                .find(|f| f.code == code)
+                .unwrap()
+                .aliases = aliases.iter().map(|a| a.to_string()).collect();
+        };
+        // An earlier code that is another item's code.
+        set(&mut project, "FEAT-002", &["FEAT-003"]);
+        assert_eq!(
+            issues(&project),
+            ["FEAT-002's earlier code FEAT-003 is FEAT-003's code"]
+        );
+        // The same earlier code on two items.
+        set(&mut project, "FEAT-002", &["FEAT-009"]);
+        set(&mut project, "FEAT-003", &["FEAT-009"]);
+        assert_eq!(
+            issues(&project),
+            ["FEAT-009 is an earlier code of both FEAT-002 and FEAT-003"]
+        );
+        // An earlier code that is not a code.
+        set(&mut project, "FEAT-003", &[]);
+        set(&mut project, "FEAT-002", &["feat 9"]);
+        assert_eq!(
+            issues(&project),
+            ["FEAT-002's earlier code 'feat 9' is not shaped as a code"]
+        );
+        let mut r = Report::default();
+        scan_aliases(&project, &mut r);
+        assert!(r.has_errors(), "rule 1 broken is an error");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

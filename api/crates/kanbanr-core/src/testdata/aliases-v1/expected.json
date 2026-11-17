@@ -1,0 +1,16 @@
+{
+  "note": "Each reference text and the current code it means in project demo; null when no item answers to it. The contract in docs/guide/reference/data-layout.md.",
+  "references": {
+    "kanbanr:DEF-095": "DEF-095",
+    "kanbanr:FEAT-001": "DEF-095",
+    "kanbanr:BUG-001/R-1": "DEF-095",
+    "kanbanr:FEAT-001/TL-001/T1": "DEF-095",
+    "FEAT-001 R-1": "DEF-095",
+    "/p/demo/feature/BUG-001": "DEF-095",
+    "demo:FEAT-001": "DEF-095",
+    "kanbanr:FTR-002": "FTR-002",
+    "demo:FTR-002": "FTR-002",
+    "kanbanr:FEAT-002": null,
+    "demo:FEAT-009": null
+  }
+}
