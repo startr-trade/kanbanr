@@ -186,6 +186,13 @@ pub enum BatchOp {
         todo: String,
         key: String,
         state: String,
+        /// What the agent reports with the change, kept in the task log (FTR-061).
+        #[serde(default)]
+        tokens: Option<u64>,
+        #[serde(default)]
+        cost_usd: Option<f64>,
+        #[serde(default)]
+        model: Option<String>,
     },
     /// Create/update a documentation folder's name + description.
     #[serde(rename = "doc.folder")]

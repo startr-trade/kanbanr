@@ -1598,8 +1598,29 @@ fn dispatch_routes(
             let raw = str_field(b, "state").unwrap_or_default();
             let state = TaskState::parse(&raw).ok_or(CoreError::InvalidTaskState(raw))?;
             let hold = str_field(b, "hold_advance");
-            let (feature, held) =
-                store.set_task_state_held(p, code, todo, key, state, hold.as_deref())?;
+            // What the agent reports with the change, kept in the task log (FTR-061).
+            let build = match b.get("build").filter(|v| !v.is_null()) {
+                Some(v) => Some(
+                    serde_json::from_value::<crate::tasklog::BuildTotals>(v.clone())
+                        .map_err(|e| CoreError::Unsupported(format!("build: {e}")))?,
+                ),
+                None => None,
+            };
+            let report = crate::store::TaskReport {
+                tokens: b.get("tokens").and_then(|v| v.as_u64()),
+                cost_usd: b.get("cost_usd").and_then(|v| v.as_f64()),
+                model: str_field(b, "model"),
+                build,
+            };
+            let (feature, held) = store.set_task_state_reporting(
+                p,
+                code,
+                todo,
+                key,
+                state,
+                hold.as_deref(),
+                &report,
+            )?;
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if let Some(held) = held {

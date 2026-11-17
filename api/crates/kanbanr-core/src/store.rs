@@ -61,6 +61,18 @@ struct Pending {
     timings: Vec<crate::timings::TimingRow>,
     /// The project revision of that run: the first timed op's `checked_rev`.
     timings_rev: Option<String>,
+    /// Task state changes to keep in the task log (FTR-061), appended after the item files.
+    task_events: Vec<crate::tasklog::TaskEvent>,
+}
+
+/// What an agent reports with a task state change (FTR-061): kept on the change's task log
+/// event, never on the task.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TaskReport {
+    pub tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub model: Option<String>,
+    pub build: Option<crate::tasklog::BuildTotals>,
 }
 
 pub struct Store {
@@ -820,6 +832,11 @@ impl Store {
             .map(IndexEntry::from_feature)
             .collect();
         self.write_index(id, &entries)?;
+        // The task log follows the item files it describes, in the same write, so both land in
+        // one board commit; an append that fails never fails the write (FTR-061).
+        for e in &pending.task_events {
+            crate::tasklog::append(&self.root, id, e.clone());
+        }
         Ok(())
     }
 
@@ -2463,9 +2480,33 @@ impl Store {
         state: TaskState,
         hold: Option<&str>,
     ) -> Result<(FeatureItem, Option<String>)> {
+        self.set_task_state_reporting(id, feature, todo, key, state, hold, &TaskReport::default())
+    }
+
+    /// [`Store::set_task_state_held`], with what the agent reports kept on the change's task log
+    /// event (FTR-061).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_task_state_reporting(
+        &self,
+        id: &str,
+        feature: &str,
+        todo: &str,
+        key: &str,
+        state: TaskState,
+        hold: Option<&str>,
+        report: &TaskReport,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        Self::set_task_state_on(&mut project, &mut pending, feature, todo, key, state)?;
+        Self::set_task_state_on(
+            &mut project,
+            &mut pending,
+            feature,
+            todo,
+            key,
+            state,
+            report,
+        )?;
         let out = match hold {
             Some(hold) => Self::held_on(&project, feature, hold)?,
             None => {
@@ -2500,6 +2541,7 @@ impl Store {
         todo: &str,
         key: &str,
         state: TaskState,
+        report: &TaskReport,
     ) -> Result<()> {
         let f = project.feature_mut(feature)?;
         let list = f
@@ -2512,10 +2554,26 @@ impl Store {
             .iter_mut()
             .find(|t| t.key == key)
             .ok_or_else(|| CoreError::TaskNotFound(key.to_string(), todo.to_string()))?;
+        let from = task.state;
         task.state = state;
         // When it changed (FEAT-214): agent drift is the branch's commits after this.
         let now = now_rfc3339();
         task.changed_at = Some(now.clone());
+        // Every change is kept in the task log (FTR-061); a state set to what it is is none.
+        if from != state {
+            pending.task_events.push(crate::tasklog::TaskEvent {
+                at: now.clone(),
+                item: f.code.clone(),
+                todo: todo.to_string(),
+                task: key.to_string(),
+                from,
+                to: state,
+                tokens: report.tokens,
+                cost_usd: report.cost_usd,
+                model: report.model.clone(),
+                build: report.build,
+            });
+        }
         f.updated_at = now;
         pending.persist_features.insert(f.code.clone());
         Ok(())
@@ -3302,6 +3360,9 @@ impl Store {
                     todo,
                     key,
                     state,
+                    tokens,
+                    cost_usd,
+                    model,
                 } => {
                     if skipped.contains(&feature) || skipped.contains(&todo) {
                         return Ok(skip("task.state", &feature));
@@ -3316,6 +3377,12 @@ impl Store {
                         &resolve(&aliases, &todo),
                         &key,
                         st,
+                        &TaskReport {
+                            tokens,
+                            cost_usd,
+                            model,
+                            build: None,
+                        },
                     )?;
                     // Whether the item finishes is judged once the whole batch has applied.
                     finishing.push((i, code.clone()));
@@ -4735,6 +4802,119 @@ mod tests {
         let after = store.load("demo").unwrap().features;
         assert_eq!(before.len(), after.len());
         assert_eq!(before[0].code, after[0].code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-061 R-3: every task state change is kept in the task log with what the agent
+    /// reported, by task write and by batch alike, in the same flush as the item; a state set to
+    /// what it already is writes no event.
+    #[test]
+    fn a_task_state_change_is_logged_with_its_reported_cost() {
+        let (store, dir) = atomic_board("tasklog");
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the board is the test's own"
+        );
+        let f = store.add_feature("demo", "Logged", "", "M", None).unwrap();
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+        for text in ["one", "two"] {
+            store
+                .add_task("demo", &f.code, &list.code, text, None)
+                .unwrap();
+        }
+        let hold = Some("the coordinator moves it");
+        let none = TaskReport::default();
+        store
+            .set_task_state_reporting(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                TaskState::InProgress,
+                hold,
+                &none,
+            )
+            .unwrap();
+        // Already in progress: no change, so no event.
+        store
+            .set_task_state_reporting(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                TaskState::InProgress,
+                hold,
+                &none,
+            )
+            .unwrap();
+        let build = crate::tasklog::BuildTotals {
+            runs: 2,
+            red: 1,
+            run_ms: 90_000,
+            wait_ms: 30_000,
+        };
+        let (item, _) = store
+            .set_task_state_reporting(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                TaskState::Completed,
+                hold,
+                &TaskReport {
+                    tokens: Some(1200),
+                    cost_usd: Some(0.3),
+                    model: Some("sonnet".into()),
+                    build: Some(build),
+                },
+            )
+            .unwrap();
+
+        let events = crate::tasklog::read_all(store.data_dir(), "demo");
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(
+            (events[0].from, events[0].to),
+            (TaskState::NotStarted, TaskState::InProgress)
+        );
+        assert_eq!(events[0].tokens, None);
+        let done = &events[1];
+        assert_eq!(
+            (done.item.as_str(), done.todo.as_str(), done.task.as_str()),
+            (f.code.as_str(), list.code.as_str(), "T1")
+        );
+        assert_eq!(
+            (done.from, done.to),
+            (TaskState::InProgress, TaskState::Completed)
+        );
+        assert_eq!(done.tokens, Some(1200));
+        assert_eq!(done.cost_usd, Some(0.3));
+        assert_eq!(done.model.as_deref(), Some("sonnet"));
+        assert_eq!(done.build, Some(build));
+        // One flush: the event's time is the `changed_at` the task write recorded, and the item
+        // on disk holds the state the event names.
+        let task = &item.todo_lists[0].tasks[0];
+        assert_eq!(task.changed_at.as_deref(), Some(done.at.as_str()));
+        let on_disk = store.load("demo").unwrap();
+        let disk_task = &on_disk.feature(&f.code).unwrap().todo_lists[0].tasks[0];
+        assert_eq!(disk_task.state, TaskState::Completed);
+
+        // A batch's task.state carries tokens, cost and model to its event.
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(json!([
+            {"op": "task.state", "feature": f.code, "todo": list.code, "key": "T2",
+             "state": "InProgress", "tokens": 50, "cost_usd": 0.01, "model": "haiku"}
+        ]))
+        .unwrap();
+        store
+            .apply_batch_held("demo", ops, false, hold, "")
+            .unwrap();
+        let events = crate::tasklog::read_all(store.data_dir(), "demo");
+        assert_eq!(events.len(), 3, "{events:?}");
+        let batched = &events[2];
+        assert_eq!(batched.task, "T2");
+        assert_eq!((batched.tokens, batched.cost_usd), (Some(50), Some(0.01)));
+        assert_eq!(batched.model.as_deref(), Some("haiku"));
+        assert_eq!(batched.build, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
