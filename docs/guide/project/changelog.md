@@ -8,7 +8,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
-- Each project opens on an Overview: what needs you, what is happening now, how much the board holds, the goals, recent decisions and activity, every number leading to its list; a Needs-you badge and drawer on every page; and an Items list filtered by kind, status, goal or evidence. The Board moves to /p/<project>/board (FTR-048).
+- Each project opens on an Overview: what needs you, what is happening now, how much the board holds, the goals, recent decisions and activity, every number leading to its list; a Needs-you badge and drawer on every page; and an Items list filtered by kind, status, goal or evidence. The Board moves to `/p/<project>/board` (FTR-048).
 - `kanbanr plan` and the Plan page's Flow panel: remaining work and the critical path in
   agent-hours, what runs, what is ready and what each blocked task waits on, and a forecast for 1,
   4 and 8 lanes bounded by build slots; every task state change is kept in a task log, with the
