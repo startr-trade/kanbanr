@@ -2287,8 +2287,14 @@ fn stale_draft(
         .iter()
         .find(|r| !release.parent.is_empty() && r.version == release.parent);
     let parent_link = match parent {
+        // From the template the draft's path came from, as `work_prepare` drafts it, so a
+        // pre-move patch's draft is recognised (MNT-002); today's when none matches.
         Some(p) => {
-            parent_notes_link(template.as_deref(), &src.path, p).map_err(CoreError::Unsupported)?
+            let from = notes_templates(store, id, project)
+                .into_iter()
+                .find(|t| prep::expand(t, &ph) == src.path)
+                .or(template);
+            parent_notes_link(from.as_deref(), &src.path, p).map_err(CoreError::Unsupported)?
         }
         None => None,
     };
@@ -8756,6 +8762,54 @@ pub(crate) mod tests {
             .expect("the notes where the book is");
         assert!(notes.contains("[v0.2.0](v0.2.0.md)"), "{notes}");
         assert!(!notes.contains("guide"), "{notes}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// MNT-002 R-3: a pre-move patch's untouched draft, its parent link made from the earlier
+    /// template its notes came from, is recognised as kanbanr's draft and drafted again when it
+    /// no longer names what ships; never left as if written by hand.
+    #[test]
+    fn a_pre_move_patch_draft_is_redrafted_when_stale() {
+        let (store, dir, repo) = moved_book_board("mnt002-redraft");
+        // A parent shipped before DEF-036 recorded where its notes were written.
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut()
+            .find(|r| r.version == "v0.2.0")
+            .unwrap()
+            .notes_path
+            .clear();
+        super::save(&store, "shop", &rs).unwrap();
+        super::add_patch(
+            &store,
+            "shop",
+            "v0.2.1",
+            "",
+            "",
+            "v0.2.0",
+            "Ada",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        let path = format!("{OLD_BOOK}/releases/v0.2.1.md");
+        let read = || {
+            let tip = coderepo::rev_parse(&repo, "release/v0.2.1").unwrap();
+            coderepo::read_blob(&repo, &tip, &path)
+                .unwrap()
+                .map(|(_, t)| t)
+                .expect("the notes where the book is")
+        };
+        let draft = read();
+        assert!(draft.contains("[v0.2.0](v0.2.0.md)"), "{draft}");
+        // A finished item now ships in the patch: the draft is stale.
+        let code = plan_done(&store, "v0.2.1");
+        let redrafted = super::redraft_notes(&store, "shop", "v0.2.1", &repo, &code).unwrap();
+        assert_eq!(redrafted.as_deref(), Some(path.as_str()));
+        let text = read();
+        assert!(text.contains(&format!("### {code} — ")), "{text}");
+        assert!(text.contains("[v0.2.0](v0.2.0.md)"), "{text}");
+        assert!(!text.contains("guide"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
