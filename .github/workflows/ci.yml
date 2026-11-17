@@ -402,6 +402,10 @@ jobs:
       # group, a prepared batch arrives selected, and the URL names the group and open rows (FTR-038).
       - name: The Review page groups decisions
         run: npm run check:review-groups
+      # The Needs-you badge counts the person's decisions and controls its drawer; the drawer heads
+      # each section and links each line or offers its sentence to copy (FTR-048).
+      - name: The Needs-you badge and drawer show what waits on the person
+        run: npm run check:needs-you
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

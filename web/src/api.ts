@@ -1,6 +1,7 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
 import { urls } from "./data/urls.ts";
 import type { CompactIndex, DriftLatest, Feature, ProjectConfig } from "./types";
+import type { Attention, ItemFilter, ItemRow, Overview } from "./types";
 import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting, GroupCount, GroupSlice, RowEvidence, GroupDecision, GroupDecisionAnswer } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
@@ -41,6 +42,12 @@ export const api = {
   /** The latest background drift result, never computed on request (FTR-045); `flags: false` leaves the flags out. */
   getDriftLatest: (id: string, q: { flags?: boolean } = {}) =>
     getJson<DriftLatest>(urls.driftLatest(id, q.flags ?? true)),
+  /** What needs the person, for the Needs-you badge and drawer (FTR-048). */
+  getAttention: (id: string) => getJson<Attention>(urls.attention(id)),
+  /** The project's Overview (FTR-048). */
+  getOverview: (id: string) => getJson<Overview>(urls.overview(id)),
+  /** Items as rows, filtered (FTR-048). */
+  getItems: (id: string, f: ItemFilter) => getJson<ItemRow[]>(urls.items(id, f)),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getProcess: (id: string) =>
     getJson<ProcessStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/process`)),

@@ -1449,3 +1449,199 @@ export interface DriftLatest {
   /** When the last run failed, RFC 3339, even beside a result. */
   failed_at?: string;
 }
+
+// ---- The Overview, Needs you and the Items list (FTR-048) ----
+
+/** Where an attention line sits in the Needs-you drawer. */
+export type AttentionSection = "decisions" | "releases" | "health" | "records";
+
+/** One thing waiting: a review group, a release at a stage, or a health or records line. */
+export interface AttentionLine {
+  /** A review group's key (as FTR-038 names them), or release, red-tests, doctor-errors, retro-due, git-doctor, read-error. */
+  kind: string;
+  section: AttentionSection;
+  label: string;
+  count: number;
+  /** The monitor path that shows it; absent when no page does. */
+  to?: string;
+  /** The "Ask Claude to …" sentence, when there is no page. */
+  ask?: string;
+  tone: string;
+  /** Counted in `total`: the person's own decision. */
+  yours: boolean;
+}
+
+/** What needs the person: `GET /projects/{p}/attention`. */
+export interface Attention {
+  /** The sum of the `yours` lines' counts: the badge's number. */
+  total: number;
+  /** Absent when nothing is waiting. */
+  lines?: AttentionLine[];
+}
+
+export interface SprintNow {
+  code: string;
+  name?: string;
+  goal?: string;
+  start: string;
+  end: string;
+  days_left: number;
+  committed: number;
+  done: number;
+}
+
+export interface StepFact {
+  key: string;
+  label: string;
+  /** done | current | next */
+  state: string;
+  at?: string;
+  by?: string;
+}
+
+export interface ReleaseNow {
+  version: string;
+  name?: string;
+  stage?: string;
+  waits_on_tag: boolean;
+  steps: StepFact[];
+  items: number;
+  finished: number;
+}
+
+export interface MilestoneNow {
+  code: string;
+  name: string;
+  done: number;
+  total: number;
+}
+
+export interface Now {
+  sprint?: SprintNow;
+  releases?: ReleaseNow[];
+  milestones?: MilestoneNow[];
+}
+
+export interface ItemCounts {
+  total: number;
+  by_kind?: Record<string, number>;
+  untyped: number;
+}
+
+export interface RequirementCounts {
+  total: number;
+  functional: number;
+  nfr: number;
+  by_pattern?: Record<string, number>;
+  iso_tagged: number;
+}
+
+export interface TestCounts {
+  total: number;
+  by_state?: Record<string, number>;
+  by_kind?: Record<string, number>;
+}
+
+export interface CoverageCounts {
+  proven: number;
+  total: number;
+  /** Distinct items with stale evidence, as `?evidence=stale` lists them. */
+  stale_items: number;
+}
+
+export interface FlowCounts {
+  completed: number;
+  cycle_p50_days?: number;
+  cycle_p90_days?: number;
+  rework: number;
+  defects: number;
+  escaped: number;
+}
+
+export interface ArchCounts {
+  /** ADRs by status. */
+  adrs?: Record<string, number>;
+  design_docs: number;
+  component_docs: number;
+}
+
+export interface RecordCounts {
+  retros: number;
+  release_notes: number;
+  lessons: number;
+  releases: number;
+}
+
+export interface Holds {
+  items: ItemCounts;
+  requirements: RequirementCounts;
+  tests: TestCounts;
+  coverage: CoverageCounts;
+  flow: FlowCounts;
+  architecture: ArchCounts;
+  records: RecordCounts;
+}
+
+export interface GoalFacts {
+  id: string;
+  title: string;
+  items_done: number;
+  items_open: number;
+  req_proven: number;
+  req_total: number;
+}
+
+export interface Recent {
+  at: string;
+  /** adr | approval | signoff | ratify | release-stage | shipped */
+  kind: string;
+  code?: string;
+  words: string;
+  to: string;
+}
+
+export interface ActivityLine {
+  at: string;
+  item?: string;
+  words: string;
+}
+
+/** The project's Overview: `GET /projects/{p}/overview`. */
+export interface Overview {
+  project: string;
+  board_rev?: string;
+  generated_at: string;
+  attention: Attention;
+  now: Now;
+  holds: Holds;
+  goals?: GoalFacts[];
+  recent?: Recent[];
+  activity?: ActivityLine[];
+}
+
+/** One row of the Items list: `GET /projects/{p}/items?…`. */
+export interface ItemRow {
+  code: string;
+  title: string;
+  kind?: string;
+  status: string;
+  milestone: string;
+  sprint?: string;
+  release?: string;
+  req_total: number;
+  req_proven: number;
+  tests_red: number;
+  tests_planned: number;
+  stale: boolean;
+}
+
+/** The Items list's filters, each optional; `kind: "none"` is untyped. */
+export interface ItemFilter {
+  kind?: string;
+  status?: string;
+  milestone?: string;
+  goal?: string;
+  sprint?: string;
+  release?: string;
+  evidence?: "red" | "planned" | "stale" | "unproven" | "proven" | "untested" | "";
+}

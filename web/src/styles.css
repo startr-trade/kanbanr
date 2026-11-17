@@ -715,3 +715,55 @@ summary:focus-visible,
   background: var(--panel); color: var(--text); font: inherit; min-width: 220px;
 }
 .prepared-sources { margin: 4px 0; padding-left: 18px; }
+
+/* ---- Needs you: the badge and its drawer in the top bar (FTR-048) ---- */
+.needs-you { position: relative; flex: none; }
+.needs-you-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.needs-you-badge[aria-expanded="true"] { border-color: var(--accent); }
+.needs-you-count {
+  min-width: 1.5em;
+  padding: 0 var(--sp-1);
+  border-radius: var(--r-2);
+  background: var(--accent-strong);
+  color: var(--on-accent-strong);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  text-align: center;
+}
+.needs-you-drawer {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  width: 24rem;
+  max-width: 90vw;
+  margin-top: var(--sp-1);
+  padding: var(--sp-3);
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+}
+.needs-you-drawer h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-3); }
+.needs-you-drawer h3 { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-2); color: var(--muted); }
+.needs-you-none { margin: 0; color: var(--muted); }
+.needs-you-lines { margin: 0; padding: 0; list-style: none; }
+.needs-you-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; }
+.needs-you-link { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--text); }
+.needs-you-note { color: var(--muted); font-size: var(--fs-1); }
+.needs-you-ask { flex-basis: 100%; color: var(--text); font-style: italic; }
+@media (max-width: 720px) {
+  .needs-you { position: static; }
+  .needs-you-drawer { left: 0; right: 0; width: auto; max-width: none; border-radius: 0; }
+}
