@@ -131,6 +131,36 @@ try {
   await closeRender();
 }
 
+// DEF-106 R-1: a tab whose count is still being worked out draws "…", says so, and stays a button.
+try {
+  const problems = [];
+  const { document } = await render(
+    "src/ui/Tabs.tsx",
+    "Tabs",
+    {
+      tabs: [
+        { key: "approve", label: "Approve", pending: true },
+        { key: "manual", label: "Manual checks", count: 4 },
+      ],
+      label: "Groups",
+      children: (key) => `panel for ${key}`,
+    },
+    { url: "/?tab=approve" },
+  );
+  const tabEls = [...document.querySelectorAll('[role="tab"]')];
+  eq(problems, "tab texts", tabEls.map((t) => t.textContent), ["Approve …", "Manual checks 4"]);
+  eq(problems, "the pending tab's aria-label", tabEls[0]?.getAttribute("aria-label"), "Approve, counting");
+  eq(problems, "a counted tab has no aria-label", tabEls[1]?.getAttribute("aria-label"), null);
+  if (tabEls[0]?.tagName !== "BUTTON" || tabEls[0]?.getAttribute("aria-disabled") === "true") problems.push("a pending tab is not a selectable button");
+  eq(problems, "the pending tab can be selected", tabEls[0]?.getAttribute("aria-selected"), "true");
+  eq(problems, "the pending count is in .ui-count", [...document.querySelectorAll('[role="tab"] .ui-count')].map((c) => c.textContent), ["…", "4"]);
+  ok = report("web::check_tabs_draw_a_pending_count", problems) && ok;
+} catch (e) {
+  ok = report("web::check_tabs_draw_a_pending_count", [`render failed: ${e?.stack ?? e}`]) && ok;
+} finally {
+  await closeRender();
+}
+
 // R-12: underlined tabs, never an accent fill.
 {
   const problems = [];

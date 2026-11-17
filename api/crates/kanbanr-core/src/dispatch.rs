@@ -3312,7 +3312,13 @@ fn dispatch_routes(
         ("GET", ["projects", p, "readiness"]) => ser(&crate::readiness::ProjectReadiness::load_in(
             store, p, repo,
         )?),
-        ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p, repo)?),
+        ("GET", ["projects", p, "review"]) => {
+            ser(&crate::reviewgroups::queue_shared(store, p, repo)?)
+        }
+        // The groups the config can have, before any is counted: the page draws its tabs from it.
+        ("GET", ["projects", p, "review", "outline"]) => {
+            ser(&crate::reviewgroups::outline(store, p)?)
+        }
         // The Review page's reads (FTR-038): the counts per decision group, one group's rows, and
         // one row's evidence. A manual row's key holds slashes, so the page percent-encodes it.
         ("GET", ["projects", p, "review", "summary"]) => {

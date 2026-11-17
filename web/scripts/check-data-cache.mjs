@@ -105,4 +105,56 @@ function report(name, problems) {
   report("web::check_query_keeps_loading_apart_from_empty", problems);
 }
 
+// DEF-106 R-2: a read records when it started, so a page can say how long it has been working.
+{
+  const problems = [];
+  const c = new DataCache();
+  const url = "/api/projects/x/review/summary";
+  if (queryState(c.read(url)).since !== null) problems.push("an unread URL has a start time");
+  let release;
+  const before = Date.now();
+  const first = c.fetch(url, ["*"], () => new Promise((r) => (release = r)));
+  const during = queryState(c.read(url));
+  if (typeof during.since !== "number" || during.since < before) problems.push(`first read in flight: since is ${during.since}`);
+  if (!during.loading) problems.push("first read in flight is not loading");
+  release([]);
+  await first;
+  if (queryState(c.read(url)).since !== null) problems.push("since is kept after the read ended");
+  c.invalidate("x", ["*"]);
+  if (queryState(c.read(url)).since !== null) problems.push("a stale entry that is not being read has a start time");
+  const again = c.fetch(url, ["*"], () => new Promise((r) => (release = r)));
+  const refreshing = queryState(c.read(url));
+  if (typeof refreshing.since !== "number" || !refreshing.refreshing) problems.push(`re-read in flight: since is ${refreshing.since}`);
+  release([]);
+  await again;
+  const failing = "/api/projects/x/config";
+  await c.fetch(failing, ["config"], async () => { throw new Error("boom"); }).catch(() => {});
+  if (queryState(c.read(failing)).since !== null) problems.push("since is kept after a failed read");
+  report("web::check_data_cache_records_when_a_read_started", problems);
+}
+
+// DEF-106 R-3: a URL already being read is never read a second time, however it is asked meanwhile.
+{
+  const problems = [];
+  const c = new DataCache();
+  const url = "/api/projects/x/prepared?state=open";
+  let runs = 0;
+  let release;
+  const load = () => {
+    runs++;
+    return new Promise((r) => (release = r));
+  };
+  const a = c.fetch(url, ["*"], load);
+  const startedAt = c.read(url).startedAt;
+  const b = c.fetch(url, ["*"], load);
+  c.invalidate("x", ["*"]);
+  const d = c.fetch(url, ["*"], load);
+  if (runs !== 1) problems.push(`${runs} reads ran for one URL in flight`);
+  if (c.read(url).startedAt !== startedAt) problems.push("a second ask moved the start time");
+  release([]);
+  await Promise.all([a, b, d]);
+  if (c.read(url).stale === false) problems.push("a change during the read left the entry fresh");
+  report("web::check_data_cache_never_starts_a_second_read_of_a_url_in_flight", problems);
+}
+
 if (failed) process.exit(1);

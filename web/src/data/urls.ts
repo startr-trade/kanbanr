@@ -76,6 +76,16 @@ export const urls = {
   meta: () => apiUrl(`/meta`),
   /** The Review page's decision groups, counted (FTR-038). */
   reviewSummary: (p: string) => apiUrl(`${project(p)}/review/summary`),
+  /** The Review page's decision groups from the process alone, before any is counted (DEF-106). */
+  reviewOutline: (p: string) => apiUrl(`${project(p)}/review/outline`),
+  /** The records Claude prepared for the person: the open ones, or every one (FTR-034). */
+  prepared: (p: string, state: "open" | "all" = "open") => apiUrl(`${project(p)}/prepared?state=${state}`),
+  /** Where this project's decisions are taken: mode, delegations, what waits (FTR-028). */
+  decisions: (p: string) => apiUrl(`${project(p)}/decisions`),
+  /** The manual tests waiting for a person (DEF-040). */
+  manualTests: (p: string) => apiUrl(`${project(p)}/manual-tests`),
+  /** An item's Mermaid blocks with the lint's findings (FEAT-200). */
+  itemDiagrams: (p: string, c: string) => apiUrl(`${project(p)}/features/${enc(c)}/diagrams`),
   /** One review group's rows (FTR-038). */
   reviewGroup: (p: string, key: string) => apiUrl(`${project(p)}/review/groups/${enc(key)}`),
   /** One row's full evidence (FTR-038); a manual row's key `<CODE>/<R-n>/<test>` is one segment. */
@@ -166,6 +176,14 @@ export const TAGS = {
   gitDoctor: ["*"],
   guards: ["*"],
   pendingReviews: ["*"],
+  /** The outline is the config's groups alone (DEF-106). */
+  reviewOutline: ["config"],
+  /** A gate result's standing reads the code repository's branches, which send no events. */
+  prepared: ["*"],
+  /** Its `waiting` is the review queue, which reads the code repository. */
+  decisions: ["*"],
+  manualTests: ["items", "manual"],
+  itemDiagrams: (c: string) => [`item:${c}`, `spec:${c}`],
   /** A release's plan reads the code repository (its branches, tags and CI) as well as the board. */
   releasePlan: ["*"],
   /** A root read: never invalidated by a project's change. */

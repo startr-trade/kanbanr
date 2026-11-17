@@ -1418,6 +1418,18 @@ pub struct DecisionsParts {
     pub to_review: Vec<DelegatedDecision>,
 }
 
+/// How many delegations the person granted (and did not revoke) whose `until` is no longer ahead of
+/// `now`. It moves when one lapses, so a snapshot or a kept body taken before knows it is stale
+/// within the day (DEF-106). A file that does not read counts none.
+pub fn ended_granted(store: &Store, p: &str, now: &str) -> usize {
+    load(store, p).map_or(0, |d| {
+        d.delegations
+            .iter()
+            .filter(|x| x.granted.is_some() && x.revoked.is_none() && !ahead(&x.until, now))
+            .count()
+    })
+}
+
 /// [`view`] without `waiting`.
 pub fn view_parts(
     store: &Store,

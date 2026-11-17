@@ -81,17 +81,25 @@ export function Tabs(p: {
               aria-controls={panelId(t.key)}
               aria-disabled={t.disabled ? true : undefined}
               title={t.disabled || undefined}
+              aria-label={t.pending ? `${t.label}, counting` : undefined}
               tabIndex={isStop ? 0 : -1}
               onClick={() => {
                 if (!t.disabled) choose(t.key);
               }}
             >
               {t.label}
-              {t.count !== undefined && (
+              {t.pending ? (
                 <>
                   {" "}
-                  <span className="ui-count">{t.count}</span>
+                  <span className="ui-count">…</span>
                 </>
+              ) : (
+                t.count !== undefined && (
+                  <>
+                    {" "}
+                    <span className="ui-count">{t.count}</span>
+                  </>
+                )
               )}
             </button>
           );

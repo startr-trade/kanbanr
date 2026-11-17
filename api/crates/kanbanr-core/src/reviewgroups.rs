@@ -975,8 +975,10 @@ struct ReviewRev {
     board_dirty: String,
     /// The code repository's fingerprint, empty without one.
     code: String,
-    /// The UTC day, so a delegation that ended is noticed.
+    /// The UTC day.
     day: String,
+    /// How many granted delegations have ended, so one that lapses mid-day is noticed at once.
+    ended: usize,
 }
 
 type SharedSlot = Arc<Mutex<Option<(ReviewRev, Arc<Board>)>>>;
@@ -1014,11 +1016,13 @@ fn rev_of(store: &Store, p: &str, repo: Option<&Path>) -> ReviewRev {
         });
         seen.push_str(&format!("{f}\0{len}\0{at}\n"));
     }
+    let now = crate::now_rfc3339();
     ReviewRev {
+        ended: crate::decisions::ended_granted(store, p, &now),
         board_head: crate::git::head_commit(&data_dir).unwrap_or_default(),
         board_dirty: crate::hash::stable_hash(&seen),
         code: repo.map(crate::coderepo::fingerprint).unwrap_or_default(),
-        day: crate::now_rfc3339().chars().take(10).collect(),
+        day: now.chars().take(10).collect(),
         project: p.to_string(),
         data_dir,
     }
@@ -1669,6 +1673,34 @@ mod tests {
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();
         (store, dir)
+    }
+
+    #[test]
+    fn a_snapshot_is_stale_once_a_granted_delegation_has_lapsed() {
+        let (store, dir) = board();
+        let stamp = "{by: Ada, at: \"2026-11-01T00:00:00Z\", origin: test}";
+        let file = |until: &str, extra: &str| {
+            format!(
+                "delegations:\n- id: DLG-1\n  verdicts: [approve]\n  all: true\n  until: \"{until}\"\n  proposed: {stamp}\n{extra}"
+            )
+        };
+        let path = store.project_dir("demo").join("decisions.yaml");
+        let granted = format!("  granted: {stamp}\n");
+        std::fs::write(&path, file("2099-01-01T00:00:00Z", &granted)).unwrap();
+        let before = rev_of(&store, "demo", None);
+        assert_eq!(before.ended, 0);
+        // The same delegation with its time passed: the day has not changed, the revision has.
+        std::fs::write(&path, file("2020-01-01T00:00:00Z", &granted)).unwrap();
+        let after = rev_of(&store, "demo", None);
+        assert_eq!(after.ended, 1);
+        assert_ne!(before, after);
+        // One that was only proposed, or was revoked, is not counted when it lapses.
+        std::fs::write(&path, file("2020-01-01T00:00:00Z", "")).unwrap();
+        assert_eq!(rev_of(&store, "demo", None).ended, 0);
+        let revoked = format!("{granted}  revoked: {stamp}\n");
+        std::fs::write(&path, file("2020-01-01T00:00:00Z", &revoked)).unwrap();
+        assert_eq!(rev_of(&store, "demo", None).ended, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn define(store: &Store, title: &str, def: FeatureDefinition) -> String {

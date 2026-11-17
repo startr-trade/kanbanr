@@ -18,7 +18,7 @@ export { Matrix, type MatrixCell } from "./Matrix.tsx";
 export { Timeline } from "./Timeline.tsx";
 export { GrowthChart } from "./GrowthChart.tsx";
 export { StageStepper, STEP_WORD } from "./StageStepper.tsx";
-export { Empty, ErrorState, LoadingState } from "./States.tsx";
+export { Empty, ErrorState, LoadingState, WorkingState } from "./States.tsx";
 export { Section } from "./Section.tsx";
 export { CopyText } from "./CopyText.tsx";
 
@@ -28,6 +28,7 @@ export { parseOpen, parseState, useOpenRows, useUrlState, writeOpen, writeState 
 // Models.
 export { TONE_WORD, type Tone } from "./tone.ts";
 export { pickTab, visibleTabs, type TabDef } from "./tabs.ts";
+export { elapsedText, WORKING_AFTER_MS } from "./working.ts";
 export { filterRows, sortRows, toCsv, type Column } from "./table.ts";
 export { percentages, type Segment } from "./progress.ts";
 export { growthPath, pointText, type GrowthPoint } from "./growth.ts";

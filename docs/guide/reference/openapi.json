@@ -4144,6 +4144,26 @@
         ],
         "type": "object"
       },
+      "GroupOutline": {
+        "description": "One decision group the config can have, named before any is counted: a tab the page draws at\nonce.",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "action"
+        ],
+        "type": "object"
+      },
       "GroupSlice": {
         "description": "One group's rows, in the page's default order.",
         "properties": {
@@ -13967,6 +13987,50 @@
           }
         },
         "summary": "One row's full evidence"
+      }
+    },
+    "/api/projects/{project}/review/outline": {
+      "get": {
+        "operationId": "getProjectsReviewOutline",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GroupOutline"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The Review page's decision groups from the process alone, before any is counted"
       }
     },
     "/api/projects/{project}/review/summary": {

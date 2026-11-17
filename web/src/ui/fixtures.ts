@@ -15,6 +15,7 @@ export const TABS: TabDef[] = [
   { key: "approve", label: "Approve", count: 3 },
   { key: "signoff", label: "Sign off", count: 7 },
   { key: "docs", label: "Docs folded", count: 0 },
+  { key: "manual", label: "Manual checks", pending: true },
   { key: "later", label: "Later", count: 2, hidden: true },
   { key: "cut", label: "The cut", disabled: "waits for main to be pushed" },
 ];
@@ -24,6 +25,7 @@ export const TAB_TEXT: Record<string, string> = {
   approve: "Three designs wait for approval.",
   signoff: "Seven items wait for sign-off.",
   docs: "Nothing waits for docs to be folded.",
+  manual: "The manual checks are still being counted.",
 };
 
 /** Accordion rows: one plain, one with a select that cannot be ticked, and why. */

@@ -3,13 +3,15 @@
  * import it directly.
  */
 
-/** One tab. `count` is shown in the label; `hidden` drops it; `disabled` says why it cannot open. */
+/** One tab. `count` is shown in the label (or "…" while `pending`); `hidden` drops it; `disabled` says why it cannot open. */
 export interface TabDef {
   key: string;
   label: string;
   count?: number;
   hidden?: boolean;
   disabled?: string;
+  /** Its count is still being worked out: drawn as "…" and announced as counting. It stays selectable. */
+  pending?: boolean;
 }
 
 /** The tabs that are drawn: hidden ones are dropped, disabled ones kept (they say why). */

@@ -453,6 +453,38 @@ fn a_rows_evidence_is_read_alone() {
     );
 }
 
+#[test]
+fn the_outline_answers_from_config_alone() {
+    let s = Scratch::new("review-groups-outline");
+    let (data, _, _) = board_with_a_manual_check(&s);
+    let url = serve(&s, &data);
+    let (code, outline) = read(&url, "demo", "/review/outline");
+    assert_eq!(code, 200, "{outline}");
+    let keys: Vec<&str> = outline
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["key"].as_str().unwrap())
+        .collect();
+    // The fixed order, from the config alone: every group the process can have, counted or not.
+    assert_eq!(keys.first(), Some(&"system-baseline"), "{outline}");
+    let at = |k: &str| keys.iter().position(|x| *x == k);
+    assert!(at("approve") < at("design-review"), "{keys:?}");
+    assert!(at("design-review") < at("manual"), "{keys:?}");
+    assert!(
+        keys.contains(&"manual") && keys.contains(&"delegation"),
+        "{keys:?}"
+    );
+    for g in outline.as_array().unwrap() {
+        assert!(g["label"].is_string() && g["action"].is_string(), "{g}");
+    }
+    // The route is the core's outline, which loads no item.
+    let store = kanbanr_core::Store::new(data.clone());
+    let core =
+        serde_json::to_value(kanbanr_core::reviewgroups::outline(&store, "demo").unwrap()).unwrap();
+    assert_eq!(outline, core);
+}
+
 /// The median of `n` timed reads of `path`.
 fn median_read(url: &str, project: &str, path: &str, n: usize) -> std::time::Duration {
     let mut times: Vec<std::time::Duration> = (0..n)
