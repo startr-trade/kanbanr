@@ -16704,3 +16704,349 @@ fn build_web_reuses_the_cached_bundle_for_unchanged_sources() {
     assert_eq!(npm, ["ci", "run", "ci", "run", "run", "run"], "{rows:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A repository for the merge queue's tests (FTR-062 R-8): the test's own board (L-41), a stub
+/// `cargo` that passes, a line check (`sh check.sh`) that fails when `bad.txt` exists, the shared
+/// cache off, and a first commit on main. Returns the scratch folder, the repository, the machine
+/// folder and the `PATH` the queue runs with.
+#[cfg(unix)]
+fn merge_queue_repo(tag: &str) -> (PathBuf, PathBuf, PathBuf, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let (base, work) = diagram_scratch(tag);
+    let board =
+        PathBuf::from(String::from_utf8_lossy(&run_in(&base, &work, &["where"]).stdout).trim());
+    assert!(
+        board
+            .canonicalize()
+            .unwrap()
+            .starts_with(base.canonicalize().unwrap()),
+        "{}",
+        board.display()
+    );
+    let ok = |o: Output| {
+        assert!(
+            o.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        o
+    };
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    std::fs::create_dir_all(work.join("api")).unwrap();
+    std::fs::write(work.join("api").join(".keep"), "").unwrap();
+    std::fs::write(
+        work.join("check.sh"),
+        "[ ! -e bad.txt ] || { echo bad.txt is here; exit 1; }\n",
+    )
+    .unwrap();
+    std::fs::write(work.join("base.txt"), "base\n").unwrap();
+    std::fs::write(work.join(".gitignore"), ".claude/\n").unwrap();
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(&base, &work, &["commit", "-q", "-m", "base"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "build",
+            "--sccache",
+            "off",
+            "--line-check",
+            "sh check.sh",
+        ],
+    ));
+    let bin = base.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let cargo = bin.join("cargo");
+    std::fs::write(&cargo, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    (base.clone(), work, base.join("machine"), path)
+}
+
+/// `kanbanr build <args>` in `work`, with the merge queue's `PATH` and machine folder.
+#[cfg(unix)]
+fn merge_queue(base: &Path, work: &Path, machine: &Path, path: &str, args: &[&str]) -> Output {
+    Command::new(cli())
+        .arg("build")
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env("PATH", path)
+        .env("KANBANR_BUILD_DIR", machine)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env_remove("CLAUDECODE")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI")
+}
+
+/// A branch `name` made from main with `files` written and committed; main stays checked out.
+#[cfg(unix)]
+fn merge_queue_branch(base: &Path, work: &Path, name: &str, files: &[(&str, &str)]) {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ok(git_in(base, work, &["checkout", "-q", "-b", name, "main"]));
+    for (f, text) in files {
+        std::fs::write(work.join(f), text).unwrap();
+        ok(git_in(base, work, &["add", f]));
+    }
+    ok(git_in(
+        base,
+        work,
+        &["commit", "-q", "-m", &format!("{name}: work")],
+    ));
+    ok(git_in(base, work, &["checkout", "-q", "main"]));
+}
+
+#[cfg(unix)]
+fn merge_queue_entries(
+    base: &Path,
+    work: &Path,
+    machine: &Path,
+    path: &str,
+) -> Vec<serde_json::Value> {
+    let o = Command::new(cli())
+        .args(["--json", "build", "queue", "list"])
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env("PATH", path)
+        .env("KANBANR_BUILD_DIR", machine)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("CLAUDECODE")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    serde_json::from_slice(&o.stdout).unwrap()
+}
+
+/// No `mq-` worktree is left, in git's list or on disk.
+#[cfg(unix)]
+fn assert_no_queue_worktree(base: &Path, work: &Path) {
+    let list = git_in(base, work, &["worktree", "list", "--porcelain"]);
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(!list.contains("/mq-"), "{list}");
+    let left: Vec<String> = std::fs::read_dir(work.join(".claude").join("worktrees"))
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("mq-"))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// FTR-062 R-8: three branches touching different files are queued for main: one is an item
+/// branch whose task is on the critical path, so it goes first though it was queued last. The
+/// queue merges each onto the last in its own worktree, checks the result with the line check,
+/// and moves main to it: main holds all three, merged in priority order, and no `mq-` worktree is
+/// left.
+#[cfg(unix)]
+#[test]
+fn the_merge_queue_integrates_branches_one_at_a_time_on_the_last() {
+    let (base, work, machine, path) = merge_queue_repo("mq-order");
+    let ok = |o: Output| {
+        assert!(
+            o.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let made = ok(run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Fast",
+            "--milestone",
+            "MS-1",
+        ],
+    ));
+    let made: serde_json::Value = serde_json::from_str(&made).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    ok(run_in(
+        &base,
+        &work,
+        &["todo", "add", &code, "--description", "work"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "add", &code, "TL-001", "--text", "one"],
+    ));
+    let item_branch = format!("feat/{code}-fast");
+
+    merge_queue_branch(&base, &work, "one", &[("one.txt", "1\n")]);
+    merge_queue_branch(&base, &work, "two", &[("two.txt", "2\n")]);
+    merge_queue_branch(&base, &work, &item_branch, &[("fast.txt", "f\n")]);
+    let q = |args: &[&str]| merge_queue(&base, &work, &machine, &path, args);
+    ok(q(&["queue", "add", "one"]));
+    ok(q(&["queue", "add", "two"]));
+    ok(q(&["queue", "add", &code]));
+    // Refused: a branch already queued, and one that does not exist.
+    assert!(!q(&["queue", "add", "one"]).status.success());
+    assert!(!q(&["queue", "add", "nope"]).status.success());
+
+    let entries = merge_queue_entries(&base, &work, &machine, &path);
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    let fast = entries
+        .iter()
+        .find(|e| e["branch"] == item_branch.as_str())
+        .unwrap();
+    assert_eq!(fast["item"], code.as_str());
+    assert_eq!(fast["into"], "main");
+    assert_eq!(
+        fast["priority"], 0,
+        "its task is on the critical path: {fast}"
+    );
+    for e in &entries {
+        assert_eq!(e["state"], "Queued", "{e}");
+        if e["branch"] != item_branch.as_str() {
+            assert!(e["priority"].as_u64().unwrap() > 0, "{e}");
+        }
+    }
+
+    ok(q(&["queue", "run"]));
+    let subjects = ok(git_in(
+        &base,
+        &work,
+        &["log", "--first-parent", "--format=%s", "main"],
+    ));
+    let subjects: Vec<&str> = subjects.lines().collect();
+    assert_eq!(
+        subjects[..3],
+        [
+            "Merge two into main".to_string(),
+            "Merge one into main".to_string(),
+            format!("Merge {item_branch} into main"),
+        ],
+        "each merged onto the last, the critical-path branch first: {subjects:?}"
+    );
+    for f in ["one.txt", "two.txt", "fast.txt"] {
+        assert!(work.join(f).is_file(), "main's checkout has {f}");
+    }
+    let tip = ok(git_in(&base, &work, &["rev-parse", "main"]))
+        .trim()
+        .to_string();
+    for e in merge_queue_entries(&base, &work, &machine, &path) {
+        assert_eq!(e["state"], "Merged", "{e}");
+        assert_eq!(e["merged"], tip.as_str(), "{e}");
+        assert!(
+            std::path::Path::new(e["log"].as_str().unwrap()).is_file(),
+            "{e}"
+        );
+    }
+    assert_no_queue_worktree(&base, &work);
+    // Nothing left to do: a second run integrates nothing and leaves main where it is.
+    ok(q(&["queue", "run"]));
+    assert_eq!(ok(git_in(&base, &work, &["rev-parse", "main"])).trim(), tip);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-062 R-8: a branch that adds the file the line check rejects and a branch that conflicts
+/// with main are both refused, with their reasons, and main moves only for the good branch. A
+/// branch taken out of the queue is never merged.
+#[cfg(unix)]
+#[test]
+fn the_merge_queue_refuses_a_red_or_conflicting_branch_and_leaves_the_line() {
+    let (base, work, machine, path) = merge_queue_repo("mq-refuse");
+    let ok = |o: Output| {
+        assert!(
+            o.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    merge_queue_branch(&base, &work, "good", &[("good.txt", "g\n")]);
+    merge_queue_branch(&base, &work, "bad", &[("bad.txt", "b\n")]);
+    merge_queue_branch(&base, &work, "clash", &[("base.txt", "clash\n")]);
+    merge_queue_branch(&base, &work, "later", &[("later.txt", "l\n")]);
+    // main moves on after the branches were made, so `clash` conflicts with it.
+    std::fs::write(work.join("base.txt"), "main\n").unwrap();
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-am", "main moves on"],
+    ));
+    let before = ok(git_in(&base, &work, &["rev-parse", "main"]))
+        .trim()
+        .to_string();
+
+    let q = |args: &[&str]| merge_queue(&base, &work, &machine, &path, args);
+    for b in ["good", "bad", "clash", "later"] {
+        ok(q(&["queue", "add", b]));
+    }
+    let later = merge_queue_entries(&base, &work, &machine, &path)
+        .into_iter()
+        .find(|e| e["branch"] == "later")
+        .unwrap();
+    ok(q(&["queue", "remove", later["id"].as_str().unwrap()]));
+
+    ok(q(&["queue", "run"]));
+    let entries = merge_queue_entries(&base, &work, &machine, &path);
+    let by = |b: &str| entries.iter().find(|e| e["branch"] == b).unwrap().clone();
+    let clash = by("clash");
+    assert_eq!(clash["state"], "Refused", "{clash}");
+    let reason = clash["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("conflicts with main") && reason.contains("base.txt"),
+        "{reason}"
+    );
+    let bad = by("bad");
+    assert_eq!(bad["state"], "Refused", "{bad}");
+    assert!(
+        bad["reason"].as_str().unwrap().starts_with("check red"),
+        "{bad}"
+    );
+    let log = std::fs::read_to_string(bad["log"].as_str().unwrap()).unwrap();
+    assert!(
+        log.contains("bad.txt is here"),
+        "the red check's log is kept: {log}"
+    );
+    let good = by("good");
+    assert_eq!(good["state"], "Merged", "{good}");
+    assert_eq!(by("later")["state"], "Removed");
+
+    let tip = ok(git_in(&base, &work, &["rev-parse", "main"]))
+        .trim()
+        .to_string();
+    assert_ne!(tip, before, "main moved for the good branch");
+    assert_eq!(good["merged"], tip.as_str());
+    let first_parent = ok(git_in(&base, &work, &["rev-parse", "main^1"]))
+        .trim()
+        .to_string();
+    assert_eq!(
+        first_parent, before,
+        "one merge, the good branch's, on main"
+    );
+    let files = ok(git_in(&base, &work, &["ls-tree", "--name-only", "main"]));
+    assert!(files.lines().any(|f| f == "good.txt"), "{files}");
+    for f in ["bad.txt", "later.txt"] {
+        assert!(!files.lines().any(|l| l == f), "{f} on main: {files}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(work.join("base.txt")).unwrap(),
+        "main\n"
+    );
+    assert_no_queue_worktree(&base, &work);
+    let _ = std::fs::remove_dir_all(&base);
+}

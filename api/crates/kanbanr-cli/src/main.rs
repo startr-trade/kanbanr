@@ -7,6 +7,7 @@ mod buildrun;
 mod editor;
 mod hookhealth;
 mod hooks;
+mod mergequeue;
 mod mirror;
 mod recover;
 mod scm;
@@ -742,6 +743,28 @@ enum BuildCmd {
         #[arg(long)]
         force: bool,
     },
+    /// The merge queue: branches integrate into their target one checked batch at a time, each
+    /// merged onto the last in the queue's own worktree, so parallel work does not break the line.
+    #[command(subcommand)]
+    Queue(QueueCmd),
+}
+
+#[derive(Subcommand)]
+enum QueueCmd {
+    /// Queue a branch: `CODE/TL-001/T3` (the task branch, into its item branch), `CODE` (the item
+    /// branch, into its line) or a branch name.
+    Add { target: String },
+    /// The queue's entries and their states.
+    List,
+    /// Integrate the queue, batch by batch: merge, check (`build check`), move the target only
+    /// when green. Never pushes.
+    Run {
+        /// One batch only.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Take an entry (`MQ-3`) out of the queue.
+    Remove { id: String },
 }
 
 #[derive(Subcommand)]
@@ -8512,6 +8535,52 @@ fn run_build(cli: &Cli, cmd: &BuildCmd) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        BuildCmd::Queue(q) => match q {
+            QueueCmd::Add { target } => {
+                let e = mergequeue::add(&store, &p, &cwd, target)?;
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&e)?);
+                } else {
+                    println!(
+                        "{} queued: {} into {} (priority {})",
+                        e.id, e.branch, e.into, e.priority
+                    );
+                }
+                Ok(())
+            }
+            QueueCmd::List => {
+                let entries = mergequeue::list(&cwd);
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&entries)?);
+                    return Ok(());
+                }
+                if entries.is_empty() {
+                    println!("the merge queue is empty");
+                }
+                for e in &entries {
+                    let why = if e.reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", e.reason)
+                    };
+                    println!(
+                        "{:<6} {:<9} {} → {} (priority {}){why}",
+                        e.id,
+                        format!("{:?}", e.state),
+                        e.branch,
+                        e.into,
+                        e.priority
+                    );
+                }
+                Ok(())
+            }
+            QueueCmd::Run { once } => mergequeue::run(&store, &p, &cwd, *once),
+            QueueCmd::Remove { id } => {
+                mergequeue::remove(&cwd, id)?;
+                println!("{id} removed from the merge queue");
+                Ok(())
+            }
+        },
     }
 }
 
