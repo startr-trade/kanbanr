@@ -1,17 +1,17 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { alreadySaid, api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
-import { useAsync, useLiveTick } from "../live";
+import { useAsync } from "../live";
 import { LiveDot } from "../components/bits";
-import type { Adr, GroupCount, GroupSlice, PendingReview, PlannedRelease, ReviewRow as Row, RowEvidence } from "../types";
+import type { Adr, DecisionsView, GroupCount, GroupOutline, GroupSlice, PendingReview, PlannedRelease, ReviewRow as Row, RowEvidence } from "../types";
 import { batches } from "../prepared";
 import type { ManualRow, Outcome } from "../manualTests";
 import type { PreparedView } from "../types";
-import { useQuery } from "../data/useQuery";
-import { urls } from "../data/urls";
-import { GROUP_PARAM, groupTabs } from "../reviewGroups";
-import { Empty, ErrorState, LoadingState, Tabs } from "../ui";
+import { useQuery, type Query } from "../data/useQuery";
+import { TAGS, urls } from "../data/urls";
+import { GROUP_PARAM, reviewTabs } from "../reviewGroups";
+import { Empty, ErrorState, LoadingState, Tabs, WorkingState } from "../ui";
 import { AdrEvidence } from "./review/AdrEvidence";
 import { DecisionsHere } from "./review/DecisionsHere";
 import { DelegationEvidence } from "./review/DelegationEvidence";
@@ -61,18 +61,20 @@ function plannedText(version: string, code: string, planned: PlannedRelease): st
  */
 export default function ReviewPage() {
   const { project = "" } = useParams();
-  // The diagram checks and the briefs re-read on the live tick.
-  const tick = useLiveTick(api.projectEvents(project), 400);
   // What each decision came to once its call returned (DEF-090); any outcome hides its form.
   const [done, setDone] = useState<Record<string, Outcome>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
-  // The decision groups, counted (FTR-038): the tabs.
+  // Every read of the page goes through the shared cache (DEF-106): a read already in flight is
+  // joined, never started again, and the page opens no event stream of its own.
+  // The decision groups from the process alone (no counts): the tabs, drawn at once.
+  const outline = useQuery<GroupOutline[]>(project, urls.reviewOutline(project), TAGS.reviewOutline);
+  // The decision groups, counted (FTR-038): the tabs' counts.
   const summary = useQuery<GroupCount[]>(project, urls.reviewSummary(project), REVIEW_TAGS);
   // What Claude prepared for these decisions (FTR-034), shown filled in beside their buttons.
-  const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
+  const prepared = useQuery<PreparedView[]>(project, urls.prepared(project), TAGS.prepared);
   // Where this project's decisions are taken, and what was delegated (FTR-028).
-  const decisions = useAsync(() => api.getDecisions(project), [project, tick]);
+  const decisions = useQuery<DecisionsView>(project, urls.decisions(project), TAGS.decisions);
 
   // Who a yes here is recorded as (FEAT-077). The board's commit identity, exactly as
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
@@ -254,7 +256,6 @@ export default function ReviewPage() {
         <EntryEvidence
           project={project}
           item={item}
-          tick={tick}
           writable={writable && !inConversation}
           busy={busy === item.code}
           outcome={done[item.code]}
@@ -324,6 +325,8 @@ export default function ReviewPage() {
   );
 
   const groups = summary.data ?? [];
+  // Neither the outline nor the summary has answered: nothing to draw yet but the working line.
+  const noGroups = !summary.data && !outline.data;
   return (
     <div className="review-page">
       <div className="page-head">
@@ -361,11 +364,15 @@ export default function ReviewPage() {
         <DecisionsHere project={project} view={decisions.data ?? null} error={decisions.error} writable={writable} who={who} />
       </details>
 
-      {summary.error && !summary.data ? (
+      {summary.error && !summary.data && !outline.data ? (
         <ErrorState error={`What is waiting could not be read: ${summary.error}`} retry={summary.reload} />
-      ) : !summary.data ? (
-        <LoadingState label="Reading what is waiting…" />
-      ) : groups.every((g) => g.count === 0) ? (
+      ) : noGroups ? (
+        summary.since === null ? (
+          <LoadingState label="Reading what is waiting…" />
+        ) : (
+          <WorkingState label="Reading what is waiting…" since={summary.since} />
+        )
+      ) : summary.data && groups.every((g) => g.count === 0) ? (
         <Empty title="Nothing is waiting for a decision.">
           <p className="muted small">
             An item appears here when its definition has never been approved, when approved text was
@@ -374,7 +381,7 @@ export default function ReviewPage() {
           </p>
         </Empty>
       ) : (
-        <Tabs tabs={groupTabs(groups)} param={GROUP_PARAM} label="Decisions waiting, by the decision">
+        <ReviewGroupsHead outline={outline} summary={summary} label="Decisions waiting, by the decision">
           {(key) => (
             <GroupView
               key={key}
@@ -382,8 +389,7 @@ export default function ReviewPage() {
               group={key}
               writable={writable}
               who={who}
-              tick={tick}
-              batches={batches(prepared.data)}
+              batches={batches(prepared.data ?? undefined)}
               body={(row, slice: GroupSlice) =>
                 slice.key === SYSTEM_BASELINE_GROUP ? (
                   baselineEvidence()
@@ -394,7 +400,7 @@ export default function ReviewPage() {
               onDecided={summary.reload}
             />
           )}
-        </Tabs>
+        </ReviewGroupsHead>
       )}
     </div>
   );
@@ -419,3 +425,38 @@ function RowBody({
 }
 
 const manualKey = (m: ManualRow) => `manual:${m.row.code}:${m.row.requirement}:${m.row.test}`;
+
+/** The slice of a `Query` the groups' head draws from, so a check can render it without a page. */
+type Read<T> = Pick<Query<T>, "data" | "error" | "loading" | "refreshing" | "since"> & { reload?(): void };
+
+/**
+ * The tabs and the working line over the open group (DEF-106). With the outline and no summary the
+ * groups are drawn at once, each with its count pending; the summary fills the counts in and drops
+ * the empty groups. A slow count says so and for how long; a re-read keeps the old counts. A summary
+ * that failed before any answer says so under the outline's tabs, with a retry.
+ */
+export function ReviewGroupsHead(p: {
+  outline: Read<GroupOutline[]>;
+  summary: Read<GroupCount[]>;
+  label: string;
+  children(key: string): ReactNode;
+}): JSX.Element {
+  const { summary } = p;
+  const failed = summary.error !== null && !summary.data;
+  return (
+    <>
+      {!failed && summary.since !== null ? (
+        <WorkingState label={summary.data ? "Updating the counts…" : "Counting what is waiting…"} since={summary.since} />
+      ) : null}
+      <Tabs tabs={reviewTabs(p.outline.data, summary.data)} param={GROUP_PARAM} label={p.label}>
+        {(key) =>
+          failed ? (
+            <ErrorState error={`What is waiting could not be read: ${summary.error}`} retry={summary.reload} />
+          ) : (
+            p.children(key)
+          )
+        }
+      </Tabs>
+    </>
+  );
+}

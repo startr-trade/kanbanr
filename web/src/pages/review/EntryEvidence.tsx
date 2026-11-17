@@ -129,7 +129,6 @@ function SpecDiff({ spec, changed }: { spec: SpecBrief; changed: boolean }) {
 export function EntryEvidence({
   project,
   item,
-  tick,
   writable,
   busy,
   outcome,
@@ -144,7 +143,6 @@ export function EntryEvidence({
 }: {
   project: string;
   item: PendingReview;
-  tick: number;
   writable: boolean;
   busy: boolean;
   outcome?: Outcome;
@@ -181,7 +179,7 @@ export function EntryEvidence({
     ? docsFoldedOffer(item)
     : { offer: true, left: [] as DriftFlag[], settled: [] as SettledText[] };
   const flags = docsFolded.left;
-  const diagrams = useDiagramCheck(project, item.code, tick);
+  const diagrams = useDiagramCheck(project, item.code);
   const blocker = approveBlocker(diagrams);
   // What Claude prepared (FTR-034): a sign-off's note and doc, a ratification's reason. A
   // docs-folded is not offered while texts are left, so nothing prepared for it shows either.
