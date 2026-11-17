@@ -1,7 +1,7 @@
 // Every URL the shared cache keys a read by, spelled once (DEF-081), and the slice tags each read
 // depends on, so a live change re-reads only what it touched.
 import { apiUrl } from "../runtimeConfig.ts";
-import type { ItemFilter } from "../types";
+import type { ItemFilter, PlanScope } from "../types";
 
 const enc = encodeURIComponent;
 const project = (p: string) => `/projects/${enc(p)}`;
@@ -80,6 +80,14 @@ export const urls = {
         ["evidence", f.evidence],
       ])}`,
     ),
+  /** The Plan page's counts per tab and the tab it opens on (FTR-043). */
+  planSummary: (p: string) => apiUrl(`${project(p)}/plan/summary`),
+  /** One Plan tab's timeline and rows (FTR-043). */
+  plan: (p: string, scope: PlanScope) => apiUrl(`${project(p)}/plan?scope=${enc(scope)}`),
+  /** One Plan row's items, read when the row is opened (FTR-043); the key `sprint:SP-004` is one segment. */
+  planRow: (p: string, key: string) => apiUrl(`${project(p)}/plan/rows/${enc(key)}`),
+  /** The portfolio's timeline, one row per project (FTR-043); a root read. */
+  portfolioPlan: () => apiUrl(`/portfolio/plan`),
 };
 
 /** What `/attention` reads (FTR-048): items, releases, prepared records, manual tests, decisions, gates, docs, ADRs and config. */
@@ -127,4 +135,6 @@ export const TAGS = {
   overview: [...ATTENTION, "sprints", "milestones", "charter", "lessons", "activity"],
   /** The Items list (FTR-048). */
   items: ["items"],
+  /** The Plan page (FTR-043): its counts, tabs and rows read sprints, releases, milestones and items. */
+  plan: ["sprints", "releases", "milestones", "items"],
 } as const;

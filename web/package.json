@@ -57,7 +57,8 @@
     "check:review-groups": "node scripts/check-review-groups.mjs",
     "check:needs-you": "node scripts/check-needs-you.mjs",
     "check:items-page": "node scripts/check-items-page.mjs",
-    "check:feature-no-docs": "node scripts/check-feature-no-docs.mjs"
+    "check:feature-no-docs": "node scripts/check-feature-no-docs.mjs",
+    "check:plan-page": "node scripts/check-plan-page.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.17",
