@@ -1241,10 +1241,7 @@ impl PathHistory {
         let mut out = Vec::new();
         let mut cur = rel.to_string();
         let mut newest_allowed = 0usize;
-        loop {
-            let Some(list) = self.touches.get(&cur) else {
-                break;
-            };
+        while let Some(list) = self.touches.get(&cur) {
             let mut next: Option<(String, usize)> = None;
             for t in list.iter().filter(|t| t.commit >= newest_allowed) {
                 let c = &self.commits[t.commit];
@@ -1467,10 +1464,10 @@ pub fn dirty_paths(dir: &Path) -> std::collections::HashSet<String> {
         }
         out.insert(e[3..].to_string());
         // A rename or copy lists its origin as the next entry.
-        if matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C') {
-            if let Some(from) = entries.next() {
-                out.insert(from.to_string());
-            }
+        if (matches!(e.as_bytes()[0], b'R' | b'C') || matches!(e.as_bytes()[1], b'R' | b'C'))
+            && let Some(from) = entries.next()
+        {
+            out.insert(from.to_string());
         }
     }
     out
