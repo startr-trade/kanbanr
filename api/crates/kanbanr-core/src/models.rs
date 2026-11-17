@@ -384,6 +384,15 @@ pub struct Signoff {
     /// repository: such a record is not judged by its branches.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub branch_heads: std::collections::BTreeMap<String, String>,
+    /// The position text (`<commit>` or `<commit>+<dirty>`) the item resolved to when the sign-off
+    /// was given with the code repository (FTR-004). Empty without one, or on a record an older
+    /// kanbanr wrote.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub position: String,
+    /// Each repository doc the item lists under Affects docs that exists at `position`, with its
+    /// blob id there (FTR-004): what was read can be opened again. Empty otherwise.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub docs_read: std::collections::BTreeMap<String, String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1823,6 +1832,37 @@ mod tests {
             back.extra.is_empty(),
             "the field is known, not kept as extra"
         );
+    }
+
+    /// FTR-004 R-7: a sign-off given without the code repository writes neither `position` nor
+    /// `docs_read`, and a record an older kanbanr wrote reads back and writes out byte for byte;
+    /// one with them keeps them as known fields, not as `extra` (FEAT-151).
+    #[test]
+    fn a_signoff_without_a_position_reads_back_unchanged() {
+        let older = "id: design-review\nby: Ada\nat: 2026-11-13T10:00:00Z\nrev: abc\nnote: fine\n";
+        let back: Signoff = crate::yaml::from_str(older).unwrap();
+        assert!(back.position.is_empty());
+        assert!(back.docs_read.is_empty());
+        assert!(back.extra.is_empty());
+        assert_eq!(crate::yaml::to_string(&back).unwrap(), older);
+
+        let commit = "1a2b3c4".repeat(5) + "abcde";
+        let blob = "9fe1d20".repeat(5) + "01234";
+        let located = Signoff {
+            position: commit.clone(),
+            docs_read: [("docs/guide/using/x.md".to_string(), blob.clone())].into(),
+            ..back
+        };
+        let text = crate::yaml::to_string(&located).unwrap();
+        assert!(text.contains(&format!("position: {commit}")), "{text}");
+        assert!(text.contains(&blob), "{text}");
+        let again: Signoff = crate::yaml::from_str(&text).unwrap();
+        assert_eq!(again, located);
+        assert!(
+            again.extra.is_empty(),
+            "the fields are known, not kept as extra"
+        );
+        assert_eq!(crate::yaml::to_string(&again).unwrap(), text);
     }
 
     /// FTR-013 R-6: a sign-off records each flagged text and how it was settled, nothing when none
