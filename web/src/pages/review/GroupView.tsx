@@ -28,10 +28,12 @@ import {
   askText,
   batchOf,
   decisionBody,
+  emptySelection,
   isTestsOnly,
-  preselected,
   select,
   selectAll,
+  selectAllState,
+  selectBatch,
   selectTestsOnly,
   type Selection,
 } from "../../reviewGroups";
@@ -39,6 +41,7 @@ import { Empty, ErrorState, LoadingState, WorkingState, filterRows, sortRows, us
 import type { BatchAnswer } from "../../api";
 import type { GroupDecisionAnswer, GroupSlice, ReviewRow as Row } from "../../types";
 import { ACCEPT_COMMAND, ACCEPT_SENTENCE } from "../../systemBaselineView";
+import "./review.css";
 import { ManualGroupLive } from "./ManualGroup";
 import { DiagramWatch, ReviewRow, type DiagramState } from "./ReviewRow";
 
@@ -204,7 +207,7 @@ export function GroupPanel(p: {
     return blockedSentence(verb, c) ?? "";
   };
 
-  const [sel, setSel] = useState<Selection>(() => preselected(slice, pending));
+  const [sel, setSel] = useState<Selection>(() => emptySelection(slice.key));
   // A live update re-reads the slice; the selection is kept, minus rows no longer selectable.
   useEffect(() => {
     setSel((s) => {
@@ -270,7 +273,13 @@ export function GroupPanel(p: {
   const n = [...visible.keys].filter((k) => slice.rows.some((r) => r.key === k)).length;
   const selectable = shown.filter((r) => reasonFor(r) === "");
   const testsOnlyN = shown.filter((r) => isTestsOnly(r) && !pending.has(r.key) && r.blocked === "").length;
-  const allOn = selectable.length > 0 && selectable.every((r) => sel.keys.has(r.key));
+  const allState = selectAllState(sel, shown, selectable);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  // React has no prop for the dash, so it is set on every render.
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = allState.indeterminate;
+  });
+  const hasReasons = shown.some((r) => reasonFor(r) !== "");
   const preparedSel: Selection = {
     group: sel.group,
     keys: new Set([...visible.keys].filter((k) => slice.rows.some((r) => r.key === k && r.prepared !== ""))),
@@ -292,7 +301,7 @@ export function GroupPanel(p: {
   const label = actionLabel(slice, visible, target) + (chosenBatch !== null ? checksOf(chosenBatch) : "");
 
   return (
-    <div className="review-group">
+    <div className={hasReasons ? "review-group review-group-has-reasons" : "review-group"}>
       <div className="review-group-head">
         <p className="muted small review-group-sentence">{sentenceOf(slice)}</p>
         <div className="review-group-tools">
@@ -300,14 +309,15 @@ export function GroupPanel(p: {
             <label className="review-select-all">
               <input
                 type="checkbox"
-                checked={allOn}
+                ref={selectAllRef}
+                checked={allState.checked}
                 disabled={selectable.length === 0 ? true : undefined}
                 onChange={(e) => {
                   const on = e.currentTarget.checked;
                   setSel((s) => selectAll(s, shown, on, pending));
                 }}
               />{" "}
-              Select all
+              <span aria-live="polite">{allState.label}</span>
             </label>
           ) : null}
           {p.writable && slice.key === "approve" && shown.some(isTestsOnly) ? (
@@ -400,12 +410,28 @@ export function GroupPanel(p: {
             To accept it, run <code>{ACCEPT_COMMAND}</code> in your own terminal.
           </p>
         ) : null}
-        {batchNames.map((name) => (
-          <p className="muted small review-group-batch" key={name}>
-            {slice.rows.filter((r) => r.batch === name).length} results from {name}
-            {checksOf(name)}
-          </p>
-        ))}
+        {batchNames.map((name) => {
+          const takable = slice.rows.filter((r) => r.batch === name && reasonFor(r) === "").length;
+          return (
+            <p className="muted small review-group-batch" key={name}>
+              {slice.rows.filter((r) => r.batch === name).length} results from {name}
+              {checksOf(name)}
+              {p.writable ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={takable === 0}
+                    onClick={() => setSel((s) => selectBatch(s, slice.rows, name, pending))}
+                  >
+                    Select these {takable}
+                  </button>
+                </>
+              ) : null}
+            </p>
+          );
+        })}
         {outcome ? (
           <div className={`review-group-outcome ${outcome.ok ? "done" : "warn"}`} role="status">
             <span className={`chip ${outcome.ok ? "done" : "warn"}`}>{outcome.text}</span>

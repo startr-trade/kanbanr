@@ -7,8 +7,17 @@
 //   web::check_review_selection_stays_within_one_group (R-2) — select ignores a key from another
 //     group and a blocked row; selectAll takes only unblocked, checked rows; switching groups
 //     empties the selection; actionLabel names the action and the count;
-//   web::check_review_prepared_rows_arrive_selected (R-5) — preselected takes the prepared,
-//     unblocked rows; unticking one keeps the rest;
+//   web::check_review_prepared_rows_arrive_unselected (R-5) — nothing is preselected: a rendered
+//     group draws every box unticked and its button reads Confirm 0; selectBatch takes exactly one
+//     batch's selectable rows, which then read Confirm all N; unticking one leaves a partial batch;
+//   web::check_review_batch_is_selected_by_its_own_button (R-5) — the batch line offers "Select these
+//     N"; pressing it ticks exactly those rows and the head offers Confirm all N and Reject all N;
+//   web::check_review_select_all_shows_part_selection_and_the_count (R-2) — selectAllState's none,
+//     some and all cases; in a live DOM, one row of three ticked gives the dash and "1 of 3 selected";
+//   web::check_review_row_columns_hold_their_place (R-9) — review.css's five-column grid, its reason
+//     column, the two-line clamp and the meta's wrap-and-hide; the rendered rows carry the classes;
+//   web::check_review_rows_fit_a_390_px_screen (R-9) — review.css's narrow form places the heading,
+//     actions, reason and meta in the rows it names;
 //   web::check_review_url_names_the_group_and_open_rows (R-6) — ?group=docs-folded#DEF-066 opens
 //     that tab and row; a changed filter writes r.q; rendered, the hash opens the row and r.q
 //     filters the rows;
@@ -54,10 +63,11 @@ import {
   emptySelection,
   groupTabs,
   isTestsOnly,
-  preselected,
   reviewTabs,
   select,
   selectAll,
+  selectAllState,
+  selectBatch,
   selectTestsOnly,
 } from "../src/reviewGroups.ts";
 import { parseOpen, parseState, writeState } from "../src/ui/urlState.ts";
@@ -163,7 +173,7 @@ let ok = true;
   eq(problems, "select-all off empties the group's selection", keys(selectAll(sel, rows, false)), []);
 
   const other = slice("docs-folded", "Sign off docs-folded", "Sign off", [row("FTR-1"), row("DEF-9")]);
-  const switched = preselected(other);
+  const switched = emptySelection(other.key);
   eq(problems, "switching groups empties the selection", [switched.group, keys(switched)], ["docs-folded", []]);
   eq(problems, "a key of the old group is not carried into the new one", keys(select(switched, "approve", "FTR-2", true, rows)), []);
 
@@ -192,7 +202,7 @@ let ok = true;
   ok = report("web::check_review_selection_stays_within_one_group", problems) && ok;
 }
 
-// R-5: a batch Claude prepared arrives selected, and the person can untick any of it.
+// R-5: nothing is preselected; a batch is selected by the person, with its own button.
 {
   const problems = [];
   const rows = [
@@ -202,8 +212,26 @@ let ok = true;
     row("DEF-4/R-1/manual: d", { code: "DEF-4", requirement: "R-1", test: "manual: d" }),
   ];
   const manual = slice("manual", "Manual checks", "Confirm", rows);
-  const pre = preselected(manual);
-  eq(problems, "the prepared, unblocked rows arrive selected", [pre.group, keys(pre)], ["manual", ["DEF-1/R-1/manual: a", "DEF-2/R-1/manual: b"]]);
+  const RG = await import("../src/reviewGroups.ts");
+  if ("preselected" in RG) problems.push("preselected is still exported");
+  try {
+    // The Manual group draws its rows through a live read; a group of another key draws them here.
+    const none = await renderPanel({ ...manual, key: "manual-rows" });
+    const boxes = [...none.document.querySelectorAll('.ui-row-select input[type="checkbox"]')];
+    eq(problems, "every row has a box (the blocked one disabled)", boxes.length, 4);
+    eq(problems, "a group loads with every box unticked", boxes.filter((b) => b.hasAttribute("checked")).length, 0);
+    const btn = [...none.document.querySelectorAll(".review-group-actions button")].map((b) => [b.textContent.trim(), b.disabled]);
+    eq(problems, "the action reads Confirm 0 and is disabled; no Reject offered", btn, [["Confirm 0", true]]);
+  } catch (e) {
+    problems.push(`rendering the group failed: ${e?.stack ?? e}`);
+  }
+  let pre = emptySelection("manual");
+  try {
+    pre = RG.selectBatch(emptySelection("manual"), rows, "agile-1");
+  } catch (e) {
+    problems.push(`selectBatch: ${e?.message ?? e}`);
+  }
+  eq(problems, "selectBatch takes exactly the batch's selectable rows", [pre.group, keys(pre)], ["manual", ["DEF-1/R-1/manual: a", "DEF-2/R-1/manual: b"]]);
   eq(problems, "the selection that is one whole batch reads Confirm all N", actionLabel(manual, pre), "Confirm all 2");
   eq(problems, "and is that batch", batchOf(manual, pre), "agile-1");
   eq(problems, "the question names the batch's items", askText(manual, pre, rows), "Confirm DEF-1 R-1 and DEF-2 R-1?");
@@ -216,9 +244,16 @@ let ok = true;
   eq(problems, "nothing selected is no batch", batchOf(manual, emptySelection("manual")), null);
   const body = decisionBody(manual, unticked, rows, "a", "");
   eq(problems, "a prepared row sends its record", [body.items[0].prepared, body.items[0].requirement, body.items[0].test], ["P-1", "R-1", "manual: a"]);
-  const preWithPending = preselected(slice("approve", "Approve", "Approve", [row("FTR-1", { prepared: "P-9" }), row("FTR-2", { prepared: "P-8" })]), new Set(["FTR-2"]));
-  eq(problems, "a prepared row whose diagram check is pending is not preselected", keys(preWithPending), ["FTR-1"]);
-  ok = report("web::check_review_prepared_rows_arrive_selected", problems) && ok;
+  try {
+    const batchRows = [row("FTR-1", { prepared: "P-9", batch: "b-1" }), row("FTR-2", { prepared: "P-8", batch: "b-1" }), row("FTR-3", { batch: "b-2" })];
+    const taken = RG.selectBatch(emptySelection("approve"), batchRows, "b-1", new Set(["FTR-2"]));
+    eq(problems, "a row whose diagram check is pending is not taken by selectBatch", keys(taken), ["FTR-1"]);
+    eq(problems, "selectBatch replaces an earlier selection", keys(RG.selectBatch({ group: "approve", keys: new Set(["FTR-3"]) }, batchRows, "b-1")), ["FTR-1", "FTR-2"]);
+    eq(problems, "an unknown batch selects nothing", keys(RG.selectBatch(emptySelection("approve"), batchRows, "nope")), []);
+  } catch (e) {
+    problems.push(`selectBatch: ${e?.message ?? e}`);
+  }
+  ok = report("web::check_review_prepared_rows_arrive_unselected", problems) && ok;
 }
 
 // R-6, the pure parts: the URL names the group and the open rows; the filter is kept under r.
@@ -263,6 +298,42 @@ async function renderPanel(s, { url = "/p/x/review", writable = true } = {}) {
   );
 }
 
+/**
+ * GroupPanel in a live DOM (createRoot, act), for what only a press shows: `fn(api)` gets the
+ * container, `act`, `click(el)` and the DOM's window. The globals are restored after.
+ */
+async function live(s, fn) {
+  const dom = new JSDOM("<!DOCTYPE html><body><div id=root></div></body>", { url: "http://localhost/p/x/review" });
+  const saved = {};
+  for (const k of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) saved[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+  Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true });
+  Object.defineProperty(globalThis, "document", { value: dom.window.document, configurable: true });
+  Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    const mod = await load("src/pages/review/GroupView.tsx");
+    const React = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { MemoryRouter } = await import("react-router-dom");
+    const container = dom.window.document.getElementById("root");
+    const root = createRoot(container);
+    const el = React.createElement(
+      MemoryRouter,
+      { initialEntries: ["/p/x/review"] },
+      React.createElement(mod.GroupPanel, { project: "x", slice: s, writable: true, who: "A <a@example.invalid>", body: (r) => `evidence of ${r.key}` }),
+    );
+    await React.act(async () => root.render(el));
+    const click = (node) => React.act(async () => node.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+    try {
+      await fn({ container, click, window: dom.window });
+    } finally {
+      await React.act(async () => root.unmount());
+    }
+  } finally {
+    for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  }
+}
+
 try {
   // R-3: every group action asks first, naming the items; the second press posts.
   {
@@ -280,7 +351,7 @@ try {
     const head = document.querySelector(".review-group-head");
     if (!head) problems.push(`no .review-group-head: ${html}`);
     const buttons = [...(head?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim());
-    if (!buttons.includes("Sign off docs-folded 2")) problems.push(`the group button does not read "Sign off docs-folded 2": ${JSON.stringify(buttons)}`);
+    if (!buttons.includes("Sign off docs-folded 0")) problems.push(`the group button does not read "Sign off docs-folded 0" (nothing preselected): ${JSON.stringify(buttons)}`);
     if (document.querySelector(".ask-first")) problems.push("the question shows before the first press");
 
     const src = read("../src/pages/review/GroupView.tsx");
@@ -741,15 +812,156 @@ try {
     const hidden = Array.from({ length: 12 }, (_, i) => row(`SPK-002/R-${i + 1}`, { code: "SPK-002", prepared: `P-${i + 1}`, what: "manual check" }));
     const mine = row("DEF-113", { what: "manual check" });
     const group = slice("docs-folded", "Sign off docs-folded", "Sign off", [...hidden, mine]);
-    // Filtered to the one unprepared row: the twelve preselected rows are not shown.
-    const { document } = await renderPanel(group, { url: "/p/x/review?group=docs-folded&r.q=DEF-113" });
-    eq(problems, "only the matching row is drawn", [...document.querySelectorAll("section.ui-row")].map((s) => s.id), ["DEF-113"]);
-    const buttons = [...document.querySelectorAll(".review-group-actions button")].map((b) => [b.textContent.trim(), b.disabled]);
-    eq(problems, "the action counts no hidden row and is disabled", buttons, [["Sign off docs-folded 0", true]]);
-    // Unfiltered, the same group offers all twelve to confirm and reject.
+    // Rows no longer arrive selected, so the twelve prepared rows are ticked first, then the filter
+    // is set to the one unprepared row: the twelve stay selected but are not shown.
     const all = await renderPanel(group, { url: "/p/x/review?group=docs-folded" });
-    eq(problems, "unfiltered, the prepared rows are offered", [...all.document.querySelectorAll(".review-group-actions button")].map((b) => b.textContent.trim()), ["Sign off docs-folded 12", "Reject 12 prepared"]);
+    eq(problems, "unfiltered, nothing is selected until the person selects", [...all.document.querySelectorAll(".review-group-actions button")].map((b) => b.textContent.trim()), ["Sign off docs-folded 0"]);
+    try {
+      await live(group, async ({ container, click, window }) => {
+        const labels = () => [...container.querySelectorAll(".review-group-actions button")].map((b) => [b.textContent.trim(), b.disabled]);
+        for (const r of hidden) await click(container.querySelector(`[id="${r.key}"] .ui-row-select input[type="checkbox"]`));
+        eq(problems, "the twelve prepared rows are offered to confirm and reject", labels().map((l) => l[0]), ["Sign off docs-folded 12", "Reject 12 prepared"]);
+        const filter = container.querySelector("input.review-group-filter");
+        const React = await import("react");
+        const { Simulate } = await import("react-dom/test-utils");
+        await React.act(async () => {
+          filter.value = "DEF-113";
+          Simulate.change(filter);
+        });
+        eq(problems, "only the matching row is drawn", [...container.querySelectorAll("section.ui-row")].map((s) => s.id), ["DEF-113"]);
+        eq(problems, "the action counts no hidden row and is disabled", labels(), [["Sign off docs-folded 0", true]]);
+      });
+    } catch (e) {
+      problems.push(`live render threw: ${e?.stack ?? e}`);
+    }
     ok = report("web::check_group_action_takes_only_the_rows_shown", problems) && ok;
+  }
+  // R-5: a batch is selected by its own button, then confirmed after asking.
+  {
+    const problems = [];
+    const rows = [
+      row("DEF-1", { prepared: "P-1", batch: "agile-1", pills: ["prepared"] }),
+      row("DEF-2", { prepared: "P-2", batch: "agile-1", pills: ["prepared"] }),
+      row("DEF-3", { prepared: "P-3", blocked: "Do the check first." }),
+      row("DEF-4"),
+    ];
+    // Key and action of a group that is not the Manual one, whose rows a live read draws.
+    const group = slice("manual-rows", "Manual checks", "Confirm", rows);
+    const { document } = await renderPanel(group);
+    const line = document.querySelector(".review-group-batch");
+    eq(problems, "the batch line names its rows", line?.textContent.replace(/\s+/g, " ").trim().startsWith("2 results from agile-1"), true);
+    eq(problems, "its button reads Select these 2 (the blocked row cannot be taken)", [...(line?.querySelectorAll("button") ?? [])].map((b) => b.textContent.trim()), ["Select these 2"]);
+    const readOnly = await renderPanel(group, { writable: false });
+    eq(problems, "a read-only monitor offers no button on the batch line", readOnly.document.querySelectorAll(".review-group-batch button").length, 0);
+    const blockedOnly = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("DEF-3", { prepared: "P-3", batch: "agile-1", blocked: "Do the check first." })]));
+    eq(problems, "a batch with nothing selectable has its button disabled", [...blockedOnly.document.querySelectorAll(".review-group-batch button")].map((b) => [b.textContent.trim(), b.disabled]), [["Select these 0", true]]);
+    try {
+      await live(group, async ({ container, click }) => {
+        const ticked = () => [...container.querySelectorAll('.ui-row-select input[type="checkbox"]')].filter((c) => c.checked).map((c) => c.closest("section").id);
+        eq(problems, "live: nothing ticked at first", ticked(), []);
+        const button = [...container.querySelectorAll(".review-group-batch button")].find((b) => /Select these/.test(b.textContent));
+        if (!button) return void problems.push("live: no Select these button");
+        await click(button);
+        eq(problems, "live: pressing it ticks exactly the batch's rows", ticked(), ["DEF-1", "DEF-2"]);
+        const heads = [...container.querySelectorAll(".review-group-actions button")].map((b) => b.textContent.trim());
+        eq(problems, "live: the head then offers Confirm all 2 and Reject all 2", heads, ["Confirm all 2", "Reject all 2"]);
+      });
+    } catch (e) {
+      problems.push(`live render threw: ${e?.stack ?? e}`);
+    }
+    ok = report("web::check_review_batch_is_selected_by_its_own_button", problems) && ok;
+  }
+
+  // R-2: Select all shows part-selection and the count.
+  {
+    const problems = [];
+    const rows = [row("A-1"), row("A-2"), row("A-3"), row("A-4", { blocked: "Not yet." })];
+    const none = emptySelection("approve");
+    const state = (keysIn, shown = rows, selectable = rows.filter((r) => r.blocked === "")) => {
+      try {
+        return selectAllState({ group: "approve", keys: new Set(keysIn) }, shown, selectable);
+      } catch (e) {
+        problems.push(`selectAllState: ${e?.message ?? e}`);
+        return {};
+      }
+    };
+    eq(problems, "none selected", state([]), { checked: false, indeterminate: false, label: "Select all 3" });
+    eq(problems, "some selected", state(["A-1"]), { checked: false, indeterminate: true, label: "1 of 4 selected" });
+    eq(problems, "all the selectable selected", state(["A-1", "A-2", "A-3"]), { checked: true, indeterminate: false, label: "3 of 4 selected" });
+    eq(problems, "nothing selectable is never checked", state([], rows.slice(3), []), { checked: false, indeterminate: false, label: "Select all 0" });
+    eq(problems, "a key that is not shown is not counted", state(["A-1", "ZZ"]), { checked: false, indeterminate: true, label: "1 of 4 selected" });
+    void none;
+    // The example from the design: 12 prepared rows ticked out of 47 shown.
+    const many = Array.from({ length: 47 }, (_, i) => row(`M-${i + 1}`, i < 12 ? { prepared: "P" } : { blocked: "Do the check." }));
+    const picked = many.slice(0, 12).map((r) => r.key);
+    eq(problems, "12 of 47: checked, since only those can be selected", state(picked, many, many.slice(0, 12)), { checked: true, indeterminate: false, label: "12 of 47 selected" });
+    eq(problems, "3 of 47: the dash", state(picked.slice(0, 3), many, many.slice(0, 12)), { checked: false, indeterminate: true, label: "3 of 47 selected" });
+    try {
+      const three = slice("docs-folded", "Sign off docs-folded", "Sign off", [row("DEF-1"), row("DEF-2"), row("DEF-3")]);
+      await live(three, async ({ container, click }) => {
+        const all = () => container.querySelector(".review-select-all input");
+        const text = () => container.querySelector(".review-select-all [aria-live]")?.textContent.trim();
+        eq(problems, "live: at first Select all 3", [all().checked, all().indeterminate, text()], [false, false, "Select all 3"]);
+        await click(container.querySelector('#DEF-1 .ui-row-select input[type="checkbox"]'));
+        eq(problems, "live: one of three ticked is the dash and 1 of 3 selected", [all().checked, all().indeterminate, text()], [false, true, "1 of 3 selected"]);
+        await click(all());
+        eq(problems, "live: Select all then checks it, no dash", [all().checked, all().indeterminate, text()], [true, false, "3 of 3 selected"]);
+      });
+    } catch (e) {
+      problems.push(`live render threw: ${e?.stack ?? e}`);
+    }
+    ok = report("web::check_review_select_all_shows_part_selection_and_the_count", problems) && ok;
+  }
+
+  // R-9: rows keep fixed columns (the stylesheet, and the classes the rendered rows carry).
+  {
+    const problems = [];
+    const css = read("../src/pages/review/review.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const narrow = css.indexOf("@media (max-width: 720px)");
+    const wide = narrow < 0 ? css : css.slice(0, narrow);
+    const rulesOf = (text) => [...text.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+    const rules = rulesOf(wide);
+    const has = (re, pred) => rules.some((r) => re.test(r.sel) && pred(r.body));
+    if (!has(/^\.review-group \.ui-row-head$/, (b) => /display:\s*grid/.test(b) && /grid-template-columns:\s*1\.5rem var\(--review-reason-w, 0\) minmax\(0, 1fr\) minmax\(0, 24rem\) auto/.test(b)))
+      problems.push(".review-group .ui-row-head is not the five-column grid");
+    if (!has(/^\.review-group \.ui-row-select$/, (b) => /display:\s*contents/.test(b))) problems.push(".ui-row-select is not display: contents");
+    if (!has(/^\.review-group\.review-group-has-reasons$/, (b) => /--review-reason-w:\s*16rem/.test(b))) problems.push("review-group-has-reasons does not set --review-reason-w: 16rem");
+    if (!has(/\.ui-row-reason$/, (b) => /-webkit-line-clamp:\s*2/.test(b) && /overflow:\s*hidden/.test(b))) problems.push("the reason is not clamped to two lines");
+    if (!has(/\.review-row-meta$/, (b) => /flex-wrap:\s*wrap/.test(b) && /overflow:\s*hidden/.test(b) && /max-height:/.test(b))) problems.push("the meta does not wrap and hide what does not fit");
+    if (!has(/\.review-row-what$/, (b) => /text-overflow:\s*ellipsis/.test(b) && /white-space:\s*nowrap/.test(b))) problems.push("the what text does not ellipsize");
+    if (!has(/\.review-group-tools$/, (b) => /padding-left:\s*var\(--sp-2\)/.test(b))) problems.push("Select all is not aligned with the row boxes");
+    if (!/import "\.\/review\.css"/.test(read("../src/pages/review/GroupView.tsx"))) problems.push("GroupView.tsx does not import review.css");
+    if (!/title=\{p\.select\.disabled\}/.test(read("../src/ui/AccordionRow.tsx"))) problems.push("the reason span has no title");
+
+    const blocked = row("FTR-2", { blocked: "Claude settles 1 text first: ask Claude to check them.", pills: ["prepared", "batch agile-1", "v0.8.0", "SP-004"], what: "waiting on docs-folded" });
+    const withReason = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("FTR-1"), blocked]));
+    const without = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("FTR-1")]));
+    eq(problems, "a group with a blocked row carries review-group-has-reasons", withReason.document.querySelector(".review-group")?.classList.contains("review-group-has-reasons"), true);
+    eq(problems, "a group without one does not", without.document.querySelector(".review-group")?.classList.contains("review-group-has-reasons"), false);
+    const meta = withReason.document.querySelector("#FTR-2 .review-row-meta");
+    eq(problems, "the meta span's title holds the what and every pill", meta?.getAttribute("title"), "waiting on docs-folded · prepared · batch agile-1 · v0.8.0 · SP-004");
+    eq(problems, "the reason span's title holds the full sentence", withReason.document.querySelector("#FTR-2 .ui-row-reason")?.getAttribute("title"), blocked.blocked);
+    ok = report("web::check_review_row_columns_hold_their_place", problems) && ok;
+  }
+
+  // R-9: Review fits a 390 px screen.
+  {
+    const problems = [];
+    const css = read("../src/pages/review/review.css").replace(/\/\*[\s\S]*?\*\//g, "");
+    const at = css.indexOf("@media (max-width: 720px)");
+    if (at < 0) problems.push("no @media (max-width: 720px) block");
+    else {
+      const rules = [...css.slice(at).matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+      const has = (re, pred) => rules.some((r) => re.test(r.sel) && pred(r.body));
+      if (!has(/^\.review-group \.ui-row-head$/, (b) => /grid-template-columns:\s*1\.5rem minmax\(0, 1fr\) auto/.test(b))) problems.push("the head is not 1.5rem, 1fr, auto at 390 px");
+      if (!has(/\.ui-row-title$/, (b) => /grid-column:\s*2/.test(b) && /grid-row:\s*1/.test(b))) problems.push("the heading is not row 1, column 2");
+      if (!has(/\.ui-row-actions$/, (b) => /grid-column:\s*3/.test(b) && /grid-row:\s*1/.test(b))) problems.push("the actions are not row 1, column 3");
+      if (!has(/\.ui-row-reason$/, (b) => /grid-column:\s*2\s*\/\s*4/.test(b) && /grid-row:\s*2/.test(b))) problems.push("the reason is not row 2, columns 2 to 3");
+      if (!has(/\.ui-row-meta$/, (b) => /grid-column:\s*2\s*\/\s*4/.test(b) && /grid-row:\s*3/.test(b))) problems.push("the meta is not row 3, columns 2 to 3");
+      if (!has(/\.review-group-tools$/, (b) => /flex-wrap:\s*wrap/.test(b))) problems.push("the tools do not wrap");
+      if (!has(/\.review-group-filter$/, (b) => /flex:\s*1 1 100%/.test(b))) problems.push("the filter does not take the whole line");
+    }
+    ok = report("web::check_review_rows_fit_a_390_px_screen", problems) && ok;
   }
 } catch (e) {
   console.error(`check-review-groups: rendering failed — ${e?.stack ?? e}`);

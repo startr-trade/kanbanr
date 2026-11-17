@@ -9,7 +9,8 @@
 // Usage: npm run check:review-check-id
 import { readFileSync } from "node:fs";
 import { batchChecks, fieldLabel } from "../src/prepared.ts";
-import { closeRender, render } from "./lib/render.mjs";
+import { JSDOM } from "jsdom";
+import { closeRender, load, render } from "./lib/render.mjs";
 
 const problems = [];
 const expect = (name, got, want) => {
@@ -60,21 +61,53 @@ const row = (key, item, batch) => ({
   blocked: "", pills: [], prepared: `P-${key}`, batch, rev: "", spec_rev: "", signoff: "", requirement: "R-1", test: "manual: x",
 });
 try {
-  const { document } = await render("src/pages/review/GroupView.tsx", "GroupPanel", {
+  // Nothing arrives selected (FTR-038 R-5): the batch line offers its own "Select these 2" button,
+  // and the action reads "Confirm all 2 (checks ...)" once it is pressed. A group of another key than
+  // Manual is used: the Manual group draws its rows through a live read (EventSource).
+  const props = {
     project: "x",
-    slice: { key: "manual", label: "Manual checks", action: "Confirm", choices: [], rows: [row("a", "FTR-034", "b2"), row("b", "DEF-040", "b2")] },
+    slice: { key: "manual-rows", label: "Manual checks", action: "Confirm", choices: [], rows: [row("a", "FTR-034", "b2"), row("b", "DEF-040", "b2")] },
     batches: [{ name: "b2", views: [view("a", "FTR-034", "MT-1"), view("b", "DEF-040", "MT-4")] }],
     writable: true,
     who: "Alice <a@example.invalid>",
     tick: 0,
     body: () => "",
-  });
+  };
+  const { document } = await render("src/pages/review/GroupView.tsx", "GroupPanel", props);
   const head = document.querySelector(".review-group-head");
   const lines = [...(head?.querySelectorAll(".review-group-batch") ?? [])];
-  expect("one line per batch in the group", lines.map((l) => l.textContent.trim()), ["2 results from b2 (checks MT-1, MT-4)"]);
+  const plain = (l) => {
+    const c = l.cloneNode(true);
+    c.querySelectorAll("button").forEach((b) => b.remove());
+    return c.textContent.trim();
+  };
+  expect("one line per batch in the group", lines.map(plain), ["2 results from b2 (checks MT-1, MT-4)"]);
   if (lines.some((l) => l.querySelector(".chip"))) problems.push("GroupPanel: the check id is a chip, not the decided plain text");
-  const buttons = [...(head?.querySelectorAll("button") ?? [])].map((x) => x.textContent.trim());
-  if (!buttons.includes("Confirm all 2 (checks MT-1, MT-4)")) problems.push(`GroupPanel: the batch's action does not read "Confirm all 2 (checks MT-1, MT-4)": ${JSON.stringify(buttons)}`);
+  // Pressed in a live DOM, as check-review-batch.mjs does.
+  const dom = new JSDOM("<!DOCTYPE html><body><div id=root></div></body>", { url: "http://localhost/p/x/review" });
+  const saved = {};
+  for (const k of ["window", "document", "navigator", "IS_REACT_ACT_ENVIRONMENT"]) saved[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+  Object.defineProperty(globalThis, "window", { value: dom.window, configurable: true });
+  Object.defineProperty(globalThis, "document", { value: dom.window.document, configurable: true });
+  Object.defineProperty(globalThis, "navigator", { value: dom.window.navigator, configurable: true });
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  try {
+    const mod = await load("src/pages/review/GroupView.tsx");
+    const React = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { MemoryRouter } = await import("react-router-dom");
+    const container = dom.window.document.getElementById("root");
+    const root = createRoot(container);
+    await React.act(async () => root.render(React.createElement(MemoryRouter, { initialEntries: ["/p/x/review"] }, React.createElement(mod.GroupPanel, props))));
+    const button = [...container.querySelectorAll(".review-group-batch button")].find((b) => /Select these/.test(b.textContent));
+    if (!button) problems.push("GroupPanel: the batch line has no Select these button");
+    else await React.act(async () => button.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+    const buttons = [...container.querySelectorAll(".review-group-head button")].map((x) => x.textContent.trim());
+    if (!buttons.includes("Confirm all 2 (checks MT-1, MT-4)")) problems.push(`GroupPanel: the batch's action does not read "Confirm all 2 (checks MT-1, MT-4)": ${JSON.stringify(buttons)}`);
+    await React.act(async () => root.unmount());
+  } finally {
+    for (const [k, d] of Object.entries(saved)) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  }
 } catch (e) {
   problems.push(`rendering the group failed: ${e?.stack ?? e}`);
 } finally {
