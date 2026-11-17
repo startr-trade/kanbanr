@@ -14,6 +14,7 @@ import {
   DataTable,
   Empty,
   ErrorState,
+  GrowthChart,
   LoadingState,
   Matrix,
   ProgressBar,
@@ -186,6 +187,21 @@ function Kit(p: { theme: Theme }) {
 
       <Section title="Timeline" level={3} id={`${k}-timeline`}>
         <Timeline from={TIMELINE.from} to={TIMELINE.to} today={TIMELINE.today} lanes={TIMELINE.lanes} caption="Sprints and releases" />
+      </Section>
+
+      <Section title="Growth chart" level={3} id={`${k}-growth`}>
+        <GrowthChart
+          points={[
+            { label: "v0.5.0", value: 12, total: 20 },
+            { label: "v0.6.0", value: 26, total: 34 },
+            { label: "v0.7.0", value: 41, total: 52 },
+          ]}
+          max={60}
+          unit="requirements proven"
+          caption="Requirements proven by each release, as tested today"
+          tableCaption="Requirements proven by release"
+          stateKey={`${k}gc`}
+        />
       </Section>
 
       <Section title="Stage stepper" level={3} id={`${k}-stepper`}>

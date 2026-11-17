@@ -248,6 +248,27 @@ a.ui-progress:hover .ui-progress-bar { outline: 1px solid var(--accent); }
 .ui-tl-today line { stroke: var(--accent); }
 .ui-timeline .ui-tl-today text { fill: var(--accent); font-weight: 600; }
 
+/* The growth chart (FTR-076): one accent step line, a faint track, recessive grid; tokens only. */
+.ui-growth { margin: 0; }
+.ui-growth svg { display: block; width: 100%; max-width: 28rem; height: auto; }
+.ui-growth text { fill: var(--text-muted); font-size: var(--fs-1); }
+.ui-growth .ui-growth-grid line { stroke: var(--border); stroke-width: 1; }
+.ui-growth .ui-growth-line { stroke: var(--accent); stroke-linejoin: round; }
+.ui-growth .ui-growth-track { stroke: var(--accent); stroke-width: 2; opacity: 0.25; }
+.ui-growth .ui-growth-point circle { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.ui-growth .ui-growth-last { fill: var(--text); font-weight: 600; }
+.ui-growth-caption { margin-top: var(--sp-1); color: var(--text-muted); font-size: var(--fs-1); }
+.ui-growth-toggle {
+  margin-top: var(--sp-1);
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--fs-1);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* The stage stepper (R-5): dots joined by a line, the state in words under each. */
 .ui-stepper {
   display: flex;
