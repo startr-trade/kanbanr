@@ -58,3 +58,8 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 [dev-dependencies]
 # FEAT-034 unit tests inspect the data repo's commit log directly (vendored, matches kanbanr-core).
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
+
+# Closing inherited descriptors before the compiler cache server starts (FTR-062); libc is
+# already in the dependency graph.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

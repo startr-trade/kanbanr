@@ -17141,7 +17141,7 @@ fn build_bench_records_before_and_after_rows_for_each_scenario() {
     std::fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nwarm=$(grep -c 'bench: warm' crates/kanbanr-core/src/lib.rs)\necho \
+            "#!/bin/sh\necho 'test result: ok (cargo on stdout)'\nwarm=$(grep -c 'bench: warm' crates/kanbanr-core/src/lib.rs)\necho \
              \"$PWD|$*|jobs=${{CARGO_BUILD_JOBS:-}}|target=${{CARGO_TARGET_DIR:-}}|warm=$warm\" >> {}\n",
             calls.display()
         ),

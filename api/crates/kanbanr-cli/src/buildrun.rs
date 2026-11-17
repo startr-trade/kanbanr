@@ -418,13 +418,13 @@ fn server_env(plan: &Plan, base_dirs: &std::ffi::OsStr) -> Vec<(String, std::ffi
 /// succeeded. The server's settings go with every call, so a server that `--show-stats` starts on
 /// its own starts with them.
 fn sccache_call(sccache: &Path, env: &[(String, std::ffi::OsString)], arg: &str) -> Option<String> {
-    let out = std::process::Command::new(sccache)
-        .arg(arg)
+    let mut c = std::process::Command::new(sccache);
+    c.arg(arg)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    close_inherited_fds(&mut c);
+    let out = c.output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -436,6 +436,55 @@ fn server_call(plan: &Plan, arg: &str) -> Option<String> {
     let wanted = buildplan::base_dirs(&plan.main_root, &worktree_roots(&plan.main_root));
     let joined = std::env::join_paths(&wanted).ok()?;
     sccache_call(sccache, &server_env(plan, &joined), arg)
+}
+
+/// Any call may start the server, which outlives kanbanr: it must not inherit a descriptor beyond
+/// stdio. A lock a wrapper (`flock`) or a parent left open without close-on-exec, a build slot
+/// among them, would otherwise stay held by the server for as long as it runs, and every build
+/// would wait for it. kanbanr's own files are opened close-on-exec; this closes the rest in the
+/// child, before `sccache` starts.
+#[cfg(unix)]
+fn close_inherited_fds(c: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure only calls `close_range` or `close`, which are async-signal-safe, and
+    // allocates nothing.
+    unsafe {
+        c.pre_exec(|| {
+            close_from(3);
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn close_inherited_fds(_: &mut std::process::Command) {}
+
+/// Close every descriptor from `low` up: `close_range` where Linux has it, else one by one up to
+/// the process's limit.
+#[cfg(unix)]
+fn close_from(low: libc::c_int) {
+    #[cfg(target_os = "linux")]
+    // SAFETY: a plain system call on descriptors this process owns; no memory is touched.
+    unsafe {
+        if libc::syscall(
+            libc::SYS_close_range,
+            low as libc::c_uint,
+            libc::c_uint::MAX,
+            0 as libc::c_uint,
+        ) == 0
+        {
+            return;
+        }
+    }
+    // SAFETY: `sysconf` and `close` touch no memory of ours; a descriptor that is not open is
+    // refused with EBADF, which is ignored.
+    unsafe {
+        let max = libc::sysconf(libc::_SC_OPEN_MAX);
+        let max = if max <= 0 { 1024 } else { max.min(65_536) } as libc::c_int;
+        for fd in low..max {
+            libc::close(fd);
+        }
+    }
 }
 
 /// Make sure the project's sccache server runs with the main checkout and every worktree as its
@@ -1240,12 +1289,14 @@ impl Drop for BenchTree {
 /// Run `cmd` in `dir` as [`spawn_in`] does, but always into the worktree's own target folder:
 /// a target folder set in the environment would let one bench run warm the next.
 fn spawn_bench(dir: &Path, cmd: &[String], env: &Env) -> std::io::Result<i32> {
+    // The command's own output goes to stderr, so `bench --json` prints the rows alone.
     let status = std::process::Command::new(&cmd[0])
         .args(&cmd[1..])
         .envs(env.iter().map(|(k, v)| (k, v)))
         .env_remove("CARGO_TARGET_DIR")
         .env_remove("CARGO_BUILD_TARGET_DIR")
         .current_dir(dir)
+        .stdout(std::io::stderr())
         .status()?;
     Ok(exit_code(status))
 }
@@ -1915,6 +1966,74 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// FTR-062 R-4 (the coordinator, 17 Nov): the cache server outlives the build that starts it,
+    /// so it must hold none of that build's locks: neither a lock a wrapper left open without
+    /// close-on-exec (cbuild's `flock`) nor the build's own slot. Once the build gives them back,
+    /// both can be taken while the server still runs.
+    #[cfg(unix)]
+    #[test]
+    fn the_cache_server_holds_no_lock_of_the_build_that_started_it() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::fs::canonicalize(scratch("sccache-fds")).unwrap();
+        let main = dir.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git_ok(&main, &["init", "-q"]);
+        git_ok(&main, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        // The stub's server is a background process that lives on, as sccache's does.
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = bin.join("sccache");
+        let pid = dir.join("server.pid");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$1\" in\n\
+                 --show-stats) exit 2 ;;\n\
+                 --start-server) sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '{pid}' ;;\n\
+                 esac\n",
+                pid = pid.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut plan = plan_in(&dir, 2, Priority::None, None);
+        plan.main_root = main.clone();
+        plan.sccache = Some(stub.clone());
+
+        // A wrapper's lock, inheritable as `flock` leaves it.
+        let wrapper = dir.join("wrapper.lock");
+        let held = open_lock(&wrapper).unwrap();
+        held.lock_exclusive().unwrap();
+        // SAFETY: fcntl on a descriptor this test owns.
+        unsafe {
+            let fd = held.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            assert!(flags >= 0);
+            assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC), 0);
+        }
+        let slot = wait_for_slot(&plan, &["cargo".to_string()]).unwrap();
+        let n = slot.n;
+        assert_eq!(ensure_cache_server(&plan, n), None);
+        let server: u32 = std::fs::read_to_string(&pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        drop(slot);
+        drop(held);
+
+        let free = |p: &Path| open_lock(p).unwrap().try_lock_exclusive().is_ok();
+        let wrapper_free = free(&wrapper);
+        let slot_free = free(&slot_lock(&plan.machine, n));
+        let _ = std::process::Command::new("kill")
+            .arg(server.to_string())
+            .status();
+        assert!(wrapper_free, "the server kept the wrapper's lock");
+        assert!(slot_free, "the server kept the build slot");
     }
 
     /// FTR-062 R-4: a stub `sccache` logs each call. With no server, the first cargo build starts
