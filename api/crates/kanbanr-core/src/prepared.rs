@@ -1187,6 +1187,14 @@ pub struct PreparedView {
     pub page: String,
     /// The equivalent verdict command, for a person's own terminal.
     pub command: String,
+    /// The release the record is about (DEF-095), derived: a promotion's own; for a gate result,
+    /// the release its commit belongs to. Empty when none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub release: String,
+    /// The release stages that ask for a gate result's gate (DEF-095), derived. Empty when none
+    /// does, so the person sees it under "Prepared, not required".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_by: Vec<String>,
 }
 
 /// Which records [`list`] answers.
@@ -1346,16 +1354,46 @@ pub fn still_waiting(
                 g.commit == r.subject.commit
                     && crate::cmp_instants(&g.at, &r.at) == std::cmp::Ordering::Greater
             });
-            match since {
-                Some(g) => Err(format!(
+            if let Some(g) = since {
+                return Err(format!(
                     "{} {} was recorded for {} by {} since",
                     g.name,
                     if g.passed { "passed" } else { "failed" },
                     g.commit.chars().take(7).collect::<String>(),
                     g.by
-                )),
-                None => Ok(()),
+                ));
             }
+            // DEF-095: the release the commit belongs to was cut since, or its branch moved on.
+            // Releases or git that cannot be read leave the record as it is.
+            let releases = crate::releases::load(store, p).unwrap_or_default();
+            let Some(release) = gate_release(&releases, repo, &r.subject.commit)
+                .and_then(|v| releases.iter().find(|x| x.version == v))
+            else {
+                return Ok(());
+            };
+            if release.state == crate::releases::ReleaseState::Shipped {
+                if crate::cmp_instants(&release.shipped_at, &r.at) == std::cmp::Ordering::Greater {
+                    return Err(format!(
+                        "{} was cut on {} after this was prepared",
+                        release.version,
+                        release.shipped_at.chars().take(10).collect::<String>()
+                    ));
+                }
+                return Ok(());
+            }
+            if let Some(repo) = repo {
+                let branch = branch_of(release);
+                if let Ok(tip) = crate::coderepo::rev_parse(repo, &branch)
+                    && tip != r.subject.commit
+                    && release.tag_commit != r.subject.commit
+                {
+                    return Err(format!(
+                        "{branch} has moved past {} since this was prepared",
+                        r.subject.commit.chars().take(7).collect::<String>()
+                    ));
+                }
+            }
+            Ok(())
         }
         "manual-test" => {
             if !crate::dispatch::is_manual_test(
@@ -1425,10 +1463,87 @@ pub fn still_waiting(
     }
 }
 
+/// The warning for preparing `gate` when no stage asks for it (DEF-095), naming each stage with
+/// what it requires, e.g. "no release stage asks for gate local (candidate: nothing; main:
+/// items_finished; production: main_at_release, pushed): it is recorded, and shows under
+/// Prepared, not required on the Releases page until the person confirms or rejects it". None
+/// when a stage asks, or the project does not work in releases.
+pub fn unrequired_gate_warning(project: &crate::store::Project, gate: &str) -> Option<String> {
+    let cadence = &project.config.cadence;
+    if !cadence.releases || !cadence.stages_asking_gate(gate).is_empty() {
+        return None;
+    }
+    let stages = cadence
+        .effective_release_gates()
+        .into_iter()
+        .map(|(stage, g)| {
+            let requires = if g.requires.is_empty() {
+                "nothing".to_string()
+            } else {
+                g.requires
+                    .iter()
+                    .map(|c| c.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("{stage}: {requires}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "no release stage asks for gate {gate} ({stages}): it is recorded, and shows under \
+         Prepared, not required on the Releases page until the person confirms or rejects it"
+    ))
+}
+
+/// A release's code branch: the one it was given, else `release/<V>`.
+fn branch_of(release: &crate::releases::Release) -> String {
+    if release.branch.is_empty() {
+        format!("release/{}", release.version)
+    } else {
+        release.branch.clone()
+    }
+}
+
+/// The release a gate result's commit belongs to: the release whose `tag_commit` is `sha`; else,
+/// with a repository, the first unshipped release (in board order) whose branch tip is `sha`,
+/// then the first whose branch contains it. None otherwise (DEF-095). A branch git cannot read
+/// names nothing.
+fn gate_release(
+    releases: &[crate::releases::Release],
+    repo: Option<&std::path::Path>,
+    sha: &str,
+) -> Option<String> {
+    if sha.is_empty() {
+        return None;
+    }
+    if let Some(r) = releases.iter().find(|r| r.tag_commit == sha) {
+        return Some(r.version.clone());
+    }
+    let repo = repo?;
+    let tips: Vec<(&crate::releases::Release, String)> = releases
+        .iter()
+        .filter(|r| r.state != crate::releases::ReleaseState::Shipped)
+        .filter_map(|r| {
+            crate::coderepo::rev_parse(repo, &branch_of(r))
+                .ok()
+                .map(|tip| (r, tip))
+        })
+        .collect();
+    if let Some((r, _)) = tips.iter().find(|(_, tip)| tip == sha) {
+        return Some(r.version.clone());
+    }
+    tips.iter()
+        .find(|(_, tip)| crate::coderepo::is_ancestor(repo, sha, tip))
+        .map(|(r, _)| r.version.clone())
+}
+
 /// Every record with where it stands, oldest first.
 fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<PreparedView>> {
     let (all, _) = read_all(store, p)?;
     let project = store.load(p)?;
+    let releases = crate::releases::load(store, p).unwrap_or_default();
+    let cadence = &project.config.cadence;
     let mut out = Vec::with_capacity(all.len());
     for (i, (r, answer)) in all.iter().enumerate() {
         let newer_open = all[i + 1..]
@@ -1441,6 +1556,21 @@ fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Ve
             Ok(())
         };
         let (state, stale_why) = state_of(r, answer.as_ref(), newer_open, waiting);
+        // Derived, never stored (ADR-0005). An answered record asks git nothing: only its tag
+        // commit names its release, which keeps the listing cheap (DEF-095).
+        let (release, required_by) = match r.kind.as_str() {
+            "gate-result" => (
+                gate_release(
+                    &releases,
+                    if answer.is_none() { repo } else { None },
+                    &r.subject.commit,
+                )
+                .unwrap_or_default(),
+                cadence.stages_asking_gate(&r.subject.gate),
+            ),
+            "promotion" => (r.subject.release.clone(), Vec::new()),
+            _ => (String::new(), Vec::new()),
+        };
         out.push(PreparedView {
             record: r.clone(),
             state,
@@ -1448,6 +1578,8 @@ fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Ve
             stale_why,
             page: page_of(&r.kind).to_string(),
             command: equivalent_command(r),
+            release,
+            required_by,
         });
     }
     Ok(out)
@@ -1470,7 +1602,7 @@ pub fn list(
             && query
                 .release
                 .as_ref()
-                .is_none_or(|x| &v.record.subject.release == x)
+                .is_none_or(|x| &v.record.subject.release == x || &v.release == x)
     });
     views.reverse();
     Ok(views)
@@ -3500,5 +3632,241 @@ mod tests {
         let edited = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
         assert_eq!(edited[0].edits.len(), 1);
         assert!(!settles(&got, &edited[0]));
+    }
+
+    // ---- DEF-095: a prepared gate result no stage asks for -----------------------------------
+
+    /// A board in releases whose production stage asks for `ci` through `gate_passed`, with v1
+    /// added, beside a scratch code repository whose `release/v1` is one commit past `main`. The
+    /// store, its folder, the repository, and the shas of `main` and of `release/v1`'s tip.
+    fn release_board(tag: &str) -> (Store, PathBuf, PathBuf, String, String) {
+        let (store, dir) = scratch();
+        let cadence: crate::config::Cadence = crate::yaml::from_str(
+            "releases: true\nrelease_stages: [candidate, main, production]\nrelease_gates:\n  \
+             candidate: {}\n  main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release, pushed, gate_passed], on_enter: [tag] }\n\
+             commit_gates: [ci]\n",
+        )
+        .unwrap();
+        store.set_cadence("demo", None, cadence).unwrap();
+        let stored = store.load("demo").unwrap().config.cadence;
+        assert_eq!(stored.stages_asking_gate("ci"), ["production"]);
+        crate::releases::add(&store, "demo", "v1", "", "").unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(&format!("def095-{tag}"));
+        let base = crate::coderepo::rev_parse(&repo, "main").unwrap();
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", "release/v1"]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "fix", "fixed\n", "fix on the release");
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let tip = crate::coderepo::rev_parse(&repo, "release/v1").unwrap();
+        (store, dir, repo, base, tip)
+    }
+
+    /// A prepared gate result for `gate` on `commit`, written at `at`; its id.
+    fn gate_on(store: &Store, gate: &str, commit: &str, at: &str) -> String {
+        let mut r = gate_record(at);
+        r.subject.gate = gate.into();
+        r.subject.commit = commit.into();
+        r.rev = commit.into();
+        let path = write_record(store, "demo", &r).unwrap();
+        path.file_stem().unwrap().to_string_lossy().to_string()
+    }
+
+    fn every(
+        store: &Store,
+        release: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Vec<PreparedView> {
+        list(
+            store,
+            "demo",
+            &ListQuery {
+                all: true,
+                release: release.map(str::to_string),
+                ..Default::default()
+            },
+            repo,
+        )
+        .unwrap()
+    }
+
+    /// DEF-095 R-2: a gate result's view names the release its commit belongs to (the branch tip,
+    /// else a branch that contains it, else the tag commit) and the stages that ask for its gate;
+    /// `list`'s release filter finds it by that release.
+    #[test]
+    fn a_gate_result_is_listed_with_its_release_and_the_stages_that_ask_for_it() {
+        let (store, _dir, repo, base, tip) = release_board("listed");
+        let ci = gate_on(&store, "ci", &tip, "2026-11-16T10:00:00Z");
+        let local = gate_on(&store, "local", &tip, "2026-11-16T10:01:00Z");
+        let older = gate_on(&store, "ci", &base, "2026-11-16T10:02:00Z");
+        let view = |views: &[PreparedView], id: &str| {
+            views.iter().find(|v| v.record.id == id).cloned().unwrap()
+        };
+        let views = every(&store, None, Some(&repo));
+        let v = view(&views, &ci);
+        assert_eq!(v.release, "v1", "{v:#?}");
+        assert_eq!(v.required_by, ["production"]);
+        let v = view(&views, &local);
+        assert_eq!(v.release, "v1");
+        assert!(v.required_by.is_empty(), "{v:#?}");
+        // A commit the branch contains belongs to the release too.
+        assert_eq!(view(&views, &older).release, "v1");
+        // The release filter matches the derived release.
+        let mut ids: Vec<String> = every(&store, Some("v1"), Some(&repo))
+            .into_iter()
+            .map(|v| v.record.id)
+            .collect();
+        ids.sort();
+        let mut want = vec![ci.clone(), local.clone(), older.clone()];
+        want.sort();
+        assert_eq!(ids, want);
+        assert!(every(&store, Some("v2"), Some(&repo)).is_empty());
+        // The open listing serializes both fields; an empty one is left out.
+        let json = serde_json::to_value(view(&views, &local)).unwrap();
+        assert_eq!(json["release"], "v1");
+        assert!(json.get("required_by").is_none(), "{json}");
+        // Without a repository only the tag commit names a release.
+        assert_eq!(view(&every(&store, None, None), &ci).release, "");
+        let path = store.project_dir("demo").join("releases.yaml");
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[0].tag_commit = tip.clone();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        let none = every(&store, None, None);
+        assert_eq!(view(&none, &ci).release, "v1");
+        assert_eq!(view(&none, &older).release, "");
+        // A promotion's view carries its own release.
+        let mut promo = gate_record("2026-11-16T10:03:00Z");
+        promo.kind = "promotion".into();
+        promo.subject = Subject {
+            release: "v1".into(),
+            stage: "main".into(),
+            ..Default::default()
+        };
+        promo.fields = Map::new();
+        let promo = write_record(&store, "demo", &promo).unwrap();
+        let promo = promo.file_stem().unwrap().to_string_lossy().to_string();
+        let v = view(&every(&store, None, None), &promo);
+        assert_eq!(v.release, "v1");
+        assert!(v.required_by.is_empty());
+    }
+
+    /// DEF-095 R-1, R-4: preparing a gate result for a gate no release stage asks for is recorded
+    /// and answered with a warning naming each stage and what it requires; a gate a stage asks for
+    /// gets no warning.
+    #[test]
+    fn preparing_a_gate_no_stage_asks_for_warns_and_names_the_stages() {
+        let (store, dir, _repo, _base, tip) = release_board("warns");
+        crate::git::ensure_repo_as(&dir, Some(("Ada L", "ada@example.com")));
+        let post = |gate: &str| {
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared",
+                serde_json::json!({
+                    "kind": "gate-result",
+                    "subject": {"gate": gate, "commit": tip},
+                    "fields": {"passed": true},
+                    "sources": [{"label": "make ci on the release tip"}],
+                    "origin": "conversation",
+                }),
+                crate::origin::Origin::Conversation,
+            )
+            .unwrap()
+        };
+        let out = post("local");
+        let warning = out["warning"].as_str().unwrap_or_default();
+        assert!(
+            warning.starts_with("no release stage asks for gate local ("),
+            "{out:#}"
+        );
+        for stage in [
+            "candidate: nothing",
+            "main: items_finished",
+            "production: main_at_release, pushed, gate_passed",
+            "Prepared, not required",
+        ] {
+            assert!(warning.contains(stage), "{stage}: {warning}");
+        }
+        // The record is written all the same (R-4).
+        let id = out["id"].as_str().unwrap();
+        assert!(
+            store
+                .project_dir("demo")
+                .join(format!("prepared/{id}.yaml"))
+                .is_file()
+        );
+        // A gate a stage asks for: no warning.
+        let out = post("ci");
+        assert!(out.get("warning").is_none(), "{out:#}");
+        assert_ne!(out["id"].as_str().unwrap(), id);
+    }
+
+    /// The view of record `id` among every record.
+    fn view_of(store: &Store, id: &str, repo: Option<&std::path::Path>) -> PreparedView {
+        every(store, None, repo)
+            .into_iter()
+            .find(|v| v.record.id == id)
+            .unwrap()
+    }
+
+    /// DEF-095 R-3: a gate result prepared before its release was cut reads as stale, saying so;
+    /// one prepared after the cut is not made stale by that rule.
+    #[test]
+    fn a_gate_result_from_before_the_cut_reads_as_stale() {
+        let (store, _dir, _repo, _base, tip) = release_board("cut");
+        let before = gate_on(&store, "local", &tip, "2026-11-16T10:00:00Z");
+        let after = gate_on(&store, "local", &tip, "2026-11-16T12:00:00Z");
+        let path = store.project_dir("demo").join("releases.yaml");
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[0].tag_commit = tip.clone();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        // Tagged, not yet cut: both wait.
+        assert_eq!(view_of(&store, &before, None).state, State::Superseded);
+        assert_eq!(view_of(&store, &after, None).state, State::Open);
+        let before = gate_on(&store, "ci", &tip, "2026-11-16T10:00:00Z");
+        assert_eq!(view_of(&store, &before, None).state, State::Open);
+        releases[0].state = crate::releases::ReleaseState::Shipped;
+        releases[0].shipped_at = "2026-11-16T11:00:00Z".into();
+        std::fs::write(&path, crate::yaml::to_string(&releases).unwrap()).unwrap();
+        let v = view_of(&store, &before, None);
+        assert_eq!(v.state, State::Stale, "{v:#?}");
+        assert!(
+            v.stale_why.contains("v1 was cut on 2026-11-16"),
+            "{}",
+            v.stale_why
+        );
+        assert_eq!(v.release, "v1");
+        let v = view_of(&store, &after, None);
+        assert_eq!(v.state, State::Open, "{v:#?}");
+        // The open listing leaves the stale one out.
+        let open = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(
+            open.iter()
+                .map(|v| v.record.id.as_str())
+                .collect::<Vec<_>>(),
+            [after.as_str()]
+        );
+    }
+
+    /// DEF-095 R-3: a gate result for a commit its release branch has moved past reads as stale;
+    /// without a repository nothing can say so, and it stays open.
+    #[test]
+    fn a_gate_result_for_a_commit_the_branch_moved_past_reads_as_stale() {
+        let (store, _dir, repo, _base, tip) = release_board("moved");
+        let id = gate_on(&store, "local", &tip, "2026-11-16T10:00:00Z");
+        assert_eq!(view_of(&store, &id, Some(&repo)).state, State::Open);
+        crate::coderepo::git(&repo, &["checkout", "-q", "release/v1"]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "fix2", "again\n", "another fix");
+        crate::coderepo::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let v = view_of(&store, &id, Some(&repo));
+        assert_eq!(v.state, State::Stale, "{v:#?}");
+        let sha7: String = tip.chars().take(7).collect();
+        assert!(
+            v.stale_why
+                .contains(&format!("release/v1 has moved past {sha7}")),
+            "{}",
+            v.stale_why
+        );
+        assert_eq!(view_of(&store, &id, None).state, State::Open);
     }
 }

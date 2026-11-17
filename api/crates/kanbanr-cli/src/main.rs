@@ -12022,11 +12022,15 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
         Some(body),
         scm::repo_root().as_deref(),
     )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    // A gate result no release stage asks for is recorded, and said so (DEF-095).
+    if let Some(w) = v["warning"].as_str().filter(|w| !w.is_empty()) {
+        eprintln!("warning: {w}");
+    }
     if cli.json {
         println!("{}", pretty(&resp));
         return Ok(());
     }
-    let v: Value = serde_json::from_str(&resp)?;
     if v["kind"] == "text-check" {
         println!(
             "recorded {what} ({}): the docs-folded sign-off takes it",

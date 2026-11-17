@@ -2089,7 +2089,21 @@ fn dispatch_routes(
         }
         // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
         // the person to confirm. Not a verdict: nothing a gate reads changes.
-        ("POST", ["projects", p, "prepared"]) => ser(&crate::prepared::prepare(store, p, b, repo)?),
+        // A gate result no release stage asks for is recorded with a `warning` (DEF-095).
+        ("POST", ["projects", p, "prepared"]) => {
+            let record = crate::prepared::prepare(store, p, b, repo)?;
+            let mut out = serde_json::to_value(&record)
+                .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+            if record.kind == "gate-result"
+                && let Some(w) = crate::prepared::unrequired_gate_warning(
+                    &store.load_meta(p)?,
+                    &record.subject.gate,
+                )
+            {
+                out["warning"] = Value::String(w);
+            }
+            ser(&out)
+        }
         // `?state=open|all&item=CODE&release=V`: the prepared records, newest first (FTR-034).
         ("GET", ["projects", p, "prepared"]) => {
             let state = query_param(query, "state").unwrap_or_else(|| "open".into());

@@ -12415,6 +12415,58 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-095 R-1, R-4: `kanbanr prepare gate` for a gate no release stage asks for warns on stderr,
+/// naming the stages, and still records the result and exits 0.
+#[test]
+fn prepare_gate_warns_when_no_stage_asks_for_it() {
+    let (base, work) = release_scratch("prepare-gate-warns");
+    // The board is the test's own, under the temporary folder (L-41).
+    assert!(
+        work.canonicalize()
+            .unwrap()
+            .starts_with(std::env::temp_dir().canonicalize().unwrap())
+    );
+    let head = String::from_utf8_lossy(&git_in(&base, &work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    let o = Command::new(cli())
+        .args([
+            "prepare",
+            "gate",
+            "local",
+            "--passed",
+            "--commit",
+            &head,
+            "--source",
+            "make ci on the release tip",
+        ])
+        .current_dir(&work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI");
+    let err = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(o.status.success(), "{err}");
+    assert!(
+        err.contains("warning: no release stage asks for gate local ("),
+        "{err}"
+    );
+    assert!(err.contains("Prepared, not required"), "{err}");
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(said.contains("prepared gate local passed on"), "{said}");
+    // The record is written all the same.
+    let list = run_in(&base, &work, &["--json", "prepare", "list"]);
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v[0]["subject"]["gate"], "local", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-055 R-1, R-3: `prepare gate`, `ratify`, `signoff` and `promotion` take `--batch`, and each
 /// record carries it; a batch name with whitespace is refused; `prepare text` takes no batch.
 #[test]
