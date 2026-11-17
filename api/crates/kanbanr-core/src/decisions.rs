@@ -277,6 +277,18 @@ impl Delegation {
             DelegationState::Ended => return Some(format!("{id} has ended ({})", self.until)),
             DelegationState::Revoked => return Some(format!("{id} was revoked")),
         }
+        self.out_of_scope(v, item)
+    }
+
+    /// Is `v` on `item` inside what this delegation names, whatever its state or time? The selector
+    /// half of [`Delegation::why_not`]: the verdict is named and the steps, items (with earlier
+    /// codes), kinds and milestone match (DEF-104).
+    pub fn in_scope(&self, v: &Verdict, item: &FeatureItem) -> bool {
+        self.out_of_scope(v, item).is_none()
+    }
+
+    fn out_of_scope(&self, v: &Verdict, item: &FeatureItem) -> Option<String> {
+        let id = &self.id;
         let name = v.name();
         if !self.verdicts.iter().any(|x| x.trim() == name) {
             return Some(format!("{id} does not cover `{name}`"));
@@ -1117,6 +1129,25 @@ pub fn set_mode(
     })
 }
 
+/// The delegation under which Claude holds `v` on `item` at `now`, if any: the one rule for "Claude
+/// holds this" (DEF-104). `None` unless the mode is `delegated`; a ratify with open overrides is
+/// never delegable (DEF-043); otherwise the first delegation, in file order, that covers it. It
+/// does not check how the grant was recorded.
+pub fn holder<'a>(
+    d: &'a Decisions,
+    v: &Verdict,
+    item: &FeatureItem,
+    now: &str,
+) -> Option<&'a Delegation> {
+    if d.mode() != Mode::Delegated {
+        return None;
+    }
+    if v.kind == VerdictKind::Ratify && !crate::readiness::open_overrides(item).is_empty() {
+        return None;
+    }
+    d.delegations.iter().find(|g| g.covers(v, item, now))
+}
+
 /// Everything waiting for a decision, each in its place under `d`'s mode: the review queue, the
 /// proposed ADRs, the proposed delegations, the delegated decisions to review and, with the code
 /// repository, the releases ready to promote. An item verdict a delegation in force covers waits
@@ -1141,10 +1172,7 @@ pub fn waiting(
     let mut push = |code: &str, what: String, verdict: Option<Verdict>, person_only: bool| {
         let covering = verdict.as_ref().and_then(|v| {
             let item = project.feature(&v.code).ok()?;
-            d.delegations
-                .iter()
-                .find(|g| g.covers(v, item, now))
-                .map(|g| g.id.clone())
+            holder(d, v, item, now).map(|g| g.id.clone())
         });
         let (place, delegation, url) = match (mode, covering) {
             (Mode::Conversation, _) if !person_only => (Place::Conversation, None, None),
@@ -1941,6 +1969,129 @@ mod tests {
             judge(&store, "POST", &ratify, None, Origin::Monitor),
             Ok(Authorized::AsIs)
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-104 R-1, R-2: one rule for "Claude holds this verdict": delegated mode, a granted
+    /// delegation in force that is in scope, and no open override for a ratify.
+    #[test]
+    fn holder_needs_delegated_mode_a_grant_in_force_and_no_open_override() {
+        let (store, dir, defect, feature) = board();
+        let item = |code: &str| store.load("demo").unwrap().feature(code).unwrap().clone();
+        let v = |code: &str| Verdict {
+            kind: VerdictKind::Signoff,
+            code: code.into(),
+            signoff: "design-review".into(),
+        };
+        let g = propose(&store, "demo", defects(), who("conversation")).unwrap();
+        // Proposed, monitor mode: nobody holds it.
+        let d = load(&store, "demo").unwrap();
+        assert!(holder(&d, &v(&defect), &item(&defect), NOW).is_none());
+        grant_it(&store, &g.id);
+        // Granted, but the mode is monitor.
+        let d = load(&store, "demo").unwrap();
+        assert!(holder(&d, &v(&defect), &item(&defect), NOW).is_none());
+        set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), None).unwrap();
+        let d = load(&store, "demo").unwrap();
+        assert_eq!(
+            holder(&d, &v(&defect), &item(&defect), NOW).map(|g| g.id.as_str()),
+            Some("DLG-001")
+        );
+        // The feature is not a defect: outside the delegation's kinds.
+        assert!(holder(&d, &v(&feature), &item(&feature), NOW).is_none());
+        // Ended: after `until`.
+        assert!(holder(&d, &v(&defect), &item(&defect), "2026-12-01T00:00:00+00:00").is_none());
+        // A verdict it does not name.
+        let approve = Verdict {
+            kind: VerdictKind::Approve,
+            code: defect.clone(),
+            signoff: String::new(),
+        };
+        assert!(holder(&d, &approve, &item(&defect), NOW).is_none());
+        // Revoked.
+        revoke(&store, "demo", "DLG-001", "enough", who("monitor")).unwrap();
+        let d = load(&store, "demo").unwrap();
+        assert!(holder(&d, &v(&defect), &item(&defect), NOW).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A delegated-mode board with a defect that carries an open override, and DLG-001 granted
+    /// for `ratify` (as `ratifying_claudes_override_is_never_delegated` sets it up).
+    fn board_with_open_override() -> (Store, std::path::PathBuf, String) {
+        let (store, dir, _, _) = board();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Because reasons".into(),
+                goals: vec![crate::Goal {
+                    statement: "Ship the thing".into(),
+                    ..crate::Goal::default()
+                }],
+                ..crate::Charter::default()
+            },
+        )
+        .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            Gate {
+                signoffs: vec!["design-review".into()],
+                enforce: crate::config::Enforce::Block,
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let defect = store
+            .add_feature_of_kind("demo", "Bug two", "spec", "M", None, Some("defect"))
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &defect,
+                Some(FeatureDefinition {
+                    statement: "Fix the bug".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        propose(
+            &store,
+            "demo",
+            NewDelegation {
+                verdicts: vec!["ratify".into()],
+                ..defects()
+            },
+            who("conversation"),
+        )
+        .unwrap();
+        set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), None).unwrap();
+        grant_it(&store, "DLG-001");
+        store
+            .move_feature_gated_as(
+                "demo",
+                &defect,
+                "Scheduled",
+                Some("CI after push"),
+                "conversation",
+            )
+            .unwrap();
+        (store, dir, defect)
+    }
+
+    /// DEF-104: a ratify with open overrides waits on the monitor, as `authorize` decides, not
+    /// for Claude under the delegation.
+    #[test]
+    fn waiting_leaves_a_ratify_with_open_overrides_on_the_monitor() {
+        let (store, dir, defect) = board_with_open_override();
+        let d = load(&store, "demo").unwrap();
+        let list = waiting(&store, "demo", None, &d, None, NOW).unwrap();
+        let w = list
+            .iter()
+            .find(|w| w.code == defect && w.what.contains("ratify"))
+            .unwrap_or_else(|| panic!("no ratify waiting: {list:?}"));
+        assert_eq!((w.place, w.delegation.clone()), (Place::Monitor, None));
         let _ = std::fs::remove_dir_all(dir);
     }
 
