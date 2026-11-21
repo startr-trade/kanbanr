@@ -1,7 +1,7 @@
 # PDCA from the command line
 
 This guide takes one item through Plan, Do, Check and Act with you running each command. To work by
-talking to Claude instead, see [PDCA with Claude](pdca-with-claude.md).
+talking to your agent instead, see [PDCA with your agent](pdca-with-claude.md).
 
 The commands and output come from a real run on a scratch project. `<tmp>` stands for a temporary
 folder.

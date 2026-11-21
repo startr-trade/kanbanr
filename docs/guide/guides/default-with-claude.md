@@ -1,23 +1,23 @@
-# The default workflow with Claude
+# The default workflow with your agent
 
 This guide takes a project from setup to finished work under the default workflow: plan, work,
 finish. You don't need to learn any commands:
 
-- **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
+- **You talk to your agent** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-  Claude tells you what is waiting there and links to it. It never records a decision, and it
-  doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
+  The agent tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question. What the agent already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
-- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+- **You can delegate the small decisions.** Tell your agent which ones it may take, such as the design
   review of small defects, and until when. It proposes a delegation; you **Grant** it on the
   **Review** page, under "Decisions here". A granted delegation does nothing until you set **Mode**
-  to **delegated** there and click **Change**. Whatever Claude decides under it comes back there
+  to **delegated** there and click **Change**. Whatever the agent decides under it comes back there
   for you to keep or undo.
   If Claude Code runs in auto mode, its safety check may stop a delegated command. When you grant a
-  delegation, kanbanr offers the one allow rule that lets it through; say yes to Claude, or run the
+  delegation, Kanbanr offers the one allow rule that lets it through; say yes to the agent, or run the
   command it names.
-  In **conversation** mode you take these in Claude's question dialog instead: it asks with the
+  In **conversation** mode you take these in the agent's question dialog instead: it asks with the
   board's own question, and your answer is the record.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
@@ -37,7 +37,7 @@ To compare processes, see the [Process guides](index.md) and
 
 **It uses no sprints and no releases by default.** There's no sprint to close and no release to cut.
 Items branch from `main` and merge back into `main`, and the merge happens when the item is
-Completed. If you want sprints or releases later, say so and Claude will show you what changes
+Completed. If you want sprints or releases later, say so and the agent will show you what changes
 before it changes anything.
 
 ```mermaid
@@ -52,15 +52,15 @@ flowchart LR
 
 > Start using kanbanr for this project. Use the default workflow.
 
-Claude asks where the board should live and what the project is for, then writes a plan showing the
+The agent asks where the board should live and what the project is for, then writes a plan showing the
 process and the branches. **Accepting the plan applies it.** It recommends no sprints and no
 releases for this process.
 
 **Do the charter first.** Gates aren't enforced until a project has a charter, and items created
-before it are exempt. Claude asks for the project's purpose and goals, and every item then links to
+before it are exempt. The agent asks for the project's purpose and goals, and every item then links to
 a goal.
 
-**Accept the system baseline before the first build.** Once the system docs are written, Claude prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. Claude never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
+**Accept the system baseline before the first build.** Once the system docs are written, the agent prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. The agent never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
 
 > Open the monitor, with writes on.
 
@@ -70,16 +70,16 @@ Keep it open. Every decision below happens there.
 
 > A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.
 
-**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
-when the first item is designed), Claude asks whether the product has screens a person uses, or is
+**The agent asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), the agent asks whether the product has screens a person uses, or is
 a service, library or command-line tool. If it has screens, they become items of their own,
 designed and approved like the rest. If it has none, that goes into the design, so a missing screen
-is a decision and not an oversight. If it has screens, Claude also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
+is a decision and not an oversight. If it has screens, the agent also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
 
-Claude asks only what it can't work out, then writes the item. It starts in Planned. Entering
+The agent asks only what it can't work out, then writes the item. It starts in Planned. Entering
 **In Progress** is where the default workflow asks for things, and Completed asks for a little more:
 
-| Stage | What Claude does | What you do on the Review page |
+| Stage | What the agent does | What you do on the Review page |
 |---|---|---|
 | **Planned** | Writes what it is, why, and the requirements, each with a named test | **Approve** |
 | **In Progress** | Writes the design and its task list into the spec, then builds on the item's branch | **Sign off design-review** first |
@@ -99,15 +99,15 @@ again.
 >
 > The saved basket is finished. Complete it.
 
-If something is missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
+If something is missing, the agent tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.
 
-**Ask Claude to prove the tests first.** In the run this guide is based on, an item moved to
-Completed with its test never recorded as green. Ask Claude to run the tests and record the results
+**Ask your agent to prove the tests first.** In the run this guide is based on, an item moved to
+Completed with its test never recorded as green. Ask your agent to run the tests and record the results
 before it finishes the item, and to check that each requirement is proven.
 
 **Completing is the merge.** kanbanr merges the item's branch into `main`, naming the item. Nothing
-is pushed. Claude will remind you that the merged branch can be deleted.
+is pushed. The agent will remind you that the merged branch can be deleted.
 
 ## Parking work
 
@@ -125,17 +125,17 @@ Deferred, Ongoing and the three "set aside" statuses all go back to Planned when
 
 > Have a sub-agent build these tasks.
 
-Claude gives each agent a scope, which kanbanr enforces. An agent can record its own tasks and test
+The agent gives each sub-agent a scope, which Kanbanr enforces. An agent can record its own tasks and test
 results and commit on its own branch. It can't move items, approve anything or push. You'll see its
-progress on the item's page, and Claude reviews its branch before bringing you any decision.
+progress on the item's page, and the agent reviews its branch before bringing you any decision.
 
-Claude stays in the project folder while an agent works, and looks inside the agent's worktree
-without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+The agent stays in the project folder while a sub-agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or the agent's. Revoking an agent's
 scope stops that agent on its next tool call and never restricts you.
 
 ## Who does what
 
-| | You | Claude |
+| | You | The agent |
 |---|---|---|
 | **Definitions** | Answer what only you know, then **Approve** | Draft them and keep them current |
 | **Design** | **Sign off design-review** | Write the design and its task list |
@@ -147,17 +147,17 @@ scope stops that agent on its next tool call and never restricts you.
 
 | You see | It means | Do this |
 |---|---|---|
-| Moves go through that shouldn't | No charter, or the item is older than it | Ask Claude to agree a charter before creating items |
+| Moves go through that shouldn't | No charter, or the item is older than it | Ask your agent to agree a charter before creating items |
 | An item is back on the Review page | Its definition changed after you approved it | Read the change, then **Approve** again |
-| A branch exists but the item is still Planned | Starting made the branch before the gate was checked | Meet the gate, then ask Claude to start it again |
-| An item is Completed but a requirement isn't proven | The move didn't ask for green tests | Ask Claude to run and record the tests |
+| A branch exists but the item is still Planned | Starting made the branch before the gate was checked | Meet the gate, then ask your agent to start it again |
+| An item is Completed but a requirement isn't proven | The move didn't ask for green tests | Ask your agent to run and record the tests |
 
-## What Claude runs
+## What the agent runs
 
 You never need these, but here they are if you're curious. [The default workflow from the command
 line](default-cli.md) covers them step by step.
 
-| You asked for | Claude runs |
+| You asked for | The agent runs |
 |---|---|
 | Set up the process | `kanbanr config workflow --preset default` |
 | Branches that follow the process | `kanbanr config cadence --git-model on` |

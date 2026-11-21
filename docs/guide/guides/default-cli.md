@@ -1,7 +1,7 @@
 # The default workflow from the command line
 
 This guide takes one item from setup to done under the default workflow, with you running each
-command. To work by talking to Claude instead, see [The default workflow with Claude](default-with-claude.md).
+command. To work by talking to your agent instead, see [The default workflow with your agent](default-with-claude.md).
 
 The commands and output come from a real run on a scratch project. `<tmp>` stands for a temporary
 folder.

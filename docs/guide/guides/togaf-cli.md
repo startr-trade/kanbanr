@@ -1,8 +1,8 @@
 # TOGAF, sprints and releases from the command line
 
 This guide takes a project from setup to a shipped release using TOGAF phases, sprints and releases,
-with you running each command. To work by talking to Claude instead, see
-[TOGAF with Claude](togaf-with-claude.md).
+with you running each command. To work by talking to your agent instead, see
+[TOGAF with your agent](togaf-with-claude.md).
 
 The commands and output come from a real run on a scratch project.
 
@@ -383,7 +383,7 @@ FEAT-002". Do the steps in order:
 Saving notes does not send a release back. A release that is tagged and not shipped refuses the
 move before anything is merged, naming the tag; the change needs `kanbanr release patch v1.1.0`.
 
-A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. `kanbanr release add v1.0.1 --patch-of v1.0.0` creates it at candidate.
+A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. The agent asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. `kanbanr release add v1.0.1 --patch-of v1.0.0` creates it at candidate.
 
 ## Closing the sprint
 

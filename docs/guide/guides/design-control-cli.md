@@ -1,7 +1,7 @@
 # Design control from the command line
 
 This guide takes one item through the `design-control` process, with you running each command. To
-work by talking to Claude instead, see [Design control with Claude](design-control-with-claude.md).
+work by talking to your agent instead, see [Design control with your agent](design-control-with-claude.md).
 
 The commands and output come from a real run on a scratch project. `<tmp>` stands for a temporary
 folder. Sprints and releases are off in this process by default, so there is no release to cut: the

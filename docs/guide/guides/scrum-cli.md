@@ -1,7 +1,7 @@
 # Scrum, sprints and releases from the command line
 
 This guide takes a project from setup to a shipped release using Scrum, with you running each
-command. To work by talking to Claude instead, see [Scrum with Claude](scrum-with-claude.md). Other
+command. To work by talking to your agent instead, see [Scrum with your agent](scrum-with-claude.md). Other
 processes are listed in the [guides index](index.md).
 
 The commands and output come from a real run on a scratch project. `<tmp>` stands for a temporary
@@ -352,7 +352,7 @@ release/v1.0.0 @ 59e2014: docs/releases/v1.0.0.md
 
 _Released 2026-11-04._
 
-A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. `kanbanr release add v1.0.1 --patch-of v1.0.0` creates it at candidate.
+A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. The agent asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. `kanbanr release add v1.0.1 --patch-of v1.0.0` creates it at candidate.
 
 ## What shipped
 
@@ -390,7 +390,7 @@ Promote to main, then push it:
 ```text
 v1.0.0 -> main; main fast-forwarded to it, not tagged
   fast-forwards main to release/v1.0.0 (59e2014)
-  next, for Claude: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
+  next, for the agent: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
     59e2014e8aae Release v1.0.0: version, changelog and notes
   nothing was pushed: push main when you are ready
   next: push main (`git push origin main`), then wait for CI, then Cut v1.0.0
@@ -407,7 +407,7 @@ The cut, then the tag push:
 v1.0.0 -> tag; tagged v1.0.0, where main already is
   tags 59e2014 "Release v1.0.0" as v1.0.0
   shipped 1 item(s); notes in releases/v1.0.0.md
-  next, for Claude: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
+  next, for the agent: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
     59e2014e8aae Release v1.0.0: version, changelog and notes
   nothing was pushed: push the tag when you are ready
   push the tag: `git push origin v1.0.0`
