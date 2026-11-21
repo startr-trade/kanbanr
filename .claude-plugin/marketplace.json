@@ -9,7 +9,7 @@
     {
       "name": "kanbanr",
       "source": "./",
-      "description": "kanbanr — the system of record for Claude-driven development: the skill plus its session-start, stop and session-summary hooks. Needs the kanbanr program from the GitHub release.",
+      "description": "kanbanr — the system of record for agent-driven development: the skill plus its session-start, stop and session-summary hooks. Needs the kanbanr program from the GitHub release.",
       "category": "productivity",
       "keywords": [
         "kanbanr",

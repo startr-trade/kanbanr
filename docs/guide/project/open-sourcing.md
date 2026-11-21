@@ -60,7 +60,7 @@ for you). **Never** paste a token into a file that gets committed.
 
 > You don't need every row. For a **first release** the essentials are **GitHub** (always: it
 > hosts the release archives and the installers) and **GHCR** (for `docker run`). **crates.io** is
-> only for `ears-classifier`. The Claude plugin needs nothing beyond a public repo. VS Code /
+> only for `ears-classifier`. The Claude Code plugin needs nothing beyond a public repo. VS Code /
 > Open VSX / npm can come later.
 
 ### Step-by-step: creating each credential
@@ -156,7 +156,7 @@ content** and your **publish credentials**:
 
 - [ ] **README** polish: one-line pitch, a screenshot or short GIF of the live monitor, the
       60-second quickstart, the architecture diagram (reuse [the architecture overview](../architecture/overview.md)), and a clear
-      "is this for me?" (personal, git-backed, Claude-driven).
+      "is this for me?" (personal, git-backed, agent-driven).
 - [ ] Badges: CI status, license, latest release.
 - [ ] A `docs/` index linking USER_GUIDE, DESIGN, ROADMAP, this file.
 - [ ] Capture screenshots in `docs/guide/images/` (`make screenshots`) (board, feature page, status page, milestones, docs).
@@ -248,13 +248,13 @@ content** and your **publish credentials**:
 
 ## 6. Distributing the skill
 
-The skill is the product surface for Claude users — make it trivial to install:
+The skill is the product surface for Claude Code users — make it trivial to install:
 
 - [ ] Document manual install (symlink/copy `skill/kanbanr` → `~/.claude/skills/kanbanr`) — already
       in the guide; keep it front-and-center.
 - [ ] Provide an install script / `make install-skill` that does the copy and verifies the CLI is
       on `PATH`.
-- [ ] Investigate publishing via the **Claude plugin/skill marketplace** (the lowest-friction path
+- [ ] Investigate publishing via the **Claude Code plugin/skill marketplace** (the lowest-friction path
       for users) and link it from the README once available.
 - [ ] If the MCP direction is taken (ADR-0006 on the board), document the MCP server install
       alongside the skill.

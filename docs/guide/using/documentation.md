@@ -36,7 +36,7 @@ Docs are more than text — the viewer renders **diagrams** and **embedded image
   ````markdown
   ```mermaid
   flowchart LR
-    A[Claude] --> B[kanbanr CLI] --> C[(data/ git repo)]
+    A[the agent] --> B[kanbanr CLI] --> C[(data/ git repo)]
   ```
   ````
 

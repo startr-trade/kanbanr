@@ -62,7 +62,7 @@ the author is already writing. Everything else warns, because a check that block
 gets bypassed wholesale (ADR-0004), and a check that fires on everything gets ignored.
 
 
-## Workflow contract (how Claude uses it)
+## Workflow contract (how an agent uses it)
 
 kanbanr is designed to be the **single system of record** for a project's activity — the only
 project information that stays outside it is the raw conversation transcript. The skill

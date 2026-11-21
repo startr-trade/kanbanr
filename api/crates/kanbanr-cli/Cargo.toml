@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "kanbanr CLI: a git-backed kanban writer for Claude-driven development, plus a read-only live monitor"
+description = "Kanbanr CLI: a git-backed kanban writer for agent-driven development, plus a read-only live monitor"
 # kanbanr ships as release archives, installers and an image — never as a crate (FEAT-024).
 publish = false
 

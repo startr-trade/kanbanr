@@ -62,11 +62,11 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/gate-results` | `name` (optional), `commit` (optional) | JSON `GateResult[]` | The gate results recorded for the project, oldest first: which gate, which commit, passed or failed, who and when |
 | `GET /api/projects/{project}/timings` | `code` (optional) | JSON `TimingsView` | Each test's last duration from the kept runs since the newest shipped release, or the newest 50 with none (FTR-058): with code, the item's tracked tests only, by requirement and test name; a test not timed in them is not listed |
 | `GET /api/projects/{project}/timings/report` | `top` (optional) | JSON `TimingReport` | The slowest tests by last duration, and those whose time grew most since the newest shipped release, derived from the kept runs since it (the newest 50 with none) |
-| `GET /api/projects/{project}/decisions` | — | JSON `DecisionsView` | Where the project's decisions are taken (FTR-028): the mode and its history, every delegation with where it stands, the decisions Claude took under one for the person to keep or undo, and what waits for a decision where |
+| `GET /api/projects/{project}/decisions` | — | JSON `DecisionsView` | Where the project's decisions are taken (FTR-028): the mode and its history, every delegation with where it stands, the decisions an agent took under one for the person to keep or undo, and what waits for a decision where |
 | `GET /api/projects/{project}/baseline` | — | JSON `BaselineView` | The project's engineering baseline (FTR-033): the packs it follows with their drift, every area with its standing answer and entries, every revision with what accepting it does, and the charter's constraints |
-| `GET /api/projects/{project}/prepared` | `state` (optional), `item` (optional), `release` (optional) | JSON `PreparedView[]` | The records Claude prepared for the person to confirm (FTR-034), newest first: each with its sources, where it stands, the person's answer and the equivalent verdict command |
-| `GET /api/projects/{project}/planning` | `state=pending\|carried\|declined` (optional) | JSON `PlanningView[]` | The person's planning decisions made on the monitor pages (FTR-049), oldest first: each with its derived state (pending until Claude carries it out or declines it) and its outcome |
-| `GET /api/projects/{project}/planning/{id}/check` | — | JSON `Assessment` | A planning decision checked, with nothing changed (FTR-049): the reasons to decline it, the warnings for Claude to judge, and the nearest valid move |
+| `GET /api/projects/{project}/prepared` | `state` (optional), `item` (optional), `release` (optional) | JSON `PreparedView[]` | The records the agent prepared for the person to confirm (FTR-034), newest first: each with its sources, where it stands, the person's answer and the equivalent verdict command |
+| `GET /api/projects/{project}/planning` | `state=pending\|carried\|declined` (optional) | JSON `PlanningView[]` | The person's planning decisions made on the monitor pages (FTR-049), oldest first: each with its derived state (pending until the agent carries it out or declines it) and its outcome |
+| `GET /api/projects/{project}/planning/{id}/check` | — | JSON `Assessment` | A planning decision checked, with nothing changed (FTR-049): the reasons to decline it, the warnings for the agent to judge, and the nearest valid move |
 | `GET /api/projects/{project}/recode` | — | JSON `RecodePlan` | What a bulk recode would do, with nothing changed (FTR-056): each item whose code's prefix is not its kind's, with the code it would become, and the plan's revision. Applying it is the person's `POST` with that revision |
 | `GET /api/projects/{project}/releases/{version}/plan` | `stage` (optional), `reason` (optional) | JSON `ReleasePlan` | What promoting a release would do, with nothing changed: the button, each step and condition, what is missing and, for the cut, what ships. The monitor reads the code repository only when started in the project folder |
 | `GET /api/projects/{project}/workflow` | `format=mermaid` | `text/plain` | The workflow as a Mermaid state diagram |
@@ -124,7 +124,7 @@ The Overview reads three more (FTR-048), each cached and warmed like the four ab
   board holds, each goal's facts, recent decisions in words and recent activity.
 - `GET /api/projects/{project}/attention` is what waits on the person: lines in the sections
   `decisions`, `releases`, `health` and `records`, each with a count, a monitor path in `to` (or
-  an `ask` for Claude when no page shows it) and `yours` when it counts toward `total`. The
+  an `ask` for the agent when no page shows it) and `yours` when it counts toward `total`. The
   Review groups come from `reviewgroups::summary`, so a new group appears with no change here.
 - `GET /api/projects/{project}/items` is items as rows with their evidence, filtered by `kind`
   (`none` for untyped), `status`, `milestone`, `goal`, `sprint`, `release` and `evidence` (`red`,
@@ -342,7 +342,7 @@ itself and ignores an `origin` in the request. When the same approval, ratificat
 repeats the latest one on text that has not changed, nothing is recorded, no activity entry, event
 or commit is made, and the answer is the item with an `already_recorded` object: `what`, `by`, `at`,
 `origin` and a `sentence` saying who recorded it first, when and from where. A sign-off repeated
-with a new note or doc is recorded. A ratification repeated while an override Claude made waits
+with a new note or doc is recorded. A ratification repeated while an override an agent made waits
 for one is recorded, not answered as `already_recorded`. A decision, promotion or cut asked for a second time is
 refused as before, and the refusal now names who did it first.
 
@@ -356,7 +356,7 @@ that item's single button posts and pinned to the `rev` and `spec_rev` the page 
 commit, and answers `{group, action, results: [{key, made?, error?}]}`. An item that is no longer
 in the group refuses the whole request by name; a verdict the board refuses for one item (a
 changed definition, a duplicate) is that item's `error`, and the rest still land. A decision that
-mixes verdicts, or one from Claude in any mode, is refused. The route exists only on the write
+mixes verdicts, or one from an agent in any mode, is refused. The route exists only on the write
 path: `kanbanr` dispatch refuses it with "a group decision is taken through the write path, which
 records each verdict as the person".
 
@@ -364,9 +364,9 @@ The person's planning decisions (FTR-049) have four routes. `GET /api/projects/{
 and `GET …/planning/{id}/check` are public and listed above. `POST /api/write/projects/{project}/planning`,
 body `{action, target, items, by, note?}` with `action` one of `into-sprint`, `into-release` or
 `out-of-sprint`, records one decision as `planning/PD-n.yaml`; it is a verdict route, so the daemon
-stamps `monitor`, ignores an `origin` in the body, and refuses it to Claude in every mode. It
+stamps `monitor`, ignores an `origin` in the body, and refuses it to an agent in every mode. It
 validates the items and the target and judges nothing: no plan changes. `POST …/planning/{id}/decline`,
-body `{by, reason, nearest?}`, records Claude's decline; it is not a verdict, and an empty reason or
+body `{by, reason, nearest?}`, records the agent's decline; it is not a verdict, and an empty reason or
 a decision that is not pending is refused. The sprint plan, sprint unplan and release plan routes
 take an optional `decision: "PD-n"` in their body: the plan and the decision's outcome are one
 commit, and a decision that is not pending, or whose action, target and items differ, is refused

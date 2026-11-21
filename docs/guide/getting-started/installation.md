@@ -114,8 +114,8 @@ A release made with `ATTEST_RELEASE=false` has no attestations and its notes say
 ## Install the skill
 
 The program is half of kanbanr; the other half is the **skill** that teaches Claude Code to use it.
-**The program carries its skill**, and the installer above puts it in place when it finds Claude
-Code (the `claude` command) — so usually there is nothing to do here. The skill always matches the
+**The program carries its skill**, and the installer above puts it in place when it finds
+Claude Code (the `claude` command) — so usually there is nothing to do here. The skill always matches the
 program: `kanbanr self-update` updates both.
 
 ```bash
@@ -283,7 +283,7 @@ git clone https://github.com/startr-trade/kanbanr.git
 cd kanbanr
 
 make test          # the whole suite, no Docker
-make install       # builds the SPA, installs the binary, links the Claude skill
+make install       # builds the SPA, installs the binary, links the Claude Code skill
 ```
 
 `cargo install --locked --path api/crates/kanbanr-cli` on its own works too, but without a built `web/dist`

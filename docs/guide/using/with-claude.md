@@ -1,23 +1,27 @@
-# Working with Claude
+# Working with your agent
 
-You can run kanbanr from Claude Code. You ask for work and answer questions, Claude records the
-work on the board, and you take every decision on the monitor's pages. This chapter
+You work with Kanbanr by talking to your agent. You ask for work and answer questions, the agent
+records the work on the board, and you take every decision on the monitor's pages. This chapter
 shows what that conversation looks like and why it asks what it asks.
+
+Today Kanbanr ships one adapter, for Claude Code: its skill, its hooks and the settings it writes.
+Where this chapter names a hook, a permission rule or plan mode, that is the Claude Code adapter
+at work; the rest holds for any agent that runs kanbanr's commands.
 
 Three things are worth knowing up front:
 
-- **Your workflow decides the questions.** Claude doesn't follow a script for TOGAF or Scrum. At
+- **Your workflow decides the questions.** The agent doesn't follow a script for TOGAF or Scrum. At
   each step it asks the board what the next stage still needs and turns each gap into a question
   or a draft. Change your workflow and the conversation changes with it.
 - **Decisions are taken on the pages.** An approval, ratification, sign-off or its withdrawal, and
   accepting or rejecting a decision, are taken on the **Review** page. Promoting or cutting a
-  release is taken on the **Releases** page. Claude tells you what is waiting there, with the
+  release is taken on the **Releases** page. The agent tells you what is waiting there, with the
   page's address, and never records one for you: kanbanr refuses if it tries, and never asks for
-  one in a plan or a question. If no monitor accepts writes, Claude offers to start one with
+  one in a plan or a question. If no monitor accepts writes, the agent offers to start one with
   `kanbanr review --ui`.
-- **Decisions arrive filled in.** What Claude already knows, such as a CI run's link and result or
+- **Decisions arrive filled in.** What the agent already knows, such as a CI run's link and result or
   what a sign-off covered, is prepared beside the button with where it came from. You check it and
-  click, or change it first ([Prepared by Claude](the-monitor.md#prepared-by-claude)).
+  click, or change it first ([Prepared by the agent](the-monitor.md#prepared-by-the-agent)).
 - **A verdict records where it was taken.** The monitor, a command in your terminal and an answer
   recorded in a Claude Code session are told apart, and the item shows which beside each approval
   and sign-off. Deciding the same thing twice records nothing the second time.
@@ -31,7 +35,7 @@ to a shipped release, see the [Process guides](../guides/index.md).
 
 ## Setting up: the cadence and the git model
 
-When Claude sets kanbanr up for a project, it asks where the board lives, which process to use,
+When the agent sets Kanbanr up for a project, it asks where the board lives, which process to use,
 and then, for every process, **whether to work in sprints and releases**. It recommends the
 process's own setting (on for Scrum and agile, off for the rest) and shows you the git model your
 answer gives before anything is written:
@@ -60,7 +64,7 @@ applies it. What each role then asks for is in [The method by stage role](the-me
 
 The interview also asks the **engineering baseline**: the stack and engineering questions a
 project answers once (what the project is, its language, where it runs, infrastructure as code,
-delivery, the practice baseline). Claude reads what the folder already shows and asks only what it
+delivery, the practice baseline). The agent reads what the folder already shows and asks only what it
 cannot tell, a few questions at a time with the recommended or detected option first; **Decide
 later** and **Explain the options** are always there. The plan shows the practice packs to follow
 and the draft baseline, and after setup you accept it on the **Baseline** page. Questions that only
@@ -76,7 +80,7 @@ Ask for what you need, in your own words:
 
 > A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.
 
-Claude reads the charter and the code, then asks only what it can't work
+The agent reads the charter and the code, then asks only what it can't work
 out, a few questions at a time:
 
 ```
@@ -89,17 +93,17 @@ The definition it writes is the item's brief: a one-line statement, the goals it
 in. It goes only as far as the first stage asks, unless you ask for the whole definition up front.
 
 **Choices are yours.** Anything you'd recognise as a decision (a business rule, a retention period,
-a limit, what's in or out of scope) is asked before the definition is written, with Claude's recommendation first.
-Anything Claude still had to choose is listed in the brief under "Choices I made", so your
+a limit, what's in or out of scope) is asked before the definition is written, with your agent's recommendation first.
+Anything the agent still had to choose is listed in the brief under "Choices I made", so your
 approval is informed. If one request spans several stages, the brief says which ones it covers.
 
-Claude writes the definition to the board, shows you its brief in a few lines, and says it is
+The agent writes the definition to the board, shows you its brief in a few lines, and says it is
 waiting for your approval on the Review page, with the link. Nothing is recorded as approved until
 you approve it there.
 
 ## Deciding: on the Review and Releases pages
 
-When decisions are waiting, the session start mentions them. Claude says in one message how many
+When decisions are waiting, the session start mentions them. The agent says in one message how many
 there are, which, and the address of the page where they wait. It doesn't list them as questions.
 If you ask it to explain one, it does, and sends you back to the page.
 
@@ -107,7 +111,7 @@ The session start's summary is sized to fit what Claude Code shows a session in 
 default (set `KANBANR_SESSION_BUDGET` to change it, never below 2000). On a small board it is the
 whole board, the recent activity and the lessons, as before. On a large one it leads with what is
 in progress, what waits for you and the sprint and release, counts the rest by status, and names
-where to read more (`kanbanr board`, `kanbanr ready`). Claude reads the whole board when the work
+where to read more (`kanbanr board`, `kanbanr ready`). The agent reads the whole board when the work
 needs it; ask it to, or open the board in the monitor. `kanbanr recover` prints the same summary.
 
 | You decide | Where |
@@ -117,58 +121,58 @@ needs it; ask it to, or open the board in the monitor. `kanbanr recover` prints 
 | Accept or reject a proposed design decision | **Review** page |
 | Withdraw an approval or a sign-off | the item's page |
 | Promote or cut a release, and confirm each stage after the tag | **Releases** page |
-| Change it | tell Claude what to change: it revises the definition, and the item comes back to the queue |
+| Change it | tell your agent what to change: it revises the definition, and the item comes back to the queue |
 
-Checks that need a push are marked to be checked after it; Claude records them once CI has run;
+Checks that need a push are marked to be checked after it; the agent records them once CI has run;
 anything still unchecked at the cut waits for you to accept it, and the notes say so. An override
-Claude makes past a gate waits on the Review page for you to ratify, and the item doesn't ship
+the agent makes past a gate waits on the Review page for you to ratify, and the item doesn't ship
 until you do.
 
-Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
+The agent may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
-give, Claude says so at once and asks you to withdraw it on the item's page.
+give, the agent says so at once and asks you to withdraw it on the item's page.
 
 ## Planning from the pages
 
 You can plan an item into a sprint or release from the Plan or Releases page instead of asking
 (FTR-049). The page records your decision and shows it pending. At session start and at each turn
-Claude reads the pending ones, checks each (frozen scope, closed sprints, finished items,
+the agent reads the pending ones, checks each (frozen scope, closed sprints, finished items,
 dependencies, capacity, dates), and either carries it out with `kanbanr sprint plan … --decision
 PD-n` (or `sprint unplan`, `release plan`) or declines it with a reason and the nearest valid
-move. Claude never records a planning decision itself. If you ask in the conversation, it plans
+move. The agent never records a planning decision itself. If you ask in the conversation, it plans
 directly, as before.
 
 ## Where decisions are taken, and delegating them
 
 Each project chooses where its decisions are taken. In **monitor** mode, the default, every
 decision is yours, on the Review and Releases pages, as above. In **delegated** mode you still
-decide there, and Claude may also take the decisions you have delegated to it, for a time.
+decide there, and the agent may also take the decisions you have delegated to it, for a time.
 
-To delegate, tell Claude what it may decide, for example: "you can sign off the design review of
-small defects for the next two weeks". Claude proposes a delegation: which verdicts (approve,
+To delegate, tell your agent what it may decide, for example: "you can sign off the design review of
+small defects for the next two weeks". The agent proposes a delegation: which verdicts (approve,
 ratify, or a named sign-off), for which items, kinds of item, milestone or stages, and until when
 (two weeks unless you say otherwise, three months at most). A proposal does nothing until you
 grant it: it waits in the **Decisions here** panel at the top of the Review page, where you grant
 it or discard it, and where you switch the project to delegated mode. Only you can grant one,
-change the mode, or review what was decided; kanbanr refuses Claude all three.
+change the mode, or review what was decided; Kanbanr refuses the agent all three.
 
-When you set a project up, Claude proposes the delegations its process usually wants, and the
+When you set a project up, the agent proposes the delegations its process usually wants, and the
 setup plan shows them under **Decisions**: for most processes, the design review of defects and
 chores, and the docs fold-in of every item; for TOGAF, only the docs fold-in, so Business
 Architecture and System Design stay yours; for design control, none. Each covers the stage an item
 is in when that sign-off is asked: a sign-off named for a stage, such as the fold-in "at
 Migration", is the one for the move into it, so it is taken in the stage before. Only forward
-moves are delegated: when an item has moved back to an earlier stage, Claude asks you before
+moves are delegated: when an item has moved back to an earlier stage, the agent asks you before
 deciding or changing anything for it, even if a delegation would cover it. You grant them on the
 Review page after setup, or don't.
 
 **In the conversation.** In **conversation** mode you take approvals, ratifications and sign-offs
-in Claude's question dialog instead of on the Review page, which stays read-only for them. Claude
+in the agent's question dialog instead of on the Review page, which stays read-only for them. The agent
 asks with the board's own question, which ends in a bracketed tag: the exact command your answer
 records. Choose **Approve** (or **Ratify**, or **Sign off**) and Claude Code's hook makes a pass
-that lets Claude record that one verdict, once, within 15 minutes; choose **Not yet** and nothing
+that lets the agent record that one verdict, once, within 15 minutes; choose **Not yet** and nothing
 is recorded. kanbanr keeps the question and your answer with the verdict, and `kanbanr feature
-show` prints them. Claude cannot make a pass or change the mode; you switch it under **Decisions
+show` prints them. The agent cannot make a pass or change the mode; you switch it under **Decisions
 here**. Run `kanbanr hooks install` once so the hook is registered; `kanbanr hooks status` warns
 if another hook could answer questions for you.
 
@@ -176,43 +180,43 @@ if another hook could answer questions for you.
 as `kanbanr signoff … --under DLG-001` before kanbanr sees it, because the check cannot know you
 granted the delegation. When you grant a delegation in delegated mode, kanbanr offers the one
 allow rule that lets the command through, on the Review page and after `kanbanr decisions grant`.
-Say yes when Claude asks, or run `kanbanr claude permissions --write` yourself: it adds
+Say yes when the agent asks, or run `kanbanr claude permissions --write` yourself: it adds
 `Bash(kanbanr signoff:*)` (one rule per delegated verb) to the project's
 `.claude/settings.local.json`, which is this machine's and is never committed. Without the rule,
-Claude prepares the decision for your click instead. kanbanr's own guard is unchanged, so a rule
+the agent prepares the decision for your click instead. kanbanr's own guard is unchanged, so a rule
 left behind lets nothing through once the delegation ends.
 
-When Claude takes a decision under a delegation, it tells you which one and under which delegation,
-and the decision is recorded as delegated, by Claude, naming the delegation. It comes back on the
+When the agent takes a decision under a delegation, it tells you which one and under which delegation,
+and the decision is recorded as delegated, by the agent, naming the delegation. It comes back on the
 Review page under **Delegated decisions to review**: **Keep** it, or **Undo** it, which withdraws
 it with a reason that names the delegation. Until you do, a release holding the item shows it as a
 warning beside its promote button and in `kanbanr release promote --plan`; it never blocks the
 release. A delegation can't cover a release, a withdrawal, a
-design decision (ADR) or the decisions settings themselves, and only the Claude you are talking to
+design decision (ADR) or the decisions settings themselves, and only the agent you are talking to
 acts under one, never a sub-agent it briefs. Revoke a delegation on the same panel at any time;
 switching back to monitor mode suspends them all.
 
 **"Can't be checked".** kanbanr honours a grant only when its own history shows that kanbanr wrote
 it. When it cannot read the board's git history, it cannot tell, so the delegation is marked
 **can't be checked**, with the reason, on the Review page and in `kanbanr decisions show`, and
-nothing is taken under it until it can be checked: Claude's decision under it is refused, naming
+nothing is taken under it until it can be checked: the agent's decision under it is refused, naming
 the reason. Most often the board's folder belongs to another user, and git refuses such a
 repository (its safe.directory rule). Run kanbanr as the folder's owner, or trust the folder with
 `git config --global --add safe.directory <folder>`; the delegation is honoured again with nothing
 to grant anew.
 
-Outside a delegation nothing changes: a verdict run inside a Claude session is refused by kanbanr
-itself, not only by its hook. This keeps Claude to what you delegated through kanbanr's own
+Outside a delegation nothing changes: a verdict run inside an agent's session is refused by Kanbanr
+itself, not only by its hook. This keeps the agent to what you delegated through kanbanr's own
 commands and hooks, and makes any departure visible; it is not a security boundary against a
 program running as you.
 
 ## Plan mode
 
-Claude uses plan mode for the setup interview and for designing or changing your process. It never
+The agent uses plan mode for the setup interview and for designing or changing your process. It never
 uses it for a routine move or a new item, and never while a sub-agent is running, because entering
 it pauses the agent.
 
-While agents build, Claude tells you only what changed: a task landed, a failure, a stall, a
+While agents build, the agent tells you only what changed: a task landed, a failure, a stall, a
 decision waiting. It sends nothing for a report that repeats one it gave. Rework goes on the item's
 todo-list before anyone starts it, and kanbanr refuses a build scope for an item with no open task.
 
@@ -222,7 +226,7 @@ todo-list before anyone starts it, and kanbanr refuses a build scope for an item
 >
 > Put FEAT-150 back to Planned.
 
-Claude runs `kanbanr move`. If a stage's gate refuses, Claude says what the stage still needs and
+The agent runs `kanbanr move`. If a stage's gate refuses, the agent says what the stage still needs and
 offers to work through it, using the table below. To run a command yourself without leaving
 Claude Code, start the line with `!`:
 
@@ -232,8 +236,8 @@ Claude Code, start the line with `!`:
 
 ## Sub-agents and agent scopes
 
-When Claude splits work across sub-agents, a design agent to draft, build agents in their own git
-worktrees to write the code, each agent's limits are not left to its brief. Claude issues each one
+When the agent splits work across sub-agents, a design agent to draft, build agents in their own git
+worktrees to write the code, each agent's limits are not left to its brief. The agent issues each one
 a **scope** first, and kanbanr enforces it (FEAT-214):
 
 ```
@@ -241,7 +245,7 @@ kanbanr scope issue build FEAT-214            # --for 8h by default, 72h at most
 ```
 
 The command records the scope on the board (who issued it, the item, what it allows, the item's
-branch, when it expires) and prints the boundary table Claude pastes at the top of the agent's
+branch, when it expires) and prints the boundary table the agent pastes at the top of the agent's
 brief. The agent starts in its own worktree (`isolation: worktree`), and its first command is the
 one the brief names, `kanbanr scope claim SC-007`. The claim binds the scope to that worktree, on
 the board and in a pointer file in the worktree's own git directory, and switches a build agent to
@@ -270,22 +274,22 @@ agent's, is refused every write and commit while no scope is bound to it. A work
 coordinator make there for your own work, such as one to resolve a merge, takes any other name and
 commits under the ordinary hooks; once a scope is bound to a worktree, it holds whatever the
 worktree is called.
-When the agent finishes its item's last task, the item stays where it is: Claude moves it. Every
+When the agent finishes its item's last task, the item stays where it is: the agent moves it. Every
 write and commit an agent makes is recorded as you, by the agent for its item: on the activity
 entry and the event, and as an `Agent-Scope:` trailer on the board commit and the code commit.
 
-Claude keeps an eye on the agents' branches: `kanbanr scope drift` names a build agent's commits
+The agent keeps an eye on the agents' branches: `kanbanr scope drift` names a build agent's commits
 that are newer than its item's last task change, and so do the Stop hook, session start and
-`kanbanr git doctor`. A merge that catches the branch up with its sprint, a release or main, and what it brings in, is not drift. When the agent's work has been reviewed, Claude revokes its scope
+`kanbanr git doctor`. A merge that catches the branch up with its sprint, a release or main, and what it brings in, is not drift. When the agent's work has been reviewed, the agent revokes its scope
 (`kanbanr scope revoke SC-007 --reason done`); `kanbanr scope list` shows the ones in force, and
 `kanbanr scope renew SC-007 --for 4h` extends one. Your own checkout is never scoped.
 
 A scope binds the agent it was issued to, never whoever stands in its folder. The three hooks
 (the Bash guard, the Write guard and test capture) tell a sub-agent's calls, which carry an
-`agent_id`, from Claude's own, and a command run in your own terminal is not an agent's at all. So a
-scope never governs you or Claude's session, and a revoke stops the agent on its next tool call and
+`agent_id`, from the agent's own, and a command run in your own terminal is not an agent's at all. So a
+scope never governs you or the agent's session, and a revoke stops the agent on its next tool call and
 frees every other shell at once. Issuing a scope therefore needs those hooks: `kanbanr hooks
-install`. Claude stays in the project folder and looks inside an agent's worktree with `git -C
+install`. The agent stays in the project folder and looks inside an agent's worktree with `git -C
 <path>`, `make -C <path>` or `npm --prefix <path>`; a `cd` into one is refused, with the way out
 named.
 
@@ -305,9 +309,9 @@ the files it writes (and reads, when that matters) and an estimate in agent-hour
 - **T3** `store.rs`: the task fields on add and edit. Depends on T2. Writes: `api/src/store.rs`, `api/src/batch.rs`. [sonnet, 2.5 h]
 ```
 
-Once you approve the Design, Claude mirrors it into the item's todo-list with `kanbanr todo
+Once you approve the Design, the agent mirrors it into the item's todo-list with `kanbanr todo
 from-design <CODE> --apply`: new tasks are added and changed ones edited, in one commit; no task's
-state changes, and a task the Design no longer names stays on the list. Ask Claude what can run
+state changes, and a task the Design no longer names stays on the list. Ask your agent what can run
 next, and it reads `kanbanr ready --tasks`: the tasks free to start, across items, and why each
 other one waits (a task it waits on, a file a running task is writing, its item not yet at its
 build stage). Ask for several agents at once and it takes `kanbanr ready --tasks --lanes 4`: up
@@ -322,11 +326,11 @@ an agent holds the whole item. A task with no files recorded runs alone within i
 
 The files a task records are kept true: `kanbanr scope drift`, `kanbanr git doctor` and the Stop
 hook name a task whose commits touched a file it did not record, and a finished task that never
-touched one it did. Claude corrects the task (`kanbanr task edit … --writes …`) or the work.
+touched one it did. The agent corrects the task (`kanbanr task edit … --writes …`) or the work.
 
 ## Running several agents
 
-When Claude runs several build agents at once, each in its own worktree, their builds share one
+When the agent runs several build agents at once, each in its own worktree, their builds share one
 machine. kanbanr co-ordinates them (FTR-062), so you can ask for more agents without the machine
 grinding to a halt or every worktree compiling everything from scratch. Nothing of this goes on
 the board: the state is on the machine and in the repository's git directory.
@@ -337,7 +341,7 @@ default kanbanr keeps 2 vCPUs free and gives each slot 5 jobs, so a 12-vCPU mach
 builds at once. When builds wait, a task on the critical path goes first, then the others in the
 order they asked. On Linux a build also waits while the machine's load or free memory says it is
 busy (another project's builds count too); on macOS and Windows those two waits are skipped.
-Ask Claude "how are the builds doing?" and it reads `kanbanr build status` (who holds each slot,
+Ask your agent "how are the builds doing?" and it reads `kanbanr build status` (who holds each slot,
 who waits) and `kanbanr build stats` (how long builds waited and ran).
 
 **Caches.** Each worktree builds into its own `api/target`, so removing a worktree removes its
@@ -354,7 +358,7 @@ them, the tests of the modules it touched, and the web or docs checks when those
 to the lockfile, the toolchain or a build script runs the full suite. The full suite also runs
 when branches are merged into the line, and `make ci` stays the release gate, once per release.
 
-**The merge queue.** Instead of merging branches by hand, Claude queues each finished one. The
+**The merge queue.** Instead of merging branches by hand, the agent queues each finished one. The
 queue merges a batch of up to four branches for the same target onto its current tip, in its own
 worktree, checks the result, and moves the target only when the check is green and nobody moved it
 meanwhile. A red batch is split and each branch checked alone; a branch that conflicts or fails is
@@ -363,21 +367,21 @@ coordinator runs the queue: an agent's scope lets it add its branch, never run i
 
 **Measured.** `kanbanr build bench` times a cold build, a warm one and a typical task's check,
 before and after these measures, each in a fresh worktree, and keeps every row in the build log.
-It is a heavy job; Claude runs it alone, with nothing else building.
+It is a heavy job; the agent runs it alone, with nothing else building.
 
 A build is not stopped when kanbanr alone is killed (Ctrl-C reaches both); it keeps running,
 outside the slots, until it ends. Settings are per project:
-ask Claude to change the number of slots, the jobs per slot, the memory reserve or the linker,
+ask your agent to change the number of slots, the jobs per slot, the memory reserve or the linker,
 and it runs `kanbanr config build`.
 
 ## Why it asks what it asks
 
-Claude asks the board, `kanbanr check <CODE> --json`, what each possible next stage still lacks.
+The agent asks the board, `kanbanr check <CODE> --json`, what each possible next stage still lacks.
 The answer comes from your [workflow's gates](processes.md): the stage's purpose, the failing
 checks, the warnings, and the sign-offs needed. Each kind of check becomes one kind of action, the
 same in every workflow:
 
-| Check | What Claude does |
+| Check | What the agent does |
 |---|---|
 | `definition` | drafts the definition into the plan |
 | `statement` | drafts the one-line statement into the plan |
@@ -393,20 +397,20 @@ same in every workflow:
 | `diagrams_valid` | fixes each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then runs `kanbanr doctor` to confirm none is left |
 | `docs_cover` | adds a link to the item in each view doc a coverage rule names (the Zachman matrix, the catalog), then moves; it never asks you |
 | `small` | proposes splitting the item |
-| `approved` | your approval on the Review page; Claude says it is waiting and links to it |
+| `approved` | your approval on the Review page; the agent says it is waiting and links to it |
 | `bypass` | your ratification on the Review page |
 | `signoff` | a "Sign off *name*" question |
 | `estimated` | a question: how big, in your project's unit (points or days) |
 | `in_sprint` | a question: plan it into the running sprint, or start its sprint today? |
 | `in_release` | a question: which planned release? |
-| `tests_green` | **never a question**: evidence decides; Claude reports what isn't green yet and makes it green |
+| `tests_green` | **never a question**: evidence decides; the agent reports what isn't green yet and makes it green |
 
 A **warning** goes into the plan as a choice: fix it, or go ahead with the warning on record. When
-more than one next stage is possible, Claude asks which. Each plan is headed with the stage's own
+more than one next stage is possible, the agent asks which. Each plan is headed with the stage's own
 `purpose` from your configuration.
 
 So if you edit your process (say, to ask *when* a feature happens at your business-architecture
-stage), Claude starts asking "When does this happen?" there, with nothing else to change.
+stage), the agent starts asking "When does this happen?" there, with nothing else to change.
 
 ## How results are captured
 
@@ -436,11 +440,11 @@ approval yet.
     no requirements · not approved · [MISSING: What] [MISSING: Who] [MISSING: Why]
 ```
 
-Claude drafts who, what and why and the requirement ("WHEN a shopper returns within 7 days, THE
+The agent drafts who, what and why and the requirement ("WHEN a shopper returns within 7 days, THE
 SYSTEM SHALL restore their cart."), asks what only you can decide ("any device, or only the same
 browser?"), and you approve the definition on the Review page. That's approval 1.
 
-**System Design.** Now only `[MISSING: How] [MISSING: Where]`. Claude proposes the design and checks
+**System Design.** Now only `[MISSING: How] [MISSING: Where]`. The agent proposes the design and checks
 it against the requirement you agreed: "server-side storage keyed by account satisfies R-1 across
 devices; browser storage would not". It asks for a quality target. The definition grew, so the
 earlier approval stands, since text was only added, and the additions are reviewed at the next
@@ -456,7 +460,7 @@ decision is drafted as *proposed* for you to accept.
     R-2 has no test — it cannot be shown to be met
 ```
 
-Claude names the tests and asks once: Approve / Change it / Skip. That's approval 3. The branch is
+The agent names the tests and asks once: Approve / Change it / Skip. That's approval 3. The branch is
 created here, so code starts only after the design was agreed.
 
 **Migration.** No question: the move waits until the tests are green.
@@ -469,7 +473,7 @@ design, ask for the whole definition up front: one plan and one approval then co
 where nothing changes.
 
 For a whole project on TOGAF with sprints and releases, from setup to a shipped release, see
-[TOGAF with Claude](../guides/togaf-with-claude.md).
+[TOGAF with your agent](../guides/togaf-with-claude.md).
 
 ## What it looked like in practice
 
@@ -484,7 +488,7 @@ a project with its own process file:
 - **One request, two stages.** "Take saved carts to business architecture, then design it" produced
   one plan covering both stages. Accepting it approved the definition at each stage, and the item
   went Vision → Business Arch → System Design, through each gate in turn.
-- **Choices asked first.** Before the plan for named baskets, Claude asked about renaming, items no
+- **Choices asked first.** Before the plan for named baskets, the agent asked about renaming, items no
   longer for sale, and deleting. The plan then listed what it had still chosen itself ("a named
   basket is a snapshot") under *Choices I made*.
 - **A drafted decision, asked at once.** The design decision behind saved carts came up as Accept /
@@ -499,7 +503,7 @@ a project with its own process file:
 
 ## Your own process, designed in the conversation
 
-At setup, or whenever you say "let's change our process", Claude designs the process with you
+At setup, or whenever you say "let's change our process", the agent designs the process with you
 instead of asking for a file. It offers the processes your team already saved first. For a new one
 it starts from the closest built-in process. Then it asks one question per stage, *what must be
 true before work enters it?*, with only the checks kanbanr can enforce as choices; anything else
@@ -508,8 +512,8 @@ accepting it saves the process (on the board for the team, or in your personal l
 it.
 
 When a saved process changes, each project using it is told: at the start of the next session,
-Claude mentions it once and asks whether to update. It never updates on its own. See
-[Processes](processes.md#designing-a-process-with-claude).
+the agent mentions it once and asks whether to update. It never updates on its own. See
+[Processes](processes.md#designing-a-process-with-your-agent).
 
 ## Beside other tools
 
@@ -522,12 +526,12 @@ whatever they do:
   the git hooks.
 - A command run through a known wrapper (`rtk`, `rtk proxy`, `sudo`, `env`, `time`, `nice`,
   `nohup`, `command`, `exec`) is judged as the bare command. A test run through `rtk`, which
-  condenses output, is still captured, and Claude is told how many results were read and asked to
+  condenses output, is still captured, and the agent is told how many results were read and asked to
   rerun it bare or as `rtk proxy …` for the rest.
 - If another tool replaces one of kanbanr's git hooks, a hook manager points `core.hooksPath`
   elsewhere, or an installer drops kanbanr's Claude Code hooks from the settings, `kanbanr doctor`,
   `kanbanr git status` and the session start say so, with the fix that keeps both tools' hooks.
-  Claude runs that fix and tells you; it never deletes the other tool's hook.
+  The agent runs that fix and tells you; it never deletes the other tool's hook.
 - Installing or removing kanbanr's Claude Code hooks touches only kanbanr's own entries.
 
 ## In other workflows
@@ -536,7 +540,7 @@ The same conversation, with only as many decisions as each workflow asks for:
 
 | Workflow | Your decisions per item | Guide |
 |---|---|---|
-| default (Kanban) | approval and `design-review` to start; `docs-folded` to complete. The move to Completed doesn't ask for green tests, so ask Claude to record them first | [Default](../guides/default-with-claude.md) |
+| default (Kanban) | approval and `design-review` to start; `docs-folded` to complete. The move to Completed doesn't ask for green tests, so ask your agent to record them first | [Default](../guides/default-with-claude.md) |
 | scheduled | approval and `design-review` to schedule; `docs-folded` to complete. Completed doesn't ask for green tests either | [Scheduled](../guides/scheduled-with-claude.md) |
 | PDCA | approval and `design-review` at Do; `docs-folded` at Check; a `review` sign-off at Act | [PDCA](../guides/pdca-with-claude.md) |
 | design control | approval and `design-review` at Design; `verification-review` before Verification; `docs-folded` at Validation; `validation` to reach Released | [Design control](../guides/design-control-with-claude.md) |

@@ -23,7 +23,7 @@
 ```mermaid
 flowchart LR
   subgraph dev["Developer in VS Code"]
-    Claude["Claude + kanbanr skill"]
+    Agent["An agent + kanbanr skill"]
   end
   CLI["kanbanr (CLI)<br/>local writer + 'serve'"]
   Core["kanbanr-core<br/>store · dispatch · git · activity · export"]
@@ -31,7 +31,7 @@ flowchart LR
   Daemon["kanbanr serve<br/>view daemon (read API + SSE + SPA)"]
   Browser["React monitor (view-only)"]
 
-  Claude -->|"runs commands"| CLI
+  Agent -->|"runs commands"| CLI
   CLI --> Core
   Core <-->|"read/write (the writer)"| FS
   CLI -->|"commit + pull/push"| Remote[("git remote<br/>(sharing)")]
@@ -120,7 +120,7 @@ budget of 200 ms; a view ID takes about 6 µs against a budget of 100 µs. A deb
 
 ```mermaid
 sequenceDiagram
-  participant C as Claude (skill)
+  participant C as Agent (skill)
   participant K as kanbanr (CLI, writer)
   participant R as board repo (sibling)
   participant D as kanbanr serve (view)

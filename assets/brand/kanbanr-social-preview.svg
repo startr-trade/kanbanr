@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="kanbanr — a system of record for Claude-driven development">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="kanbanr — a system of record for agent-driven development">
   <!-- GitHub social-preview card (render to PNG at 1280×640 before uploading). -->
   <rect width="1280" height="640" fill="#0F1117"/>
   <g transform="translate(90,130) scale(2.4)">
@@ -17,7 +17,7 @@
   <text x="572" y="392" font-family="'Noto Sans CJK JP','Noto Sans JP','Noto Sans',sans-serif"
         font-size="34" fill="#7C82A0">看板</text>
   <text x="570" y="470" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
-        font-size="27" fill="#C9CDE4">A system of record for Claude-driven development —</text>
+        font-size="27" fill="#C9CDE4">A system of record for agent-driven development —</text>
   <text x="570" y="514" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
         font-size="27" fill="#C9CDE4">every line of code traced to the reason it exists.</text>
   <text x="570" y="586" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"

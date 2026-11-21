@@ -5,9 +5,9 @@ allowed, and what each status asks of an item before the item may enter it. kanb
 check things. The project decides which checks apply where. None of it is hard-coded: TOGAF, PDCA,
 a design-control flow or your organisation's own process is a file.
 
-In Claude Code you never read this table to know what to do next: Claude asks the board what the
+In Claude Code you never read this table to know what to do next: the agent asks the board what the
 next stage needs and turns each gap into a draft or a question — see
-[Working with Claude](with-claude.md).
+[Working with your agent](with-claude.md).
 
 ## Choosing a process
 
@@ -143,7 +143,7 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   until someone ratifies it. `--unapproved` is the older name. An override a gate did not need is
   not recorded: if the gap closed while you were asked, the move goes through plain and `gate:` says
   so.
-- **An override Claude makes** (inside a Claude Code session, or by a delegated agent) records
+- **An override the agent makes** (inside a Claude Code session, or by a delegated agent) records
   where it was made, and waits on the Review page for you to ratify it even when the item was
   approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item
   does not ship: **Promote \<VERSION\> to main** and the cut carry it, saying why. Your own
@@ -288,7 +288,7 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
   reaches next, and only once that stage's other requirements are met. A workflow that lets an
   item skip ahead doesn't get the later stage's sign-off offered early. A finished item is listed
   only when its approval lapsed or text was added since, and then only to approve again.
-- **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
+- **Who gives it:** a sign-off is a person's agreement. The agent asks for it and never gives it.
 - **Taking it back:** a sign-off given in error is withdrawn with a reason:
 
   ```bash
@@ -639,17 +639,17 @@ defaults to HEAD; a pass with no commit named is refused while the working tree 
 changes, because it would not be about HEAD. The Releases page offers the same as a **Record result**
 form where a promotion lacks a result (the Releases page's Record result form, just above the Cut), and shows the command on a read-only monitor.
 
-When Claude has read the run's result, it prepares it (`kanbanr prepare gate`) instead of asking you
+When the agent has read the run's result, it prepares it (`kanbanr prepare gate`) instead of asking you
 to type it. The Releases page then shows the result filled in where **Record result** would be:
 the gate, the commit, passed or failed, the link to the run and the note, with one button. Confirm
 it, change a field first with **Edit**, or **Reject** it. The result is recorded as you, and what
-Claude prepared is kept beside it ([Prepared by Claude](the-monitor.md#prepared-by-claude)).
+the agent prepared is kept beside it ([Prepared by the agent](the-monitor.md#prepared-by-the-agent)).
 
 A promotion that would itself add a commit to the release branch (`prepare`) cannot be covered: no
 result can exist for a commit that is not made yet, so promote to the stage that prepares first and
 record the result once it is on the branch. `make ci` records its own run as the gate `local`, a
 failure always and a pass only on a clean working tree; add `local` to `commit_gates` to require it.
-Claude never records a result for you.
+The agent never records a result for you.
 
 ```bash
 kanbanr config release-stage candidate --on-enter branch,prepare
@@ -783,7 +783,7 @@ kanbanr release add v1.0.1 --patch-of v1.0.0
 
 The patch records its parent, which must have been cut and tagged — any cut release, an older
 supported one included. `release/v1.0.1` is made from the parent's tag, not from where main has
-since gone, and the patch starts at candidate. A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. Claude asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. It goes through the same stages. Its notes
+since gone, and the patch starts at candidate. A patch release starts at **candidate** the moment it is created, so there is no first stage to promote from. The agent asks you in the conversation to confirm it; main and the tag are then decided on the Releases page as usual. It goes through the same stages. Its notes
 name the parent in one line, with a link to the parent's notes — "Patch of v1.0.0. Everything in
 [v1.0.0](v1.0.0.md) is included; this patch adds:" — and list only the patch's own items, never
 the parent's. While the notes are still kanbanr's untouched draft, they are drafted again when a
@@ -793,7 +793,7 @@ when the draft no longer names what would ship. Notes you wrote yourself are nev
 At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
 past the parent, main is left where it is. The patch's commits that the integration branch does
 not have yet are listed — in the output and in the notes, under "To merge forward" — so the next
-release keeps the fix. Claude merges them forward with `kanbanr git forward <VERSION>` as soon as
+release keeps the fix. The agent merges them forward with `kanbanr git forward <VERSION>` as soon as
 kanbanr says so; you push.
 
 The integration branch and the main branch are both the repository's default branch unless the
@@ -854,7 +854,7 @@ With the model on, the board makes the merges:
   rebase. One that would conflict is reported with its files and left as it was.
 - **A fix to a release under test** integrates into `release/<VERSION>`, and the move says the line
   lacks it. `kanbanr git forward <VERSION>` merges the release forward into the line, naming every
-  item its commits name. Claude runs it as soon as the move says so, and tells you what merged;
+  item its commits name. The agent runs it as soon as the move says so, and tells you what merged;
   you push.
 
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
@@ -886,9 +886,9 @@ The file holds statuses, `default_state`, `displayed_states`, `no_op_states`, `t
 that declares gates is stamped `schema_version: 3`, so an older kanbanr refuses to open it instead
 of ignoring its gates.
 
-## Designing a process with Claude
+## Designing a process with your agent
 
-You don't have to write the file. Tell Claude how your team works ("design review before we build,
+You don't have to write the file. Tell your agent how your team works ("design review before we build,
 QA signs off releases"), at setup or any time later. In plan mode, it:
 
 1. offers the processes already saved on the board and in your personal library, then the
@@ -907,7 +907,7 @@ QA signs off releases"), at setup or any time later. In plan mode, it:
    plan, with a one-line description of what the process is for.
 
 Accepting the plan saves the process and applies it. Changing it later is the same conversation,
-and then Claude asks, one project at a time, whether each project using it should take the new
+and then the agent asks, one project at a time, whether each project using it should take the new
 version.
 
 ## Saving and sharing processes
@@ -956,7 +956,7 @@ kanbanr process update            # take the saved version now
 ```
 
 - `kanbanr doctor` warns when a newer version is saved, or when the project's workflow was edited
-  after it was applied. The same notice opens each Claude session, and Claude asks once whether
+  after it was applied. The same notice opens each agent session, and the agent asks once whether
   to update.
 - The monitor's Workflow page shows the process, its version and library, and any notice.
 - Items already in progress meet the new gates on their next move. Approvals already given stay.

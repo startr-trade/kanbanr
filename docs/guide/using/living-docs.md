@@ -24,7 +24,7 @@ needs its configuration and observability written down. kanbanr keeps the list a
 | `parts` | what it is made of | cli, api, web-ui, desktop-ui, mobile-app, library, worker, daemon |
 | `data` | what it keeps | none, files, sql, nosql, object-store, queue, cache |
 
-Claude asks them once at setup, recommending what the folder's manifests suggest
+The agent asks them once at setup, recommending what the folder's manifests suggest
 (`suggested_facts` in `kanbanr where --json`), and records them with `kanbanr facts set`.
 
 **The catalog** (`projects/<id>/catalog.yaml`) is a list of rows. Each row says:
@@ -273,10 +273,10 @@ kanbanr catalog baseline            # where it stands, and what changed since it
 kanbanr catalog baseline init       # pin the applying system rows (needs the catalog)
 ```
 
-**Accepting it is yours.** Once the system docs are written, Claude prepares the acceptance
+**Accepting it is yours.** Once the system docs are written, the agent prepares the acceptance
 (`kanbanr prepare system-baseline`) and you accept it as its own group on the Review page
 (`/p/<project>/review?group=system-baseline`), or in your terminal with
-`kanbanr catalog baseline accept`. Claude never accepts it, in any mode, and no delegation covers
+`kanbanr catalog baseline accept`. The agent never accepts it, in any mode, and no delegation covers
 it. Until you do, the build stage's gate (`system_baseline_accepted`) refuses the first item, so
 nothing is built before the system design is agreed. A new project has this on from the start; an
 existing one opts in with `kanbanr catalog baseline init`.
@@ -292,7 +292,7 @@ current hashes, and the item page lists the **Views changed** by a design. An ea
 is never rewritten.
 
 **Re-accepting at a milestone.** When the system design moved on purpose, review it with the
-milestone's architecture review ([above](#before-a-release-and-at-each-milestone)): Claude
+milestone's architecture review ([above](#before-a-release-and-at-each-milestone)): the agent
 prepares a new acceptance and you accept it. It is added to the history; the latest one is what
 later changes are measured against.
 
@@ -356,18 +356,18 @@ or status name counts only inside a code span, and a command only on a line that
 A flag says which text names which changed name. It never says the text is wrong, so read it and
 decide:
 
-- Claude settles each flagged text before `docs-folded` is offered: it reads the text against the
+- The agent settles each flagged text before `docs-folded` is offered: it reads the text against the
   change, then records that it is still right, with why, or that a correction is filed
   (`kanbanr prepare text`). The record names who settled it and the revision it checked. A new
   commit that names the text again, or a later edit to the text, puts it back among those left. The
-  Review page lists the texts left, with the names found and their lines, and says Claude settles
-  them; the sign-off appears once none is left, and the page shows what Claude checked under
-  "Checked by Claude". The sign-off keeps those records. `kanbanr check` lists the texts left under
+  Review page lists the texts left, with the names found and their lines, and says the agent settles
+  them; the sign-off appears once none is left, and the page shows what the agent checked under
+  "Checked by the agent". The sign-off keeps those records. `kanbanr check` lists the texts left under
   "Texts to settle".
-- An edit never settles a flag. A flagged text that is edited stays flagged until Claude's check
+- An edit never settles a flag. A flagged text that is edited stays flagged until the agent's check
   covers the edit, and the Review page shows the edit, with its diff, as "Edited while flagged", so
   the person signing docs-folded sees a text that changed while it was flagged. The board does not
-  record who made an edit, so every edit to the text is shown. Claude is also refused an edit to
+  record who made an edit, so every edit to the text is shown. The agent is also refused an edit to
   another item's approved specification: to change one, the person unapproves that item first (the
   Review page), and the edit goes back through review.
 - When an item is merged, the flagged texts are listed on stderr.

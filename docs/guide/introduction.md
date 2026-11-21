@@ -5,7 +5,7 @@
   <img class="on-dark" src="images/brand/kanbanr-lockup-dark.svg" alt="kanbanr — 看板, a system of record">
 </div>
 
-A kanban board that is the **system of record** for Claude-driven development. Claude manages it
+A kanban board that is the **system of record** for agent-driven development. The agent manages it
 through a [skill](using/everyday.md) that drives the `kanbanr` CLI, and a read-only web monitor
 shows what is happening live while you work.
 
@@ -20,7 +20,7 @@ An AI agent doing real project work needs a durable, external system of record �
 scratchpad. Without one, the plan, the reasoning and the evidence live only in a transcript: they
 vanish between sessions, cannot be reviewed, and work gets built that nobody agreed to.
 
-kanbanr keeps all of it in plain, git-backed files a human can read, and makes Claude keep it
+Kanbanr keeps all of it in plain, git-backed files a human can read, and makes the agent keep it
 current as part of doing the work rather than as an afterthought.
 
 What it commits to — work items link these by id:

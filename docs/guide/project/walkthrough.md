@@ -23,7 +23,7 @@ person can judge.
    to the run's binary, first on the session's `PATH` so the session and every hook use it, and a
    monitor with writes on over the scratch board, started once the first step has made it.
 3. **Drives a Claude Code session** headlessly (`claude -p` over stream-json), saying what the guide
-   says, step by step. Under `claude -p` a question arrives in Claude's final text (with
+   says, step by step. Under `claude -p` a question arrives in Claude Code's final text (with
    "(recommended)" after the recommended option); the run answers it, as the next turn, from the
    first of: a runbook rule matching the question, the recommended option, a rule matching the
    whole message (only for a question with no options), the first option, the free-text pick. It
@@ -59,7 +59,7 @@ person can judge.
    **Reject all N** beside the single buttons; one click records them all. Each prepared result
    shows its check id (**Check** `MT-6`) beside its result, note and commit, and the batch's
    summary names its checks (`(checks MT-1, MT-4)`), so the Review page matches the run log and
-   Claude's report. A check that measured nothing goes nowhere, and a run that never made its
+   the agent's report. A check that measured nothing goes nowhere, and a run that never made its
    board (`setup-incomplete`, and `setup_failed true` in `raw/setup.log`) puts nothing on yours.
 
 **Every result names the commit the binary was built from; a dirty or unknown build is refused
@@ -106,7 +106,7 @@ steps:
     expect: {board: {release: {version: v0.1.0, stage: main}}, truth: {ci: {release: v0.1.0, passed: true}}}
 ```
 
-- **`say`** is what the person says to Claude; `{board_remote}`, `{code_remote}`, `{monitor_url}`
+- **`say`** is what the person says to the agent; `{board_remote}`, `{code_remote}`, `{monitor_url}`
   and `{today}` are filled in by the run. **`answers`** are rules (`match` is a case-insensitive
   pattern over the question's text) on a step or shared; the current step's are tried first.
 - **`decide`** is one of `approve`, `signoff`, `ratify`, `adr`, `promote`, `gate_result`,
@@ -120,8 +120,8 @@ steps:
   `item: {title_contains}` or `{title_matches}`, `item: {item, status}`, `config: {release_prepare: configured}`,
   `sprint: active`), a `truth` claim (`tag`, `ci`, `merged`, `doctor: clean`), a `page` claim
   (`url`, `contains`, `absent`) or a `talk` claim (`asked`, `not_asked`, `said`: patterns over what
-  Claude asked and said in the step). In a `talk` claim, `since: <step id>` widens `asked` and
-  `not_asked` to every step from that one to this, so a question Claude asks while it first scopes
+  the agent asked and said in the step). In a `talk` claim, `since: <step id>` widens `asked` and
+  `not_asked` to every step from that one to this, so a question the agent asks while it first scopes
   the work still counts; `said` always reads the step's own last message. `offer: {page, button,
   subject}` with `absent: true` claims that the page does not offer that button for that item.
 - **`only_if: {board: …}`** runs the step only when that board claim holds, such as
@@ -138,7 +138,7 @@ steps:
 
 Start a run, read `findings.md` and the tables, confirm or reject the batch on the Review page with
 one click, and check what only a person can judge: whether the guide's words were confusing, and
-whether what Claude wrote reads well. `--pause-at-decisions` leaves each click to you and changes
+whether what the agent wrote reads well. `--pause-at-decisions` leaves each click to you and changes
 nothing else.
 
 Two runbooks ship on this board: `walkthroughs/togaf.md` and `walkthroughs/agile.md`, for the two
@@ -158,7 +158,7 @@ made from two runs of one build:
    `kanbanr walkthrough run walkthroughs/agile.md --no-batch --name agile-<version>-<n> --remotes <prefix>`.
    Watch the run logs and the machine's load as for any long job.
 4. Run `kanbanr walkthrough prepare --batch <version>-guides <togaf run> <agile run>`.
-5. Claude reports each check by its id from both runs' `checks.tsv` and findings, and you confirm
+5. The agent reports each check by its id from both runs' `checks.tsv` and findings, and you confirm
    the batch on the Review page. MT-10 is recorded by step 4 as automated evidence, green only if
    both runs reached their cut.
 

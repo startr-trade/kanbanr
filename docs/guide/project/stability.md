@@ -42,7 +42,7 @@ changelog saying so.
 - **The monitor's look** — its pages, layout and URLs other than `/api/…`.
 - **The daemon's internal routes** — the reads it answers that the OpenAPI document does not
   list (see [HTTP API](../reference/http-api.md#internal-routes)), and its write routes.
-- **The skill's wording** — how SKILL.md phrases its guidance to Claude, as long as the commands it
+- **The skill's wording** — how SKILL.md phrases its guidance to the agent, as long as the commands it
   drives keep working.
 - **Internal crates** — `kanbanr-core`, `kanbanr-server` and `kanbanr-cli` are not libraries;
   they are not published, and their Rust API changes freely. (`ears-classifier` and `mermaid-lint`

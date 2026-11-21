@@ -259,7 +259,7 @@ After that, every kanbanr change updates GitHub:
   kanbanr's on the next sync.
 - Edits and comments made on GitHub aren't pulled back automatically. `kanbanr mirror pull FEAT-012`
   shows whether the issue was edited since the last sync, its current content, and new comments,
-  so you (or Claude) can bring what matters into kanbanr first.
+  so you (or the agent) can bring what matters into Kanbanr first.
 - `kanbanr mirror status` shows what a sync would do without calling GitHub;
   `kanbanr mirror disable` turns the mirror off and keeps the links.
 
@@ -336,13 +336,13 @@ outside the menu, always visible.
   next (see [The Board](#the-board)); click a card's title → that feature's page.
   A card names the one stage the item reaches next, with the same count `kanbanr check` gives for
   it, sign-offs included: "Migration needs 6, 1 yours" means six things stand between the item and
-  Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
+  Migration and one of them is yours (a sign-off or approval); the rest are the agent's. "Waiting on
   you: docs-folded" appears only when nothing but your part remains. The card says nothing about
   stages the item could skip to.
 - **Review: texts to check.** Under an item's docs-folded sign-off, the page lists the docs and
-  items that name something the item changed and have not changed since, and says Claude settles
-  them. You fill in nothing: the sign-off appears once none is left, and "Checked by Claude" lists
-  what Claude confirmed or corrected, with why.
+  items that name something the item changed and have not changed since, and says the agent settles
+  them. You fill in nothing: the sign-off appears once none is left, and "Checked by the agent" lists
+  what the agent confirmed or corrected, with why.
 - **Review: a lapsed docs-folded.** When the item's branch gets a commit after its docs-folded
   sign-off, the page asks for the sign-off again and says why: "The earlier docs-folded sign-off
   lapsed: feat/… has commits after sign-off 'docs-folded' was given."
@@ -383,24 +383,24 @@ Overview leads with what needs you, then what is happening, then how much the bo
 - **Needs you**: what waits on you, in four sections: Decisions (each Review group), Releases (a
   release at a stage that waits for you), Health (red tests, doctor errors, a repository that has
   drifted) and Records (a retrospective that is due). Each line has a count and links to the page
-  that takes it. Only your own decisions count toward the total; health is Claude's to fix, so
-  its line says "Ask Claude to fix the 22 doctor errors." instead of linking.
+  that takes it. Only your own decisions count toward the total; health is the agent's to fix, so
+  its line says "Ask your agent to fix the 22 doctor errors." instead of linking.
 - **Now**: the running sprint with its days left, each release in flight with the steps done,
   current and next, and the open milestones, each named with its code and done/total above
   its bar.
 - **What the board holds**: items by kind (untyped counted apart), requirements, tests by state
   and kind, requirement coverage, flow (completed, cycle time, rework, defects) and records. Every
   count links to the list it counts; the flow numbers that have no list are tiles that say
-  "Ask Claude for the flow report."
+  "Ask your agent for the flow report."
 - **Goals**, **Recent decisions** (ADRs, approvals, sign-offs, release stages, shipped releases,
   newest first, in words) and **Activity**.
 
 **In delegated mode.** While a delegation is in force, Needs you reads in three parts. **Yours** is
 what only you can do, and it is all the badge counts; a delegation that ends within three days, or
-was revoked, is listed there with how many decisions return to you. **Decided by Claude** lists what
-Claude decided under a delegation since you last looked, newest first, each linking to the Review
+was revoked, is listed there with how many decisions return to you. **Decided by the agent** lists what
+the agent decided under a delegation since you last looked, newest first, each linking to the Review
 page to keep or undo. **Held** says what each delegation still holds ("DLG-001: 4 design reviews,
-2 approvals, until 4 Dec"): that is Claude's work, not yours. "Since you last looked" is kept in
+2 approvals, until 4 Dec"): that is the agent's work, not yours. "Since you last looked" is kept in
 this browser only.
 
 Every page also carries a **Needs you** badge in the top bar with the same total; it opens a
@@ -433,10 +433,10 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
-An override Claude made past a gate waits on the **Review** page to be ratified, even on an item
-you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by Claude, past its
+An override the agent made past a gate waits on the **Review** page to be ratified, even on an item
+you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by the agent, past its
 gate: …" above **Ratify**. Until you ratify it, the item does not ship. Each override waits on
-its own: one Claude made after you ratified an earlier one, at the same definition, is listed
+its own: one the agent made after you ratified an earlier one, at the same definition, is listed
 again, and ratifying records a new ratification. When Approve or Ratify is disabled, the sentence
 under it says what is missing and who provides it (the diagram check running, a diagram to fix, or
 a page to reload).
@@ -496,7 +496,7 @@ agent is on it now*, *Blocked or stalled*) open with full cards; the others show
 oldest item, for example "Building · 23 — oldest FTR-012, 23 days in In Progress", and open in place
 as one-line rows. A long group scrolls inside itself; nothing is hidden behind a page number.
 
-**Decisions Claude holds.** In delegated mode a card says "design review: Claude, under DLG-001"
+**Decisions the agent holds.** In delegated mode a card says "design review: the agent, under DLG-001"
 for a sign-off or approval a delegation in force covers, in a quiet style with a link to the
 delegation, and it never says "waiting on you" for it. "Waiting on you" stays for what is yours.
 When the delegation ends or you revoke it, the same card reads as yours again.
@@ -567,7 +567,7 @@ Gantt stays in the CLI (`kanbanr gantt`) and in the HTTP API for export.
   band over its dates with the part done filled in, and the releases in flight, drawn as a
   diamond at their target with a dot for each stage change. A release due in the window is a row
   too. Rows run soonest end first. With nothing running, the tab says "Nothing is running today.
-  Ask Claude to plan the next sprint."
+  Ask your agent to plan the next sprint."
 - **Planned**: upcoming sprints, releases and milestones on a quarter's timeline from today,
   soonest start first. A milestone is a band from today to the latest target of the releases its
   items are planned into. A milestone whose items are in no release, or a release with no target,
@@ -619,7 +619,7 @@ the same plan `kanbanr plan` prints:
 
 A forecast is never a date. The only dates on the panel are the ones a person set, a running
 sprint's last day and a release's target, shown as chips labelled "(set by the person)". With no
-tasks to plan, the panel says so and offers the sentence to ask Claude to break the sprint's items
+tasks to plan, the panel says so and offers the sentence to ask your agent to break the sprint's items
 into tasks.
 
 ### The Workflow page
@@ -678,7 +678,7 @@ title. A system row also carries its [system baseline](living-docs.md#the-system
 pinned, changed since the acceptance, not pinned or awaiting. A written source links to its doc (a folder to the Docs page at that folder); a generated
 source links to the page that shows it, such as the Charter, the Plan page or Releases. A repository doc
 shows its path. With no facts the page says so and names `kanbanr facts set`; with no catalog it
-names `kanbanr catalog init`. The page is read-only: Claude keeps the catalog. See
+names `kanbanr catalog init`. The page is read-only: the agent keeps the catalog. See
 [Living architecture docs](living-docs.md#what-a-project-documents-the-content-catalog).
 
 ### Docs at a position
@@ -851,15 +851,15 @@ same whichever you use. A read-only monitor shows the command instead.
 - **Tagged, waiting for the tag workflow.** When the tag stage is the last and a gate judges the
   tag, the cut leaves the release "tagged, not released yet", still in Current. Its body keeps the
   tag's panel, and its header a button, "Waiting for the tag workflow", that stays off until a passed result is recorded for the
-  tag's commit. Confirming Claude's prepared result (or recording it with **Record result**) ships
+  tag's commit. Confirming the agent's prepared result (or recording it with **Record result**) ships
   the release. A failed result keeps it tagged and the panel offers the patch release. This is
   `kanbanr gate record <gate> --passed --commit <tag>`, or `kanbanr release promote <VERSION>`.
-- **Prepared, not required.** A record Claude prepared for a release that no form on its row
+- **Prepared, not required.** A record the agent prepared for a release that no form on its row
   shows, such as a gate result for a gate no release stage asks for, or a confirmation for a stage
   other than the next one, is listed in the release's body under **Prepared, not required**,
   below its item table and the rest of its button, and above its notes. A gate result no stage asks for reads "no stage asks for
   \<gate\>". Each has its own button (**Record \<gate\> passed on \<commit\>**), **Edit** and
-  **Reject**, as in [Prepared by Claude](#prepared-by-claude), so nothing waits unseen. A prepared
+  **Reject**, as in [Prepared by the agent](#prepared-by-the-agent), so nothing waits unseen. A prepared
   gate result goes stale once its release is cut after it was prepared, or its release branch
   moves past its commit; it then shows why and has no button. `kanbanr prepare list --release
   <VERSION>` lists the same records. An answered one names its release only by the tag commit, so
@@ -872,7 +872,7 @@ same whichever you use. A read-only monitor shows the command instead.
   discards it. This is `kanbanr release notes <VERSION> --edit`. The notes are read from the
   repository the monitor was started in; a read-only monitor shows them with the command instead.
   Under the notes the panel shows the version's section of the changelog ("Changelog section
-  (CHANGELOG.md)"), read-only; when there is none it says so. Ask Claude to change it
+  (CHANGELOG.md)"), read-only; when there is none it says so. Ask your agent to change it
   (`kanbanr release notes <VERSION> --changelog FILE`).
   They are read from the path they were written to, so changing the notes path later leaves earlier
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
@@ -892,29 +892,29 @@ working and for how many seconds, and a read repeated after a change keeps the l
 - **System baseline.** Before the first build, the acceptance of the [system
   baseline](living-docs.md#the-system-baseline) is its own group, **System baseline**, first among
   the tabs, with one row: the project's baseline ("N rows, M pinned: awaiting acceptance"), each
-  row linked to its source, and Claude's prepared note when there is one. **Accept** asks first,
+  row linked to its source, and the agent's prepared note when there is one. **Accept** asks first,
   like every group action, and records you as the person who agreed the system design. A read-only
   monitor shows `kanbanr catalog baseline accept` for your own terminal. The group shows while the
   baseline awaits acceptance or a re-acceptance is prepared, never as a panel on the page. In a
   design-review row, "Changes the system baseline" lists each baseline row the item changes, pinned
   hash against now.
-- **What Claude holds.** In delegated mode a row whose decision a delegation in force covers is
-  shown last in its group, with a pill naming the delegation ("Claude holds it, under DLG-001"),
+- **What the agent holds.** In delegated mode a row whose decision a delegation in force covers is
+  shown last in its group, with a pill naming the delegation ("the agent holds it, under DLG-001"),
   and is not counted in the group's number. It is still yours to decide if you want to: tick it
   like any other row. A group with only such rows stays listed, with a count of 0 and "· 4
-  Claude's" on its tab, and its sentence says how many Claude holds and until when.
+  the agent's" on its tab, and its sentence says how many the agent holds and until when.
 - **Rows.** Each row is one item on one line: its code, its title, what is being decided, and pills
   for what needs your eye ("approval lapsed", "spec changed since sign-off", "added since
   approval", "prepared", the batch it is in), with its release and sprint. Under it, one line says
   what your click records. Open a row to see its evidence in place: the definition's changes since
-  you last approved, the spec diff, the diagrams, the texts Claude settled, a record Claude
+  you last approved, the spec diff, the diagrams, the texts the agent settled, a record the agent
   prepared with its sources. Only an opened row's evidence is read.
 - **Selecting.** A checkbox per row and **Select all** in the group's header pick rows in that
   group only; opening another group starts a new selection, so one confirmation is always one
-  decision. A row that cannot be decided yet says why, and who provides what is missing ("Claude
-  settles 2 texts first: ask Claude to check them"), and cannot be ticked. In the Approve and
+  decision. A row that cannot be decided yet says why, and who provides what is missing ("the agent
+  settles 2 texts first: ask your agent to check them"), and cannot be ticked. In the Approve and
   Ratify groups a row can be ticked once its diagrams have been checked and parse. Nothing
-  arrives ticked: tick the rows to decide, or press **Select these N** beside a batch Claude
+  arrives ticked: tick the rows to decide, or press **Select these N** beside a batch the agent
   prepared; **Select all** shows how many of the shown rows are selected.
 - **Filter and sort.** The header's filter box searches the group by code or title, and its sort
   orders the rows by release, last change, sprint or code. The header stays in view as the rows
@@ -925,23 +925,23 @@ working and for how many seconds, and a read repeated after a change keeps the l
   press records the decision for each of them: one verdict per item, each pinned to the definition
   you saw and recorded as you from the monitor, all in one commit. An item that changed since the
   page read it is refused alone, and a line under the header says so ("approved 2 of 3; FTR-043:
-  …"); the others go through. When the selection is exactly one batch Claude prepared, the button
+  …"); the others go through. When the selection is exactly one batch the agent prepared, the button
   reads **Confirm all N** (and **Reject all N** for its records) and confirms the batch the same
   way. The Delegated decisions group also has **Undo N**, and selected prepared rows have **Reject
   N prepared**. A decision that needs a reason or your own observation stays in its row: an ADR's
   Reject, Undo with a reason, and Passed or Failed on a manual check with nothing prepared.
 - **Links.** The group and the open rows are in the address, such as
-  `/p/<project>/review?group=docs-folded#DEF-066`, so Claude can link you to exactly the decision
+  `/p/<project>/review?group=docs-folded#DEF-066`, so the agent can link you to exactly the decision
   it is asking for. Your selection is never in a link.
 - **Read-only.** A read-only monitor shows the same groups and rows with no checkboxes or
   buttons; each row's evidence gives the command that takes the decision in your own terminal.
 
-**The Recode group** (FTR-056) holds one row when Claude has prepared the bulk recode of old codes
+**The Recode group** (FTR-056) holds one row when the agent has prepared the bulk recode of old codes
 to their kinds' prefixes (`kanbanr prepare recode`). Its row opens to the plan as a table, **From**
 to **To**, with the count of renames in its heading ("Renames 129 items to their kinds' prefixes"),
 scrolling when the plan is long. **Confirm 1** asks first, then renames every item in one board
 commit; each keeps its old code as an alias, so no link, trailer or record stops resolving. A plan
-the board has changed since is shown stale and refused: ask Claude to prepare it again. Applying a
+the board has changed since is shown stale and refused: ask your agent to prepare it again. Applying a
 recode is yours alone, in every decision mode. The same decision from your own terminal is
 `kanbanr feature recode --apply --rev <rev>`.
 
@@ -957,9 +957,9 @@ A manual test that is not yet green waits on the **Review** page, in the **Manua
 item, the requirement and its text, the check to make, and its state ("not run", or "failed" with
 who failed it and when). Do the check, then click **Passed** or **Failed**. **Add a note** opens an
 optional note; nothing has to be typed. The click records the result as you, the same record
-`kanbanr test` makes in your own terminal. Claude is refused a manual result, since it says a
-person checked; if you tell Claude the result, it prepares the record filled in and you confirm it
-here. A failed check is recorded as failed and no defect is filed for you: ask Claude to file one.
+`kanbanr test` makes in your own terminal. The agent is refused a manual result, since it says a
+person checked; if you tell your agent the result, it prepares the record filled in and you confirm it
+here. A failed check is recorded as failed and no defect is filed for you: ask your agent to file one.
 A read-only monitor shows the `kanbanr test` command instead. A check opens once its item reaches
 its build stage: before then nothing exists to check, so it is listed apart under **Not due yet**
 with no Passed or Failed, and kanbanr refuses a result for it from any page or terminal.
@@ -987,41 +987,41 @@ reason for all of them, and the second press retires them. A retirement is your 
 Passed and Failed: it is kept with its reason and who retired it, and the check leaves the group.
 It is not a pass: the test stays not proven, so readiness and the evidence report still count it
 as unproven. Only a check of a shipped release can be retired, never one of the release being cut
-or of an item in no release, and never a passed one. Claude is refused retiring; if you tell it to
+or of an item in no release, and never a passed one. The agent is refused retiring; if you tell it to
 retire a check, it prepares the retirement (`kanbanr prepare test <CODE> <R-n> "<test>" --retired
 --note "<your reason>"`) and you confirm it in the row (**Record retired**) or with the group's
 **Confirm**.
 
-### Prepared by Claude
+### Prepared by the agent
 
-When Claude already has the evidence for a decision, it prepares the record instead of asking you
+When the agent already has the evidence for a decision, it prepares the record instead of asking you
 to fill in a form (FTR-034): a sign-off's note and the doc it covered, the reason for a
 ratification, what was checked before a stage after the tag, or a CI result with its run's link.
 On the Review page the record's row sits in the group of the decision it prepares, not ticked (its batch has a
 **Select these N** button), with
 the record in its evidence; on the Releases page it sits beside the decision's one button. It is
 shown filled in, headed "Prepared
-by Claude on 12 Nov 2026 from CI run 4512, release tip 9f078bd", with each source as a link: a
+by the agent on 12 Nov 2026 from CI run 4512, release tip 9f078bd", with each source as a link: a
 board doc or item opens here, a web link opens in a new tab, and a commit is shown as its hash.
 
 - **The button** confirms it as it stands. The verdict is made as you, through the same route the
   form or the command uses, with the same checks: a definition, spec or release branch that moved
   since the page was shown is refused, and nothing is recorded.
-- **Edit** turns the fields you may change into inputs, filled in with what Claude prepared; the
+- **Edit** turns the fields you may change into inputs, filled in with what the agent prepared; the
   same button then confirms your version.
 - **Reject** takes an optional reason and records that you turned it down. Nothing else changes;
-  ask Claude to prepare it again.
+  ask your agent to prepare it again.
 
-Both parts are kept as files under the project's `prepared/` folder: what Claude prepared, with
+Both parts are kept as files under the project's `prepared/` folder: what the agent prepared, with
 its sources, and your answer, with each field you changed. Neither is rewritten. A record whose
 decision was taken some other way, or whose item or release moved on, shows why and has no button;
 a newer one for the same decision replaces it. A read-only monitor shows the record and the
-command that takes the same decision in your own terminal. Claude can prepare a record but can
+command that takes the same decision in your own terminal. The agent can prepare a record but can
 never confirm or reject one.
 
 ### Planning from the pages
 
-You can plan items from the pages instead of asking Claude in the conversation (FTR-049). On the
+You can plan items from the pages instead of asking your agent in the conversation (FTR-049). On the
 Plan page, open a row: each item in its table has a checkbox, and one **Plan into…** button acts on
 the selection, with the sprints and releases that are not frozen as targets. You can also drag an
 item's table row onto a sprint or release row of the Plan page. On the Releases page, an item
@@ -1032,27 +1032,27 @@ FTR-044 and DEF-076 into SP-004?", with a button of the same words and Cancel; t
 records it. A drop never records anything by itself.
 
 What is recorded is your decision, as you, from the monitor: one commit, one file under
-`planning/`. It does not change any plan. The row shows it as **pending: Claude carries it out at
+`planning/`. It does not change any plan. The row shows it as **pending: the agent carries it out at
 its next turn**, and the Overview lists it under Decisions without counting it in the badge, since
-it waits for Claude. Claude then checks dependencies, frozen scope, capacity and dates, and either
+it waits for the agent. The agent then checks dependencies, frozen scope, capacity and dates, and either
 plans the items (the outcome shows as carried) or declines with its reason and the nearest valid
-move, shown on the item's row with a one-press "Ask for v0.9.0 instead". Claude can never record a
+move, shown on the item's row with a one-press "Ask for v0.9.0 instead". The agent can never record a
 planning decision, and you can carry out your own in a terminal with `--decision`. A read-only
 monitor shows pending decisions but not the buttons.
 
 ### Decisions here
 
 **Decisions here**, a collapsed section above the Review page's groups, says where this project's
-decisions are taken (FTR-028). Delegations Claude proposed and decisions Claude took under one
+decisions are taken (FTR-028). Delegations the agent proposed and decisions the agent took under one
 are rows in the **Delegations** and **Delegated decisions** groups, each row opening to the panel
 below:
 
 - **The mode**, `monitor`, `delegated` or `conversation`, with **Change**. After a change the panel lists what is
-  waiting and where it is taken now: here, or by Claude under a delegation that covers it.
-  In `conversation` mode the item verdicts (approve, ratify, sign-off) are taken in Claude's
+  waiting and where it is taken now: here, or by the agent under a delegation that covers it.
+  In `conversation` mode the item verdicts (approve, ratify, sign-off) are taken in the agent's
   question dialog, so this page shows them as waiting there and hides their buttons; you record
   the rest here as always (FTR-035).
-- **Delegations.** A proposal from Claude is shown like a prepared record, with what it covers and
+- **Delegations.** A proposal from the agent is shown like a prepared record, with what it covers and
   until when: **Grant** grants it exactly as shown (if it changed since the page loaded, the grant
   is refused), **Reject** discards it. A granted one shows its end and **Revoke**, which needs a
   reason. A delegation whose grant kanbanr did not write (the file was edited by hand, or changed
@@ -1064,7 +1064,7 @@ below:
   the missing rule and the command that adds it, `kanbanr claude permissions --write`.
 - **Holds now.** Each granted delegation says what it holds at this moment ("Holds now: 4 design
   reviews, 2 approvals", or "Holds nothing now."). A card's delegation link opens here.
-- **Delegated decisions to review**: what Claude decided under a delegation, on which item, under
+- **Delegated decisions to review**: what the agent decided under a delegation, on which item, under
   which delegation and when, with **Keep** and **Undo** and an optional reason. Undo withdraws the
   approval or sign-off.
 
