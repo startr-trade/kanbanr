@@ -1,7 +1,7 @@
 ---
 name: kanbanr
 description: >-
-  The project management system of record for Claude-driven development. Use it whenever doing
+  The project management system of record for agent-driven development. Use it whenever doing
   ANY work on a project that is tracked with kanbanr — and adopt it for the whole project the
   moment the user says "start using kanbanr for this project" (or asks to set up / init kanbanr —
   which runs a plan-mode setup interview first), then keep using it for the rest of the project's
@@ -145,9 +145,9 @@ project"** (or anything equivalent):
    the plan runs `kanbanr catalog baseline init`: it pins the system rows that apply, and from then
    on the first item cannot enter the build role until the person has accepted the baseline. The
    plan's last line says so: "the system baseline waits for your acceptance on the Review page
-   (`/p/<project>/review?group=system-baseline`)". Once the system docs are written, Claude
-   prepares it (`kanbanr prepare system-baseline --note "…" --source doc:<path>`) and tells the
-   person it waits. Claude never accepts it: `kanbanr catalog baseline accept` is the person's.
+   (`/p/<project>/review?group=system-baseline`)". Once the system docs are written, you
+   prepare it (`kanbanr prepare system-baseline --note "…" --source doc:<path>`) and tell the
+   person it waits. You never accept it: `kanbanr catalog baseline accept` is the person's.
    A project set up before this opts in with `kanbanr catalog baseline init` (or
    `kanbanr config method --on system-baseline`); until then nothing waits.
 
@@ -314,7 +314,7 @@ known:
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
   version and the target date, then `kanbanr release add`. If an empty planned release exists,
   reuse it; a mistaken empty one is `kanbanr release remove <V>`. **The first release has a
-  checklist, finished before you name Promote to candidate** (the `next, for Claude:` lines
+  checklist, finished before you name Promote to candidate** (the `next, for the agent:` lines
   `release add` prints say the same):
   (a) `kanbanr config release-prepare` with no flag shows what is configured. When it writes
   nothing, propose it in **one** AskUserQuestion, the answers read from the repository and
@@ -839,7 +839,7 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   new option, show what depends on the old one (`depends_on` in `kanbanr baseline show --json`),
   and file the items the change needs, each naming the revision. Nothing changes until the person
   accepts it on the Baseline page; never record an acceptance (`kanbanr baseline accept` is the
-  person's, and is refused in a Claude session).
+  person's, and is refused when an agent runs it).
 - **Packs** are added, removed and updated only on request (`kanbanr profile add|remove|update`).
   A team's own pack is edited in conversation: draft it, `kanbanr profile check -` it, then
   `kanbanr profile save <name> --from-file <file> [--personal]`. **When a session opens with a
@@ -1178,7 +1178,7 @@ branches; fix it before going on.
   to main. A cut that requires `pushed` waits until main is pushed (and CI has run on it).
 - **A stage taken by mistake is undone by the person** with `kanbanr release undo <V> --reason …`
   while nothing is pushed or tagged: it steps back the newest stage only, and deletes
-  `release/<V>` when it made the branch and every commit on it is kanbanr's. Claude never runs it.
+  `release/<V>` when it made the branch and every commit on it is kanbanr's. You never run it.
   After a push or a tag, the way on is a patch release.
 - **Remote CI belongs to the release, not to an item.** Never give an item a task or a test that
   needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
@@ -1213,7 +1213,7 @@ branches; fix it before going on.
   prepared the same way and ships it.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
-  or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
+  or a promotion says it is needed (`next, for the agent: …`), run `kanbanr git forward <V>` yourself
   at once, and tell the user what merged: from, into, the commit. It is a local merge; the user
   still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
   to resolve them. Never hand the user the command. A patch starts at candidate when created; tell
@@ -1403,7 +1403,7 @@ check (it names the kind to use instead), and one that does not say what the per
 release, at the cut, among the requirements they accept untested, or when they see the thing in a
 walkthrough. `kanbanr doctor` warns about an item whose manual tests break this rule. A test of kind `walkthrough` is only for what a kanbanr runbook can observe on
 the board, the monitor or the remote: a button the monitor offers, a decision taken with nothing
-typed, a question Claude asked or did not ask, a board claim, a tag on the remote. Name it
+typed, a question the agent asked or did not ask, a board claim, a tag on the remote. Name it
 `walkthrough: <what the run shows>`: automated evidence, proved by
 `kanbanr walkthrough run <runbook doc>`, never asked of the person, and never searched for in the
 repository (FTR-037). `kanbanr check` says so for one not yet green. **The product's own behaviour
@@ -1784,7 +1784,7 @@ kanbanr facts [show] [--json] | set --languages L --runtimes R --production P --
 kanbanr catalog [show] [--json]   # what the project must document: the gaps, then each row's source and protections
 kanbanr catalog baseline [show] [--json]   # the system baseline: state, rows changed since acceptance, rows not pinned
 kanbanr catalog baseline init                # pin the applying system rows; the build stage then waits for the person's acceptance
-kanbanr catalog baseline accept [--note "…"] # the person's own; refused in a Claude session. Prepare instead:
+kanbanr catalog baseline accept [--note "…"] # the person's own; refused when an agent runs it. Prepare instead:
 kanbanr prepare system-baseline --note "…" --source doc:<path> [--batch <name>]
 kanbanr feature design --template [--kind feature|defect|chore|docs|spike]   # a kind's Design skeleton; writes nothing
 kanbanr catalog init [--force] [--print] | set --from-file F | add <row> | off <row> --why "…" | on <row>   # the catalog's rows
@@ -1809,7 +1809,7 @@ kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain,
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
-kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the user's, on the monitor; refused when Claude runs it
+kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the user's, on the monitor; refused when an agent runs it
 kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
 kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
 kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]
@@ -1824,8 +1824,8 @@ kanbanr git forward <VERSION>                    # merge a release's fixes forwa
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr git tidy [--yes]                         # list merged branches that can go; --yes deletes them locally (ask once first)
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
-kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
-kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when Claude runs it
+kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when an agent runs it (so are ratify, unapprove)
+kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when an agent runs it
 kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back (the user's too); the earlier entry stays as history
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded (after a fresh `kanbanr check`)
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
@@ -1851,11 +1851,11 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr sprint edit SP-001 [--name N] [--goal G] [--start D] [--length 2w | --end D] [--capacity N|0]   # only while planned
 kanbanr sprint remove SP-001                      # only an empty, unstarted sprint
 kanbanr release remove v0.1.0                     # only an empty, unstarted release
-kanbanr release undo v0.1.0 --reason "…"           # the user's; refused when Claude runs it. Steps the newest stage back while nothing is pushed or tagged
+kanbanr release undo v0.1.0 --reason "…"           # the user's; refused when an agent runs it. Steps the newest stage back while nothing is pushed or tagged
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
-kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest
-kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
+kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when an agent runs it. Ship the finished items, write notes, carry the rest
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when an agent runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
 kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
 kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…] [--batch NAME]   # a CI result you read, for the person to confirm on the Releases page; warns when no release stage asks for the gate
@@ -1867,7 +1867,7 @@ kanbanr decisions show                            # the mode, delegations, deleg
 kanbanr decisions propose --verdict signoff:<name>|approve|ratify [--step S] [--item CODE] [--kind K] [--milestone MS] [--all] [--until YYYY-MM-DD] [--note …]   # yours: inert until the user grants it
 kanbanr decisions revoke DLG-001 --reason "…"     # yours or the user's
 kanbanr decisions defaults [--process <name> --dry-run]   # yours: propose the process's default delegations
-kanbanr decisions mode monitor|delegated|conversation | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when Claude runs it
+kanbanr decisions mode monitor|delegated|conversation | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when an agent runs it
 kanbanr approve|ratify|signoff … --under DLG-001  # yours, in delegated mode, only for what a delegation in force covers
 kanbanr decisions question <approve|ratify|signoff> <CODE> [<NAME>] [--json]   # conversation mode: the board's question to ask the person verbatim
 kanbanr approve|ratify|signoff … --pass P-n       # yours, in conversation mode, with the pass the hook made from the person's answer
@@ -1899,7 +1899,7 @@ kanbanr profile status | diff [<name>]            # whether the followed packs m
 kanbanr profile update [<name>] [--dry-run]       # adopt the library's copy — only when the user says so
 kanbanr baseline show [--json]                    # the baseline: packs, areas, entries, revisions, depends_on
 kanbanr baseline propose --answers F|- [--item CODE] [--note …]   # yours: inert until the user accepts it
-kanbanr baseline accept REV-n                     # the user's, on the Baseline page; refused when Claude runs it
+kanbanr baseline accept REV-n                     # the user's, on the Baseline page; refused when an agent runs it
 kanbanr baseline withdraw REV-n --reason "…"      # withdraw a proposed revision
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with
