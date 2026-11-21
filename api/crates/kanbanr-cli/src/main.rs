@@ -46,7 +46,7 @@ const VERSION: &str = concat!(
 #[command(
     name = "kanbanr",
     version = VERSION,
-    about = "Kanban task manager for Claude development (HTTP client)"
+    about = "A system of record for agent-driven development: the board's CLI (HTTP client)"
 )]
 struct Cli {
     /// Project to operate on (default: $KANBANR_PROJECT, .kanbanr marker, or cwd name).
@@ -113,7 +113,7 @@ enum Command {
         #[arg(long = "version", value_name = "TAG")]
         tag: Option<String>,
     },
-    /// The Claude Code skill this program carries (FEAT-141): install it into Claude Code's personal
+    /// Claude Code adapter: the skill this program carries (FEAT-141): install it into Claude Code's personal
     /// skills folder, check it matches this program, or remove it. The release installers run
     /// `install`, and `self-update` keeps an installed copy in step.
     #[command(subcommand)]
@@ -286,7 +286,7 @@ enum Command {
         /// `src/thing.rs` or `src/thing.rs:42`.
         target: String,
     },
-    /// Put the board's reasoning in front of the agent working on this project (FEAT-065):
+    /// Claude Code adapter: put the board's reasoning in front of the agent working on this project (FEAT-065):
     /// writes a generated, regenerable block into the project's CLAUDE.md.
     #[command(subcommand)]
     Claude(ClaudeCmd),
@@ -345,9 +345,9 @@ enum Command {
     /// rejects it there. Preparing is not the decision, and there is no confirm command.
     #[command(subcommand)]
     Prepare(PrepareCmd),
-    /// Where this project's decisions are taken, and what Claude may decide under a delegation
+    /// Where this project's decisions are taken, and what an agent may decide under a delegation
     /// (FTR-028). `show`, `propose`, `revoke` and `defaults` are anyone's; `mode`, `grant` and
-    /// `review` are the person's own, refused inside a Claude session.
+    /// `review` are the person's own, refused inside an agent's session.
     #[command(subcommand)]
     Decisions(DecisionsCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
@@ -445,15 +445,15 @@ enum Command {
         #[arg(long)]
         by: Option<String>,
         /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
-        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        /// `rev`). Refused if the definition changed since — what an agent passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
-        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// Take it under this delegation (`DLG-001`): for an agent, within a delegation the person
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG")]
         under: Option<String>,
         /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
-        /// made from it (FTR-035). Claude's; a person needs none.
+        /// made from it (FTR-035). For an agent; a person needs none.
         #[arg(long, value_name = "P", conflicts_with = "under")]
         pass: Option<String>,
     },
@@ -476,15 +476,15 @@ enum Command {
         #[arg(long)]
         by: Option<String>,
         /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
-        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        /// `rev`). Refused if the definition changed since — what an agent passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
-        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// Take it under this delegation (`DLG-001`): for an agent, within a delegation the person
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG")]
         under: Option<String>,
         /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
-        /// made from it (FTR-035). Claude's; a person needs none.
+        /// made from it (FTR-035). For an agent; a person needs none.
         #[arg(long, value_name = "P", conflicts_with = "under")]
         pass: Option<String>,
     },
@@ -504,7 +504,7 @@ enum Command {
         #[arg(long)]
         by: Option<String>,
         /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
-        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        /// `rev`). Refused if the definition changed since — what an agent passes (FEAT-159).
         #[arg(long, conflicts_with = "withdraw")]
         rev: Option<String>,
         /// The spec revision the user was shown (`kanbanr review --pending --json` gives it as
@@ -518,12 +518,12 @@ enum Command {
         /// Why the sign-off no longer stands (with --withdraw).
         #[arg(long, requires = "withdraw")]
         reason: Option<String>,
-        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// Take it under this delegation (`DLG-001`): for an agent, within a delegation the person
         /// granted (FTR-028). A person needs none.
         #[arg(long, value_name = "DLG", conflicts_with = "withdraw")]
         under: Option<String>,
         /// Record it from the person's answer in the conversation: the pass (`P-…`) the hook
-        /// made from it (FTR-035). Claude's; a person needs none.
+        /// made from it (FTR-035). For an agent; a person needs none.
         #[arg(long, value_name = "P", conflicts_with_all = ["withdraw", "under"])]
         pass: Option<String>,
     },
@@ -559,7 +559,7 @@ enum Command {
     /// Work items link goals by id, so the board can show what each item serves. (FEAT-046)
     #[command(subcommand)]
     Charter(CharterCmd),
-    /// Register kanbanr's Claude Code hooks (SessionStart: recover the board; Stop: nudge to record
+    /// Claude Code adapter: register Kanbanr's hooks (SessionStart: recover the board; Stop: nudge to record
     /// work) in the global Claude Code settings. `kanbanr init` does this automatically.
     #[command(subcommand)]
     Hooks(HooksCmd),
@@ -616,7 +616,7 @@ enum Command {
         #[arg(long)]
         write: bool,
     },
-    /// Export a feature item as markdown or JSON (Claude-ready).
+    /// Export a feature item as markdown or JSON (agent-ready).
     Export {
         code: String,
         #[arg(long, default_value = "md")]
@@ -1373,7 +1373,7 @@ enum FeatureCmd {
     },
     /// Bring old items to their kinds' code prefixes (FTR-056): print the plan, one line per
     /// rename, with its rev. Writes nothing. `--apply --rev <REV>` is the person's own decision,
-    /// refused to Claude in every mode: Claude shows the plan, then `kanbanr prepare recode`.
+    /// refused to an agent in every mode: the agent shows the plan, then `kanbanr prepare recode`.
     Recode {
         /// Apply the plan named by `--rev`, as one board commit. Each item keeps its old code
         /// as an alias.
@@ -1871,7 +1871,7 @@ enum DecisionsCmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Keep or undo a decision Claude took under a delegation. The person's own.
+    /// Keep or undo a decision an agent took under a delegation. The person's own.
     Review {
         /// The decision's reference, as `decisions show` lists it.
         decision: String,
@@ -1894,7 +1894,7 @@ enum DecisionsCmd {
     },
     /// Claude Code's PostToolUse hook on AskUserQuestion. Reads the payload on stdin; when the
     /// person chose the approving option of a tagged question, writes a one-time pass and tells
-    /// Claude the command that records it. Never run by hand.
+    /// the agent the command that records it. Never run by hand.
     Heard,
 }
 
@@ -1979,7 +1979,7 @@ enum PrepareCmd {
         batch: Option<String>,
     },
     /// Prepare the acceptance of the system baseline, for the person to confirm on the Review page.
-    /// Claude never accepts it itself.
+    /// An agent never accepts it itself.
     SystemBaseline {
         /// What was agreed, or where it was agreed.
         #[arg(long)]
@@ -1994,7 +1994,7 @@ enum PrepareCmd {
         batch: Option<String>,
     },
     /// Prepare the bulk recode of codes to their kinds' prefixes (FTR-056), for the person to
-    /// confirm on the Review page. Show them the plan first (`kanbanr feature recode`). Claude
+    /// confirm on the Review page. Show them the plan first (`kanbanr feature recode`). An agent
     /// never applies it itself.
     Recode {
         /// Where the plan was agreed (see `prepare signoff --help`). Defaults to the plan itself.
@@ -2005,7 +2005,7 @@ enum PrepareCmd {
         #[arg(long, value_name = "NAME")]
         batch: Option<String>,
     },
-    /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
+    /// Settle one text to check under an item's docs-folded sign-off: the agent read it against the
     /// change and it is still right, or a correction is filed. Run it from the project folder.
     Text {
         code: String,
@@ -2096,7 +2096,7 @@ enum ReleaseCmd {
         /// With --patch-of: the parent's tag has a failed CI result recorded (FTR-026). A defect
         /// is filed carrying the failed run's link and --notes, the defect and the parent's items
         /// are planned into the patch, and the parent is marked superseded. Your own verdict:
-        /// Claude does not run it.
+        /// An agent does not run it.
         #[arg(long, requires = "patch_of")]
         from_failed_tag: bool,
         /// With --from-failed-tag: the failed run's link (default: the link on the recorded
@@ -2149,7 +2149,7 @@ enum ReleaseCmd {
     /// or tagged (DEF-034). Undoing the change that made `release/<VERSION>` deletes the branch,
     /// only when every commit on it is kanbanr's and it is neither checked out nor on a remote.
     /// A stage that moved main or tagged is never undone: start a patch release instead. Only the
-    /// newest change is undone; an earlier mistake is two undos. Your own verdict: Claude does not
+    /// newest change is undone; an earlier mistake is two undos. Your own verdict: an agent does not
     /// run it. Run it from the project folder.
     Undo {
         version: String,
@@ -2479,7 +2479,7 @@ enum SystemBaselineCmd {
     /// for its acceptance on. New projects have the wait already; this is how an existing one opts in.
     Init,
     /// Accept the baseline as it stands: the person's own, on the Review page or in their terminal.
-    /// Claude prepares it instead (`kanbanr prepare system-baseline`).
+    /// The agent prepares it instead (`kanbanr prepare system-baseline`).
     Accept {
         /// What was agreed, kept with the acceptance.
         #[arg(long)]
@@ -2574,7 +2574,7 @@ enum AdrCmd {
     },
     /// Walk the lineage: 0001 → 0003 → 0007.
     History { id: String },
-    /// Accept a proposed decision — the user's verdict, never Claude's (FEAT-153). Every section
+    /// Accept a proposed decision — the user's verdict, never an agent's (FEAT-153). Every section
     /// has to be answered first.
     Accept {
         id: String,
@@ -4194,7 +4194,7 @@ fn permission_hint(view: &Value, id: Option<&str>) -> Vec<String> {
         }
         for rule in missing {
             out.push(format!(
-                "auto mode: {gid} needs `{rule}` in .claude/settings.local.json: ask Claude, or \
+                "auto mode: {gid} needs `{rule}` in .claude/settings.local.json: ask your agent, or \
                  run `kanbanr claude permissions --write`"
             ));
         }
@@ -4329,7 +4329,7 @@ fn run_claude_permissions(cli: &Cli, client: &Backend, write: bool) -> anyhow::R
 /// Why a Write or Edit of `target` is refused to every caller, or `None` (FTR-035): a file in the
 /// board's pass folder (`passes`), which only kanbanr's hook writes, and a Claude Code settings
 /// file (`.claude/settings.json` or `.claude/settings.local.json` of any project, or
-/// `settings.json` in the user's Claude config dir `config_dir`), where a registered PreToolUse
+/// `settings.json` in the user's Claude Code config dir `config_dir`), where a registered PreToolUse
 /// hook could answer a question for the person. A mechanical test of the path, never of content.
 fn protected_file_refusal(
     target: &Path,
@@ -5634,11 +5634,11 @@ fn names_baseline_file(word: &str) -> bool {
     }
 }
 
-/// Why Claude may not write a pass (FTR-035).
+/// Why an agent may not write a pass (FTR-035).
 const PASS_REFUSAL: &str = "refused: a pass is the person's answer, written only by kanbanr's \
                             hook: read the folder, never change it.";
 
-/// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
+/// The verdict commands an agent may not run (FTR-024): approving, ratifying, signing off or
 /// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
 /// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
 /// where the person decides (`review_url`, or its Releases sibling for a release).
@@ -5662,7 +5662,7 @@ fn verdict_refusal(
     // (FTR-028).
     if command.to_ascii_lowercase().contains("x-kanbanr-token") {
         return refused(
-            "the monitor's buttons are the person's; its page token is not Claude's to use.",
+            "the monitor's buttons are the person's; its page token is not an agent's to use.",
         );
     }
     // The decision mode and the delegations are written by kanbanr only: reading the file is
@@ -5758,8 +5758,8 @@ fn verdict_refusal(
         let rest = &words[1..];
         if matches!(path.as_slice(), ["decisions", "heard"]) {
             return Some((
-                "refused: a pass is made by Claude Code's hook from the person's answer, never by \
-                 Claude: ask with `kanbanr decisions question <approve|ratify|signoff> <CODE>` and \
+                "refused: a pass is made by Claude Code's hook from the person's answer, never by an \
+                 agent: ask with `kanbanr decisions question <approve|ratify|signoff> <CODE>` and \
                  let the hook answer."
             ).to_string());
         }
@@ -8007,7 +8007,7 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A process file's text, from a path or `-` for stdin (FEAT-171): in plan mode Claude may not write
+/// A process file's text, from a path or `-` for stdin (FEAT-171): in plan mode an agent may not write
 /// a file, so a draft is checked from a heredoc.
 fn read_process_text(src: &str) -> anyhow::Result<String> {
     if src == "-" {
@@ -8521,8 +8521,8 @@ fn pack_library_copy(
     })
 }
 
-/// Who a pack or baseline write is by: the data folder's identity, else Claude (core stamps a
-/// session's write as Claude's whatever it says).
+/// Who a pack or baseline write is by: the data folder's identity, else the default author (core stamps a
+/// session's write with it whatever it says).
 fn pack_author(cli: &Cli) -> String {
     verdict_author(cli, None).unwrap_or_else(|_| "Claude".into())
 }
@@ -9006,7 +9006,7 @@ fn print_pack_change(cli: &Cli, p: &str, resp: &str, dry_run: bool) -> anyhow::R
 }
 
 /// `kanbanr baseline show|propose|accept|withdraw` (FTR-033).
-/// Who carries out or declines a planning decision (FTR-049): Claude in a Claude Code session, else
+/// Who carries out or declines a planning decision (FTR-049): the default author in a Claude Code session, else
 /// the board's identity, as the person carrying out their own decision in a terminal (R-9).
 fn planning_by(cli: &Cli) -> anyhow::Result<String> {
     if kanbanr_core::Origin::of_cli() == kanbanr_core::Origin::Conversation {
@@ -9123,7 +9123,7 @@ fn planning_waiting_line(client: &Backend, p: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "Planning decisions waiting for Claude: {}. Check each with `kanbanr planning check`, then \
+        "Planning decisions waiting for the agent: {}. Check each with `kanbanr planning check`, then \
          carry it out or decline it.",
         each.join(", ")
     ))
@@ -12005,7 +12005,7 @@ fn run_plan(cli: &Cli, client: &Backend, args: &PlanArgs) -> anyhow::Result<()> 
     let (running, ready, blocked) = (list("running"), list("ready"), list("blocked"));
     println!("Plan for {}", plan["scope"].as_str().unwrap_or("?"));
     if f("total_h") == 0.0 && running.is_empty() && ready.is_empty() && blocked.is_empty() {
-        println!("No tasks to plan. Ask Claude to break the sprint's items into tasks.");
+        println!("No tasks to plan. Ask your agent to break the sprint's items into tasks.");
     } else {
         println!(
             "Remaining {:.1} agent-h · critical path {} over {} tasks · up to {} at once",
@@ -14766,7 +14766,7 @@ enum Recorded<'a> {
     Signoff(&'a str),
 }
 
-/// Who a verdict was recorded as given by: under a delegation it is Claude, whatever was asked
+/// Who a verdict was recorded as given by: under a delegation it is the default author, whatever was asked
 /// (FTR-028). The record is the answer itself, or else the item's approval or the sign-off with
 /// the asked name (the latest one if a name repeats), never the item's last sign-off (DEF-107).
 fn recorded_by(resp: &str, asked: &str, which: Recorded<'_>) -> String {
@@ -14953,7 +14953,7 @@ fn print_waiting(waiting: &Value) {
     for w in waiting.as_array().into_iter().flatten() {
         let place = w["place"].as_str().unwrap_or("");
         let at = match (place, w["delegation"].as_str(), w["url"].as_str()) {
-            ("delegated", Some(d), _) => format!("for Claude under {d}"),
+            ("delegated", Some(d), _) => format!("for the agent under {d}"),
             (_, _, Some(u)) => format!("on the {place} ({u})"),
             _ => format!("on the {place}"),
         };
@@ -15002,7 +15002,7 @@ fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
 
 /// `kanbanr decisions heard`, Claude Code's PostToolUse hook on AskUserQuestion (FTR-035). Reads
 /// the payload on stdin; for each tagged question the person answered with its approving option it
-/// writes a one-time pass and tells Claude the command that records it. It never blocks and never
+/// writes a one-time pass and tells the agent the command that records it. It never blocks and never
 /// exits non-zero: every outcome is silence or one `additionalContext` answer.
 fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     use kanbanr_core::passes::{self, Listened};
@@ -15149,7 +15149,7 @@ fn conversation_question(
             },
             {
                 "label": "Not yet",
-                "description": "Record nothing; tell Claude what to change or what you need to \
+                "description": "Record nothing; tell your agent what to change or what you need to \
                                 see first",
             },
         ],
@@ -15859,7 +15859,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 && let Ok(v) = serde_json::from_str::<Value>(&resp)
             {
                 for line in v["next"].as_array().into_iter().flatten() {
-                    println!("next, for Claude: {}", line.as_str().unwrap_or_default());
+                    println!("next, for the agent: {}", line.as_str().unwrap_or_default());
                 }
             }
         }
