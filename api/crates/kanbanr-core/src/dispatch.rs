@@ -67,7 +67,7 @@ fn repeat_approval(
 }
 
 /// The earlier ratification a repeat of `code`'s collides with, if any (DEF-028), unless an
-/// override Claude made waits for one (DEF-064).
+/// override the agent made waits for one (DEF-064).
 fn repeat_ratification(
     store: &Store,
     p: &str,
@@ -278,7 +278,7 @@ fn signoff_checked(
     }
     if !missing.is_empty() {
         return Err(CoreError::Unsupported(format!(
-            "docs-folded waits on {} text(s) Claude has not settled: {}. Claude settles each with \
+            "docs-folded waits on {} text(s) the agent has not settled: {}. The agent settles each with \
              `kanbanr prepare text {code} <TARGET>`",
             missing.len(),
             missing.join(", ")

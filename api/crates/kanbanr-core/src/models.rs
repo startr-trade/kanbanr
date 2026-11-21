@@ -114,7 +114,7 @@ impl TodoList {
     }
 }
 
-/// A feature item: the unit Claude develops. Holds the spec and its todo list.
+/// A feature item: the unit the agent develops. Holds the spec and its todo list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FeatureItem {

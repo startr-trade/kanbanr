@@ -631,7 +631,7 @@ pub fn followed_in_force(b: &Baseline) -> Vec<&Entry> {
         .collect()
 }
 
-/// What Claude proposes: the answers, and the item whose design asked (empty at setup).
+/// What the agent proposes: the answers, and the item whose design asked (empty at setup).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Proposal {

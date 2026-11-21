@@ -85,7 +85,7 @@ pub struct PlanningOutcome {
     pub decision: String,
     /// `carried` or `declined`.
     pub outcome: String,
-    /// Claude, or the person.
+    /// The agent, or the person.
     pub by: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
@@ -111,7 +111,7 @@ pub struct PlanningView {
     pub outcome: Option<PlanningOutcome>,
 }
 
-/// What `kanbanr planning check` reports: reasons to decline, things for Claude to judge, and the
+/// What `kanbanr planning check` reports: reasons to decline, things for the agent to judge, and the
 /// nearest valid move when the target cannot take the items.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -119,7 +119,7 @@ pub struct Assessment {
     pub decision: String,
     /// Each a reason to decline.
     pub problems: Vec<String>,
-    /// Each for Claude to judge.
+    /// Each for the agent to judge.
     pub warnings: Vec<String>,
     pub nearest: Option<Nearest>,
 }
@@ -583,7 +583,7 @@ fn unit_name(project: &Project) -> &'static str {
 /// target is frozen (a release shipped, superseded or at a stage; a closed sprint) or gone, an item
 /// is gone, finished or in a no-op status, or, taking items out of their sprint, an item is in
 /// none or in a closed one (which can't change, as `sprints::unplan` refuses). Warnings are for
-/// Claude to judge: a dependency planned later or not at all, a sprint over its capacity, an item
+/// the agent to judge: a dependency planned later or not at all, a sprint over its capacity, an item
 /// due before the sprint's end or the release's target (it would land too late). The nearest move is
 /// the next planned release for a frozen release, and the active, else the next planned, sprint
 /// for a closed one.

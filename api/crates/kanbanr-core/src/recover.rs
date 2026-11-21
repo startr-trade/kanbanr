@@ -100,7 +100,7 @@ pub fn held_line(held: &[(String, usize)]) -> String {
     let total: usize = held.iter().map(|(_, n)| n).sum();
     let each: Vec<String> = held.iter().map(|(id, n)| format!("{id} ({n})")).collect();
     format!(
-        "Claude holds {total} decision(s) under {}: take them with `--under`, not the person's.",
+        "The agent holds {total} decision(s) under {}: take them with `--under`, not the person's.",
         each.join(", ")
     )
 }
@@ -494,12 +494,12 @@ mod tests {
     fn the_held_line_names_each_delegation() {
         let mut i = base();
         let out = render(&i, DEFAULT_BUDGET);
-        assert!(!out.contains("Claude holds"), "{out}");
+        assert!(!out.contains("The agent holds"), "{out}");
         i.waiting.held = vec![("DLG-001".into(), 3), ("DLG-002".into(), 1)];
         let out = render(&i, DEFAULT_BUDGET);
         assert!(
             out.contains(
-                "Claude holds 4 decision(s) under DLG-001 (3), DLG-002 (1): take them with \
+                "The agent holds 4 decision(s) under DLG-001 (3), DLG-002 (1): take them with \
                  `--under`, not the person's."
             ),
             "{out}"

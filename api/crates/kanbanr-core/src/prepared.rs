@@ -1872,7 +1872,7 @@ fn open_record(
             )))
         }
         _ => Err(unsupported(format!(
-            "{id} no longer waits: {}. Ask Claude to prepare it again",
+            "{id} no longer waits: {}. Ask your agent to prepare it again",
             v.stale_why
         ))),
     }
@@ -2590,7 +2590,7 @@ mod tests {
                 crate::origin::Origin::Conversation,
             ) {
                 Err(crate::write::WriteError::Refused(why)) => {
-                    assert!(why.contains("never by Claude"), "{why}")
+                    assert!(why.contains("never by an agent"), "{why}")
                 }
                 other => panic!("{action} was not refused: {other:?}"),
             }

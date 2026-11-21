@@ -34,7 +34,7 @@ pub enum Mode {
     /// On the monitor, by the person: today's behaviour, and the default.
     #[default]
     Monitor,
-    /// On the monitor, and by Claude within a granted delegation.
+    /// On the monitor, and by an agent within a granted delegation.
     Delegated,
     /// In the conversation (FTR-035; recording it is refused until that is built).
     Conversation,
@@ -408,16 +408,16 @@ pub fn verdict_of(method: &str, path: &str) -> Option<Verdict> {
     }
 }
 
-/// Why Claude may not accept a baseline revision (FTR-033): the person-only wording, shared by
+/// Why the agent may not accept a baseline revision (FTR-033): the person-only wording, shared by
 /// the guard and the write path.
 pub const ACCEPT_BASELINE_REFUSAL: &str = "accepting a baseline revision is the person's own, on the Baseline page or in their \
-     terminal: no mode or delegation lets Claude take it. Propose it (`kanbanr baseline \
+     terminal: no mode or delegation lets the agent take it. Propose it (`kanbanr baseline \
      propose`) and tell the person where it waits.";
 
-/// Why Claude may not accept the system baseline (FTR-006): the person's in every mode; Claude
+/// Why the agent may not accept the system baseline (FTR-006): the person's in every mode; the agent
 /// prepares the acceptance for them. Shared by the guard and the write path.
 pub const ACCEPT_SYSTEM_BASELINE_REFUSAL: &str = "a verdict is the person's own, recorded on the \
-     monitor, never by Claude (FTR-024). The system baseline is accepted by the person on the \
+     monitor, never by an agent (FTR-024). The system baseline is accepted by the person on the \
      Review page. If they agreed to it, prepare it: `kanbanr prepare system-baseline --note \"…\" \
      --source \"doc:architecture/context.md\"`.";
 
@@ -483,9 +483,9 @@ pub(crate) fn authorize(
         return if by_the_person && named.is_empty() && named_pass.is_empty() {
             Ok(Authorized::AsIs)
         } else if by_the_person && named.is_empty() {
-            Err("`--pass` is Claude's; a person needs none".to_string())
+            Err("`--pass` is the agent's; a person needs none".to_string())
         } else if by_the_person {
-            Err("`--under` is Claude's; a person needs none".to_string())
+            Err("`--under` is the agent's; a person needs none".to_string())
         } else if matches!(
             segments(path).as_slice(),
             ["projects", _, "catalog", "baseline", "accept"]
@@ -496,23 +496,23 @@ pub(crate) fn authorize(
         } else if matches!(segments(path).as_slice(), ["projects", _, "prepared", ..]) {
             Err(
                 "answering a prepared record is the person's own, recorded on the monitor, never \
-                 by Claude (FTR-024, FTR-034)."
+                 by an agent (FTR-024, FTR-034)."
                     .to_string(),
             )
         } else {
             Err(
                 "this is the person's own, on the Review page or in their terminal: \
-                 Claude cannot set the decision mode, grant a delegation or review a decision"
+                 The agent cannot set the decision mode, grant a delegation or review a decision"
                     .to_string(),
             )
         };
     }
     if by_the_person {
         if !named.is_empty() {
-            return Err("`--under` is Claude's; a person needs none".to_string());
+            return Err("`--under` is the agent's; a person needs none".to_string());
         }
         if !named_pass.is_empty() {
-            return Err("`--pass` is Claude's; a person needs none".to_string());
+            return Err("`--pass` is the agent's; a person needs none".to_string());
         }
         if mode == Mode::Conversation && verdict.is_some() && origin == Origin::Monitor {
             return Err(
@@ -638,7 +638,7 @@ pub(crate) fn authorize(
     // covers it. Claude prepares the ratification; the person confirms it.
     if v.kind == VerdictKind::Ratify && !crate::readiness::open_overrides(item).is_empty() {
         return Err(format!(
-            "{} has an override Claude made that waits for the person's ratification (DEF-043), \
+            "{} has an override the agent made that waits for the person's ratification (DEF-043), \
              so `ratify` on {} stays the person's: prepare it with `kanbanr prepare ratify {} \
              --reason \"…\" --source S`",
             v.code, v.code, v.code
@@ -1173,7 +1173,7 @@ pub fn set_mode(
     })
 }
 
-/// The delegation under which Claude holds `v` on `item` at `now`, if any: the one rule for "Claude
+/// The delegation under which the agent holds `v` on `item` at `now`, if any: the one rule for "the agent
 /// holds this" (DEF-104). `None` unless the mode is `delegated`; a ratify with open overrides is
 /// never delegable (DEF-043); otherwise the first delegation, in file order, that covers it. It
 /// does not check how the grant was recorded.
@@ -1195,7 +1195,7 @@ pub fn holder<'a>(
 /// Everything waiting for a decision, each in its place under `d`'s mode: the review queue, the
 /// proposed ADRs, the proposed delegations, the delegated decisions to review and, with the code
 /// repository, the releases ready to promote. An item verdict a delegation in force covers waits
-/// for Claude under it in `delegated` mode; in `conversation` mode everything waits there; the
+/// for the agent under it in `delegated` mode; in `conversation` mode everything waits there; the
 /// rest waits on the monitor, at `{review_url}#{code}` (the Releases page for a release).
 pub fn waiting(
     store: &Store,
@@ -1387,16 +1387,16 @@ pub struct DelegationView {
     #[serde(flatten)]
     pub delegation: Delegation,
     pub state: DelegationState,
-    /// Granted, not ended and not revoked: Claude may act under it.
+    /// Granted, not ended and not revoked: the agent may act under it.
     pub in_force: bool,
     /// What a grant is pinned to: [`Delegation::rev`], sent back with the grant.
     pub rev: String,
     /// Granted, but not through kanbanr (T9): written into the file by hand, or not committed.
-    /// Claude's verdicts under it are refused.
+    /// The agent's verdicts under it are refused.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub not_granted_through_kanbanr: bool,
     /// Granted, but the board's history cannot be read, so where the grant came from cannot be
-    /// checked: why, naming the repository (DEF-080). Claude's verdicts under it are refused.
+    /// checked: why, naming the repository (DEF-080). The agent's verdicts under it are refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_unverifiable: Option<String>,
     /// The Claude Code allow rules this delegation's verdicts need to run in auto mode (DEF-060),
@@ -1407,7 +1407,7 @@ pub struct DelegationView {
     /// `permission_rules_missing` says something.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub permission_rules_checked: bool,
-    /// The rules none of the project's or the user's Claude settings allows.
+    /// The rules none of the project's or the user's Claude Code settings allows.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_rules_missing: Vec<String>,
 }
@@ -2801,7 +2801,7 @@ mod tests {
         let under = json!({"delegation": "DLG-001"});
         for o in [Origin::Terminal, Origin::Monitor] {
             let why = judge(&store, "POST", &signoff, Some(&under), o).unwrap_err();
-            assert!(why.contains("`--under` is Claude's"), "{why}");
+            assert!(why.contains("`--under` is the agent's"), "{why}");
         }
         // The same body from a session is accepted.
         assert!(matches!(

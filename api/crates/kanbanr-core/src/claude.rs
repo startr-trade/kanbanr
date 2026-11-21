@@ -387,7 +387,7 @@ pub fn docs_guard_reason(suggestion: &str) -> String {
 
 use std::path::{Path, PathBuf};
 
-/// The Claude Code allow rule that lets Claude run the command for one delegable verdict:
+/// The Claude Code allow rule that lets the agent run the command for one delegable verdict:
 /// `approve`, `ratify`, or `signoff:<name>`. Anything else has none.
 pub fn permission_rule(verdict: &str) -> Option<String> {
     let verdict = verdict.trim();

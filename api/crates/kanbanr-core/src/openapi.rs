@@ -531,7 +531,7 @@ pub fn public_routes() -> Vec<RouteDoc> {
         RouteDoc {
             path: "/api/projects/{project}/decisions",
             summary: "Where the project's decisions are taken (FTR-028): the mode and its \
-                      history, every delegation with where it stands, the decisions Claude took \
+                      history, every delegation with where it stands, the decisions the agent took \
                       under one for the person to keep or undo, and what waits for a decision \
                       where",
             params: &[PROJECT],
@@ -547,7 +547,7 @@ pub fn public_routes() -> Vec<RouteDoc> {
         },
         RouteDoc {
             path: "/api/projects/{project}/prepared",
-            summary: "The records Claude prepared for the person to confirm (FTR-034), newest \
+            summary: "The records the agent prepared for the person to confirm (FTR-034), newest \
                       first: each with its sources, where it stands, the person's answer and the \
                       equivalent verdict command",
             params: &[
@@ -579,7 +579,7 @@ pub fn public_routes() -> Vec<RouteDoc> {
         RouteDoc {
             path: "/api/projects/{project}/planning",
             summary: "The person's planning decisions made on the monitor pages (FTR-049), oldest \
-                      first: each with its derived state (pending until Claude carries it out or \
+                      first: each with its derived state (pending until the agent carries it out or \
                       declines it) and its outcome",
             params: &[
                 PROJECT,
@@ -596,7 +596,7 @@ pub fn public_routes() -> Vec<RouteDoc> {
         RouteDoc {
             path: "/api/projects/{project}/planning/{id}/check",
             summary: "A planning decision checked, with nothing changed (FTR-049): the reasons to \
-                      decline it, the warnings for Claude to judge, and the nearest valid move",
+                      decline it, the warnings for the agent to judge, and the nearest valid move",
             params: &[
                 PROJECT,
                 Param {

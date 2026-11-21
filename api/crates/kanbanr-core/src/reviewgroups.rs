@@ -28,7 +28,7 @@ const RATIFY: &str = "ratify";
 const WHICH_RELEASE: &str = "which-release";
 /// Manual checks with a result Claude prepared.
 const MANUAL: &str = "manual";
-/// Delegations Claude proposed (FTR-028).
+/// Delegations the agent proposed (FTR-028).
 const DELEGATION: &str = "delegation";
 /// Decisions Claude took under a delegation, to keep or undo.
 const DELEGATED: &str = "delegated";
@@ -69,7 +69,7 @@ pub struct GroupCount {
     pub ready: usize,
     /// The rows with an open prepared record.
     pub prepared: usize,
-    /// The rows Claude holds under a delegation in force: listed, not in `count` (DEF-104).
+    /// The rows the agent holds under a delegation in force: listed, not in `count` (DEF-104).
     pub held: usize,
 }
 
@@ -102,7 +102,7 @@ pub struct ReviewRow {
     pub signoff: String,
     pub requirement: String,
     pub test: String,
-    /// The delegation under which Claude holds this row's decision (DEF-104); empty when the
+    /// The delegation under which the agent holds this row's decision (DEF-104); empty when the
     /// decision is the person's. A held row is shown, last, and not counted.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub held_by: String,
@@ -263,7 +263,7 @@ fn blocked_sentence(key: &str, entry: &ReviewEntry, mode: Mode) -> String {
         let left = crate::review::docs_folded_left(entry);
         if left > 0 {
             return format!(
-                "Claude settles {} first: ask Claude to check them.",
+                "The agent settles {} first: ask your agent to check them.",
                 count_of(left, "text", "texts")
             );
         }
@@ -472,7 +472,7 @@ impl Board {
                         count_of(n, "override", "overrides")
                     ),
                     format!(
-                        "Records a ratification; it closes the {} Claude made",
+                        "Records a ratification; it closes the {} the agent made",
                         count_of(n, "override", "overrides")
                     ),
                 )
@@ -517,7 +517,7 @@ impl Board {
             .cloned();
         if let Some(h) = &held {
             pills.push(format!(
-                "Claude holds \u{b7} {} until {}",
+                "The agent holds it \u{b7} {} until {}",
                 h.delegation,
                 day_month(&h.until)
             ));
@@ -624,7 +624,7 @@ impl Board {
                     scope.join(", "),
                     day(&g.until)
                 ),
-                records: format!("Grants {}: Claude may take these verdicts", g.id),
+                records: format!("Grants {}: the agent may take these verdicts", g.id),
                 release: String::new(),
                 sprint: String::new(),
                 changed_at: g.proposed.at.clone(),
@@ -819,7 +819,7 @@ impl Board {
             String::new()
         } else {
             format!(
-                "Answer {} first: ask Claude to fill them.",
+                "Answer {} first: ask your agent to fill them.",
                 a.missing.join(", ")
             )
         };
@@ -875,7 +875,7 @@ impl Board {
         }
     }
 
-    /// What Claude holds in the queue, and per revoked or ended delegation how many of the queue's
+    /// What the agent holds in the queue, and per revoked or ended delegation how many of the queue's
     /// verdicts it was in scope for that nobody holds now (DEF-104).
     fn holds(&self) -> Holds {
         use crate::decisions::DelegationState;
@@ -1151,13 +1151,13 @@ pub fn outline(store: &Store, p: &str) -> Result<Vec<GroupOutline>> {
 // ---- reads -------------------------------------------------------------------------------------
 
 /// Every non-empty decision group of project `p`, counted, in the fixed order. A group whose rows
-/// Claude all holds is listed with a count of 0 and its `held` rows (DEF-104).
+/// the agent all holds is listed with a count of 0 and its `held` rows (DEF-104).
 pub fn summary(store: &Store, p: &str, repo: Option<&Path>) -> Result<Vec<GroupCount>> {
     let board = shared(store, p, repo)?;
     summary_of(&board).map(|x| x.0)
 }
 
-/// What Claude holds and what returns to the person, read with the summary (DEF-104).
+/// What the agent holds and what returns to the person, read with the summary (DEF-104).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Holds {
     pub held: Vec<HeldDecision>,
@@ -1166,7 +1166,7 @@ pub struct Holds {
     pub returned: Vec<(String, usize)>,
 }
 
-/// One decision Claude holds under a delegation in force.
+/// One decision the agent holds under a delegation in force.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldDecision {
     pub code: String,
@@ -1529,7 +1529,7 @@ pub fn ops(
             crate::origin::Origin::Monitor | crate::origin::Origin::Terminal
         ) {
             return Err(refuse(
-                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                "a verdict is the person's own, recorded on the monitor, never by an agent \
                  (FTR-024)"
                     .into(),
             ));
@@ -1673,7 +1673,7 @@ pub fn ops(
                 SYSTEM_BASELINE => (format!("/projects/{p}/catalog/baseline/accept"), pins(item)),
                 RECODE => {
                     return Err(refuse(
-                        "a recode is confirmed from its prepared plan: ask Claude to prepare it \
+                        "a recode is confirmed from its prepared plan: ask your agent to prepare it \
                          (`kanbanr prepare recode`)"
                             .into(),
                     ));
@@ -2123,7 +2123,7 @@ mod tests {
         assert!(
             rows[1]
                 .pills
-                .contains(&"Claude holds \u{b7} DLG-001 until 4 Dec".to_string()),
+                .contains(&"The agent holds it \u{b7} DLG-001 until 4 Dec".to_string()),
             "{:?}",
             rows[1].pills
         );

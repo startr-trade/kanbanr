@@ -848,7 +848,7 @@ pub struct NextGate {
     /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
     pub signoffs_needed: Vec<String>,
     /// Sign-offs withheld because the work they confirm is not built (DEF-033): one gap per
-    /// unbuilt document. Only Claude can build them, so they are not "for you".
+    /// unbuilt document. Only the agent can build them, so they are not "for you".
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub signoffs_held: Vec<Gap>,
     /// What the stage lacks, by family (FTR-078): five tallies in [`CheckFamily::ALL`] order whose
@@ -924,13 +924,13 @@ pub struct NextStage {
     pub for_you: usize,
     /// What the stage lacks, by family (FTR-078), copied from the gate.
     pub checks: Vec<CheckTally>,
-    /// The sign-off and approval gaps a delegation in force holds for Claude (DEF-104); counted in
+    /// The sign-off and approval gaps a delegation in force holds for the agent (DEF-104); counted in
     /// `missing`, left out of `for_you`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegated: Vec<DelegatedGap>,
 }
 
-/// A gap Claude holds under a delegation in force (DEF-104).
+/// A gap the agent holds under a delegation in force (DEF-104).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DelegatedGap {
@@ -941,7 +941,7 @@ pub struct DelegatedGap {
     /// The delegation that holds it, `DLG-001`.
     pub delegation: String,
     /// When the delegation ends (RFC 3339), so a surface can say "until 4 Dec" and stop calling it
-    /// Claude's once it has passed.
+    /// The agent's once it has passed.
     pub until: String,
 }
 
@@ -1612,7 +1612,7 @@ pub fn evaluate(
 
 /// As [`evaluate`], judging the project-dependent checks ([`Check::Estimated`],
 /// [`Check::InSprint`]) against `ctx`.
-/// Claude's overrides on `f` that no ratification after them answers (DEF-043): each history
+/// The agent's overrides on `f` that no ratification after them answers (DEF-043): each history
 /// entry with an `override` reason and origin `conversation` or `delegated`, made after the
 /// newest approval event whose verdict is `ratified` (`crate::before`). Oldest first.
 ///
@@ -1714,7 +1714,7 @@ fn evaluate_in_window(
                 None,
                 "override not ratified",
                 format!(
-                    "moved {} → {} on {} past its gate by Claude: {} — the person ratifies it on \
+                    "moved {} → {} on {} past its gate by an agent: {} — the person ratifies it on \
                      the Review page",
                     t.from,
                     t.to,
@@ -2606,7 +2606,7 @@ pub struct ItemCheck {
     /// The documents still unbuilt while the next stage holds `docs-folded` (DEF-033).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docs_unbuilt: Vec<crate::docsbuilt::Unbuilt>,
-    /// The flagged texts Claude has not settled, as `doc:<path>`, `adr:<id>` or `item:<CODE>`,
+    /// The flagged texts the agent has not settled, as `doc:<path>`, `adr:<id>` or `item:<CODE>`,
     /// while the next stage holds `docs-folded` and a code repository is attached (DEF-039).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts_to_settle: Vec<String>,

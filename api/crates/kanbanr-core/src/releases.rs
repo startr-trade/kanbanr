@@ -692,7 +692,7 @@ fn cadence_on(store: &Store, id: &str) -> Result<Project> {
     Ok(project)
 }
 
-/// What Claude still prepares for a project's first release (DEF-056): the lines `release add`
+/// What the agent still prepares for a project's first release (DEF-056): the lines `release add`
 /// says "next, for Claude". Empty for a later release, a patch, or when neither applies.
 pub fn first_release_hints(config: &crate::ProjectConfig, releases: &[Release]) -> Vec<String> {
     if releases.iter().filter(|r| r.parent.is_empty()).count() != 1 {
@@ -2397,7 +2397,7 @@ pub fn delegated_waiting(store: &Store, id: &str, version: &str) -> Vec<String> 
                 name => format!("{name} sign-off"),
             };
             format!(
-                "{}: the {what} Claude took under {} is not kept or undone yet: review it on the \
+                "{}: the {what} the agent took under {} is not kept or undone yet: review it on the \
                  Review page",
                 x.code, x.delegation
             )
@@ -5211,7 +5211,7 @@ fn refusal(w: &Worked) -> CoreError {
     CoreError::Unsupported(out)
 }
 
-/// Claude's next step when a promotion leaves commits the line lacks (DEF-045): empty when none.
+/// The agent's next step when a promotion leaves commits the line lacks (DEF-045): empty when none.
 fn forward_next(version: &str, forward: &[CommitLine], into: &str) -> String {
     if forward.is_empty() {
         String::new()

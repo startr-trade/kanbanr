@@ -289,12 +289,12 @@ impl DecisionContext<'_> {
     }
 }
 
-/// Why Claude may not record a planning decision (FTR-049 R-2).
+/// Why the agent may not record a planning decision (FTR-049 R-2).
 pub const PLANNING_REFUSAL: &str = "a planning decision is the person's: ask the person to make \
                                     it on the Plan page, or plan it yourself with `kanbanr sprint \
                                     plan` when the person asked you to in the conversation";
 
-/// Why Claude may not apply a recode plan (FTR-056).
+/// Why the agent may not apply a recode plan (FTR-056).
 pub const RECODE_REFUSAL: &str = "a recode is the person's own, in every decision mode, a \
                                   delegation included: it renames many items in one step, and \
                                   the person confirms the plan on the Review page or runs \
@@ -319,7 +319,7 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
         return match taker {
             Taker::Person => None,
             Taker::Claude => Some(format!(
-                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                "a verdict is the person's own, recorded on the monitor, never by an agent \
                  (FTR-024). {PREPARE_INSTEAD} A manual test's result says a person checked it, \
                  so the person records it on the Review page (DEF-040). If they told you the \
                  result, prepare it: `kanbanr prepare test <CODE> <R-n> \"<test>\" --passed \
@@ -348,7 +348,7 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
         return match taker {
             Taker::Person => None,
             Taker::Claude => Some(format!(
-                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                "a verdict is the person's own, recorded on the monitor, never by an agent \
                  (FTR-024). {PREPARE_INSTEAD} A group decision on the Review page is the \
                  person's in every mode: link them the group (FTR-038)."
             )),
@@ -368,12 +368,12 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
         return match taker {
             Taker::Person => None,
             Taker::Claude if decisions_route => Some(
-                "this is the person's own, on the Review page or in their terminal: Claude \
+                "this is the person's own, on the Review page or in their terminal: the agent \
                  cannot set the decision mode, grant a delegation or review a decision"
                     .to_string(),
             ),
             Taker::Claude => Some(format!(
-                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                "a verdict is the person's own, recorded on the monitor, never by an agent \
                  (FTR-024). {PREPARE_INSTEAD}"
             )),
         };
