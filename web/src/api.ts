@@ -349,7 +349,7 @@ export const api = {
         ...(pins.spec_rev ? { spec_rev: pins.spec_rev } : {}),
         ...(pins.expect ? { expect: pins.expect } : {}),
       },
-      "confirm what Claude prepared",
+      "confirm what the agent prepared",
       view.command || "kanbanr prepare list",
     ),
   /** Turn a prepared record down (FTR-034); the reason is optional. Nothing else changes. */
@@ -357,7 +357,7 @@ export const api = {
     writePost(
       `/projects/${encodeURIComponent(id)}/prepared/${encodeURIComponent(prepared)}/reject`,
       { by, ...(reason ? { reason } : {}) },
-      "reject what Claude prepared",
+      "reject what the agent prepared",
       "kanbanr prepare list",
     ) as Promise<Resolution>,
   /**
@@ -368,7 +368,7 @@ export const api = {
     writePost(
       `/projects/${encodeURIComponent(id)}/prepared/batch/${encodeURIComponent(batch)}/confirm`,
       { by },
-      "confirm the batch Claude prepared",
+      "confirm the batch the agent prepared",
       "kanbanr prepare list",
     ) as Promise<BatchAnswer>,
   /** Turn a whole batch down at once (FTR-037); the reason is optional. */
@@ -376,7 +376,7 @@ export const api = {
     writePost(
       `/projects/${encodeURIComponent(id)}/prepared/batch/${encodeURIComponent(batch)}/reject`,
       { by, ...(reason ? { reason } : {}) },
-      "reject the batch Claude prepared",
+      "reject the batch the agent prepared",
       "kanbanr prepare list",
     ) as Promise<BatchAnswer>,
   /**

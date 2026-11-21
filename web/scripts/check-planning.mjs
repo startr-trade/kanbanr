@@ -300,7 +300,7 @@ try {
     items: ["FTR-044", "DEF-076"],
     by: "Ada",
   });
-  ok(R1, "then it shows pending", text().includes("pending: Claude carries it out at its next turn"), text());
+  ok(R1, "then it shows pending", text().includes("pending: the agent carries it out at its next turn"), text());
 
   // A refusal is shown, not swallowed.
   posts.length = 0;
@@ -327,7 +327,7 @@ try {
   await press("Ask for v0.8.0 instead");
   expect(R5, "one press posts one decision", posts.length, 1);
   expect(R5, "the nearest move, for the same items", posts[0]?.body, { action: "into-release", target: "v0.8.0", items: ["FTR-044"], by: "Ada" });
-  ok(R5, "then it shows pending", text().includes("pending: Claude carries it out at its next turn"), text());
+  ok(R5, "then it shows pending", text().includes("pending: the agent carries it out at its next turn"), text());
   await act(() => root3.unmount());
 
   // R-7: a drag drafts a request and moves nothing.

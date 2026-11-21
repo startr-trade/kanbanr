@@ -121,7 +121,7 @@ export function LessonsSection(p: { project: string; progress: CharterProgress }
   const location = useLocation();
   const { lessons } = p.progress;
   if (lessons.total === 0) {
-    return <Empty title="No lessons recorded yet. Ask Claude to record one when something teaches the project." />;
+    return <Empty title="No lessons recorded yet. Ask your agent to record one when something teaches the project." />;
   }
   const cycles = lessons.cycles ?? [];
   const filter = (q: string) => ({ pathname: location.pathname, search: q ? `?lq=${q}` : "", hash: location.hash });

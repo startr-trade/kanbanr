@@ -127,7 +127,7 @@ export function CharterView(p: {
         )}
       </div>
 
-      {empty && <Empty title="No charter yet. Ask Claude to write the project's charter: its purpose, goals and what it will not do." />}
+      {empty && <Empty title="No charter yet. Ask your agent to write the project's charter: its purpose, goals and what it will not do." />}
 
       <Section title="Purpose" id="purpose">
         {c.purpose?.trim() ? <Markdown source={c.purpose} /> : <span className="ui-pill ui-pill-warn">[MISSING: purpose]</span>}

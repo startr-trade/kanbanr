@@ -135,7 +135,7 @@ try {
     const noRetry = await render("src/ui/States.tsx", "ErrorState", { error: "gone" });
     eq(problems, "ErrorState without retry has no button", noRetry.document.querySelectorAll("button").length, 0);
 
-    const ask = "Ask Claude to plan the next sprint";
+    const ask = "Ask your agent to plan the next sprint";
     const empty = await render("src/ui/States.tsx", "Empty", { title: "No sprint is planned", ask, children: "Plan one from the backlog." });
     eq(problems, "Empty's roles (none)", roles(empty.document), []);
     const box = empty.document.querySelector("div.ui-empty");

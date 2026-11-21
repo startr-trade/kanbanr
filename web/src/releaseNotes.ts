@@ -25,7 +25,7 @@ export interface NotesSection {
   changelogEmpty: string;
 }
 
-export const CHANGELOG_EMPTY = "The changelog has no section for this release yet: ask Claude to write it.";
+export const CHANGELOG_EMPTY = "The changelog has no section for this release yet: ask your agent to write it.";
 
 export function notesSection(
   release: Release,

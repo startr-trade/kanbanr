@@ -31,7 +31,7 @@ function holdsNow(waiting: Waiting[], id: string): string {
 
 /** Where a waiting decision is taken, in words. */
 function placeWords(w: Waiting): string {
-  if (w.place === "delegated") return `for Claude, under ${w.delegation ?? "a delegation"}`;
+  if (w.place === "delegated") return `for the agent, under ${w.delegation ?? "a delegation"}`;
   if (w.place === "conversation") return "in the conversation";
   return "here, on the monitor";
 }
@@ -91,7 +91,7 @@ export function DecisionsHere({
       <p className="muted">
         Decisions are taken in <strong>{view.mode}</strong> mode.{" "}
         {view.mode === "delegated"
-          ? "You decide here; Claude may take a verdict a delegation you granted covers, and it comes back in the Delegated decisions group for you to keep or undo."
+          ? "You decide here; the agent may take a verdict a delegation you granted covers, and it comes back in the Delegated decisions group for you to keep or undo."
           : view.mode === "conversation"
             ? "Decisions are taken in the conversation in this project."
             : "Every verdict is yours, taken here."}
@@ -171,7 +171,7 @@ export function DecisionsHere({
                 <>
                   {" "}
                   · auto mode: add <code>{g.permission_rules_missing.join(", ")}</code> to{" "}
-                  <code>.claude/settings.local.json</code> (ask Claude, or run{" "}
+                  <code>.claude/settings.local.json</code> (ask your agent, or run{" "}
                   <code>kanbanr claude permissions --write</code> in your own terminal)
                 </>
               ) : (

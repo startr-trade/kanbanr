@@ -38,7 +38,7 @@ export const SECTIONS: { key: AttentionSection; title: string }[] = [
 ];
 
 /** The sentence the drift line offers: there is no drift page in v0.8.0. */
-export const DRIFT_ASK = "Ask Claude to settle the drifted docs.";
+export const DRIFT_ASK = "Ask your agent to settle the drifted docs.";
 
 /** A drawer line: an attention line, with a note after its count (the drift result's age). */
 export type DrawerLine = AttentionLine & { note?: string };
@@ -191,7 +191,7 @@ export function needsYouParts(project: string, attention: Attention, drift: Drif
     delegated: true,
     yours,
     ending,
-    emptyYours: yours.length === 0 && ending.length === 0 ? `Nothing needs you \u2014 Claude is working under ${andList(d.in_force)}` : null,
+    emptyYours: yours.length === 0 && ending.length === 0 ? `Nothing needs you \u2014 the agent is working under ${andList(d.in_force)}` : null,
     decided: { fresh: shown, earlier: earlierList.length, earlierList, more: fresh.length - shown.length + Math.max(0, d.decided_total - d.decided.length) },
     holds,
     heldTotal: d.holds.reduce((n, h) => n + h.total, 0),

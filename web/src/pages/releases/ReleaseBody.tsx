@@ -278,7 +278,7 @@ export function PreparedNotRequired({
               label={label}
               onConfirm={(edits) => who && answer(id, () => api.confirmPrepared(project, view, who, edits), `${label}: done`)}
               onReject={(reason) =>
-                who && answer(id, () => api.rejectPrepared(project, id, who, reason), "rejected what Claude prepared")
+                who && answer(id, () => api.rejectPrepared(project, id, who, reason), "rejected what the agent prepared")
               }
             />
             {said[id] ? <span className={`chip ${said[id].ok ? "done" : "warn"}`}>{said[id].text}</span> : null}

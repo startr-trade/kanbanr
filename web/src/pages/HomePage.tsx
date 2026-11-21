@@ -28,7 +28,7 @@ export default function HomePage() {
       </div>
       {projects.length === 0 && (
         <p className="muted">
-          No projects yet. Create one with the Claude skill / CLI: <code>kanbanr project init my-project</code>.
+          No projects yet. Ask your agent to set one up, or run <code>kanbanr project init my-project</code>.
         </p>
       )}
       {groups.map((g) =>

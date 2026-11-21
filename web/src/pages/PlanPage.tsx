@@ -133,7 +133,7 @@ export function PlanTabBody(p: { project: string; scope: PlanScope; slice: PlanS
   const droppable = scope !== "past" && !!planning?.writable;
   const lanes = [...slice.lanes, ...slice.undated];
   if (lanes.length === 0) {
-    if (scope === "current") return <Empty title="Nothing is running today." ask="Ask Claude to plan the next sprint." />;
+    if (scope === "current") return <Empty title="Nothing is running today." ask="Ask your agent to plan the next sprint." />;
     if (scope === "planned") return <Empty title="Nothing is planned yet." />;
     return <Empty title="Nothing has closed or shipped yet." />;
   }

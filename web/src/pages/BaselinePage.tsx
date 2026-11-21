@@ -99,7 +99,7 @@ export function BaselineBody({
       {empty ? (
         <Empty
           title="No baseline yet."
-          ask="Ask Claude to set up the project's engineering baseline: which practice packs to follow and their questions."
+          ask="Ask your agent to set up the project's engineering baseline: which practice packs to follow and their questions."
         />
       ) : null}
 
@@ -261,7 +261,7 @@ function AreaBlock({ area, project, adrs }: { area: BaselineArea; project: strin
           ) : null}
         </p>
       ) : (
-        <p className="muted small">Not asked yet: Claude asks it at the first design that touches it.</p>
+        <p className="muted small">Not asked yet: the agent asks it at the first design that touches it.</p>
       )}
       {area.entries.length ? (
         <ul className="small">

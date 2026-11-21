@@ -357,8 +357,8 @@ export function EntryEvidence({
         <div className="drift-flags">
           <h4>Left to check before docs-folded</h4>
           <p>
-            Claude reads each text against what {item.code} changed, then confirms it is still right or files a
-            correction. Ask Claude to settle them; docs-folded appears here once none is left.
+            The agent reads each text against what {item.code} changed, then confirms it is still right or files a
+            correction. Ask your agent to settle them; docs-folded appears here once none is left.
           </p>
           <ul>
             {flags.map((f) => (
@@ -386,14 +386,14 @@ export function EntryEvidence({
         <ul className="dep-list small">
           {item.overrides.map((o) => (
             <li key={`${o.at}-${o.to}`}>
-              Moved {o.from} → {o.to} on {o.at.slice(0, 10)} by Claude, past its gate: {o.reason}
+              Moved {o.from} → {o.to} on {o.at.slice(0, 10)} by an agent, past its gate: {o.reason}
             </li>
           ))}
         </ul>
       ) : null}
       {docsFolded.settled.length ? (
         <details className="drift-settled">
-          <summary>Checked by Claude ({docsFolded.settled.length})</summary>
+          <summary>Checked by the agent ({docsFolded.settled.length})</summary>
           <ul>
             {docsFolded.settled.map((t) => (
               <li key={driftKey(t.flag)}>
@@ -601,7 +601,7 @@ function EditedWhileFlagged({ flag }: { flag: DriftFlag }) {
           <code>{edited.shas[i]}</code> {e.at.slice(0, 10)} {e.subject}
         </span>
       ))}
-      ). Only Claude&apos;s check settles this flag, not the edit.
+      ). Only the agent&apos;s check settles this flag, not the edit.
       {edited.diff ? (
         <details>
           <summary>Diff of the edits</summary>

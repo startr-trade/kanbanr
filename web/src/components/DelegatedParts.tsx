@@ -59,7 +59,7 @@ export function DelegatedParts(p: { parts: NeedsYouParts; project: string; level
     <>
       {decidedAny && (
         <section className="needs-you-part needs-you-decided" aria-labelledby="needs-you-decided">
-          <H id="needs-you-decided">Claude decided, since you last looked</H>
+          <H id="needs-you-decided">The agent decided, since you last looked</H>
           {decided.fresh.length > 0 && (
             <ul className="needs-you-lines">
               {decided.fresh.map((d) => (
@@ -89,7 +89,7 @@ export function DelegatedParts(p: { parts: NeedsYouParts; project: string; level
       )}
       {holds.length > 0 && (
         <section className="needs-you-part needs-you-held" aria-labelledby="needs-you-held">
-          <H id="needs-you-held">Claude holds</H>
+          <H id="needs-you-held">The agent holds</H>
           <details>
             <summary>
               <span aria-hidden="true">{"⚙"}</span> {p.parts.heldTotal} {p.parts.heldTotal === 1 ? "decision" : "decisions"} under {ids}

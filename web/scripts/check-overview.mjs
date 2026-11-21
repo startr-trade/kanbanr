@@ -40,7 +40,7 @@ const text = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
 const srcDir = new URL("../src/", import.meta.url).pathname;
 const read = (rel) => readFileSync(join(srcDir, rel), "utf8");
 
-const FLOW = "Ask Claude for the flow report.";
+const FLOW = "Ask your agent for the flow report.";
 const noop = () => {};
 
 const attention = {
@@ -49,7 +49,7 @@ const attention = {
     { kind: "approve", section: "decisions", label: "Approve", count: 2, to: "/p/x/review?group=approve", tone: "info", yours: true },
     { kind: "release", section: "releases", label: "v0.8.0 at candidate", count: 1, to: "/p/x/releases?tab=current#v0.8.0", tone: "info", yours: true },
     { kind: "red-tests", section: "health", label: "Red tests", count: 4, to: "/p/x/items?evidence=red", tone: "error", yours: false },
-    { kind: "doctor-errors", section: "health", label: "Doctor errors", count: 22, ask: "Ask Claude to fix the 22 doctor errors.", tone: "error", yours: false },
+    { kind: "doctor-errors", section: "health", label: "Doctor errors", count: 22, ask: "Ask your agent to fix the 22 doctor errors.", tone: "error", yours: false },
   ],
 };
 const full = {
@@ -215,7 +215,7 @@ try {
     const needs = section("Needs you");
     const cardLinks = needs ? [...needs.querySelectorAll("a.ui-tile")].map((a) => a.getAttribute("href")) : [];
     if (!cardLinks.includes("/p/x/review?group=approve")) problems.push("Needs you has no card linking the Approve group");
-    if (needs && !text(needs).includes("Ask Claude to fix the 22 doctor errors.")) problems.push("the doctor card does not offer its sentence");
+    if (needs && !text(needs).includes("Ask your agent to fix the 22 doctor errors.")) problems.push("the doctor card does not offer its sentence");
     const recent = section("Recent decisions and ADRs");
     if (recent && ![...recent.querySelectorAll("a")].some((a) => a.getAttribute("href") === "/p/x/feature/FTR-043")) problems.push("Recent does not link its lines");
     const activity = section("Activity");
@@ -272,10 +272,10 @@ try {
     const find = (t) => empties.find((e) => text(e.querySelector(".ui-empty-title")) === t);
     const cases = [
       ["Nothing needs you right now.", null],
-      ["No sprint is running.", "Ask Claude to plan the next sprint."],
-      ["No release is in flight.", "Ask Claude what the next release should hold."],
+      ["No sprint is running.", "Ask your agent to plan the next sprint."],
+      ["No release is in flight.", "Ask your agent what the next release should hold."],
       ["No milestone is in progress.", null],
-      ["The charter has no goals yet.", "Ask Claude to draft the charter's goals with you."],
+      ["The charter has no goals yet.", "Ask your agent to draft the charter's goals with you."],
       ["No decisions recorded yet.", null],
       ["No activity yet.", null],
     ];

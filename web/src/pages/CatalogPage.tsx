@@ -77,18 +77,18 @@ export function CatalogBody({
       ) : (
         <Empty
           title="No project facts yet: rows that depend on what the project is read as not applying."
-          ask="Ask Claude to set the project's facts: its languages, runtimes, where it runs, its parts and its data."
+          ask="Ask your agent to set the project's facts: its languages, runtimes, where it runs, its parts and its data."
         >
           <p className="muted small">
-            Claude records them with <code>kanbanr facts set</code>.
+            The agent records them with <code>kanbanr facts set</code>.
           </p>
         </Empty>
       )}
 
       {!any ? (
-        <Empty title="No catalog yet." ask="Ask Claude to set up the project's content catalog from the starter.">
+        <Empty title="No catalog yet." ask="Ask your agent to set up the project's content catalog from the starter.">
           <p className="muted small">
-            Claude writes it with <code>kanbanr catalog init</code>.
+            The agent writes it with <code>kanbanr catalog init</code>.
           </p>
         </Empty>
       ) : (

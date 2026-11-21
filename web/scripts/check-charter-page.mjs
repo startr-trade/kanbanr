@@ -168,7 +168,7 @@ globalThis.window ??= new JSDOM("<!DOCTYPE html>").window;
 const PAGE = "src/pages/CharterPage.tsx";
 const longConstraint = `Must stay local-first ${"and plain-text ".repeat(26)}end.`;
 const fullCharter = {
-  purpose: "Keep the plan where Claude can read it",
+  purpose: "Keep the plan where an agent can read it",
   vision: "Every session continues the plan with no recap",
   goals: [
     { id: "G-1", statement: "A session recovers the full plan", measure: "zero recaps", horizon: "2026" },
@@ -311,10 +311,10 @@ await check("web::check_charter_fresh_project_says_so_plainly", "an empty projec
   const { document, html } = await view({ charter: { purpose: "", goals: [] }, progress: emptyProgress }, "/p/x/charter");
   expect("no svg", document.querySelectorAll("svg").length, 0);
   for (const t of [
-    "No charter yet. Ask Claude to write the project's charter: its purpose, goals and what it will not do.",
+    "No charter yet. Ask your agent to write the project's charter: its purpose, goals and what it will not do.",
     "No goals yet: items have nothing to serve.",
     "This project does not ship releases, so there is no line of releases to draw. Finished work shows under Recent wins.",
-    "No lessons recorded yet. Ask Claude to record one when something teaches the project.",
+    "No lessons recorded yet. Ask your agent to record one when something teaches the project.",
     "Nothing that serves a goal has finished yet.",
   ]) if (!html.includes(t.replace(/'/g, "&#x27;")) && !html.includes(t)) problems.push(`missing sentence: ${t}`);
   const shipping = await view({ charter: fullCharter, progress: { ...emptyProgress, releases_on: true, goals: [], route: [{ version: "v0.1.0", state: "next", items: 0 }] } }, "/p/x/charter");

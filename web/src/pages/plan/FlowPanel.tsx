@@ -97,7 +97,7 @@ export function FlowPanelBody(p: { project: string; plan: FlowPlan }): JSX.Eleme
     return (
       <div className="plan-flow">
         <Section title="Flow">
-          <Empty title="No tasks to plan." ask="Ask Claude to break the sprint's items into tasks." />
+          <Empty title="No tasks to plan." ask="Ask your agent to break the sprint's items into tasks." />
           {dates}
         </Section>
       </div>

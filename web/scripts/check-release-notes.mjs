@@ -63,7 +63,7 @@ s = notesSection(draft, path, { ...notes, changelog_path: "CHANGELOG.md", change
 expect("web::release_notes_section_shows_the_changelog_section: heading", s.changelogHeading === "Changelog section (CHANGELOG.md)", s);
 expect("web::release_notes_section_shows_the_changelog_section: rendered text", s.changelogText === "### Added\n\n- A thing." && s.changelogEmpty === "", s);
 s = notesSection(draft, path, { ...notes, changelog_path: "CHANGELOG.md" }, true);
-expect("web::release_notes_section_shows_the_changelog_section: empty says so", s.changelogText === "" && s.changelogEmpty.includes("ask Claude to write it"), s);
+expect("web::release_notes_section_shows_the_changelog_section: empty says so", s.changelogText === "" && s.changelogEmpty.includes("ask your agent to write it"), s);
 s = notesSection(draft, path, notes, true);
 expect("web::release_notes_section_shows_the_changelog_section: none without a changelog", !s.changelogHeading && !s.changelogEmpty, s);
 

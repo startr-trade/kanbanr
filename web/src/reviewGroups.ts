@@ -23,7 +23,7 @@ export function groupTabs(groups: GroupCount[]): TabDef[] {
     const held = g.held ?? 0;
     return {
       key: g.key,
-      label: held > 0 ? `${g.label} · ${held} Claude's` : g.label,
+      label: held > 0 ? `${g.label} · ${held} the agent's` : g.label,
       count: g.count,
       // A group of only what Claude holds stays listed, with count 0: the person can still decide it.
       hidden: g.count === 0 && held === 0,

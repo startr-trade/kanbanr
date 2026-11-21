@@ -62,13 +62,13 @@ export function nextStageHint(n: NextStage, now: Date = new Date()): CardHint | 
     if (rest > 0) {
       const mine = yours > 0 ? `, ${yours} yours` : "";
       const ids = [...new Set(held.map((g) => g.delegation))].join(" and ");
-      const claudes = held.length > 0 ? `, and ${held.length} Claude holds under ${ids}` : "";
+      const claudes = held.length > 0 ? `, and ${held.length} held by the agent under ${ids}` : "";
       return {
         text: `${n.status} needs ${n.missing}${mine}`,
         title:
           yours > 0 || held.length > 0
-            ? `${n.status} needs ${n.missing} things: ${rest} for Claude to do, ${yours} for you (a sign-off or approval)${claudes}`
-            : `${n.status} needs ${n.missing} thing(s) done by Claude`,
+            ? `${n.status} needs ${n.missing} things: ${rest} for the agent to do, ${yours} for you (a sign-off or approval)${claudes}`
+            : `${n.status} needs ${n.missing} thing(s) done by the agent`,
         kind: "needs",
       };
     }
@@ -108,8 +108,8 @@ export function delegatedHints(n: NextStage, now: Date = new Date()): DelegatedH
   for (const g of liveDelegated(n, now)) byId.set(g.delegation, [...(byId.get(g.delegation) ?? []), g]);
   return [...byId].map(([delegation, gaps]) => ({
     delegation,
-    text: `${[...new Set(gaps.map(asWords))].join(", ")}: Claude, under ${delegation}`,
-    title: `Claude may take these under ${delegation} until ${dayMonth(gaps[0].until)}; you can still take them on the Review page`,
+    text: `${[...new Set(gaps.map(asWords))].join(", ")}: the agent, under ${delegation}`,
+    title: `The agent may take these under ${delegation} until ${dayMonth(gaps[0].until)}; you can still take them on the Review page`,
     kind: "delegated" as const,
   }));
 }

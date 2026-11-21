@@ -236,7 +236,7 @@ expect("web::release_returned_banner: shown on a read-only monitor too", a.retur
 
 // FTR-028 Decision 5: a delegated decision not yet kept or undone is a warning beside the button
 // (the page lists the plan's warnings), never a block.
-const delegated = "DEF-9: the design-review sign-off Claude took under DLG-001 is not kept or undone yet: review it on the Review page";
+const delegated = "DEF-9: the design-review sign-off the agent took under DLG-001 is not kept or undone yet: review it on the Review page";
 a = releaseAction({ ...base, warnings: [delegated] }, true);
 expect(
   "web::release_warns_of_unreviewed_delegated_decisions: the button stays enabled",
