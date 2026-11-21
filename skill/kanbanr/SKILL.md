@@ -2,14 +2,14 @@
 name: kanbanr
 description: >-
   The project management system of record for agent-driven development. Use it whenever doing
-  ANY work on a project that is tracked with kanbanr — and adopt it for the whole project the
+  ANY work on a project that is tracked with Kanbanr — and adopt it for the whole project the
   moment the user says "start using kanbanr for this project" (or asks to set up / init kanbanr —
   which runs a plan-mode setup interview first), then keep using it for the rest of the project's
   life with no further instruction. Use to: scope work as feature
   items with specs; group them into milestones; plan via the workflow (statuses, allowed
   transitions, displayed/no-op states); create persistent todo-lists with items on a feature and
   mark them Not started / In progress / Completed; move feature items between states; record
-  documentation (every doc, requested or self-initiated, goes into kanbanr docs, NOT the working
+  documentation (every doc, requested or self-initiated, goes into Kanbanr docs, NOT the working
   folder, unless the user asks for it in the project folder, e.g. an mdBook/MkDocs site or
   README deliverable); and recover/resume the full project state at the start of a
   session. Drives the
@@ -17,9 +17,9 @@ description: >-
   views it live.
 ---
 
-# kanbanr — the project's system of record
+# Kanbanr — the project's system of record
 
-kanbanr tracks development work as **feature items** (epics with a spec + persistent todo-lists),
+Kanbanr tracks development work as **feature items** (epics with a spec + persistent todo-lists),
 grouped into **milestones** (a dependency DAG). The data is durable, git-backed YAML/markdown in a
 local folder; a read-only web monitor renders it live.
 
@@ -170,7 +170,7 @@ project"** (or anything equivalent):
      - **design-control**: modelled on ISO 9001 §8.3, with sign-offs.
 
      Recommend **agile** for a new project: it asked the person for the fewest decisions in the
-     TOGAF-and-agile walkthrough (`notes/developer-path-togaf-vs-agile.md` on the kanbanr board).
+     TOGAF-and-agile walkthrough (`notes/developer-path-togaf-vs-agile.md` on the Kanbanr board).
      Offer TOGAF, Scrum and the rest as the other options, and never drop them. A saved process of
      the board or the person stays the first option when one exists (a team's agreed process wins).
 
@@ -190,8 +190,8 @@ project"** (or anything equivalent):
 
      After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
      no board. Show its output verbatim in the follow-up and in the plan: where items branch from
-     and merge into, what kanbanr merges, and that pushing is always the user's. With sprints or
-     releases on, setup turns the git model on: the preview says `automation: on`, and kanbanr
+     and merge into, what Kanbanr merges, and that pushing is always the user's. With sprints or
+     releases on, setup turns the git model on: the preview says `automation: on`, and Kanbanr
      merges as it shows. Say so in the plan. Turning it off is the user's choice
      (`kanbanr config cadence --git-model off`).
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
@@ -223,8 +223,8 @@ project"** (or anything equivalent):
      charter is agreed, or changed, after that commit, `kanbanr claude sync` changes `CLAUDE.md`
      on the default branch again: commit it alone at once,
      `git add CLAUDE.md && git commit -m "[no-ref] refresh the kanbanr block"`. The hooks and the
-     guard take that commit while nothing outside the generated blocks changed: kanbanr's, or any
-     other tool's such as katalogr's (`<!-- <tool>:begin -->` … `<!-- <tool>:end -->`), so another
+     guard take that commit while nothing outside the generated blocks changed: Kanbanr's, or any
+     other tool's such as Katalogr's (`<!-- <tool>:begin -->` … `<!-- <tool>:end -->`), so another
      tool's sync is committed the same way, alone with a `[no-ref]` reason. Left uncommitted, it
      makes Promote to main refuse the dirty checkout later.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
@@ -288,7 +288,7 @@ project"** (or anything equivalent):
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
    opens it. Say that the proposed delegations wait on the Review page for them to grant.
    **Only then** go back to what the user originally asked for.
-6. From that point on, treat kanbanr as the **system of record for the entire project**, with no
+6. From that point on, treat Kanbanr as the **system of record for the entire project**, with no
    further prompting.
 
 The charter is read back at the start of every session with `kanbanr charter show`, alongside
@@ -307,7 +307,7 @@ known:
   If the user wants to begin before a sprint's first day, ask whether to start it today;
   `kanbanr sprint start` then moves its dates to today and keeps its length. Never start a sprint
   without asking. For agent-built work, state the sprint's capacity as lanes and build slots
-  (`kanbanr sprint add … --lanes 4 --build-slots 2`, with kanbanr 0.8.0 or later installed), not
+  (`kanbanr sprint add … --lanes 4 --build-slots 2`, with Kanbanr 0.8.0 or later installed), not
   days. If a
   planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
@@ -367,7 +367,7 @@ somewhere else, so it isn't lost and doesn't stay a second, conflicting plan.
    - On every imported `feature.add`, set `source` and `original`:
      `"source": {"system": "file", "ref": "TODO.md:14"}` or
      `{"system": "github", "ref": "owner/repo#123", "url": "…"}`, and `"original"` = the item's
-     original text, verbatim. kanbanr preserves `original` in the spec under "Imported from",
+     original text, verbatim. Kanbanr preserves `original` in the spec under "Imported from",
      stamps the import time, derives a re-import key, and records the project commit for file
      sources. The source is **history, not a live link**: the item stays meaningful even after the
      file is deleted or the issue is gone.
@@ -381,7 +381,7 @@ somewhere else, so it isn't lost and doesn't stay a second, conflicting plan.
    items already imported (same source key), milestones with the same name, and the ops under
    skipped items are skipped.
 5. **Retire the old tracker, only with a yes.** Ask what to do with it: leave it; replace the file
-   with a short pointer to kanbanr; delete it; for GitHub issues, comment with the kanbanr code
+   with a short pointer to Kanbanr; delete it; for GitHub issues, comment with the Kanbanr code
    (`gh issue comment`) and/or close them (`gh issue close`), or keep them in step with the
    GitHub mirror instead. Never edit, delete, comment on or close anything without explicit
    approval.
@@ -391,14 +391,14 @@ Later, `kanbanr sources` (run in the project folder) shows whether file sources 
 
 ## GitHub issue mirror (optional)
 
-kanbanr can keep GitHub issues in step with the board, **one way**: kanbanr is the source of truth
+Kanbanr can keep GitHub issues in step with the board, **one way**: Kanbanr is the source of truth
 and the issues follow it. Offer it when the project lives on GitHub and people follow its issues;
 enable it only with the user's yes.
 
 - **Enable:** `kanbanr mirror enable --repo owner/repo` (needs `gh` installed and logged in).
   For a **public** repo it refuses unless you add `--allow-public`: first tell the user that specs,
   todo-lists and notes will be publicly visible, and get an explicit OK.
-- **Then it's automatic.** After every kanbanr write, changed features are pushed:
+- **Then it's automatic.** After every Kanbanr write, changed features are pushed:
   - a new feature gets a new issue;
   - title, spec, labels, todo-lists and status changes update the issue;
   - Completed closes it as completed; a no-op state closes it as not planned.
@@ -410,11 +410,11 @@ enable it only with the user's yes.
   GitHub.
 - **No duplicates for imported issues:** features imported from GitHub carry an `issue` link, so
   the mirror updates those same issues. `kanbanr mirror link FEAT-012 45` links an existing issue
-  by hand; tell the user its title and body will be replaced by kanbanr's on the next sync.
+  by hand; tell the user its title and body will be replaced by Kanbanr's on the next sync.
 - **Changes on GitHub don't flow back automatically.** When the user asks, or before a sync that
   would overwrite edits, run `kanbanr mirror pull FEAT-012`: it shows whether the issue was edited
   on GitHub since the last sync, its current title/body/labels, and new comments. Bring what
-  matters into kanbanr (spec, tasks, status) deliberately; the next sync then pushes the result.
+  matters into Kanbanr (spec, tasks, status) deliberately; the next sync then pushes the result.
 - `kanbanr mirror disable` turns it off; issue links are kept.
 
 ## Defining work: why it exists, what must be true, how it is verified
@@ -468,7 +468,7 @@ for it; the release stage does. Say so when the person approves. Never override 
 **Scope → define → the user decides on the Review page → only then write code.** Every verdict is
 the user's and is taken on the monitor: approve, ratify, sign off, withdraw, accept or reject a
 decision (Review page), promote or cut a release and confirm each stage after the tag (Releases
-page). **You never record a verdict, and never ask for one in a plan or a question.** kanbanr's
+page). **You never record a verdict, and never ask for one in a plan or a question.** Kanbanr's
 guard refuses the commands if you try. (The one exception is a project in `conversation` mode,
 below: there the person answers the board's own question, and that answer is the verdict.) **Never hand the user a kanbanr command that writes as the
 way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `adr accept`,
@@ -478,8 +478,8 @@ form, the page names it. Your part is one message saying what is waiting and whe
 `<monitor>/p/<project>/review` or `…/releases`; the project's own page, `<monitor>/p/<project>`, is the Overview of what needs the person, and `…/review?group=<key>` opens one Review group. Never shorten it to `<monitor>/review`, which does
 not open the project's page. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
-When the monitor's header warns that the board was last written by a newer kanbanr than it runs
-(FTR-036), restart the monitor from the newer kanbanr before the user takes sign-offs on it.
+When the monitor's header warns that the board was last written by a newer Kanbanr than it runs
+(FTR-036), restart the monitor from the newer Kanbanr before the user takes sign-offs on it.
 
 **Where decisions are taken is the project's choice** (FTR-028). `kanbanr decisions show` says the
 mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may
@@ -487,7 +487,7 @@ take a verdict a delegation in force covers, with `--under DLG-n`, and nothing e
 message what you decided and under which delegation; it waits on the Review page for them to keep
 or undo. The session-start summary and the board count only the person's decisions; what a delegation in force holds is listed as yours to take under it, never as waiting on the person. **When an item has moved back to an earlier stage, ask the user before taking any
 decision or making any change for it, even if a delegation would cover it**: delegations are for
-forward moves. You never change the mode, grant a delegation or review a decision: kanbanr
+forward moves. You never change the mode, grant a delegation or review a decision: Kanbanr
 refuses it.
 You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
 grants it on the Review page.
@@ -502,11 +502,11 @@ pass, matched to the project, item, verdict and revision, valid for 15 minutes, 
 command: run exactly that, `kanbanr approve|ratify|signoff … --rev <REV> --pass P-n`. The verdict
 is recorded as the person's, with their question and answer kept on the record. If they answer
 `Not yet` or anything else, nothing is recorded: ask what to change. You cannot make a pass
-(`kanbanr decisions heard` is the hook's), you never change the mode, and kanbanr refuses a verdict
+(`kanbanr decisions heard` is the hook's), you never change the mode, and Kanbanr refuses a verdict
 from you without a matching pass.
 
 **Auto mode** (DEF-060). Claude Code's auto-mode safety check can stop a delegated command
-(`kanbanr signoff … --under DLG-n`) before kanbanr sees it. When a delegation is granted and the
+(`kanbanr signoff … --under DLG-n`) before Kanbanr sees it. When a delegation is granted and the
 mode is `delegated`, check `kanbanr decisions show --json` for `permission_rules_missing` on a
 granted delegation. If a rule is missing, **ask once**, as one question: "DLG-n is granted and the
 mode is delegated. In auto mode Claude Code's safety check may stop `kanbanr signoff … --under
@@ -584,7 +584,7 @@ options, e.g. a latency target, or "no target"), rather than noting its absence 
 ### Diagrams
 
 A design usually carries Mermaid diagrams, and a broken one draws as an error the reviewer finds at
-approval time. kanbanr lints every `mermaid` block when you write a spec or a doc and prints each
+approval time. Kanbanr lints every `mermaid` block when you write a spec or a doc and prints each
 problem as `diagram: <file>, diagram #n, line N: … (rule)` on stderr; fix it before you go on, not
 after. Write them so they draw:
 - **Quote flowchart labels:** `A["f(x) {y}"]`, never `A[f(x)]`. Parentheses, braces, brackets,
@@ -728,7 +728,7 @@ lists the projects on the board still on an earlier version. Ask, **for every pr
 are in **and every other one** — **one question each**: show `kanbanr process diff --project <id>`
 in a few lines and ask Update / Not now. Update → `kanbanr process update --project <id>`.
 
-Whether another project takes the new version is the user's choice, not yours: kanbanr has no
+Whether another project takes the new version is the user's choice, not yours: Kanbanr has no
 project owners, so never skip a project because it "belongs to someone else", and never leave the
 update as a command for the user to run. If they say another person decides for that project,
 "Not now" records nothing and the notice stays for that person. If an update is refused because a
@@ -745,7 +745,7 @@ The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". 
 table — and offer to work through it. Before any `--override`, run `kanbanr check <CODE> --json`
 again and read the gate's gaps at that moment: a sign-off or approval given while you were asking
 closes them. If the gap is gone, move without `--override`. Override only a gap still there, with
-the user's reason; kanbanr records no override a gate did not need, and says `gate: the gate was
+the user's reason; Kanbanr records no override a gate did not need, and says `gate: the gate was
 met`. `--override "<reason>"` is for genuine emergencies, with the
 user's reason, and the item then needs ratifying. An override is yours to explain and the person's
 to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
@@ -761,7 +761,7 @@ add the links each one names before you move the item on.
 - A verdict records **who** gave it, defaulting to the board's commit identity. One with no named
   approver is refused, so never invent `--by`: if it fails, the board has no identity and the user
   sets one with `kanbanr identity`.
-- kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
+- Kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
   definition's approval is current. Change or remove approved text and it **lapses**; added text is
   reviewed at the next decision — scope cannot drift silently past a yes.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
@@ -774,7 +774,7 @@ add the links each one names before you move the item on.
 
 ## The method by stage role
 
-kanbanr carries one method for every process: a build-ready design before code, architecture docs
+Kanbanr carries one method for every process: a build-ready design before code, architecture docs
 kept as built, live links, a git model that follows the cadence, and releases that move through
 stages. It is stated here once, by the **role** a stage holds, so it holds the same under the
 default kanban, Scrum, TOGAF, PDCA or a process of the user's own.
@@ -911,7 +911,7 @@ names:
 - the tests that prove it, by name, and the requirement each serves;
 - the tasks it depends on.
 
-Write each task in the form kanbanr reads (FTR-060), under a heading `Implementation tasks`: a
+Write each task in the form Kanbanr reads (FTR-060), under a heading `Implementation tasks`: a
 top-level bullet `- **T<n>** …` whose line ends with `Depends on …` (`T2`, or `FTR-041 T1` for
 another item's task; `Depends on —` for none), `Writes: …` with every file it creates or changes
 (and `Reads: …` when a file it only reads matters), and the estimate in agent-hours in the trailing
@@ -943,7 +943,7 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
   common with a running task) and why each other one waits; `kanbanr ready --tasks --lanes N`
   proposes up to N to start together, critical path first. Issue one task scope per lane,
   `kanbanr scope issue build <CODE> --task T<n>`: each agent works on its own task branch from the
-  item branch and may set only its own task's state. Install kanbanr 0.8.0 before issuing task
+  item branch and may set only its own task's state. Install Kanbanr 0.8.0 before issuing task
   scopes: an older binary reads one as covering the whole item. A task with no `writes` runs alone
   within its item, so record them.
 - **Keep footprints true.** `kanbanr scope drift` (and `git doctor`, the Stop hook) names a task
@@ -961,11 +961,11 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
 
 ### Sub-agents: what each may do
 
-Only you, the coordinator, act under a delegation; never brief an agent to (kanbanr refuses
+Only you, the coordinator, act under a delegation; never brief an agent to (Kanbanr refuses
 `--under` from a sub-agent).
 
 When you hand work to a sub-agent, its limits are not left to its judgement or to a one-off line
-in the brief. Each role has fixed boundaries, kanbanr enforces them,
+in the brief. Each role has fixed boundaries, Kanbanr enforces them,
 and the brief states them **verbatim**:
 
 | | A **build** agent (one item, in its own worktree) | A **design** agent (in its own worktree) |
@@ -991,7 +991,7 @@ Then:
 - with `--worktree <path>` the scope is bound at once and the brief has no claim step; without it
   the agent's first command is the claim;
 - paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
-  agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
+  agent claim the scope (`kanbanr scope claim SC-…`); from then on Kanbanr refuses, and names, every
   board write, commit and push that agent makes from that worktree that the scope does not allow;
 - **stay in the project folder.** A scope binds the agent it was issued to, never you, but your own
   shell is kept out of an agent's worktree: never `cd` into an agent's worktree. Look inside with
@@ -1008,7 +1008,7 @@ Then:
 - put your own worktree, for a merge or a finished item, under `.claude/worktrees/` too, with a
   name that does not start `agent-`: only `agent-*` worktrees are refused without a scope.
 
-A build scope needs its item at the build stage and kanbanr's hooks installed
+A build scope needs its item at the build stage and Kanbanr's hooks installed
 (`kanbanr git install-hooks`, which adds the pre-push hook, and `kanbanr hooks install`, whose
 Claude Code hooks tell an agent from you). It finds or makes the item branch;
 the claim switches the agent's worktree to it.
@@ -1041,7 +1041,7 @@ the user, by the agent for its item (`Agent-Scope:` on the commit).
 
 ### Builds: through `kanbanr build`
 
-Several agents building on one machine share its CPUs, memory and caches. kanbanr co-ordinates
+Several agents building on one machine share its CPUs, memory and caches. Kanbanr co-ordinates
 them (FTR-062); its state stays on the machine and in the git directory, never on the board.
 
 - **Run every cargo and npm command through `kanbanr build run --`** (`kanbanr build run --task
@@ -1084,7 +1084,7 @@ Before the move:
   --why "what you compared"`. If it is wrong, correct the text as part of folding the design, or
   file a correction and run `kanbanr prepare text <CODE> <TARGET> --correction <CODE>`. Edit a
   flagged text only to correct what it says, never to make its flag go away. Never edit a flagged
-  text, or another item's spec, to clear a flag. Only your recorded check settles it. kanbanr keeps
+  text, or another item's spec, to clear a flag. Only your recorded check settles it. Kanbanr keeps
   the flag open after an edit and shows the person the edit and its diff. Another item's approved
   spec is refused to you; return a proposed change, do not edit it. The record carries who settled
   it and at which revision; a new commit that names the text again, or a later edit to it, puts it
@@ -1103,7 +1103,7 @@ branches; fix it before going on.
 ### At the release role
 
 - A release moves through its stages with `kanbanr release promote <V> [stage]`. By default the
-  first stage makes `release/<V>` and the last, production, is the cut: kanbanr brings main up to
+  first stage makes `release/<V>` and the last, production, is the cut: Kanbanr brings main up to
   the release (a fast-forward, refused with nothing changed if main has commits the release lacks)
   and tags the version.
 - Stages can follow the tag (`tag_passed`): the stage holding `tag` is the cut and ships nothing;
@@ -1124,7 +1124,7 @@ branches; fix it before going on.
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
 - Before Promote to main, every planned item is integrated into the release: move it to its
   integrate status from the project folder. That merge needs no `--override`. Under the git model
-  kanbanr asks `items_merged` of the stage that moves main (or the cut) when no earlier stage does;
+  Kanbanr asks `items_merged` of the stage that moves main (or the cut) when no earlier stage does;
   `release stages` and the plan show it as `items_merged (implied)` (DEF-077).
 - **Before a candidate's release sign-off, run the walkthroughs** (FTR-037):
   `kanbanr walkthrough run walkthroughs/<process>.md` drives the guide headlessly on a scratch
@@ -1158,7 +1158,7 @@ branches; fix it before going on.
   leaves one section and removes any copies. Never open a fix item to change the changelog or the notes of a release
   under test.
 - **A merge sends a promoted release back.** When a move merges an item into a release that is past
-  candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
+  candidate, Kanbanr sends the release back to candidate and says so. Tell the person, in one
   message, what the Releases page now offers: update the notes, run the gate again, promote to
   main, push and wait for CI, then cut. Confirm no stage yourself. A release that is tagged and not
   shipped refuses the merge and needs a patch release.
@@ -1178,7 +1178,7 @@ branches; fix it before going on.
   to main. A cut that requires `pushed` waits until main is pushed (and CI has run on it).
 - **A stage taken by mistake is undone by the person** with `kanbanr release undo <V> --reason …`
   while nothing is pushed or tagged: it steps back the newest stage only, and deletes
-  `release/<V>` when it made the branch and every commit on it is kanbanr's. You never run it.
+  `release/<V>` when it made the branch and every commit on it is Kanbanr's. You never run it.
   After a push or a tag, the way on is a patch release.
 - **Remote CI belongs to the release, not to an item.** Never give an item a task or a test that
   needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
@@ -1190,7 +1190,7 @@ branches; fix it before going on.
   the notes (`kanbanr release notes <V>`) and tell the person the cut waits for their acceptance on
   the Releases page. Never accept it yourself.
 - **A CI result is the user's to confirm.** A stage that requires `gate_passed` needs a recorded
-  passed result for the release tip. kanbanr never asks a server. You may read the CI's result
+  passed result for the release tip. Kanbanr never asks a server. You may read the CI's result
   with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url
   <the run>` puts it beside **Record result** on the Releases page, and the person confirms it
   there with one click. Say where: the **Record result** form above the Cut on the Releases page,
@@ -1240,7 +1240,7 @@ branches; fix it before going on.
   stages to start with. Keep the first pipeline small by platforms and checks, never by merging
   stages. Ask the user which checks their plan and settings allow
   (you cannot see their account) and leave out any they cannot run; make the release description the
-  notes kanbanr drafted (`kanbanr release notes <V>`), never a list generated from commits; add a
+  notes Kanbanr drafted (`kanbanr release notes <V>`), never a list generated from commits; add a
   manual trigger that runs everything up to publishing and publishes nothing, and ask the user to
   run it before the cut; run each check once per commit; and test the built product the way a
   person will use it. Name no remote server or CI product that the project has not already chosen.
@@ -1248,7 +1248,7 @@ branches; fix it before going on.
 ### Carry-over
 
 `kanbanr sprint close <SP> --carry-to <next SP>` carries the unfinished items and keeps their
-branches. kanbanr merges the next sprint's branch into each carried item's branch (a catch-up, never
+branches. Kanbanr merges the next sprint's branch into each carried item's branch (a catch-up, never
 a rebase); a conflict is reported for that item and its branch is left as it was, for you to resolve
 on the item branch.
 
@@ -1257,18 +1257,18 @@ on the item branch.
 `kanbanr git model --sprints on|off --releases on|off` shows the model for a cadence, and
 `kanbanr git model` the one this project follows:
 
-| Cadence | Items branch from and merge into | Production moves at | kanbanr merges (with the git model on) |
+| Cadence | Items branch from and merge into | Production moves at | Kanbanr merges (with the git model on) |
 |---|---|---|---|
 | neither (trunk) | main | the integrate merge | each item branch into main |
 | sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
 | releases only | `integration` | the release stage with `move_main` (by default the last) | item branches into `integration`; `release/<V>` into main at its `move_main` stage; tagged at the cut, after main is pushed if the stage requires `pushed` |
 | sprints and releases | `sprint/<SP>` | the release stage with `move_main` (by default the last) | item branches into `sprint/<SP>`; `release/<V>` into main at its `move_main` stage; tagged at the cut, after main is pushed if the stage requires `pushed`; the sprint into carried items |
 
-kanbanr commits only its release-preparation commit on `release/<V>`.
+Kanbanr commits only its release-preparation commit on `release/<V>`.
 
-With the git model off, kanbanr merges nothing and the model is a description. The **code**
-repository is never pushed, by kanbanr or by you: the user reviews and pushes, in every row. The
-board's own remote is a different repository, which kanbanr syncs after each write as its push
+With the git model off, Kanbanr merges nothing and the model is a description. The **code**
+repository is never pushed, by Kanbanr or by you: the user reviews and pushes, in every row. The
+board's own remote is a different repository, which Kanbanr syncs after each write as its push
 policy says (`kanbanr remote push-policy`).
 
 ### Each milestone ends with a compliance review
@@ -1314,9 +1314,9 @@ itself, unless that status's gate isn't met.
 - `spike/<name>` branches are for exploring. Their output is a **change to a definition**, never
   merged code — `kanbanr finish` refuses them.
 - `kanbanr git install-hooks` puts the checks in the repo (an existing hook is kept and chained
-  with `--force`). The board's own data folder is exempt: kanbanr authors those commits itself.
+  with `--force`). The board's own data folder is exempt: Kanbanr authors those commits itself.
 - Other tools use the same hooks. When `kanbanr doctor`, `kanbanr git status` or the session start
-  names a kanbanr hook another tool replaced, a hook manager's `core.hooksPath` bypassed, or a
+  names a Kanbanr hook another tool replaced, a hook manager's `core.hooksPath` bypassed, or a
   Claude Code hook dropped from the settings, run the fix it names and tell the person. Never
   delete the other tool's hook: `install-hooks --force` keeps it as `<name>.pre-kanbanr` and runs
   it first.
@@ -1346,15 +1346,15 @@ project revision it was observed at. So:
   them records nothing. Settle that form before you ask for approval (below).
 - At Design, check each tracked test name against the runner the project uses and one of these
   forms. A runner outside them (go test, Jest, Maven) records nothing; cargo nextest's lines and
-  its JUnit reports are read from kanbanr 0.8.0 (FTR-058), under the names cargo test prints, with
+  its JUnit reports are read from Kanbanr 0.8.0 (FTR-058), under the names cargo test prints, with
   each duration kept. Say so in the Design and ask before choosing it. When the hook says it read
   no test result from a run, rerun in a form it reads; never set the test by hand.
 - `kanbanr report --tests` lists the slowest tests and those that slowed most since the last
   shipped release, from the kept durations; a `cargo test` run keeps results and no durations.
 - `make test` runs nextest when it is installed (`cargo install cargo-nextest --locked`). On a
-  kanbanr older than 0.8.0, which does not read nextest's lines, run
+  Kanbanr older than 0.8.0, which does not read nextest's lines, run
   `KANBANR_TEST_RUNNER=cargo make test` when the run's results should be captured.
-- In kanbanr's own repository, `make ci` runs its heavy steps (cargo, the monitor build, the
+- In Kanbanr's own repository, `make ci` runs its heavy steps (cargo, the monitor build, the
   image build) under the machine's build lock (`flock ~/.cache/heavy-build.lock`) and a memory cap
   (`systemd-run --user --scope`, 60% of memory unless `KANBANR_CI_MEMORY_MAX` says otherwise), with
   `CARGO_BUILD_JOBS` leaving two CPUs free: a second heavy build on the machine waits for it rather
@@ -1383,7 +1383,7 @@ judges (below).
 **A manual test's result is the person's, recorded on the monitor.** A manual test that is not
 green waits on the Review page, under **Manual checks**, with its requirement and the check to
 make; the person does the check and clicks Passed or Failed there. Tell them it is there. **Never
-give them a `kanbanr test` command to run**, and never record a manual result yourself: kanbanr
+give them a `kanbanr test` command to run**, and never record a manual result yourself: Kanbanr
 refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
 said>"` and tell them to confirm it on the Review page. To retire a check left on a shipped release
@@ -1491,7 +1491,7 @@ gates, tell the user what differs and ask which holds.
   goals, non-goals and constraints, and regenerates that block whenever the charter changes.
   Everything outside the markers belongs to the author. When it changes the block on the default
   branch, commit `CLAUDE.md` alone with `[no-ref] refresh the kanbanr block`; the same holds for
-  any other tool's generated block (katalogr's, say), committed alone with a `[no-ref]` reason. On
+  any other tool's generated block (Katalogr's, say), committed alone with a `[no-ref]` reason. On
   an item's branch it goes in that item's next commit. **Never hand-copy the charter into instructions** —
   reference it.
 - `kanbanr hooks install` registers the hooks for **this project** (`<project>/.claude/settings.json`),
@@ -1552,8 +1552,8 @@ board cannot answer yet.
 
 ## The prime directive: one system of record
 
-**kanbanr is the single source of truth for everything about the project's activity.** The ONLY
-project information allowed to live outside kanbanr is the raw conversation transcript itself.
+**Kanbanr is the single source of truth for everything about the project's activity.** The ONLY
+project information allowed to live outside Kanbanr is the raw conversation transcript itself.
 
 - **Never** track project work in an ephemeral / in-session todo list. Do not use the session
   scratch todo for project tasks. Instead, create a **persistent todo-list on the relevant
@@ -1562,13 +1562,13 @@ project information allowed to live outside kanbanr is the raw conversation tran
 - Because everything is persisted, the project's state is fully **recoverable and resumable**
   across sessions — nothing is lost when a session ends.
 
-## Where documentation goes (default: kanbanr, not the working folder)
+## Where documentation goes (default: Kanbanr, not the working folder)
 
-Every document goes into kanbanr, **whether the user asked for it or you are creating it on your
+Every document goes into Kanbanr, **whether the user asked for it or you are creating it on your
 own initiative**, unless the user asks for it to be stored in the project folder. Decide where a
 doc goes **before** creating any file:
 
-- **Default → kanbanr docs.** Design notes, architecture, decisions/ADRs, research & investigation
+- **Default → Kanbanr docs.** Design notes, architecture, decisions/ADRs, research & investigation
   write-ups, plans, runbooks, how-tos, guides, meeting notes, reports: write them with
   `kanbanr doc add <folder>/<name>.md` (create folders with `kanbanr doc folder …`; images and
   diagrams go there too). Detail that belongs to one piece of work goes in that **feature's spec**.
@@ -1580,17 +1580,17 @@ doc goes **before** creating any file:
   up such an in-repo deliverable, keeping it in sync with later code changes falls under that
   request, but don't put internal project notes into it.
   (Code comments and doc comments are part of the code, not documents, so this rule doesn't cover them.)
-- **Don't ask each time.** Default to kanbanr and say where you saved it (e.g. "saved to kanbanr
+- **Don't ask each time.** Default to Kanbanr and say where you saved it (e.g. "saved to Kanbanr
   docs: `design/auth-flow.md`"). The user can ask to have it in the project folder instead.
-- **One home per doc.** Never keep the same content in both places; link to the kanbanr doc path
+- **One home per doc.** Never keep the same content in both places; link to the Kanbanr doc path
   from specs or tasks instead of copying.
 - **Index every decision.** When an ADR is accepted, add a link to it in the architecture index
   (or whichever view the project's `adr` coverage rule names) in the same session.
 
-## System views from katalogr (optional)
+## System views from Katalogr (optional)
 
-A doc can hold a `katalogr-query` block, and the monitor draws it when katalogr is installed. It is
-optional: never install, start or require katalogr for a project, and never put its address in the
+A doc can hold a `katalogr-query` block, and the monitor draws it when Katalogr is installed. It is
+optional: never install, start or require Katalogr for a project, and never put its address in the
 board's config (it is `KANBANR_KATALOGR_URL` or `kanbanr serve --katalogr-url`).
 
 - **Write a block** as a fenced code block whose info string is `katalogr-query`, with exactly one
@@ -1598,7 +1598,7 @@ board's config (it is `KANBANR_KATALOGR_URL` or `kanbanr serve --katalogr-url`).
   `process` or `path`), its arguments (none, one symbol, or from and to for `path`), then flags as
   `--name value`; a word with spaces in double quotes; a flag once.
 - **The monitor** asks `katalogr api` at the project's current position and draws the answer; when
-  katalogr is absent, too old, or holds no context for the position, the block shows its source and one
+  Katalogr is absent, too old, or holds no context for the position, the block shows its source and one
   sentence says why. `kanbanr katalogr status` tells you which.
 - **A warning** after `doc add` reads `query block: docs/<path>, line N: <reason>`. The write already
   succeeded: read the reason, and never edit a block only to make the warning go away.
@@ -1608,7 +1608,7 @@ board's config (it is `KANBANR_KATALOGR_URL` or `kanbanr serve --katalogr-url`).
 
 ## Recover & resume (start of every session)
 
-Before doing project work in a new or resumed session, **recover the state from kanbanr first**:
+Before doing project work in a new or resumed session, **recover the state from Kanbanr first**:
 run `kanbanr board` and read the relevant feature items (`kanbanr feature show …`,
 `kanbanr todo list …`). Continue exactly where the project left off; do not restart from memory.
 
@@ -1618,7 +1618,7 @@ assume an item is absent because the summary did not list it.
 
 ## Keep the tool updated — before AND after every task
 
-Treat kanbanr updates as part of doing the work, not an afterthought:
+Treat Kanbanr updates as part of doing the work, not an afterthought:
 
 - **Scope first.** Turn requested work into **feature items** with clear `--spec` markdown (and
   milestones as needed) AND a **definition** (see "Defining work" above). Each FI starts in the
@@ -1727,7 +1727,7 @@ and `kanbanr sprint unplan`.
 
 ## How it runs (local-only, no server needed)
 
-kanbanr is a **local-only** tool: the CLI writes the data folder directly (no server, no login, no
+Kanbanr is a **local-only** tool: the CLI writes the data folder directly (no server, no login, no
 accounts). Each write is a git commit authored by the configured identity; sharing/centralization
 is via **git remotes**.
 
@@ -1744,7 +1744,7 @@ is via **git remotes**.
 kanbanr remote add origin git@host:org/data.git ; kanbanr remote list ; kanbanr remote remove origin
 ```
 Commits are pulled + pushed to remotes after each write. **Merge conflicts are left for normal git
-resolution** in the data folder (kanbanr never auto-resolves).
+resolution** in the data folder (Kanbanr never auto-resolves).
 
 **The live monitor** is a separate, read-only **view** of the local folder — no auth, localhost:
 ```
