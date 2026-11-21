@@ -160,7 +160,7 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       await api.rejectPrepared(project, view.id ?? "", who, reason);
-      setDone((d) => ({ ...d, [code]: { ok: true, text: "Rejected what Claude prepared; ask Claude to prepare it again" } }));
+      setDone((d) => ({ ...d, [code]: { ok: true, text: "Rejected what the agent prepared; ask your agent to prepare it again" } }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: failure(e) }));
     } finally {
@@ -337,7 +337,7 @@ export default function ReviewPage() {
       <p className="muted">
         {isReadOnly() ? (
           <>
-            This copy of the monitor is <strong>read-only</strong> — record a verdict in Claude Code, or
+            This copy of the monitor is <strong>read-only</strong> — record a verdict in your agent's session, or
             run the command each row shows.
           </>
         ) : meta.data?.writes !== true ? (

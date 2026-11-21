@@ -56,13 +56,13 @@ const dr = gap("signoff", "design-review");
 const ap = gap("approved", "");
 // [name, next stage, expected hint text, expected delegated-hint texts]
 const held = [
-  ["held beside Claude's work and a sign-off of yours", { status: "In Progress", missing: 3, signoffs: ["design-review", "docs-folded"], for_you: 1, tasks_open: 0, delegated: [dr] }, "In Progress needs 3, 1 yours", ["design review: Claude, under DLG-001"]],
-  ["only a held gap left", { status: "In Progress", missing: 1, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr] }, null, ["design review: Claude, under DLG-001"]],
-  ["held and yours", { status: "Completed", missing: 2, signoffs: ["design-review", "docs-folded"], for_you: 1, tasks_open: 0, delegated: [dr] }, "waiting on you: docs-folded", ["design review: Claude, under DLG-001"]],
-  ["two held gaps", { status: "In Progress", missing: 2, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr, ap] }, null, ["design review, approval: Claude, under DLG-001"]],
-  ["held, tasks open", { status: "In Progress", missing: 1, signoffs: ["design-review"], for_you: 0, tasks_open: 2, delegated: [dr] }, null, ["design review: Claude, under DLG-001"]],
+  ["held beside the agent's work and a sign-off of yours", { status: "In Progress", missing: 3, signoffs: ["design-review", "docs-folded"], for_you: 1, tasks_open: 0, delegated: [dr] }, "In Progress needs 3, 1 yours", ["design review: the agent, under DLG-001"]],
+  ["only a held gap left", { status: "In Progress", missing: 1, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr] }, null, ["design review: the agent, under DLG-001"]],
+  ["held and yours", { status: "Completed", missing: 2, signoffs: ["design-review", "docs-folded"], for_you: 1, tasks_open: 0, delegated: [dr] }, "waiting on you: docs-folded", ["design review: the agent, under DLG-001"]],
+  ["two held gaps", { status: "In Progress", missing: 2, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr, ap] }, null, ["design review, approval: the agent, under DLG-001"]],
+  ["held, tasks open", { status: "In Progress", missing: 1, signoffs: ["design-review"], for_you: 0, tasks_open: 2, delegated: [dr] }, null, ["design review: the agent, under DLG-001"]],
   ["the delegation ended since the read", { status: "In Progress", missing: 1, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [gap("signoff", "design-review", PAST)] }, "waiting on you: design-review", []],
-  ["two delegations", { status: "In Progress", missing: 2, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr, gap("approved", "", AHEAD, "DLG-002")] }, null, ["design review: Claude, under DLG-001", "approval: Claude, under DLG-002"]],
+  ["two delegations", { status: "In Progress", missing: 2, signoffs: ["design-review"], for_you: 0, tasks_open: 0, delegated: [dr, gap("approved", "", AHEAD, "DLG-002")] }, null, ["design review: the agent, under DLG-001", "approval: the agent, under DLG-002"]],
   ["not the immediate stage", { status: "Operations", missing: 1, signoffs: ["release"], for_you: 0, tasks_open: 0, immediate: false, delegated: [gap("signoff", "release")] }, null, []],
   ["older daemon: no delegated", { status: "Completed", missing: 1, signoffs: ["design-review"], for_you: 1, tasks_open: 0 }, "waiting on you: design-review", []],
 ];
@@ -85,7 +85,7 @@ const link = doc.querySelector("a.hint-delegated");
 if (!link) problems.push("the card has no a.hint-delegated");
 else {
   if (link.getAttribute("href") !== "/p/p/review#DLG-001") problems.push(`the delegated link goes to ${link.getAttribute("href")}`);
-  if (!link.textContent.includes("design review: Claude, under DLG-001")) problems.push(`the delegated link reads "${link.textContent}"`);
+  if (!link.textContent.includes("design review: the agent, under DLG-001")) problems.push(`the delegated link reads "${link.textContent}"`);
 }
 if (/waiting on you/.test(doc.body.textContent)) problems.push("a held card says 'waiting on you'");
 const title = doc.querySelector("h3.card-title a.card-link");
@@ -101,5 +101,5 @@ if (problems.length) {
   process.exit(1);
 }
 for (const t of Object.keys(named)) console.log(`${t} — ok`);
-console.log("web::check_card_shows_delegated_gaps_as_claudes — a gap a delegation holds reads as Claude's, with a link, and never as waiting on you.");
+console.log("web::check_card_shows_delegated_gaps_as_claudes — a gap a delegation holds reads as the agent's, with a link, and never as waiting on you.");
 console.log("web::card_says_what_is_next — cards say what is next in plain words, and never ready while work or a sign-off is due.");

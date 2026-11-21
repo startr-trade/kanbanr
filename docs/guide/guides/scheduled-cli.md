@@ -1,8 +1,8 @@
 # Scheduled, from the command line
 
 This guide takes one item through the `scheduled` process (Planned, Scheduled, Completed) with you
-running each command. To work by talking to Claude instead, see
-[Scheduled with Claude](scheduled-with-claude.md).
+running each command. To work by talking to your agent instead, see
+[Scheduled with your agent](scheduled-with-claude.md).
 
 The commands and output come from a real run on a scratch project. `<tmp>` stands for a temporary
 folder.

@@ -10,7 +10,7 @@
 
 # Using kanbanr
 
-- [Working with Claude](using/with-claude.md)
+- [Working with your agent](using/with-claude.md)
 - [Everyday use](using/everyday.md)
 - [The method: why work exists](using/the-method.md)
 - [Evidence and measurement](using/evidence.md)
@@ -29,19 +29,19 @@
 # Process guides
 
 - [Choosing a guide](guides/index.md)
-- [TOGAF with Claude](guides/togaf-with-claude.md)
+- [TOGAF with your agent](guides/togaf-with-claude.md)
 - [TOGAF from the command line](guides/togaf-cli.md)
-- [The default workflow with Claude](guides/default-with-claude.md)
+- [The default workflow with your agent](guides/default-with-claude.md)
 - [The default workflow from the command line](guides/default-cli.md)
-- [Scheduled with Claude](guides/scheduled-with-claude.md)
+- [Scheduled with your agent](guides/scheduled-with-claude.md)
 - [Scheduled from the command line](guides/scheduled-cli.md)
-- [PDCA with Claude](guides/pdca-with-claude.md)
+- [PDCA with your agent](guides/pdca-with-claude.md)
 - [PDCA from the command line](guides/pdca-cli.md)
-- [Design control with Claude](guides/design-control-with-claude.md)
+- [Design control with your agent](guides/design-control-with-claude.md)
 - [Design control from the command line](guides/design-control-cli.md)
-- [Scrum with Claude](guides/scrum-with-claude.md)
+- [Scrum with your agent](guides/scrum-with-claude.md)
 - [Scrum from the command line](guides/scrum-cli.md)
-- [Agile with Claude](guides/agile-with-claude.md)
+- [Agile with your agent](guides/agile-with-claude.md)
 - [Agile from the command line](guides/agile-cli.md)
 - [Designing CI and the release workflow](guides/delivery-pipeline.md)
 

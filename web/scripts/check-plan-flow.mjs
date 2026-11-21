@@ -108,7 +108,7 @@ const EMPTY = {
 
 await check(
   "web::check_plan_flow_shows_running_ready_blocked_and_the_forecast",
-  "the helpers word the stats, each wait, the forecast rows and agent-hours; the panel shows running, ready, blocked, the forecast with the critical path as its floor and the notes, asks Claude for tasks when there are none, reads urls.planFlow through the cache, and is drawn first on the Current tab.",
+  "the helpers word the stats, each wait, the forecast rows and agent-hours; the panel shows running, ready, blocked, the forecast with the critical path as its floor and the notes, asks your agent for tasks when there are none, reads urls.planFlow through the cache, and is drawn first on the Current tab.",
   async (expect, problems) => {
     // The pure helpers.
     expect("hours to one decimal", hoursText(14), "14.0 h");
@@ -187,7 +187,7 @@ await check(
 
     const empty = await render("src/pages/plan/FlowPanel.tsx", "FlowPanelBody", { project: "shop", plan: EMPTY }, { url: "/p/shop/plan" });
     expect("no tasks: the empty title", text(empty.document.querySelector(".ui-empty-title")), "No tasks to plan.");
-    expect("its ask", text(empty.document.querySelector(".ui-empty-sentence")), "Ask Claude to break the sprint's items into tasks.");
+    expect("its ask", text(empty.document.querySelector(".ui-empty-sentence")), "Ask your agent to break the sprint's items into tasks.");
   },
 );
 

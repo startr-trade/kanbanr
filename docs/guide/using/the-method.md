@@ -3,8 +3,8 @@
 ## The method: why work exists, and what proves it done
 
 Everything above tracks *what* is being built. This section is about *why* — the part a board
-normally loses. You rarely write any of it by hand: Claude drafts it in a plan and asks what it
-cannot infer — see [Working with Claude](with-claude.md). It is opt-in: a project with no charter isn't refused anything, though a move a gate would have
+normally loses. You rarely write any of it by hand: the agent drafts it in a plan and asks what it
+cannot infer — see [Working with your agent](with-claude.md). It is opt-in: a project with no charter isn't refused anything, though a move a gate would have
 stopped says what was missing and that `kanbanr charter set` turns the gates on. Items
 created before a charter was adopted are never reported against it.
 
@@ -102,7 +102,7 @@ duration dropped), pytest (`-v`: `tests/test_x.py::test_y`), unittest (`-v`:
 `e2e/basket.spec.ts › kept basket › basket is kept`, or the titles alone; project, location and
 duration dropped). Vitest's default reporter and Playwright's `line` and `dot` reporters print no
 per-test pass line, so a run under them records nothing. When a test run prints nothing capture
-can read, the hook tells Claude so and names these forms. Claude settles each test's name in that
+can read, the hook tells your agent so and names these forms. The agent settles each test's name in that
 form, and its kind, before it asks you to approve the definition, because renaming or re-kinding
 an approved test lapses the approval. A test you name keeps the kind and the wording you gave. A
 `walkthrough:` test is only for what a kanbanr run can see on the board, the monitor or the
@@ -143,8 +143,8 @@ one line with the counts of vanished results, misattributed greens and open manu
 A manual test that is not green also waits on the monitor's **Review** page, under **Manual
 checks**, with its requirement and the check to make. The person who did the check clicks Passed
 or Failed there; the board keeps who, when, from where and any note. `kanbanr test` still records
-it from the person's own terminal. Claude cannot record one, because the result says a person
-checked: if you tell Claude the result, it prepares the record and you confirm it on the page.
+it from the person's own terminal. The agent cannot record one, because the result says a person
+checked: if you tell your agent the result, it prepares the record and you confirm it on the page.
 
 ## The method by stage role
 
@@ -152,14 +152,14 @@ kanbanr carries one way of working for every process: a build-ready design befor
 architecture docs kept as built, live links, a git model that follows your cadence, and releases
 that move through stages. It is the same under the default kanban, Scrum, TOGAF, PDCA or a process
 of your own, because it is tied to the **role** a stage holds, not to what the stage is called
-([Stage roles](processes.md#stage-roles)). Claude follows it from the skill; you don't need to
+([Stage roles](processes.md#stage-roles)). The agent follows it from the skill; you don't need to
 copy it into a personal or project instruction file, and a copy would drift from the tool.
 
 **Roles first.** `kanbanr process show <name>` prints the working agreement with each stage's role,
 and `kanbanr process checks` lists the roles and the checks a gate can ask for. `kanbanr config
 method` says which parts of the method your project has on ([The method, on by
 default](processes.md#the-method-on-by-default)). A part you turn off is no longer asked for, but
-it is still good practice, and Claude never turns one off or on for you.
+it is still good practice, and the agent never turns one off or on for you.
 
 **Design at three levels.** The system is designed once, before the first build, and agreed as the
 [system baseline](living-docs.md#the-system-baseline): you accept it on the Review page, and the
@@ -195,8 +195,8 @@ through `kanbanr commit`, which names the item. Subagents take one task at a tim
 todo-list. Nobody commits on main or on a line of integration (the hooks refuse), and kanbanr never
 pushes.
 
-**Sub-agents: what each may do.** When Claude hands work to a sub-agent, each role has fixed
-boundaries, kanbanr enforces them, and Claude puts them in the agent's brief word for word:
+**Sub-agents: what each may do.** When the agent hands work to a sub-agent, each role has fixed
+boundaries, Kanbanr enforces them, and the agent puts them in the agent's brief word for word:
 
 | | A **build** agent (one item, in its own worktree) | A **design** agent |
 |---|---|---|
@@ -209,16 +209,16 @@ boundaries, kanbanr enforces them, and Claude puts them in the agent's brief wor
 
 To walk a process through, an agent runs `kanbanr --data-dir $TMPDIR/walk init …` and then the same `--data-dir` (or `KANBANR_DATA_DIR`) on each command.
 
-Before starting each sub-agent, Claude issues it a scope with one command,
+Before starting each sub-agent, the agent issues it a scope with one command,
 `kanbanr scope issue <design|build> <CODE>`, starts the agent in its own worktree (design agents
 too), and pastes the brief the command prints at the top of the agent's brief. The agent's first
 command claims the scope; from then on every board write, commit and push from its worktree that
 the scope does not allow is refused, naming the boundary it crossed. See
 [Agent scopes](with-claude.md#sub-agents-and-agent-scopes).
 
-Claude, as the coordinator, keeps the board current as the agents work, never waiting for their
+The agent, as the coordinator, keeps the board current as the agents work, never waiting for their
 reports, and takes back every question and every piece of work outside the brief. Verdicts, moves
-and pushes stay with Claude and you; when the agent's work has been reviewed, Claude revokes its
+and pushes stay with your agent and you; when the agent's work has been reviewed, the agent revokes its
 scope.
 
 **At the integrate role.** Before the move, the Design is folded into each doc in `affects_docs`,
@@ -237,7 +237,7 @@ main only once main is pushed. A release prepares itself, so no item is made to 
 `kanbanr release promote <V> --plan` says what the next stage does and still needs; after each
 promotion kanbanr says what is next. A release with nothing planned into it is never promoted. A patch is
 `kanbanr release add <V> --patch-of <P>` ([Patch releases](processes.md#patch-releases)), and a fix
-made on a release branch reaches the line when Claude runs `kanbanr git forward <V>`, as soon as kanbanr says so; you push. With sprints and no
+made on a release branch reaches the line when the agent runs `kanbanr git forward <V>`, as soon as Kanbanr says so; you push. With sprints and no
 releases, `kanbanr sprint close <SP>` is the cut.
 
 **Carry-over.** `kanbanr sprint close <SP> --carry-to <next>` carries unfinished items and keeps
@@ -259,7 +259,7 @@ kanbanr commits only its release-preparation commit on `release/<V>`.
 
 With the git model off, kanbanr merges nothing and the model is only a description
 ([The git model](processes.md#the-git-model)). **You push your code repository, in every row**:
-neither kanbanr nor Claude ever does. The board's own remote is a different repository, which
+neither Kanbanr nor the agent ever does. The board's own remote is a different repository, which
 kanbanr syncs after each write as its push policy says (`kanbanr remote push-policy`).
 
 **Each milestone ends** with an architecture compliance review: every component has a doc that

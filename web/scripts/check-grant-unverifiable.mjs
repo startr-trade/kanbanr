@@ -31,15 +31,15 @@ if (!branch) {
   if (!body.includes("nothing is taken under it until it can")) {
     problems.push("DecisionsHere.tsx: the line does not say nothing is taken under it until it can");
   }
-  if (body.includes("not granted through kanbanr")) {
-    problems.push("DecisionsHere.tsx: the line also says \"not granted through kanbanr\"");
+  if (body.includes("not granted through Kanbanr")) {
+    problems.push("DecisionsHere.tsx: the line also says \"not granted through Kanbanr\"");
   }
 }
 // The "not granted" branch is still gated on its own field alone, which the API leaves false for
 // an unverifiable grant.
-const notGranted = page.match(/\{([^{}]*)\? \(\s*<>\s*\{" "\}\s*· <strong>not granted through kanbanr<\/strong>/);
+const notGranted = page.match(/\{([^{}]*)\? \(\s*<>\s*\{" "\}\s*· <strong>not granted through Kanbanr<\/strong>/);
 if (!notGranted || notGranted[1].trim() !== "g.not_granted_through_kanbanr") {
-  problems.push("DecisionsHere.tsx: \"not granted through kanbanr\" is not shown on not_granted_through_kanbanr alone");
+  problems.push("DecisionsHere.tsx: \"not granted through Kanbanr\" is not shown on not_granted_through_kanbanr alone");
 }
 
 if (problems.length) {

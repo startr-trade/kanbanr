@@ -119,7 +119,7 @@ export function stateChip(state: SourceState): Chip {
     stub: ["stub", "warn"],
     missing: ["missing", "warn"],
     available: ["available", "ok"],
-    needs_katalogr: ["needs katalogr", "neutral"],
+    needs_katalogr: ["needs Katalogr", "neutral"],
     declared: ["declared", "neutral"],
     no_repository: ["no repository", "neutral"],
   };

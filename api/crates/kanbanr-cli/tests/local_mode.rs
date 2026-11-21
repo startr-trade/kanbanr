@@ -6671,7 +6671,7 @@ fn the_moves_next_step_names_git_forward_for_claude_not_the_person() {
     let (base, work, said) = release_fix_integrated("gm-forward-claude");
     let line = said
         .lines()
-        .find(|l| l.contains("next, for Claude:"))
+        .find(|l| l.contains("next, for the agent:"))
         .unwrap_or_else(|| panic!("no next step in: {said}"));
     assert!(line.contains("kanbanr git forward v1"), "{line}");
     assert!(line.contains("nothing is pushed"), "{line}");
@@ -7000,7 +7000,7 @@ fn patch_release_reports_forward_merge() {
         &["release", "promote", "v1.0.1", "production"],
     ));
     assert!(
-        said.contains("next, for Claude: bring release/v1.0.1 into develop"),
+        said.contains("next, for the agent: bring release/v1.0.1 into develop"),
         "{said}"
     );
     assert!(said.contains("[no-ref] change"), "{said}");
@@ -7021,7 +7021,7 @@ fn patch_release_reports_forward_merge() {
         &work,
         &["release", "promote", "v1.0.1", "production"],
     ));
-    assert!(!said.contains("next, for Claude"), "{said}");
+    assert!(!said.contains("next, for the agent"), "{said}");
     assert_eq!(
         rev(&base, &work, "main"),
         rev(&base, &work, "release/v1.0.1")
@@ -7296,7 +7296,7 @@ fn git_doctor_orphans_and_forward_merges() {
         "sprint/SP-099 names no sprint",
         "release/v9 names no release",
         "release/v1 has 1 commit integration lacks",
-        "next, for Claude: bring release/v1 into integration with `kanbanr git forward v1`",
+        "next, for the agent: bring release/v1 into integration with `kanbanr git forward v1`",
     ] {
         assert!(said.contains(want), "missing {want:?} in {said}");
     }
@@ -11916,18 +11916,18 @@ fn release_add_says_what_the_first_release_still_needs() {
     ok(&["config", "cadence", "--has-ci", "on"]);
     let out = String::from_utf8(ok(&["release", "add", "v0.1.0"]).stdout).unwrap();
     assert!(out.contains("added release v0.1.0"), "{out}");
-    assert_eq!(out.matches("next, for Claude:").count(), 2, "{out}");
+    assert_eq!(out.matches("next, for the agent:").count(), 2, "{out}");
     // --json carries `next` and prints no lines of its own.
     ok(&["release", "remove", "v0.1.0"]);
     let o = ok(&["--json", "release", "add", "v0.1.0"]);
     let text = String::from_utf8(o.stdout).unwrap();
-    assert!(!text.contains("next, for Claude:"), "{text}");
+    assert!(!text.contains("next, for the agent:"), "{text}");
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["next"].as_array().map(Vec::len), Some(2), "{text}");
     // A later release has no hints, and once prepared nothing is said.
     ok(&["config", "release-prepare", "--changelog", "CHANGELOG.md"]);
     let out = String::from_utf8(ok(&["release", "add", "v0.2.0"]).stdout).unwrap();
-    assert!(!out.contains("next, for Claude:"), "{out}");
+    assert!(!out.contains("next, for the agent:"), "{out}");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -15411,7 +15411,7 @@ fn session_start_counts_only_the_persons_decisions() {
         before.contains("3 item(s) and 0 proposed decision(s)"),
         "{before}"
     );
-    assert!(!before.contains("Claude holds"), "{before}");
+    assert!(!before.contains("The agent holds"), "{before}");
 
     // Claude proposes approving FEAT-001 and FEAT-002; the person grants it and sets delegated mode.
     ok(in_session(
@@ -15436,7 +15436,7 @@ fn session_start_counts_only_the_persons_decisions() {
         "only FEAT-003 is the person's:\n{after}"
     );
     assert!(
-        after.contains("Claude holds 2 decision(s) under DLG-001 (2)"),
+        after.contains("The agent holds 2 decision(s) under DLG-001 (2)"),
         "{after}"
     );
     let _ = std::fs::remove_dir_all(&base);
@@ -19754,7 +19754,7 @@ fn board_lists_pending_planning_decisions() {
     let said = fx.run(&["board"]);
     assert!(
         said.contains(
-            "Planning decisions waiting for Claude: PD-1 (into SP-001: FEAT-001, FEAT-002). \
+            "Planning decisions waiting for the agent: PD-1 (into SP-001: FEAT-001, FEAT-002). \
              Check each with `kanbanr planning check`, then carry it out or decline it."
         ),
         "{said}"
@@ -21087,4 +21087,70 @@ fn concurrent_writers_and_readers_commit_every_write_exactly_once() {
         "LOCK_WAIT {:?} must be at least 10 x p99 ({p99:.3}s)",
         kanbanr_core::write::LOCK_WAIT
     );
+}
+
+/// MNT-019 R-2: the help reads for any agent. The top-level `about` says what kanbanr is for;
+/// the three Claude Code adapter commands say so first; no other line of `kanbanr --help` names
+/// the vendor on its own (only "Claude Code", the adapter).
+#[test]
+fn help_names_the_claude_code_adapter_and_no_vendor_elsewhere() {
+    let base = std::env::temp_dir().join(format!("kanbanr-help-adapter-{}", std::process::id()));
+    let work = base.join("work");
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // Not inside a repository or a board: the test's own folder under the temp dir.
+    assert!(
+        std::fs::canonicalize(&work)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "{work:?} is not under the temp dir"
+    );
+    let help = |args: &[&str]| -> String {
+        let out = run_in(&base, &work, args);
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let top = help(&["--help"]);
+    assert!(top.contains("agent-driven development"), "{top}");
+    // A line wrapped between "Claude" and "Code" is still the adapter's name.
+    let mut joined = String::new();
+    let lines: Vec<&str> = top.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        joined.push_str(line);
+        if line.trim_end().ends_with("Claude")
+            && lines
+                .get(i + 1)
+                .is_some_and(|n| n.trim_start().starts_with("Code"))
+        {
+            joined.push(' ');
+        } else {
+            joined.push('\n');
+        }
+    }
+    for line in joined.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("Claude") {
+            let after = &rest[at + "Claude".len()..];
+            assert!(
+                after.starts_with(" Code"),
+                "a bare `Claude` in a top-level help line: {line}"
+            );
+            rest = after;
+        }
+    }
+
+    for cmd in ["claude", "hooks", "skill"] {
+        let text = help(&[cmd, "--help"]);
+        assert!(
+            text.trim_start().starts_with("Claude Code adapter:"),
+            "`kanbanr {cmd} --help` starts: {text}"
+        );
+        // And in the list a newcomer reads first.
+        assert!(
+            top.contains("Claude Code adapter:"),
+            "`kanbanr --help` carries the adapter label: {top}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
 }

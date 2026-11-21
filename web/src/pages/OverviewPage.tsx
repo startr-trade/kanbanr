@@ -20,7 +20,7 @@ import "./OverviewPage.css";
 /** The most action cards Needs you shows; past it, the last card opens the drawer. */
 const MAX_CARDS = 5;
 /** What a flow number with no list page offers instead (R-13). */
-const FLOW_ASK = "Ask Claude for the flow report.";
+const FLOW_ASK = "Ask your agent for the flow report.";
 
 const TONES: Tone[] = ["ok", "info", "warn", "error", "neutral"];
 const toneOf = (t: string): Tone => (TONES.includes(t as Tone) ? (t as Tone) : "neutral");
@@ -125,7 +125,7 @@ function NowSection(p: { project: string; overview: Overview; cadence: { sprints
             sub={`${sprint.days_left} day${sprint.days_left === 1 ? "" : "s"} left${sprint.name ? ` · ${sprint.name}` : ""}`}
           />
         ) : (
-          <Empty title="No sprint is running." ask="Ask Claude to plan the next sprint." />
+          <Empty title="No sprint is running." ask="Ask your agent to plan the next sprint." />
         )}
       </div>
       )}
@@ -145,7 +145,7 @@ function NowSection(p: { project: string; overview: Overview; cadence: { sprints
             </div>
           ))
         ) : (
-          <Empty title="No release is in flight." ask="Ask Claude what the next release should hold." />
+          <Empty title="No release is in flight." ask="Ask your agent what the next release should hold." />
         )}
       </div>
       )}
@@ -352,7 +352,7 @@ export function OverviewBody(p: {
         {(o.goals ?? []).length > 0 ? (
           <DataTable rows={o.goals ?? []} columns={goalColumns(p.project)} rowKey={(g) => g.id} caption="Goals" csvName="goals" stateKey="goals" empty={<Empty title="No goals match." />} />
         ) : (
-          <Empty title="The charter has no goals yet." ask="Ask Claude to draft the charter's goals with you." />
+          <Empty title="The charter has no goals yet." ask="Ask your agent to draft the charter's goals with you." />
         )}
       </Section>
       <Section title="Recent decisions and ADRs">

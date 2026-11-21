@@ -2,7 +2,7 @@
 //
 // web::texts_to_check (DEF-039 R-1): the Review page shows no sign-off form while texts are left to
 // check. It says which are left and that Claude settles them, offers docs-folded only when none is
-// left (a skipped check still offers it, as FTR-013 R-9 keeps), and shows what Claude checked.
+// left (a skipped check still offers it, as FTR-013 R-9 keeps), and shows what the agent checked.
 //
 // Usage: npm run check:texts-to-check
 import { readFileSync } from "node:fs";
@@ -21,7 +21,7 @@ const expect = (name, got, want) => {
 expect("texts left: no offer", docsFoldedOffer({ to_check: [flag("a.md")], settled: [settled] }).offer, false);
 expect("texts left are listed", docsFoldedOffer({ to_check: [flag("a.md")] }).left.length, 1);
 expect("none left: offered", docsFoldedOffer({ to_check: [], settled: [settled] }).offer, true);
-expect("none left: what Claude settled is kept", docsFoldedOffer({ to_check: [], settled: [settled] }).settled.length, 1);
+expect("none left: what the agent settled is kept", docsFoldedOffer({ to_check: [], settled: [settled] }).settled.length, 1);
 expect("check skipped: offered", docsFoldedOffer({}).offer, true);
 
 // Since FTR-038 an item's sign-offs are in its row's evidence, EntryEvidence.
@@ -29,13 +29,13 @@ const page = readFileSync(new URL("../src/pages/review/EntryEvidence.tsx", impor
 if (/type="checkbox"/.test(page)) problems.push('EntryEvidence.tsx: still has a type="checkbox"');
 if (/placeholder="DEF-/.test(page)) problems.push('EntryEvidence.tsx: still has a placeholder="DEF-…" input');
 if (!/docsFolded\.offer/.test(page)) problems.push("EntryEvidence.tsx: docs-folded is not offered by docsFoldedOffer");
-if (!/Claude to settle them/.test(page) && !/settle them/.test(page)) {
-  problems.push('EntryEvidence.tsx: does not say Claude settles the texts left ("settle them")');
+if (!/agent to settle them/.test(page) && !/settle them/.test(page)) {
+  problems.push('EntryEvidence.tsx: does not say the agent settles the texts left ("settle them")');
 }
-if (!/Checked by Claude/.test(page)) problems.push("EntryEvidence.tsx: does not show what Claude checked");
+if (!/Checked by the agent/.test(page)) problems.push("EntryEvidence.tsx: does not show what the agent checked");
 
 if (problems.length) {
   for (const p of problems) console.error(`web::texts_to_check — ${p}`);
   process.exit(1);
 }
-console.log("web::texts_to_check — no form while texts are left; Claude settles them; sign-off once none is left.");
+console.log("web::texts_to_check — no form while texts are left; the agent settles them; sign-off once none is left.");

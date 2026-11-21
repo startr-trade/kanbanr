@@ -202,12 +202,12 @@ pub struct ReviewEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signoff_lapsed: Option<String>,
     /// `docs-folded` is among them: the texts that name something the item changed since they
-    /// last changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not
+    /// last changed and that the agent has not yet settled (FTR-013, DEF-039). The sign-off is not
     /// offered while any is left. `None` when the check was skipped (see `drift_skipped`) or the
     /// sign-off is not asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_check: Option<Vec<crate::docdrift::Flag>>,
-    /// The flagged texts Claude settled, with what it recorded, for the page to show (DEF-039).
+    /// The flagged texts the agent settled, with what it recorded, for the page to show (DEF-039).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub settled: Vec<SettledText>,
     /// Why the drift check did not run: no code repository is attached. The sign-off is offered
@@ -238,7 +238,7 @@ pub struct ReviewEntry {
     /// The spec the sign-off asked pins, with what changed since the last sign-off (FTR-023).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec: Option<SpecBrief>,
-    /// Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.
+    /// The agent's overrides on the item that wait for the person to ratify (DEF-043), oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overrides: Vec<OverrideView>,
     /// The release the item is planned into (FTR-038); empty when none.
@@ -262,7 +262,7 @@ pub struct ReviewEntry {
     /// Affects docs heading, and the rows its `affects_views` names (FTR-006).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views_changed: Vec<String>,
-    /// The verdicts this entry asks that Claude holds under a delegation in force, in the order
+    /// The verdicts this entry asks that the agent holds under a delegation in force, in the order
     /// `asked` lists them (DEF-104).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub held: Vec<Held>,
@@ -272,7 +272,7 @@ pub struct ReviewEntry {
     pub claudes: bool,
 }
 
-/// A verdict Claude holds under a delegation in force (DEF-104).
+/// A verdict the agent holds under a delegation in force (DEF-104).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Held {
@@ -326,7 +326,7 @@ pub struct SystemBaselineRow {
     pub href: Option<String>,
 }
 
-/// One override Claude made, as the Review page shows it (DEF-043).
+/// One override the agent made, as the Review page shows it (DEF-043).
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct OverrideView {

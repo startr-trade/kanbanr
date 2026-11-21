@@ -36,7 +36,7 @@ for (const verb of ["Approve", "Ratify"]) {
     if (s.length >= 220) problems.push(`${label}: the sentence is ${s.length} characters, not under 220`);
     if (!s.includes(verb)) problems.push(`${label}: the sentence does not name ${verb}`);
     if (!s.includes("diagram")) problems.push(`${label}: the sentence does not name the diagram check`);
-    if (!/Claude|reload the page|this page/.test(s)) {
+    if (!/the agent|reload the page|this page/.test(s)) {
       problems.push(`${label}: the sentence does not say who provides what is missing: ${JSON.stringify(s)}`);
     }
   }
@@ -45,12 +45,12 @@ for (const verb of ["Approve", "Ratify"]) {
   expect(
     `${verb}: one diagram is singular`,
     one,
-    `${verb} is held until the 1 diagram listed above parses: Claude fixes it in the spec or the doc, and this page checks again.`,
+    `${verb} is held until the 1 diagram listed above parses: the agent fixes it in the spec or the doc, and this page checks again.`,
   );
   expect(
     `${verb}: three diagrams are plural`,
     three,
-    `${verb} is held until the 3 diagrams listed above parse: Claude fixes them in the spec or the doc, and this page checks again.`,
+    `${verb} is held until the 3 diagrams listed above parse: the agent fixes them in the spec or the doc, and this page checks again.`,
   );
   if (one === three) problems.push(`${verb}: the single and plural forms are the same`);
 }

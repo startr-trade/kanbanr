@@ -1099,7 +1099,7 @@ fn decide_group(
     )
 }
 
-/// What a verdict Claude takes stands on (FTR-028, FTR-035).
+/// What a verdict the agent takes stands on (FTR-028, FTR-035).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Under {
     /// A delegation in force, `DLG-n`.

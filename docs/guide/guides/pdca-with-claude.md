@@ -1,22 +1,22 @@
-# PDCA with Claude
+# PDCA with your agent
 
 This guide takes one item through Plan, Do, Check and Act. You don't need to learn any commands:
 
-- **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
+- **You talk to your agent** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-  Claude tells you what is waiting there and links to it. It never records a decision, and it
-  doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
+  The agent tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question. What the agent already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
-- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+- **You can delegate the small decisions.** Tell your agent which ones it may take, such as the design
   review of small defects, and until when. It proposes a delegation; you **Grant** it on the
   **Review** page, under "Decisions here". A granted delegation does nothing until you set **Mode**
-  to **delegated** there and click **Change**. Whatever Claude decides under it comes back there
+  to **delegated** there and click **Change**. Whatever the agent decides under it comes back there
   for you to keep or undo.
   If Claude Code runs in auto mode, its safety check may stop a delegated command. When you grant a
-  delegation, kanbanr offers the one allow rule that lets it through; say yes to Claude, or run the
+  delegation, Kanbanr offers the one allow rule that lets it through; say yes to the agent, or run the
   command it names.
-  In **conversation** mode you take these in Claude's question dialog instead: it asks with the
+  In **conversation** mode you take these in the agent's question dialog instead: it asks with the
   board's own question, and your answer is the record.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
@@ -52,34 +52,34 @@ flowchart LR
 
 > Start using kanbanr for this project. Use PDCA.
 
-Claude asks where the board should live and what the project is for. It also asks whether you want
-sprints and releases. PDCA recommends neither. Claude shows the plan, and **accepting the plan
+The agent asks where the board should live and what the project is for. It also asks whether you want
+sprints and releases. PDCA recommends neither. The agent shows the plan, and **accepting the plan
 applies it.**
 
 > Agree a charter with me first.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
-are exempt. Claude asks for the project's purpose and goals. Every item then links to a goal.
+are exempt. The agent asks for the project's purpose and goals. Every item then links to a goal.
 
-**Accept the system baseline before the first build.** Once the system docs are written, Claude prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. Claude never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
+**Accept the system baseline before the first build.** Once the system docs are written, the agent prepares the baseline and you accept it in the System baseline group on the Review page; until you do, the first item waits. The agent never accepts it for you ([The system baseline](../using/living-docs.md#the-system-baseline)).
 
 > Open the monitor, with writes on.
 
-Keep it open. Claude gives you the address, and your decisions happen there.
+Keep it open. The agent gives you the address, and your decisions happen there.
 
 ## One item, stage by stage
 
-Ask for the work in your own words, and Claude asks only what it can't work out.
+Ask for the work in your own words, and the agent asks only what it can't work out.
 
 > A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Plan it.
 
-**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
-when the first item is designed), Claude asks whether the product has screens a person uses, or is
+**The agent asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), the agent asks whether the product has screens a person uses, or is
 a service, library or command-line tool. If it has screens, they become items of their own,
 designed and approved like the rest. If it has none, that goes into the design, so a missing screen
-is a decision and not an oversight. If it has screens, Claude also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
+is a decision and not an oversight. If it has screens, the agent also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
 
-| Stage | What Claude does | What you do on the Review page |
+| Stage | What the agent does | What you do on the Review page |
 |---|---|---|
 | **Plan** | Writes the change, why, and how you will know it worked: the requirements and a named test for each | Nothing yet |
 | **Do** | Writes the design and its task list, makes the item's branch, builds, commits | **Sign off design-review**, then **Approve** |
@@ -87,7 +87,7 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 | **Act** | Writes what worked and what the next cycle should change | **Sign off review** |
 
 **Approve and sign off before Do.** Do asks for an approved definition, a `## Design` section in the
-spec and the `design-review` sign-off. If one is missing, Claude says which, and drafts it or brings
+spec and the `design-review` sign-off. If one is missing, the agent says which, and drafts it or brings
 it to you.
 
 **Adding keeps your approval; changing lapses it.** Each approval covers the text you saw. Adding to
@@ -98,14 +98,14 @@ changed or removed, the item returns to the Review page. Read what changed, then
 
 > Take the saved basket to Do.
 
-If something's missing, Claude tells you what. Nothing moves past a gate unless you say why, and that
+If something's missing, the agent tells you what. Nothing moves past a gate unless you say why, and that
 reason stays on the item.
 
 **Check is where the proof goes.** An item can't enter Check until every requirement has a green
 test. The tests are recorded against the commit they ran on.
 
-**Act ends the item.** After your **Sign off review**, ask Claude to move it to Act. Claude also
-writes what the next cycle should change. To run another cycle on the same item, ask Claude to move
+**Act ends the item.** After your **Sign off review**, ask your agent to move it to Act. The agent also
+writes what the next cycle should change. To run another cycle on the same item, ask your agent to move
 it back to Plan.
 
 After the merge your checkout may still be on the item's branch. `main` has moved, but your remote
@@ -115,17 +115,17 @@ server hasn't until you push.
 
 > Have a sub-agent build these tasks.
 
-Claude gives each agent a scope, which kanbanr enforces. An agent can record its own tasks and test
+The agent gives each sub-agent a scope, which Kanbanr enforces. An agent can record its own tasks and test
 results and commit on its branch. It can't move items, approve anything or push. When it finishes,
-Claude reviews the branch and brings you any decisions.
+the agent reviews the branch and brings you any decisions.
 
-Claude stays in the project folder while an agent works, and looks inside the agent's worktree
-without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+The agent stays in the project folder while a sub-agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or the agent's. Revoking an agent's
 scope stops that agent on its next tool call and never restricts you.
 
 ## Who does what
 
-| | You | Claude |
+| | You | The agent |
 |---|---|---|
 | **Definitions** | Answer what only you know, then **Approve** | Draft them, ask, and keep the spec current |
 | **Design** | **Sign off design-review** | Write the design and its task list |
@@ -138,16 +138,16 @@ scope stops that agent on its next tool call and never restricts you.
 
 | You see | It means | Do this |
 |---|---|---|
-| Moves go through that shouldn't | No charter, or the item is older than it | Ask Claude to agree a charter before creating items |
+| Moves go through that shouldn't | No charter, or the item is older than it | Ask your agent to agree a charter before creating items |
 | An item is back on the Review page | Its definition changed after you approved it | Read the change, then **Approve** again |
-| Claude says the move to Do is refused | The definition, the design, the sign-off or the approval is missing | Do what Claude names |
-| Claude says the move to Check is refused | A requirement has no green test, or `docs-folded` is missing | Ask Claude to run the tests, then **Sign off docs-folded** |
+| The agent says the move to Do is refused | The definition, the design, the sign-off or the approval is missing | Do what the agent names |
+| The agent says the move to Check is refused | A requirement has no green test, or `docs-folded` is missing | Ask your agent to run the tests, then **Sign off docs-folded** |
 
-## What Claude runs
+## What the agent runs
 
 You never need these. [PDCA from the command line](pdca-cli.md) covers them step by step.
 
-| You asked for | Claude runs |
+| You asked for | The agent runs |
 |---|---|
 | Set up the process | `kanbanr config workflow --preset pdca` |
 | Branches | `kanbanr config cadence --git-model on` |

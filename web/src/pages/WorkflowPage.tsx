@@ -73,7 +73,7 @@ export default function WorkflowPage() {
         <h2>Stages</h2>
         {staged.length === 0 ? (
           <p className="muted">
-            This workflow declares no gates, so kanbanr's built-in rule applies: moving an item into
+            This workflow declares no gates, so Kanbanr's built-in rule applies: moving an item into
             a status that means work has started needs an approved definition.
           </p>
         ) : (

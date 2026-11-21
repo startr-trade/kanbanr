@@ -22,24 +22,24 @@ no accounts**. Each change you make is a git commit authored by your identity. (
 in — no external `git` needed.)
 
 `init` also registers kanbanr's **Claude Code hooks** in this project's `.claude/settings.json`,
-merged with whatever is there: the board is shown when a Claude session starts, a turn that changed
+merged with whatever is there: the board is shown when an agent session starts, a turn that changed
 code is reminded to record it, commits and notes are checked on the way, and each session is
 summarised beside the board. They act only in folders kanbanr tracks. Skip them with
 `kanbanr init --no-hooks`; `kanbanr hooks install --global` registers them for every project on the
 machine instead; `kanbanr hooks install | status | uninstall` manages them later.
 
-### Setting up through Claude: a setup interview first
+### Setting up through your agent: a setup interview first
 
-You can also skip the terminal and ask Claude to **"set up kanbanr for this project"**. It
+You can also skip the terminal and ask your agent to **"set up kanbanr for this project"**. It
 doesn't start running commands. It switches to **plan mode** and interviews you:
 
 1. **Board and identity**: where the board lives (the choices below), the project name, and the
    commit name and email, which default to your `git config`.
-2. **Charter**: purpose, goals with measures, non-goals, stakeholders and constraints. Claude
+2. **Charter**: purpose, goals with measures, non-goals, stakeholders and constraints. The agent
    drafts these from your README and manifests, labels them as a draft, and leaves blank anything
    the repository doesn't answer so it can ask you.
 3. **Process**: the workflow (the default kanban, TOGAF phases as the columns, or your own
-   statuses), then whether to work in sprints and releases, whichever process you chose. Claude
+   statuses), then whether to work in sprints and releases, whichever process you chose. The agent
    recommends the process's own setting and shows the git model that follows
    (`kanbanr git model --sprints on|off --releases on|off`, which needs no board): where items
    branch from and merge into, what kanbanr merges, and that pushing stays yours. Then the git
@@ -48,7 +48,7 @@ doesn't start running commands. It switches to **plan mode** and interviews you:
    default; the plan says so, and `kanbanr config method --off` turns them off later.
 
 The plan lists every answer and the exact commands it will run. **Approving the plan (exiting plan
-mode) is the go-ahead.** Claude then runs the whole setup: `init`, the workflow, `charter set`,
+mode) is the go-ahead.** The agent then runs the whole setup: `init`, the workflow, `charter set`,
 the Claude Code and git hooks, `claude sync`, and the optional steps. It saves the approved plan
 as a board doc (`setup/<date>-setup.md`) and checks the result with `kanbanr doctor`. Only after
 that does it get back to whatever you originally asked for. A folder that's already tracked skips
@@ -78,8 +78,8 @@ Choose a number or type a path [1]:
   even if you run `init` from a subfolder.
 - Pick an existing kanbanr folder to share one board repo across several projects. Portfolio
   views, cross-project dependencies and the cross-project Gantt work within one data folder.
-- Pass `--data-dir <folder>` to skip the question. Without a terminal (e.g. when Claude runs it)
-  `init` uses the recommendation; with the skill, Claude asks you first and passes `--data-dir`.
+- Pass `--data-dir <folder>` to skip the question. Without a terminal (e.g. when an agent runs it)
+  `init` uses the recommendation; with the skill, the agent asks you first and passes `--data-dir`.
 - `init` warns if the folder you pick is inside a git repo.
 
 The choice is recorded in the project's `.kanbanr` marker, relative to the marker:
@@ -99,11 +99,11 @@ The data dir resolves from `--data-dir` / `$KANBANR_DATA_DIR` / the marker's `da
 ### Importing tasks you already track
 
 If the project already tracks work, in a `TODO.md` or `ROADMAP.md`, in another AI tool's plan files
-(Spec Kit, Kiro), or in GitHub issues, Claude offers to import it when you start using kanbanr (or
+(Spec Kit, Kiro), or in GitHub issues, the agent offers to import it when you start using Kanbanr (or
 whenever you ask). It lists what it found and asks which sources to import; by default only open
 and in-progress items come in.
 
-- **Preview first.** Claude builds one bundle and shows you the dry run
+- **Preview first.** The agent builds one bundle and shows you the dry run
   (`kanbanr batch --dry-run`), which writes nothing. After you confirm, the import is a single
   commit in the board repo, so it's easy to revert.
 - **Nothing is lost if the old tracker goes away.** Each imported item records where it came from
@@ -114,7 +114,7 @@ and in-progress items come in.
 - **Re-importing is safe.** Items already imported are skipped, matched by issue number or, for
   files, by title (so moving or renumbering a file doesn't import it twice).
 - **You decide what happens to the old tracker**: leave it, replace the file with a pointer to
-  kanbanr, delete it, or comment on / close GitHub issues with `gh`. Claude never does any of
+  Kanbanr, delete it, or comment on / close GitHub issues with `gh`. The agent never does any of
   that without asking.
 
 `kanbanr sources` (in the project folder) lists imported items and whether their files still

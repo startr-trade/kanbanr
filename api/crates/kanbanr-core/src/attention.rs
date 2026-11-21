@@ -26,7 +26,7 @@ pub struct Attention {
     /// In section order: decisions, releases, health, records.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<AttentionLine>,
-    /// What Claude holds and decided under a delegation, while one is in force or has just ended
+    /// What the agent holds and decided under a delegation, while one is in force or has just ended
     /// (DEF-104). Absent in `monitor` mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegated: Option<DelegatedAttention>,
@@ -37,13 +37,13 @@ pub const ENDING_SOON_HOURS: i64 = 72;
 /// The most delegated decisions an answer lists; `decided_total` says how many there are.
 pub const DECIDED_MAX: usize = 50;
 
-/// Needs you in delegated (autonomous) mode: what Claude decided and holds (DEF-104).
+/// Needs you in delegated (autonomous) mode: what the agent decided and holds (DEF-104).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DelegatedAttention {
     /// The delegations in force, in file order.
     pub in_force: Vec<String>,
-    /// The verdicts Claude recorded that the person has not yet kept or undone, newest first, at
+    /// The verdicts the agent recorded that the person has not yet kept or undone, newest first, at
     /// most [`DECIDED_MAX`].
     pub decided: Vec<crate::decisions::DelegatedDecision>,
     pub decided_total: usize,
@@ -186,7 +186,7 @@ pub(crate) fn delegated_attention(
     })
 }
 
-/// One kind of thing waiting, counted, with where to see it or what to ask Claude.
+/// One kind of thing waiting, counted, with where to see it or what to ask your agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AttentionLine {
@@ -201,7 +201,7 @@ pub struct AttentionLine {
     /// The monitor page that shows it; absent when no page does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
-    /// The sentence to ask Claude with, when no page shows it.
+    /// The sentence to ask your agent with, when no page shows it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask: Option<String>,
     /// `info`, `warn` or `error`.
@@ -271,7 +271,7 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
         Ok(pending) if !pending.is_empty() => decisions.push(AttentionLine {
             kind: "planning".into(),
             section: Section::Decisions,
-            label: "Planning decisions waiting for Claude".into(),
+            label: "Planning decisions waiting for the agent".into(),
             count: pending.len(),
             to: Some(format!("/p/{p}/plan")),
             ask: None,
@@ -342,7 +342,7 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
                     count: errors,
                     to: None,
                     ask: Some(format!(
-                        "Ask Claude to fix the {errors} doctor {}.",
+                        "Ask your agent to fix the {errors} doctor {}.",
                         if errors == 1 { "error" } else { "errors" }
                     )),
                     tone: ERROR.into(),
@@ -378,7 +378,7 @@ pub fn attention(store: &Store, p: &str, repo: Option<&Path>) -> Result<Attentio
             count: 1,
             to: None,
             ask: Some(format!(
-                "Ask Claude to write the retro for {m} from its facts."
+                "Ask your agent to write the retro for {m} from its facts."
             )),
             tone: INFO.into(),
             yours: false,
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(doctor.to, None);
         let ask = doctor.ask.as_deref().unwrap();
         assert!(
-            ask.starts_with(&format!("Ask Claude to fix the {errors} doctor error")),
+            ask.starts_with(&format!("Ask your agent to fix the {errors} doctor error")),
             "{ask}"
         );
         assert_eq!(doctor.tone, "error");
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(retro.to, None);
         assert_eq!(
             retro.ask.as_deref(),
-            Some("Ask Claude to write the retro for MS-2 from its facts.")
+            Some("Ask your agent to write the retro for MS-2 from its facts.")
         );
 
         // No repository: no git doctor line, and nothing failed to read.
@@ -672,7 +672,7 @@ mod tests {
             .find(|l| l.kind == "planning")
             .unwrap_or_else(|| panic!("no planning line: {a:#?}"));
         assert_eq!(line.section, Section::Decisions);
-        assert_eq!(line.label, "Planning decisions waiting for Claude");
+        assert_eq!(line.label, "Planning decisions waiting for the agent");
         assert_eq!(line.count, 1);
         assert_eq!(line.to.as_deref(), Some("/p/demo/plan"));
         assert_eq!(line.ask, None);

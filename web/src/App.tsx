@@ -33,7 +33,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <Link to="/" aria-label="kanbanr — all projects">
+          <Link to="/" aria-label="Kanbanr — all projects">
             <BrandMark />
             <span className="brand-word">kanbanr</span>
           </Link>
@@ -42,7 +42,7 @@ export default function App() {
         {project && <NeedsYouBadge project={project} />}
         <span className="spacer" />
         {label && (
-          <span className="build" title="The kanbanr this monitor runs">
+          <span className="build" title="The Kanbanr this monitor runs">
             {label}
           </span>
         )}

@@ -113,6 +113,7 @@ All notable changes to kanbanr are documented here. The format follows
 - The Releases page has Current, Planned and Released tabs, newest first; each release is an
   accordion whose header carries its chips, stage stepper and next step, and whose body is a
   full-width, sortable table of its items, loaded only when opened (FTR-041).
+- Product text says "agent" where it said Claude: the monitor's strings, the CLI's messages and help, the read API's descriptions, the README, the guide and the skill's description. Claude Code is named only as the adapter it is (its skill, hooks, settings and CLAUDE.md block), and the adapter's commands say so first in their help. Records already on boards keep reading as written, and a scan in the docs checks that no bare "Claude" returns to product text (MNT-019).
 
 ### Fixed
 

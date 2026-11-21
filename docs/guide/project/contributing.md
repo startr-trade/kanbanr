@@ -7,7 +7,7 @@ issue before large changes so we can agree on the approach.
 ## What kanbanr is (so contributions fit the design)
 
 One binary. `kanbanr` is the **only writer** — the CLI edits a git-backed `data/` folder directly
-(driven by a Claude skill). `kanbanr serve` runs a **read-only** view daemon (localhost, no auth, no
+(driven by an agent's skill). `kanbanr serve` runs a **read-only** view daemon (localhost, no auth, no
 accounts) over the same folder. Sharing is delegated to git remotes. Keep this split intact:
 
 - **All writes go through `kanbanr-core`** (the engine: store · `dispatch` router · git · activity).

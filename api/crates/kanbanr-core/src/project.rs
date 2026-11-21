@@ -178,7 +178,7 @@ pub fn setup_questions(tracked: bool, git_identity: bool, has_remote: bool) -> V
     }
     // FTR-022 R-4: one confirmation for the whole charter, not one question per field.
     ask.push(
-        "The charter — asked after the process, because its goals vocabulary may matter: Claude \
+        "The charter — asked after the process, because its goals vocabulary may matter: the agent \
          drafts it from the README, manifests and docs, shows it marked as a draft with every \
          blank left blank, and asks one question: confirm, or say what to change. One question \
          for the whole charter, not one per field; nothing is adopted before the confirmation."

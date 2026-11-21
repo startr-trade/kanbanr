@@ -370,7 +370,7 @@ try {
     if (!word) problems.push("the brand link has no .brand-word span around the word kanbanr");
     else if (word.textContent.trim() !== "kanbanr") problems.push(`.brand-word reads "${word.textContent}", expected "kanbanr"`);
     const brand = document.querySelector(".brand a");
-    if (brand && brand.getAttribute("aria-label") !== "kanbanr — all projects") problems.push("the brand link lost its accessible name");
+    if (brand && brand.getAttribute("aria-label") !== "Kanbanr — all projects") problems.push("the brand link lost its accessible name");
     const small = narrowBlock(stylesCss, 480);
     const hide = declarations(small, ".brand-word");
     if (!hide) problems.push("no .brand-word rule at @media (max-width: 480px)");

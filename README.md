@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <b>A system of record for Claude-driven development.</b><br>
+  <b>A system of record for agent-driven development.</b><br>
   Plans, reasoning and evidence on a git-backed kanban board — every line of code traced to the
   reason it exists.
 </p>
@@ -24,14 +24,14 @@
 
 ## Why
 
-When Claude does real project work, the plan, the reasoning and the evidence live only in the
+When an AI agent does real project work, the plan, the reasoning and the evidence live only in the
 transcript. They vanish between sessions, nobody can review them, and work gets built that nobody
-agreed to. kanbanr keeps all of it in plain, git-backed files a person can read — and makes Claude
+agreed to. Kanbanr keeps all of it in plain, git-backed files a person can read — and makes the agent
 keep them current as part of doing the work, not as an afterthought.
 
 ## What you get
 
-- **A board Claude recovers from.** Every session starts from the board, not from memory: scope,
+- **A board your agent recovers from.** Every session starts from the board, not from memory: scope,
   progress and decisions are where it left them. ([Everyday use](docs/guide/using/everyday.md))
 - **Work that says why it exists.** Each item carries a definition — a statement, the goals it
   serves, the Zachman questions, and [EARS](https://alistairmavin.com/ears/) requirements each
@@ -48,7 +48,7 @@ keep them current as part of doing the work, not as an afterthought.
   guards refuse ones that don't, and `kanbanr why <file>:<line>` names the requirement and goal
   behind any line. ([Traceability](docs/guide/using/traceability.md))
 - **A live, read-only monitor.** The board, items, review queue, sprints, Gantt, workflow and
-  docs, updating as Claude works. ([The monitor](docs/guide/using/the-monitor.md))
+  docs, updating as the agent works. ([The monitor](docs/guide/using/the-monitor.md))
 - **Local-first, one binary.** Plain YAML and markdown in a git repository: no database, no
   accounts, no server. Share through a git remote. ([How the pieces fit](docs/guide/getting-started/how-it-fits.md))
 
@@ -94,10 +94,10 @@ One binary, checked against the release's `SHA256SUMS`, with the monitor **and t
 skill** inside it: when Claude Code is installed, the installer puts the matching skill in place
 too (`--no-skill` to skip; [other ways](docs/guide/getting-started/installation.md#install-the-skill)). Add
 `--vscode` to install the [VS Code extension](docs/guide/getting-started/installation.md#the-vs-code-extension) as well.
-Then, in your project, ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
+Then, in your project, ask your agent to **"set up kanbanr for this project"**: it interviews you in plan mode —
 where the board lives, your identity, a charter drafted from your repository, and the process —
 and sets everything up when you approve the plan. From then on you scope, decide and move work by
-talking to Claude — plans to accept, one question per decision ([Working with Claude](docs/guide/using/with-claude.md)).
+talking to your agent — plans to accept, one question per decision ([Working with your agent](docs/guide/using/with-claude.md)).
 Or from a terminal:
 
 ```bash
@@ -147,7 +147,7 @@ kanbanr serve          # the live monitor
 
 ```mermaid
 flowchart LR
-  C["Claude, with the kanbanr skill"] -->|runs| CLI["kanbanr CLI<br/>(the only writer)"]
+  C["An agent, with the kanbanr skill"] -->|runs| CLI["kanbanr CLI<br/>(the only writer)"]
   CLI -->|commits| B[("the board<br/>its own git repo · YAML + markdown")]
   B <-->|pull / push| R["git remote<br/>(sharing)"]
   B -->|reads| S["kanbanr serve<br/>read-only"]
@@ -159,8 +159,8 @@ flowchart LR
   authored by you. `kanbanr serve` is a read-only view of the same folder.
 - **The board is its own git repository**, beside your code. Sharing is a git remote, which is also
   the access boundary — there are no accounts.
-- **Claude drives it through a skill** ([SKILL.md](skill/kanbanr/SKILL.md)) and keeps it honest
-  through hooks: the session starts from the board, a turn that changed code is reminded to record
+- **The agent drives it through a skill** ([SKILL.md](skill/kanbanr/SKILL.md)) and keeps it honest
+  through hooks (today Kanbanr ships one adapter, for Claude Code): the session starts from the board, a turn that changed code is reminded to record
   it, commits must name their item, and notes go to the board, not the code repository.
 
 More in [the architecture chapter](docs/guide/architecture/overview.md).

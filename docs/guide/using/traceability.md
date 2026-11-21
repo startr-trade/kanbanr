@@ -110,7 +110,7 @@ no estimate, branch or tests, so counting them as work items would distort the f
 Deciding is still work — it is a task on the item that needed the decision, and the ADR is its
 output.
 
-A decision starts **proposed** and is accepted or rejected by its owner — never by Claude — on the
+A decision starts **proposed** and is accepted or rejected by its owner — never by the agent — on the
 Review page (beside the definitions waiting for approval) or with `kanbanr adr accept` /
 `adr reject --reason`. Accepting is refused while a section is unanswered; a rejection keeps its
 reason. The verdict, the decider and the date are written on the decision, and the verdict appears

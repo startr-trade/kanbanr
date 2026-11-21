@@ -1097,7 +1097,7 @@ pub struct Forwarded {
 /// named as such, and that it is a local merge with nothing pushed.
 pub fn forward_step(version: &str, line: &str) -> String {
     format!(
-        "next, for Claude: bring release/{version} into {line} with `kanbanr git forward {version}` \
+        "next, for the agent: bring release/{version} into {line} with `kanbanr git forward {version}` \
          — a local merge, nothing is pushed; a conflict stops it with nothing changed"
     )
 }

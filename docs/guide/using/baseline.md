@@ -51,13 +51,13 @@ removed", keep their ADRs, and are no longer asked about or checked against desi
 pack again brings them back unchanged.
 
 **Every option teaches.** Each option carries its `why` (what choosing it means), `fits_when`
-(when it is the right choice) and `costs` (what it gives up or needs). Claude shows the `why` with
+(when it is the right choice) and `costs` (what it gives up or needs). The agent shows the `why` with
 each option, and **Explain the options** prints the other two for every option of the area, with
 what the project folder shows that bears on them. A built-in pack with an option missing any of
 the three does not pass `kanbanr profile check`.
 
 A team writes its own packs in conversation ("add an area for audit logging", "our default proxy
-is Caddy"): Claude drafts the file, `kanbanr profile check` validates it without applying it, and
+is Caddy"): the agent drafts the file, `kanbanr profile check` validates it without applying it, and
 `kanbanr profile save` writes a new version to the board or your personal library.
 
 ## The built-in packs
@@ -85,7 +85,7 @@ product can ship as a container image, a Compose file and Kubernetes manifests t
 
 ## Asked once: at setup and at first need
 
-**At setup**, in the setup interview, Claude runs `kanbanr profile ask --json`. It lists the setup
+**At setup**, in the setup interview, the agent runs `kanbanr profile ask --json`. It lists the setup
 areas the folder does not already answer, with the detected option first (or else the recommended
 one), in dialogs of at most four questions. **Decide later** and **Explain the options** are always
 offered. A detected answer is still yours to confirm. The setup plan shows the packs to follow and
@@ -93,12 +93,12 @@ the **draft baseline** (each area, its answer, the kind of entry it records), an
 draft waits on the Baseline page for you to accept.
 
 **At the first design that needs an area**, `kanbanr check <CODE>` names the areas the design
-touches that are not answered yet, and Claude asks them in the design dialog, before the design is
+touches that are not answered yet, and the agent asks them in the design dialog, before the design is
 offered for review. The answer is proposed as a change to the baseline, not written into the item,
 and you accept it on the Baseline page alongside the design-review. An answered area is never
 asked again.
 
-**Changing an answer** ("move from SQLite to PostgreSQL") is a new revision: Claude shows what
+**Changing an answer** ("move from SQLite to PostgreSQL") is a new revision: the agent shows what
 depends on the old answer (the items, ADRs and docs that name it), proposes the revision with the
 new option, and files the work items the change needs. Nothing changes until you accept it. The
 old answer stays in the history, and the new constraint's ADR supersedes the old one.
@@ -144,7 +144,7 @@ shows:
 - **also in the charter**: the charter's own constraints, which stay where they are;
 - **the history** of accepted revisions.
 
-Accepting is yours alone: `kanbanr baseline accept` is refused inside a Claude session, and an
+Accepting is yours alone: `kanbanr baseline accept` is refused inside an agent session, and an
 acceptance counts only when it was committed through kanbanr. Without an accepted baseline, the
 gates treat the project as having none and say so.
 

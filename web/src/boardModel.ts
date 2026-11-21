@@ -472,7 +472,7 @@ export function stepperSteps(next: NextStageWire, now: Date = new Date()): Step[
     const state: Step["state"] = missing > 0 ? "next" : asked ? "done" : "skipped";
     const step: Step = { key: family, label: missing > 0 ? `${FAMILY_LABEL[family]} ${missing}` : FAMILY_LABEL[family], state };
     // A step whose open gaps are all Claude's under a delegation says so, in words (decision 7).
-    if (missing > 0 && heldIn(next, family, now).held >= missing) step.word = "Claude holds";
+    if (missing > 0 && heldIn(next, family, now).held >= missing) step.word = "Agent holds";
     return step;
   });
 }
@@ -498,7 +498,7 @@ export function checksLeftSegments(next: NextStageWire, now: Date = new Date()):
       if (held === 0) return [{ text: words }];
       const holds = ids.flatMap((id, k): LeftSegment[] => [
         ...(k > 0 ? [{ text: " and " }] : []),
-        { text: `Claude, under ${id}`, delegation: id },
+        { text: `the agent, under ${id}`, delegation: id },
       ]);
       return [{ text: `${words} (${held >= c.missing ? "" : `${held} `}` }, ...holds, { text: ")" }];
     });

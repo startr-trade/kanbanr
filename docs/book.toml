@@ -1,6 +1,6 @@
 [book]
 title = "kanbanr"
-description = "A git-backed board that is the system of record for Claude-driven development"
+description = "A git-backed board that is the system of record for agent-driven development"
 authors = ["The kanbanr Authors"]
 language = "en"
 src = "guide"

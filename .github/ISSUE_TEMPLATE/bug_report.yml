@@ -21,7 +21,7 @@ body:
       options:
         - CLI (kanbanr ...)
         - View daemon (kanbanr serve) / web monitor
-        - Claude skill / hooks
+        - Claude Code adapter (skill / hooks)
         - Docker image
         - Build / install
         - Other

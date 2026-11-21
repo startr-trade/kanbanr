@@ -151,7 +151,7 @@ let ok = true;
 // R-2: selection stays inside one group.
 {
   const problems = [];
-  const rows = [row("FTR-1"), row("FTR-2"), row("FTR-3", { blocked: "Claude settles 1 text first: ask Claude to check them." }), row("FTR-4")];
+  const rows = [row("FTR-1"), row("FTR-2"), row("FTR-3", { blocked: "The agent settles 1 text first: ask your agent to check them." }), row("FTR-4")];
   const approve = slice("approve", "Approve", "Approve", rows);
   let sel = emptySelection("approve");
   eq(problems, "an empty selection names its group", [sel.group, keys(sel)], ["approve", []]);
@@ -376,7 +376,7 @@ try {
   // R-2: a row that cannot be decided says why, and cannot be selected.
   {
     const problems = [];
-    const why = "Claude settles 1 text first: ask Claude to check them.";
+    const why = "The agent settles 1 text first: ask your agent to check them.";
     const rows = [row("FTR-1"), row("FTR-3", { blocked: why })];
     const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
     eq(problems, "select refuses the blocked row", [...select(emptySelection("docs-folded"), "docs-folded", "FTR-3", true, rows).keys], []);
@@ -446,7 +446,7 @@ try {
       t("FTR-1"),
       t("FTR-2"),
       row("FTR-3", { pills: ["approval lapsed"] }),
-      t("FTR-4", { blocked: "Claude settles 1 text first: ask Claude to check them." }),
+      t("FTR-4", { blocked: "The agent settles 1 text first: ask your agent to check them." }),
       t("FTR-5"),
     ];
     eq(problems, "isTestsOnly picks the rows", rows.map(isTestsOnly), [true, true, false, true, true]);
@@ -657,22 +657,22 @@ try {
     const by = (k) => tabs.find((t) => t.key === k);
     eq(problems, "a held-only group's tab is shown", by("docs-folded")?.hidden, false);
     eq(problems, "its count stays 0", by("docs-folded")?.count, 0);
-    eq(problems, "its label says what Claude holds", by("docs-folded")?.label, "Sign off docs-folded · 4 Claude's");
+    eq(problems, "its label says what the agent holds", by("docs-folded")?.label, "Sign off docs-folded · 4 the agent's");
     eq(problems, "a group with nothing at all is hidden", by("ratify")?.hidden, true);
     eq(problems, "a group with no held count keeps its label", by("approve")?.label, "Approve");
     eq(problems, "a group without the field keeps its label", by("manual")?.label, "Manual");
 
-    const held = (k) => row(k, { held_by: "DLG-001", held_until: "2026-12-04T10:00:00Z", pills: ["Claude holds it, under DLG-001"] });
+    const held = (k) => row(k, { held_by: "DLG-001", held_until: "2026-12-04T10:00:00Z", pills: ["The agent holds it, under DLG-001"] });
     const rows = [row("DEF-1"), held("DEF-2")];
     const docs = slice("docs-folded", "Sign off docs-folded", "Sign off", rows);
     eq(problems, "a held row stays selectable", [...select(emptySelection("docs-folded"), "docs-folded", "DEF-2", true, rows).keys], ["DEF-2"]);
     const shown = await renderPanel(docs);
     const sentence = shown.document.querySelector(".review-group-sentence")?.textContent ?? "";
-    if (!sentence.includes("1 of these Claude holds under DLG-001 until 4 Dec; you can still decide them.")) {
+    if (!sentence.includes("1 of these the agent holds under DLG-001 until 4 Dec; you can still decide them.")) {
       problems.push(`the sentence does not name the delegation: ${sentence}`);
     }
     const plain = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("DEF-1")]));
-    if ((plain.document.querySelector(".review-group-sentence")?.textContent ?? "").includes("Claude holds")) {
+    if ((plain.document.querySelector(".review-group-sentence")?.textContent ?? "").includes("the agent holds")) {
       problems.push("a group with no held row names a delegation");
     }
     const box = shown.document.getElementById("DEF-2")?.querySelector('.ui-row-select input[type="checkbox"]');
@@ -933,7 +933,7 @@ try {
     if (!/import "\.\/review\.css"/.test(read("../src/pages/review/GroupView.tsx"))) problems.push("GroupView.tsx does not import review.css");
     if (!/title=\{p\.select\.disabled\}/.test(read("../src/ui/AccordionRow.tsx"))) problems.push("the reason span has no title");
 
-    const blocked = row("FTR-2", { blocked: "Claude settles 1 text first: ask Claude to check them.", pills: ["prepared", "batch agile-1", "v0.8.0", "SP-004"], what: "waiting on docs-folded" });
+    const blocked = row("FTR-2", { blocked: "The agent settles 1 text first: ask your agent to check them.", pills: ["prepared", "batch agile-1", "v0.8.0", "SP-004"], what: "waiting on docs-folded" });
     const withReason = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("FTR-1"), blocked]));
     const without = await renderPanel(slice("docs-folded", "Sign off docs-folded", "Sign off", [row("FTR-1")]));
     eq(problems, "a group with a blocked row carries review-group-has-reasons", withReason.document.querySelector(".review-group")?.classList.contains("review-group-has-reasons"), true);

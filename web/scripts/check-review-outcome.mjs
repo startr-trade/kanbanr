@@ -143,7 +143,7 @@ function checkOutcome() {
   if (!/\{ ok: true, text: "Rejected" \}/.test(handler("rejectManual"))) {
     problems.push('ReviewPage.tsx: rejectManual does not write {ok: true, text: "Rejected"}');
   }
-  if (!/\{ ok: true, text: "Rejected what Claude prepared; ask Claude to prepare it again" \}/.test(handler("rejectPrepared"))) {
+  if (!/\{ ok: true, text: "Rejected what the agent prepared; ask your agent to prepare it again" \}/.test(handler("rejectPrepared"))) {
     problems.push("ReviewPage.tsx: rejectPrepared does not write its rejected outcome");
   }
   if (/setDone\(\(d\) => \(\{ \.\.\.d, \[[^\]]+\]: (e instanceof|"|`|alreadyOr|plannedText)/.test(page)) {

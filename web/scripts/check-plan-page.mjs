@@ -259,7 +259,7 @@ await check(
 
 await check(
   "web::check_plan_page_reads_only_what_is_open",
-  "the page reads the summary, one tab and an opened row through the shared cache with the Plan tags, a closed row draws and reads nothing, nothing reads the whole board or the Gantt, and an empty Current tab asks Claude to plan.",
+  "the page reads the summary, one tab and an opened row through the shared cache with the Plan tags, a closed row draws and reads nothing, nothing reads the whole board or the Gantt, and an empty Current tab asks your agent to plan.",
   async (expect, problems) => {
     const sources = { "pages/PlanPage.tsx": src("pages/PlanPage.tsx") };
     for (const f of readdirSync(new URL("../src/pages/plan", import.meta.url))) sources[`pages/plan/${f}`] = src(`pages/plan/${f}`);
@@ -310,7 +310,7 @@ await check(
     // An empty Current tab asks Claude to plan.
     const empty = await render("src/pages/PlanPage.tsx", "PlanTabBody", { project: "shop", scope: "current", slice: { ...CURRENT, lanes: [], undated: [] } }, { url: "/p/shop/plan" });
     expect("the empty Current tab", text(empty.document.querySelector(".ui-empty-title")), "Nothing is running today.");
-    expect("its ask", text(empty.document.querySelector(".ui-empty-sentence")), "Ask Claude to plan the next sprint.");
+    expect("its ask", text(empty.document.querySelector(".ui-empty-sentence")), "Ask your agent to plan the next sprint.");
 
     // At 390 px (below 640 px, T7): the timeline scrolls sideways inside its frame, and the row table
     // drops Placed and Critical path, keeping Code, Title and Status. jsdom has no layout, so the

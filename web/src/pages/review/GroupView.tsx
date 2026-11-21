@@ -73,7 +73,7 @@ function sentenceOf(slice: GroupSlice): string {
   const held = slice.rows.filter((r) => r.held_by);
   const first = held[0];
   const tail = first
-    ? ` ${held.length} of these Claude holds under ${first.held_by}${first.held_until ? ` until ${dayMonth(first.held_until)}` : ""}; you can still decide them.`
+    ? ` ${held.length} of these the agent holds under ${first.held_by}${first.held_until ? ` until ${dayMonth(first.held_until)}` : ""}; you can still decide them.`
     : "";
   return baseSentenceOf(slice) + tail;
 }
@@ -87,11 +87,11 @@ function baseSentenceOf(slice: GroupSlice): string {
     case "which-release":
       return "Each selected item is planned into the release you choose, as `kanbanr release plan` plans it.";
     case "manual":
-      return "Confirming records the result Claude prepared as yours. A check with nothing prepared is your own observation: do it, then record it in its row.";
+      return "Confirming records the result the agent prepared as yours. A check with nothing prepared is your own observation: do it, then record it in its row.";
     case "delegation":
-      return "Granting lets Claude take the verdicts a delegation names, within its scope and until its date.";
+      return "Granting lets the agent take the verdicts a delegation names, within its scope and until its date.";
     case "delegated":
-      return "Keep lets a decision Claude took under a delegation stand; Undo withdraws it. To give a reason, open the row.";
+      return "Keep lets a decision the agent took under a delegation stand; Undo withdraws it. To give a reason, open the row.";
     case "adr":
       return "Accepting needs every section answered. Rejecting needs a reason, so it is done in the row.";
     case "system-baseline":
@@ -378,7 +378,7 @@ export function GroupPanel(p: {
                 ask={askText(slice, visible, slice.rows, target)}
                 className={n > 0 ? "btn btn-primary" : "btn"}
                 disabled={n === 0 || inFlight || (plan && target === "")}
-                disabledWhy={plan && target === "" ? "No release is planned: ask Claude to add one" : nothing}
+                disabledWhy={plan && target === "" ? "No release is planned: ask your agent to add one" : nothing}
                 onConfirm={() => send(slice.action, visible)}
               />
               {slice.key === "delegated" ? (
@@ -394,7 +394,7 @@ export function GroupPanel(p: {
               {preparedSel.keys.size > 0 ? (
                 <AskFirst
                   label={rejectLabel}
-                  ask={askText({ ...slice, action: "Reject what Claude prepared for" }, preparedSel, slice.rows)}
+                  ask={askText({ ...slice, action: "Reject what the agent prepared for" }, preparedSel, slice.rows)}
                   className="btn"
                   disabled={inFlight}
                   disabledWhy="Recording…"

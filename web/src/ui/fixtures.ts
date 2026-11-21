@@ -167,4 +167,4 @@ export const STAGE_HISTORY: History[] = [
 export const STAGE_CURRENT = "gates";
 
 /** The sentence an empty state offers to copy. */
-export const ASK = "Ask Claude to plan the next sprint from the ready list";
+export const ASK = "Ask your agent to plan the next sprint from the ready list";

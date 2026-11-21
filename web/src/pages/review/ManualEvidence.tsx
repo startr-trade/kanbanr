@@ -57,7 +57,7 @@ export function ManualEvidence({
       </p>
       {last ? <p className="small muted">Last result: {last}.</p> : null}
       {failed ? (
-        <p className="small muted">It is recorded as failed. To have a defect filed, ask Claude to file one.</p>
+        <p className="small muted">It is recorded as failed. To have a defect filed, ask your agent to file one.</p>
       ) : null}
       {finished ? (
         <OutcomeChip outcome={outcome} onRetry={onRetry} />

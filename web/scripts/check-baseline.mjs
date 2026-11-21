@@ -205,7 +205,7 @@ const view = {
   const buttons = [...document.querySelectorAll("button")].map((b) => b.textContent?.trim());
   if (!buttons.includes("Accept")) problems.push(`a writable page offers no Accept (buttons: ${buttons.join(", ")})`);
   if (!document.querySelector("#REV-002 .prepared-panel")) problems.push("REV-002 is not shown on a prepared panel under its id");
-  for (const want of ["decide later", "not applicable", "no screens", "pack removed", "not accepted through kanbanr", "changed", "current"]) {
+  for (const want of ["decide later", "not applicable", "no screens", "pack removed", "not accepted through Kanbanr", "changed", "current"]) {
     if (!text.includes(want)) problems.push(`the page does not say "${want}"`);
   }
   if (!text.includes("Local-first: plain YAML")) problems.push("the charter's constraints are not shown");

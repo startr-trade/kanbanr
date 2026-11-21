@@ -640,7 +640,7 @@
         "type": "object"
       },
       "Assessment": {
-        "description": "What `kanbanr planning check` reports: reasons to decline, things for Claude to judge, and the\nnearest valid move when the target cannot take the items.",
+        "description": "What `kanbanr planning check` reports: reasons to decline, things for the agent to judge, and the\nnearest valid move when the target cannot take the items.",
         "properties": {
           "decision": {
             "type": "string"
@@ -663,7 +663,7 @@
             "type": "array"
           },
           "warnings": {
-            "description": "Each for Claude to judge.",
+            "description": "Each for the agent to judge.",
             "items": {
               "type": "string"
             },
@@ -683,7 +683,7 @@
         "properties": {
           "delegated": {
             "$ref": "#/components/schemas/DelegatedAttention",
-            "description": "What Claude holds and decided under a delegation, while one is in force or has just ended\n(DEF-104). Absent in `monitor` mode."
+            "description": "What the agent holds and decided under a delegation, while one is in force or has just ended\n(DEF-104). Absent in `monitor` mode."
           },
           "lines": {
             "description": "In section order: decisions, releases, health, records.",
@@ -705,10 +705,10 @@
         "type": "object"
       },
       "AttentionLine": {
-        "description": "One kind of thing waiting, counted, with where to see it or what to ask Claude.",
+        "description": "One kind of thing waiting, counted, with where to see it or what to ask your agent.",
         "properties": {
           "ask": {
-            "description": "The sentence to ask Claude with, when no page shows it.",
+            "description": "The sentence to ask your agent with, when no page shows it.",
             "type": "string"
           },
           "count": {
@@ -2144,10 +2144,10 @@
         "type": "object"
       },
       "DelegatedAttention": {
-        "description": "Needs you in delegated (autonomous) mode: what Claude decided and holds (DEF-104).",
+        "description": "Needs you in delegated (autonomous) mode: what the agent decided and holds (DEF-104).",
         "properties": {
           "decided": {
-            "description": "The verdicts Claude recorded that the person has not yet kept or undone, newest first, at\nmost [`DECIDED_MAX`].",
+            "description": "The verdicts the agent recorded that the person has not yet kept or undone, newest first, at\nmost [`DECIDED_MAX`].",
             "items": {
               "$ref": "#/components/schemas/DelegatedDecision"
             },
@@ -2234,7 +2234,7 @@
         "type": "object"
       },
       "DelegatedGap": {
-        "description": "A gap Claude holds under a delegation in force (DEF-104).",
+        "description": "A gap the agent holds under a delegation in force (DEF-104).",
         "properties": {
           "check": {
             "$ref": "#/components/schemas/Check",
@@ -2249,7 +2249,7 @@
             "type": "string"
           },
           "until": {
-            "description": "When the delegation ends (RFC 3339), so a surface can say \"until 4 Dec\" and stop calling it\nClaude's once it has passed.",
+            "description": "When the delegation ends (RFC 3339), so a surface can say \"until 4 Dec\" and stop calling it\nThe agent's once it has passed.",
             "type": "string"
           }
         },
@@ -2338,7 +2338,7 @@
             "type": "boolean"
           },
           "grant_unverifiable": {
-            "description": "Granted, but the board's history cannot be read, so where the grant came from cannot be\nchecked: why, naming the repository (DEF-080). Claude's verdicts under it are refused.",
+            "description": "Granted, but the board's history cannot be read, so where the grant came from cannot be\nchecked: why, naming the repository (DEF-080). The agent's verdicts under it are refused.",
             "type": "string"
           },
           "granted": {
@@ -2348,7 +2348,7 @@
             "type": "string"
           },
           "in_force": {
-            "description": "Granted, not ended and not revoked: Claude may act under it.",
+            "description": "Granted, not ended and not revoked: the agent may act under it.",
             "type": "boolean"
           },
           "items": {
@@ -2370,7 +2370,7 @@
             "type": "string"
           },
           "not_granted_through_kanbanr": {
-            "description": "Granted, but not through kanbanr (T9): written into the file by hand, or not committed.\nClaude's verdicts under it are refused.",
+            "description": "Granted, but not through kanbanr (T9): written into the file by hand, or not committed.\nThe agent's verdicts under it are refused.",
             "type": "boolean"
           },
           "note": {
@@ -2388,7 +2388,7 @@
             "type": "boolean"
           },
           "permission_rules_missing": {
-            "description": "The rules none of the project's or the user's Claude settings allows.",
+            "description": "The rules none of the project's or the user's Claude Code settings allows.",
             "items": {
               "type": "string"
             },
@@ -3234,7 +3234,7 @@
       },
       "FeatureItem": {
         "additionalProperties": true,
-        "description": "A feature item: the unit Claude develops. Holds the spec and its todo list.",
+        "description": "A feature item: the unit the agent develops. Holds the spec and its todo list.",
         "properties": {
           "aliases": {
             "description": "The item's earlier codes, oldest first (FTR-056): a reference to one of them means this\nitem, and no other item is ever given one. Absent when the item was never renamed.",
@@ -3804,7 +3804,7 @@
             "type": "array"
           },
           "purpose": {
-            "description": "What this stage is for, in a sentence — shown to Claude and in the monitor.",
+            "description": "What this stage is for, in a sentence — shown to the agent and in the monitor.",
             "type": "string"
           },
           "requires": {
@@ -4113,7 +4113,7 @@
             "type": "integer"
           },
           "held": {
-            "description": "The rows Claude holds under a delegation in force: listed, not in `count` (DEF-104).",
+            "description": "The rows the agent holds under a delegation in force: listed, not in `count` (DEF-104).",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
@@ -4270,7 +4270,7 @@
         "type": "object"
       },
       "Held": {
-        "description": "A verdict Claude holds under a delegation in force (DEF-104).",
+        "description": "A verdict the agent holds under a delegation in force (DEF-104).",
         "properties": {
           "delegation": {
             "description": "The delegation that holds it, `DLG-001`.",
@@ -5604,7 +5604,7 @@
           },
           {
             "const": "delegated",
-            "description": "On the monitor, and by Claude within a granted delegation.",
+            "description": "On the monitor, and by an agent within a granted delegation.",
             "type": "string"
           },
           {
@@ -5718,7 +5718,7 @@
             "type": "array"
           },
           "signoffs_held": {
-            "description": "Sign-offs withheld because the work they confirm is not built (DEF-033): one gap per\nunbuilt document. Only Claude can build them, so they are not \"for you\".",
+            "description": "Sign-offs withheld because the work they confirm is not built (DEF-033): one gap per\nunbuilt document. Only the agent can build them, so they are not \"for you\".",
             "items": {
               "$ref": "#/components/schemas/Gap"
             },
@@ -5764,7 +5764,7 @@
             "type": "array"
           },
           "delegated": {
-            "description": "The sign-off and approval gaps a delegation in force holds for Claude (DEF-104); counted in\n`missing`, left out of `for_you`.",
+            "description": "The sign-off and approval gaps a delegation in force holds for the agent (DEF-104); counted in\n`missing`, left out of `for_you`.",
             "items": {
               "$ref": "#/components/schemas/DelegatedGap"
             },
@@ -5895,7 +5895,7 @@
         ]
       },
       "OverrideView": {
-        "description": "One override Claude made, as the Review page shows it (DEF-043).",
+        "description": "One override the agent made, as the Review page shows it (DEF-043).",
         "properties": {
           "at": {
             "type": "string"
@@ -6603,7 +6603,7 @@
             "type": "string"
           },
           "by": {
-            "description": "Claude, or the person.",
+            "description": "The agent, or the person.",
             "type": "string"
           },
           "decision": {
@@ -8658,7 +8658,7 @@
             "type": "boolean"
           },
           "held": {
-            "description": "The verdicts this entry asks that Claude holds under a delegation in force, in the order\n`asked` lists them (DEF-104).",
+            "description": "The verdicts this entry asks that the agent holds under a delegation in force, in the order\n`asked` lists them (DEF-104).",
             "items": {
               "$ref": "#/components/schemas/Held"
             },
@@ -8669,7 +8669,7 @@
             "type": "boolean"
           },
           "overrides": {
-            "description": "Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.",
+            "description": "The agent's overrides on the item that wait for the person to ratify (DEF-043), oldest first.",
             "items": {
               "$ref": "#/components/schemas/OverrideView"
             },
@@ -8691,7 +8691,7 @@
             "type": "string"
           },
           "settled": {
-            "description": "The flagged texts Claude settled, with what it recorded, for the page to show (DEF-039).",
+            "description": "The flagged texts the agent settled, with what it recorded, for the page to show (DEF-039).",
             "items": {
               "$ref": "#/components/schemas/SettledText"
             },
@@ -8741,7 +8741,7 @@
             "type": "string"
           },
           "to_check": {
-            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not\noffered while any is left. `None` when the check was skipped (see `drift_skipped`) or the\nsign-off is not asked.",
+            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed and that the agent has not yet settled (FTR-013, DEF-039). The sign-off is not\noffered while any is left. `None` when the check was skipped (see `drift_skipped`) or the\nsign-off is not asked.",
             "items": {
               "$ref": "#/components/schemas/Flag"
             },
@@ -8787,7 +8787,7 @@
             "type": "string"
           },
           "held_by": {
-            "description": "The delegation under which Claude holds this row's decision (DEF-104); empty when the\ndecision is the person's. A held row is shown, last, and not counted.",
+            "description": "The delegation under which the agent holds this row's decision (DEF-104); empty when the\ndecision is the person's. A held row is shown, last, and not counted.",
             "type": "string"
           },
           "held_until": {
@@ -11677,7 +11677,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "Where the project's decisions are taken (FTR-028): the mode and its history, every delegation with where it stands, the decisions Claude took under one for the person to keep or undo, and what waits for a decision where"
+        "summary": "Where the project's decisions are taken (FTR-028): the mode and its history, every delegation with where it stands, the decisions the agent took under one for the person to keep or undo, and what waits for a decision where"
       }
     },
     "/api/projects/{project}/docs": {
@@ -12972,7 +12972,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "The person's planning decisions made on the monitor pages (FTR-049), oldest first: each with its derived state (pending until Claude carries it out or declines it) and its outcome"
+        "summary": "The person's planning decisions made on the monitor pages (FTR-049), oldest first: each with its derived state (pending until the agent carries it out or declines it) and its outcome"
       }
     },
     "/api/projects/{project}/planning/{id}/check": {
@@ -13022,7 +13022,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "A planning decision checked, with nothing changed (FTR-049): the reasons to decline it, the warnings for Claude to judge, and the nearest valid move"
+        "summary": "A planning decision checked, with nothing changed (FTR-049): the reasons to decline it, the warnings for the agent to judge, and the nearest valid move"
       }
     },
     "/api/projects/{project}/position": {
@@ -13228,7 +13228,7 @@
             "$ref": "#/components/responses/E500"
           }
         },
-        "summary": "The records Claude prepared for the person to confirm (FTR-034), newest first: each with its sources, where it stands, the person's answer and the equivalent verdict command"
+        "summary": "The records the agent prepared for the person to confirm (FTR-034), newest first: each with its sources, where it stands, the person's answer and the equivalent verdict command"
       }
     },
     "/api/projects/{project}/process": {

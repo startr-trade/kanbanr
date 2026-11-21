@@ -111,14 +111,14 @@ class ExampleTests(unittest.TestCase):
         for process in WITH_CLAUDE:
             name = f"{process}-with-claude.md"
             with self.subTest(guide=name):
-                self.assertTrue("Claude asks whether it has a user interface" in read(GUIDES / name))
+                self.assertTrue("The agent asks whether it has a user interface" in read(GUIDES / name))
 
 
     def every_with_claude_guide_explains_the_style_question(self) -> None:
         for process in WITH_CLAUDE:
             name = f"{process}-with-claude.md"
             with self.subTest(guide=name):
-                self.assertTrue("Claude also asks how the screens should look" in read(GUIDES / name))
+                self.assertTrue("the agent also asks how the screens should look" in read(GUIDES / name))
 
     def every_guide_index_names_agile_first(self) -> None:
         """DOC-009 R-1: agile is the first row, marked recommended, and the report is linked."""

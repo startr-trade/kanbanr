@@ -814,7 +814,7 @@ impl Gate {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Gate {
-    /// What this stage is for, in a sentence — shown to Claude and in the monitor.
+    /// What this stage is for, in a sentence — shown to the agent and in the monitor.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub purpose: String,
     /// Conditions that must hold to enter.

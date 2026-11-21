@@ -9,14 +9,14 @@ This page applies to every process that has releases: [TOGAF](togaf-with-claude.
 [Scrum](scrum-with-claude.md) and [Agile](agile-with-claude.md). The words below don't depend on
 which remote server, CI service or package registry you use.
 
-## Ask Claude to design it with you
+## Ask your agent to design it with you
 
 > Design the CI and the release workflow for this project, before the first release. Propose
 > separate stages I can rerun one at a time, with caching for our stack, on one platform to start.
 > Tell me which checks our plan can't run. Use the release notes kanbanr wrote as the release
 > description. Add a manual run that builds everything and publishes nothing.
 
-Claude proposes the pipeline and brings you the choices. You approve it like any other design, and
+The agent proposes the pipeline and brings you the choices. You approve it like any other design, and
 it becomes an item on the board, so it has a definition, a test and an approval of its own.
 
 ## What to settle before the first tag
@@ -38,7 +38,7 @@ it becomes an item on the board, so it has a definition, a test and an approval 
 
    A pipeline that is green and small is worth more than a complete one that has never run.
 
-   **Speed-ups by stack**, which Claude offers for the stacks the project uses:
+   **Speed-ups by stack**, which the agent offers for the stacks the project uses:
 
    | Stack | Cache keyed on | Speed-ups |
    |---|---|---|
@@ -51,10 +51,10 @@ it becomes an item on the board, so it has a definition, a test and an approval 
    [FTR-033](/p/kanbanr/feature/FTR-033) is built.
 2. **Check what your plan allows.** Some checks only run on certain plans or settings. A code
    scanner may be unavailable for a private project, and a package registry may need a setting on
-   your account before it accepts a push. Claude can't see your account settings, so it asks you,
+   your account before it accepts a push. The agent can't see your account settings, so it asks you,
    and you look. Leave out any check you can't run, and add it back when you can.
 3. **Take the release description from kanbanr's notes.** Promoting a release to its first stage
-   drafts the notes, and you and Claude rewrite them for readers. Tell Claude to make the pipeline
+   drafts the notes, and you and the agent rewrite them for readers. Tell your agent to make the pipeline
    publish those notes as the description. A pipeline that generates its own description from
    commits will ignore everything you wrote.
 4. **Run the release workflow without a tag.** Ask for a manual trigger that runs every step
@@ -68,21 +68,21 @@ it becomes an item on the board, so it has a definition, a test and an approval 
    passes every check on the machine that made it and fails everywhere else.
 7. **Record CI before you cut.** kanbanr can see that main was pushed. It can't see whether CI
    passed. The Cut waits until a CI result is recorded for main's commit, on the Releases page.
-   Claude reads the run and prepares the result with its link; you check it and click **Record ci
+   The agent reads the run and prepares the result with its link; you check it and click **Record ci
    passed**.
 8. **Mark the checks that need a push.** A requirement that only CI can show (the job runs, a tag
    publishes the notes) gets `at: pushed` on its test, or `at: cut`. The item's gate doesn't wait for
-   it, so Promote to main isn't held; Claude records the result once CI has run. Anything still not
+   it, so Promote to main isn't held; the agent records the result once CI has run. Anything still not
    run at the cut waits for you to accept shipping it unverified, and the notes name it.
 
 ## Where it fits
 
 | When | What |
 |---|---|
-| When you plan the first release | Claude proposes the pipeline item (if setup recorded CI); you approve it like any other design |
-| During setup or the first sprint | Ask Claude to design the pipeline, and approve it |
+| When you plan the first release | The agent proposes the pipeline item (if setup recorded CI); you approve it like any other design |
+| During setup or the first sprint | Ask your agent to design the pipeline, and approve it |
 | Before **Promote to main** | Run the release workflow without a tag, and fix what it shows |
-| After you push main | Wait for CI to go green, check the result Claude prepared and click **Record ci passed**, then **Check again** and **Cut** |
+| After you push main | Wait for CI to go green, check the result the agent prepared and click **Record ci passed**, then **Check again** and **Cut** |
 | After you push the tag | Wait for the release workflow, and check the release page has your notes |
 
 If the pipeline needs a fix after the cut, that is a patch release. See

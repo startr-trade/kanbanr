@@ -1,0 +1,7 @@
+# Agent-neutral wording (MNT-019): files and lines where product text may still name Claude.
+# Format: <path-glob>[ :: <substring>] # reason
+# A glob alone exempts the file; a substring exempts that line only. An entry that exempts
+# nothing fails test_docs_layout.TestAgentNeutral, so this list cannot rot.
+api/crates/kanbanr-cli/src/main.rs :: Command::Claude(  # the `claude` adapter command's enum variant (an identifier, not text)
+api/crates/kanbanr-cli/src/main.rs :: Claude(ClaudeCmd)  # the same variant's declaration
+api/crates/kanbanr-core/src/origin.rs :: Claude,  # the Taker::Claude variant, renamed with the identity type in FTR-097

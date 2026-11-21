@@ -22,7 +22,7 @@ rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 authors = ["the kanbanr authors"]
 repository = "https://github.com/startr-trade/kanbanr"
-description = "Kanban task manager for Claude-driven development: a git-backed CLI writer + read-only live monitor"
+description = "A system of record for agent-driven development: a git-backed CLI writer + read-only live monitor"
 
 [workspace.dependencies]
 kanbanr-core = { path = "crates/kanbanr-core" }

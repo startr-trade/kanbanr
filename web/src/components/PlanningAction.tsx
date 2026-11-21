@@ -6,7 +6,7 @@ import type { PlanningDecision, PlanningRequest, PlanningView } from "../types";
 import { AskFirst } from "./AskFirst";
 
 /** The chip a recorded decision shows until Claude acts on it. */
-const PENDING = "pending: Claude carries it out at its next turn";
+const PENDING = "pending: the agent carries it out at its next turn";
 
 /**
  * Record `request` once per press (DEF-090): a press while the call is in flight is dropped. The

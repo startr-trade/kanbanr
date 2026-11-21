@@ -522,10 +522,10 @@ function makeBoard(n) {
     { family: "tests", asked: true, missing: 2 },
     { family: "docs", asked: false, missing: 0 },
   ] };
-  eq(problems, "a held family says Claude holds", stepperSteps(heldNext, NOW).map((s) => s.word ?? null), [null, null, "Claude holds", null, null]);
+  eq(problems, "a held family says Agent holds", stepperSteps(heldNext, NOW).map((s) => s.word ?? null), [null, null, "Agent holds", null, null]);
   eq(problems, "a part-held family keeps its words", stepperSteps({ ...heldNext, delegated: [dlg("signoff", "release")] }, NOW).map((s) => s.word ?? null), [null, null, null, null, null]);
   eq(problems, "an ended delegation is the person's again", stepperSteps({ ...heldNext, delegated: [dlg("signoff", "a", "2026-11-17T11:00:00Z"), dlg("signoff", "b", "2026-11-17T11:00:00Z")] }, NOW).map((s) => s.word ?? null), [null, null, null, null, null]);
-  eq(problems, "checks left names who holds", checksLeftText(heldNext, NOW), "5 checks left before Completed: 2 sign-offs (Claude, under DLG-001), 2 tests to turn green, 1 approval");
+  eq(problems, "checks left names who holds", checksLeftText(heldNext, NOW), "5 checks left before Completed: 2 sign-offs (the agent, under DLG-001), 2 tests to turn green, 1 approval");
   report("web::check_board_model_helpers", problems);
 }
 
@@ -664,8 +664,8 @@ const boardItem = (over = {}, itemOver = {}) => ({
   const { idx } = activeFixture();
   const held = { ...next({ status: "Completed", missing: 2, signoffs: ["design-review"] }), checks: [{ family: "signoffs", asked: true, missing: 2 }], delegated: [{ check: "signoff", name: "design-review", delegation: "DLG-001", until: "2099-01-01T00:00:00Z" }] };
   const { document } = await render(CARD, "BoardCard", { project: "p", b: boardItem({ next: held }), index: idx, usual: 4 });
-  eq(problems, "the held words link their delegation", [...document.querySelectorAll(".board-left a")].map((a) => [a.getAttribute("href"), text(a)]), [["/p/p/review#DLG-001", "Claude, under DLG-001"]]);
-  eq(problems, "the words around the link are kept", text(document.querySelector(".board-left p")), "2 checks left before Completed: 2 sign-offs (1 Claude, under DLG-001)");
+  eq(problems, "the held words link their delegation", [...document.querySelectorAll(".board-left a")].map((a) => [a.getAttribute("href"), text(a)]), [["/p/p/review#DLG-001", "the agent, under DLG-001"]]);
+  eq(problems, "the words around the link are kept", text(document.querySelector(".board-left p")), "2 checks left before Completed: 2 sign-offs (1 the agent, under DLG-001)");
   report("web::check_card_shows_delegated_gaps_as_claudes (board)", problems);
 }
 

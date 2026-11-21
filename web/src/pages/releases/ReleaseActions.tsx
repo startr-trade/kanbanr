@@ -149,7 +149,7 @@ export function ReleaseButton({
     if (!who) return;
     try {
       await api.rejectPrepared(project, view.id ?? "", who, reason);
-      setPreparedSaid("rejected what Claude prepared");
+      setPreparedSaid("rejected what the agent prepared");
     } catch (e) {
       setPreparedSaid(e instanceof Error ? e.message : String(e));
     }
@@ -648,7 +648,7 @@ export function RecordResult({
             )
           }
           onReject={(reason) =>
-            who && answer(() => api.rejectPrepared(project, view.id ?? "", who, reason), "rejected what Claude prepared")
+            who && answer(() => api.rejectPrepared(project, view.id ?? "", who, reason), "rejected what the agent prepared")
           }
         />
         {said ? <span className={`chip ${said.ok ? "done" : "warn"}`}>{said.text}</span> : null}
