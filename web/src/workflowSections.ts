@@ -131,16 +131,16 @@ export function gitModelRows(view: GitModelView): Row[] {
     { label: "Item branch names", value: m.item_patterns.join(", ") },
     { label: "Protected (merges only)", value: m.protected.join(", ") },
     {
-      label: "kanbanr merges",
+      label: "Kanbanr merges",
       value: view.automated ? view.kanbanr_merges.join("; ") : "nothing: with automation off the model is a description",
     },
     {
       label: "Automation",
-      value: view.automated ? "on: kanbanr branches and merges by this model" : "off",
+      value: view.automated ? "on: Kanbanr branches and merges by this model" : "off",
       tone: view.automated ? "on" : "off",
       command: `kanbanr config cadence --git-model ${view.automated ? "off" : "on"}`,
     },
-    { label: "Pushing", value: "yours: kanbanr never pushes code", command: "git push" },
+    { label: "Pushing", value: "yours: Kanbanr never pushes code", command: "git push" },
   );
   return rows;
 }
@@ -261,7 +261,7 @@ export function guardRows(g: Guards): GuardRow[] {
     {
       group: "Pushing",
       label: "the code",
-      value: `never by kanbanr: pushing is ${g.code_pushes === "you" ? "yours" : g.code_pushes}`,
+      value: `never by Kanbanr: pushing is ${g.code_pushes === "you" ? "yours" : g.code_pushes}`,
       tone: "on",
       command: "git push",
     },

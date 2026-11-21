@@ -118,7 +118,7 @@ function SpecDiff({ spec, changed }: { spec: SpecBrief; changed: boolean }) {
       {changed && !spec.previous_kept ? (
         <p className="muted small">
           The text signed off on {spec.signed_at.slice(0, 10)} wasn't kept on this board (it was signed before
-          kanbanr kept it), so the whole spec is shown.
+          Kanbanr kept it), so the whole spec is shown.
         </p>
       ) : null}
       {whole}

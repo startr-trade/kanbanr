@@ -157,7 +157,7 @@ export function DecisionsHere({
             {g.not_granted_through_kanbanr ? (
               <>
                 {" "}
-                · <strong>not granted through kanbanr</strong>: nothing is taken under it
+                · <strong>not granted through Kanbanr</strong>: nothing is taken under it
               </>
             ) : null}
             {g.grant_unverifiable ? (

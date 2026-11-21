@@ -25,7 +25,7 @@ const SORTS: { value: SortKey; label: string }[] = [
 
 /** The one line an older daemon earns: it reports neither the days in a stage nor what each stage lacks. */
 export const OLDER_DAEMON_NOTICE =
-  "This kanbanr does not report how long items have been in their stage or what each stage still lacks: update it to see them.";
+  "This Kanbanr does not report how long items have been in their stage or what each stage still lacks: update it to see them.";
 
 /** The notice, or null when the daemon's answers carry the new fields (or there is nothing to judge). */
 export function olderDaemonNotice(index: CompactIndex, readiness: Readiness | null): string | null {

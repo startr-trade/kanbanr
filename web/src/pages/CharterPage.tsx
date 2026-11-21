@@ -88,7 +88,7 @@ function clock(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const NOT_YET = "This kanbanr does not report progress yet: update it to see the way travelled.";
+const NOT_YET = "This Kanbanr does not report progress yet: update it to see the way travelled.";
 
 /**
  * The page drawn from its data, exported so the checks render it without a daemon. `progress` null

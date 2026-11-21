@@ -116,7 +116,7 @@ const status = {
   expect("a protection carries its why as the title", chips(byId.context).find((c) => c.label.startsWith("drift"))?.title, "no code repository");
   expect("an empty folder reads as missing", stateChip({ folder: { docs: 0 } }).tone, "warn");
   expect("a folder with docs counts them", stateChip({ folder: { docs: 2 } }).label, "2 docs");
-  expect("a katalogr view says it needs katalogr", stateChip("needs_katalogr").label, "needs katalogr");
+  expect("a katalogr view says it needs katalogr", stateChip("needs_katalogr").label, "needs Katalogr");
 
   expect("a written doc links its page", sourceHref("my shop", byId.context), "/p/my%20shop/docs/file/architecture/context.md");
   expect("a written folder links the Docs page at it", sourceHref("x", byId["component-docs"]), "/p/x/docs/folder/architecture/components");

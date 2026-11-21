@@ -18,9 +18,9 @@ export function behindWarning(meta: Meta | null): string | null {
   const bw = meta?.board_writer;
   if (!meta?.writer_newer || !bw) return null;
   return (
-    `This monitor runs kanbanr ${meta.version ?? "unknown"} (${meta.commit ?? "unknown"}); ` +
+    `This monitor runs Kanbanr ${meta.version ?? "unknown"} (${meta.commit ?? "unknown"}); ` +
     `the board was last written by ${bw.version} (${bw.commit}). ` +
     `Decisions taken here follow older rules than the work was built for. ` +
-    `Restart the monitor from the newer kanbanr.`
+    `Restart the monitor from the newer Kanbanr.`
   );
 }

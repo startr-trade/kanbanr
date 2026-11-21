@@ -296,7 +296,7 @@ function EntryLine({ entry, project, adrs }: { entry: BaselineEntryView; project
       {entry.not_accepted_through_kanbanr ? (
         <>
           {" "}
-          <span className="chip warn">not accepted through kanbanr</span>
+          <span className="chip warn">not accepted through Kanbanr</span>
         </>
       ) : null}
       {entry.named_by.length ? (

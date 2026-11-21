@@ -104,13 +104,13 @@ expect(row(gitRows, "Item branches from")?.value === "sprint/SP-002", "git model
 expect(row(gitRows, "Production moves")?.value === "when a release is cut", "git model: where production moves");
 expect(row(gitRows, "Item branch names")?.value.includes("feat/{code}-{slug}"), "git model: item branch names");
 expect(row(gitRows, "Protected (merges only)")?.value === "main, sprint/*, release/*", "git model: protected branches");
-expect(row(gitRows, "kanbanr merges")?.value.includes("integrate stage"), "git model: what kanbanr merges and when");
+expect(row(gitRows, "Kanbanr merges")?.value.includes("integrate stage"), "git model: what kanbanr merges and when");
 expect(row(gitRows, "Pushing")?.value.includes("never pushes"), "git model: pushing is yours");
 const automation = row(gitRows, "Automation");
 expect(automation?.tone === "on" && automation?.command === "kanbanr config cadence --git-model off", "git model: automation on, and the command that switches it off");
 const manual = gitModelRows({ ...model, automated: false });
 expect(row(manual, "Automation")?.command === "kanbanr config cadence --git-model on", "git model: automation off, and the command that switches it on");
-expect(row(manual, "kanbanr merges")?.value.startsWith("nothing"), "git model: with automation off kanbanr merges nothing");
+expect(row(manual, "Kanbanr merges")?.value.startsWith("nothing"), "git model: with automation off kanbanr merges nothing");
 
 expect(doctorWarning([]) === null, "git doctor: nothing found, no warning");
 const issues = ["a", "b", "c", "d"].map((m, i) => ({ severity: "warning", project: "shop", code: i === 0 ? "FEAT-001" : null, message: m }));
@@ -156,7 +156,7 @@ expect(group("Coverage").length === 1 && group("Coverage")[0].value === "1 of 3 
 const none = guardRows({ ...guards, coverage: [] });
 expect(none.find((r) => r.group === "Coverage")?.value === "none", "guard rails: no coverage rules says so");
 expect(group("Pushing").find((r) => r.label === "the board")?.value === "off (this board's setting)", "guard rails: the board's push policy and where it came from");
-expect(group("Pushing").find((r) => r.label === "the code")?.value.includes("never by kanbanr"), "guard rails: kanbanr never pushes code");
+expect(group("Pushing").find((r) => r.label === "the code")?.value.includes("never by Kanbanr"), "guard rails: kanbanr never pushes code");
 for (const r of rails) {
   expect(/^(kanbanr|git) /.test(r.command), `guard rails: "${r.group} / ${r.label}" names its command (${r.command})`);
 }

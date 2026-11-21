@@ -43,7 +43,7 @@ export function saidFor(views: DocViews, block: DocViewBlock): string {
   const k = views.katalogr;
   if (k.state === "absent") return `${k.said} — the block shows its source`;
   if (k.state === "too_old") return k.said;
-  return "katalogr gave no view for this block";
+  return "Katalogr gave no view for this block";
 }
 
 export interface Pair<N> {
@@ -57,7 +57,7 @@ export function pairBlocks<N>(nodes: N[], views: DocViews): Pair<N>[] {
 }
 
 /** The text a block shows while the daemon is being asked; the source is never hidden. */
-export const ASKING = "asking katalogr…";
+export const ASKING = "asking Katalogr…";
 
 /** A line of plain text under a block's source (`.katalogr-said`); text only, never markup. */
 export function saidElement(doc: Document, text: string): HTMLElement {
@@ -97,7 +97,7 @@ export function figureElement(doc: Document, block: DocViewBlock, views: DocView
     a.href = open;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    a.textContent = "open in katalogr";
+    a.textContent = "open in Katalogr";
     position.append(" · ", a);
   }
   for (const w of block.view?.warnings ?? []) {
@@ -118,7 +118,7 @@ export function figureElement(doc: Document, block: DocViewBlock, views: DocView
 }
 
 /** The daemon could not be asked at all: the same sentence for every block. */
-export const UNREACHED = "the monitor's daemon could not ask katalogr — the block shows its source";
+export const UNREACHED = "the monitor's daemon could not ask Katalogr — the block shows its source";
 
 /** What `webViewFor` finds for one block: its figure inputs, or the sentence that stands in. */
 export type WebView = { kind: "draw"; block: DocViewBlock } | { kind: "say"; text: string };
@@ -158,5 +158,5 @@ export function snapshotLine(release: Pick<Release, "snapshot">): SnapshotLine |
       after: ` — repos named: ${repos} — check them before pushing a public board`,
     };
   }
-  return { before: `no system views: ${s.reason || "katalogr saved none"}`, after: "" };
+  return { before: `no system views: ${s.reason || "Katalogr saved none"}`, after: "" };
 }

@@ -320,7 +320,7 @@ await check("web::check_charter_fresh_project_says_so_plainly", "an empty projec
   const shipping = await view({ charter: fullCharter, progress: { ...emptyProgress, releases_on: true, goals: [], route: [{ version: "v0.1.0", state: "next", items: 0 }] } }, "/p/x/charter");
   expect("nothing shipped", shipping.html.includes("Nothing has shipped yet. The first release will start the line."), true);
   const old = await view({ progress: null }, "/p/x/charter");
-  expect("older daemon", old.html.includes("This kanbanr does not report progress yet: update it to see the way travelled"), true);
+  expect("older daemon", old.html.includes("This Kanbanr does not report progress yet: update it to see the way travelled"), true);
 });
 
 await check("web::check_charter_charts_have_tables_and_links", "every chart has its numbers in a table, every count is a link, marks use only accent", async (expect, problems) => {
