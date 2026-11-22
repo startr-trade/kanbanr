@@ -252,35 +252,57 @@ fn agent() -> ureq::Agent {
 }
 
 /// A GET with these request headers, whatever the status. An event stream's body is not read.
+///
+/// A raw HTTP/1.0 client: ureq gets its `gzip` feature from kanbanr-cli in a `--workspace`
+/// build and would then decompress and drop `Content-Encoding`, hiding the wire sizes.
 fn get(url: &str, headers: &[(&str, &str)]) -> Reply {
-    let mut req = agent().get(url);
-    for (k, v) in headers {
-        req = req.set(k, v);
-    }
-    let resp = match req.call() {
-        Ok(r) => r,
-        Err(ureq::Error::Status(_, r)) => r,
-        Err(e) => panic!("GET {url}: {e}"),
+    use std::io::Write;
+    let rest = url.strip_prefix("http://").expect("an http url");
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
     };
-    let status = resp.status();
-    let headers: Vec<(String, String)> = resp
-        .headers_names()
-        .into_iter()
-        .map(|k| {
-            let v = resp.header(&k).unwrap_or_default().to_string();
-            (k.to_ascii_lowercase(), v)
-        })
-        .collect();
-    let mut body = Vec::new();
-    let streaming = headers
+    let mut stream =
+        std::net::TcpStream::connect(host).unwrap_or_else(|e| panic!("GET {url}: {e}"));
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let mut req = format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n");
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut reader = std::io::BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let status: u16 = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| panic!("GET {url}: bad status line {line:?}"));
+    let mut hdrs: Vec<(String, String)> = Vec::new();
+    loop {
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let l = line.trim_end();
+        if l.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = l.split_once(':') {
+            hdrs.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
+        }
+    }
+    let streaming = hdrs
         .iter()
         .any(|(k, v)| k == "content-type" && v.starts_with("text/event-stream"));
+    let mut body = Vec::new();
     if !streaming {
-        resp.into_reader().read_to_end(&mut body).unwrap();
+        reader.read_to_end(&mut body).unwrap();
     }
     Reply {
         status,
-        headers,
+        headers: hdrs,
         body,
     }
 }
@@ -294,6 +316,13 @@ fn get_gz(url: &str) -> Reply {
         "GET {url}: {}",
         String::from_utf8_lossy(&r.decoded())
     );
+    if r.body.len() > 1024 && r.header("content-type").is_some_and(|t| t.contains("json")) {
+        assert_eq!(
+            r.header("content-encoding"),
+            Some("gzip"),
+            "GET {url}: a JSON reply over 1 KB must arrive gzipped (the client must not decode it)"
+        );
+    }
     r
 }
 
