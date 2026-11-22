@@ -11,7 +11,6 @@
 //! commits; the queue never pushes, and its worktree is removed on every path.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -24,6 +23,7 @@ use kanbanr_core::config::{ProjectConfig, Role};
 use crate::buildrun;
 
 const QUEUE_FILE: &str = "queue.yaml";
+const QUEUE_LOCK: &str = "queue.yaml.lock";
 const RUN_LOCK: &str = "queue.lock";
 const LOGS: &str = "queue-logs";
 
@@ -43,44 +43,53 @@ fn main_root(repo: &Path) -> PathBuf {
         .unwrap_or_else(|| repo.to_path_buf())
 }
 
-/// Read the queue under its lock, let `f` change it, and write it back while still holding the
-/// lock, so two agents queueing at once never lose an entry. The file is locked and rewritten in
-/// place (never renamed over), so the lock is the file's own.
-fn with_queue<T>(
-    dir: &Path,
-    f: impl FnOnce(&mut Vec<QueueEntry>) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
-    std::fs::create_dir_all(dir)?;
-    let path = dir.join(QUEUE_FILE);
-    let mut file = OpenOptions::new()
+/// Hold the queue's own lock file (`queue.yaml.lock`, which never holds content), shared or
+/// exclusive. The queue file itself is replaced by rename, so it cannot carry the lock.
+fn lock_queue(dir: &Path, exclusive: bool) -> anyhow::Result<File> {
+    let path = dir.join(QUEUE_LOCK);
+    let lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(&path)
         .with_context(|| format!("cannot open {}", path.display()))?;
-    file.lock_exclusive()?;
-    let mut entries = read_entries(&mut file, &path)?;
+    if exclusive {
+        lock.lock_exclusive()?;
+    } else {
+        lock.lock_shared()?;
+    }
+    Ok(lock)
+}
+
+fn read_queue(dir: &Path) -> anyhow::Result<Vec<QueueEntry>> {
+    let path = dir.join(QUEUE_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) if text.trim().is_empty() => Ok(Vec::new()),
+        Ok(text) => kanbanr_core::yaml::from_str(&text)
+            .with_context(|| format!("{} cannot be read", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
+}
+
+/// Read the queue under its lock, let `f` change it, and write it back while still holding the
+/// lock, so two agents queueing at once never lose an entry. The queue is written whole through
+/// `kanbanr_core::atomic::write`, so a crash leaves the old queue or the new one, never half.
+fn with_queue<T>(
+    dir: &Path,
+    f: impl FnOnce(&mut Vec<QueueEntry>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    std::fs::create_dir_all(dir)?;
+    let _lock = lock_queue(dir, true)?;
+    let mut entries = read_queue(dir)?;
     let before = entries.clone();
     let out = f(&mut entries)?;
     if entries != before {
         let text = kanbanr_core::yaml::to_string(&entries)?;
-        file.seek(SeekFrom::Start(0))?;
-        file.set_len(0)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
+        kanbanr_core::atomic::write(dir.join(QUEUE_FILE), text)?;
     }
     Ok(out)
-}
-
-fn read_entries(file: &mut File, path: &Path) -> anyhow::Result<Vec<QueueEntry>> {
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    if text.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    kanbanr_core::yaml::from_str(&text)
-        .with_context(|| format!("{} cannot be read", path.display()))
 }
 
 /// The queue's entries, in the order they were added.
@@ -88,14 +97,13 @@ pub fn list(repo: &Path) -> Vec<QueueEntry> {
     let Ok(dir) = repo_dir(repo) else {
         return Vec::new();
     };
-    let path = dir.join(QUEUE_FILE);
-    let Ok(mut file) = File::open(&path) else {
-        return Vec::new();
-    };
-    if file.lock_shared().is_err() {
+    if !dir.join(QUEUE_FILE).exists() {
         return Vec::new();
     }
-    read_entries(&mut file, &path).unwrap_or_default()
+    let Ok(_lock) = lock_queue(&dir, false) else {
+        return Vec::new();
+    };
+    read_queue(&dir).unwrap_or_default()
 }
 
 /// Is `branch` a local branch of the repository at `root`?
@@ -700,5 +708,44 @@ mod tests {
                    FAIL (exit 1) test sh check.sh  [0.0 s]\n\
                    2 of 3 checks passed\n";
         assert_eq!(failed_checks(log), ["test sh check.sh"]);
+    }
+
+    fn entry(id: &str) -> QueueEntry {
+        QueueEntry {
+            id: id.into(),
+            ..Default::default()
+        }
+    }
+
+    /// A write interrupted between the temporary file and the rename leaves the old queue whole
+    /// (FTR-062 T10): a half-written temporary beside it is never read as the queue.
+    #[test]
+    fn an_interrupted_queue_write_leaves_the_old_queue_whole() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-mq-atomic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        with_queue(&dir, |e| {
+            e.push(entry("a"));
+            Ok(())
+        })
+        .unwrap();
+        let whole = std::fs::read_to_string(dir.join(QUEUE_FILE)).unwrap();
+        std::fs::write(dir.join(".queue.yaml.1.1.tmp"), "- id: [half").unwrap();
+        let got = read_queue(&dir).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "a");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(QUEUE_FILE)).unwrap(),
+            whole
+        );
+        // The lock is its own file, and the queue is replaced, not rewritten in place.
+        assert!(dir.join(QUEUE_LOCK).exists());
+        with_queue(&dir, |e| {
+            e.push(entry("b"));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(read_queue(&dir).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

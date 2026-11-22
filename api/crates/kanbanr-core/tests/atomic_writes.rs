@@ -20,8 +20,48 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "kanbanr-core/src/write.rs",
-        "let file = std::fs::OpenOptions::new()",
-        "the board lock file holds no content and is opened, not written",
+        "let mut file = std::fs::OpenOptions::new()",
+        "the board lock file is locked in place; only its holder line is written, under the lock, and a torn holder line only degrades the busy message",
+    ),
+    (
+        "kanbanr-core/src/buildplan.rs",
+        "let mut f = std::fs::OpenOptions::new()",
+        "the build log is append-only: one row per write_all, never rewritten; a torn last row is skipped on read; not a board file",
+    ),
+    (
+        "kanbanr-cli/src/mergequeue.rs",
+        "let lock = OpenOptions::new()",
+        "the queue's lock files (queue.yaml.lock, queue.lock) hold no content and are opened, not written; queue.yaml itself is written through atomic::write",
+    ),
+    (
+        "kanbanr-cli/src/mergequeue.rs",
+        "let out = File::create(log)",
+        "a check run's log streams the child's output as it comes; it is a scratch log under the repository's build folder, not a board file",
+    ),
+    (
+        "kanbanr-cli/src/buildrun.rs",
+        "std::fs::copy(e.path(), &target)?;",
+        "copies a built web bundle into the machine's bundle cache, outside any board; a bundle is used only once complete (keyed folder)",
+    ),
+    (
+        "kanbanr-cli/src/buildrun.rs",
+        "OpenOptions::new()",
+        "slot and ticket lock files are opened and locked, not written; ticket holder info is a machine-local hint",
+    ),
+    (
+        "kanbanr-cli/src/buildrun.rs",
+        "std::fs::write(&info, serde_json::to_vec(&holder)?)?;",
+        "a ticket's holder note under the machine's build folder, written while the ticket lock is held; a torn note only degrades the status line",
+    ),
+    (
+        "kanbanr-cli/src/buildrun.rs",
+        "let _ = std::fs::write(&holder,",
+        "the holder note of a build slot's ticket, machine-local, written while the lock is held; a torn note only degrades the status line",
+    ),
+    (
+        "kanbanr-cli/src/buildrun.rs",
+        "std::fs::write(&touched,",
+        "bench touches one source file inside its own detached scratch worktree and restores it after the run; not a board file",
     ),
     (
         "kanbanr-core/src/atomic.rs",
