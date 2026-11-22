@@ -27,6 +27,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 65534
         runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: httpd
           # busybox 1.37.0, multi-arch index digest read 17 Nov 2026; pulled from Google's Docker Hub
@@ -36,6 +38,13 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
           readinessProbe:
             tcpSocket:
               port: http
