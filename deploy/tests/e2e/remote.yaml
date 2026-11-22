@@ -29,8 +29,9 @@ spec:
         runAsGroup: 65534
       containers:
         - name: httpd
-          # busybox 1.37.0, multi-arch index digest read 17 Nov 2026.
-          image: docker.io/library/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+          # busybox 1.37.0, multi-arch index digest read 17 Nov 2026; pulled from Google's Docker Hub
+          # mirror (same digest, checked 22 Nov 2026) because Trivy's KSV-0125 trusts gcr.io, not docker.io.
+          image: mirror.gcr.io/library/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
           command: ["httpd", "-f", "-p", "8080", "-h", "/srv"]
           ports:
             - name: http
