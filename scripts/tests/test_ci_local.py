@@ -551,12 +551,24 @@ class HeavySteps(unittest.TestCase):
         return mock.patch.object(ci_local.shutil, "which",
                                  side_effect=lambda tool: f"/usr/bin/{tool}" if tool in present else None)
 
+    @unittest.skipUnless(ci_local.shutil.which("systemd-run") and os.environ.get("XDG_RUNTIME_DIR"),
+                         "needs a systemd user session")
+    def test_a_heavy_step_reaches_bash_with_its_shell_variables_unexpanded(self) -> None:
+        # release.yml's tag check uses ${tag#v}; systemd-run 254+ expanded it to "" (v0.8.0 gate).
+        script = 'tag=v1.2.3; echo "[${tag#v}] [$tag]"'
+        cmd = ci_local.heavy(["bash", "--noprofile", "--norc", "-c", script], dict(os.environ))
+        cmd = [c for c in cmd if c not in ("flock", str(ci_local.LOCK))]  # the probe needs no lock
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.stdout.strip(), "[1.2.3] [v1.2.3]", out.stderr)
+
     def test_heavy_steps_take_the_lock_and_the_memory_cap_when_the_tools_exist(self) -> None:
         cmd = ["bash", "-c", "cargo test"]
         cap = str(int(41943040 * 1024 * 0.6))
-        with self.which("flock", "systemd-run"):
+        with self.which("flock", "systemd-run"), \
+                mock.patch.object(ci_local, "systemd_run_expands", return_value=True):
             self.assertEqual(ci_local.heavy(cmd, self.SESSION),
-                             ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={cap}",
+                             ["systemd-run", "--user", "--scope", "-q", "--expand-environment=no",
+                              "-p", f"MemoryMax={cap}",
                               "flock", str(Path.home() / ".cache/heavy-build.lock"), *cmd])
             self.assertIsNone(ci_local.heavy_notice(self.SESSION))
             ci_local.os.environ["KANBANR_CI_MEMORY_MAX"] = "8G"
