@@ -23,6 +23,7 @@ Needs: bash, git, python3 with PyYAML, cargo, node/npm, docker (actionlint, Powe
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 import shutil
@@ -330,8 +331,21 @@ def heavy(cmd: list[str], env: dict[str, str]) -> list[str]:
     if shutil.which("flock"):
         cmd = ["flock", str(LOCK), *cmd]
     if has_user_manager(env):
-        cmd = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={memory_cap()}", *cmd]
+        # systemd 254+ expands $VAR and ${VAR} in the command it starts, so a step's own shell
+        # variables (release.yml's ${tag#v}) would arrive empty; the script must reach bash as written.
+        literal = ["--expand-environment=no"] if systemd_run_expands() else []
+        cmd = ["systemd-run", "--user", "--scope", "-q", *literal, "-p", f"MemoryMax={memory_cap()}", *cmd]
     return cmd
+
+
+@functools.cache
+def systemd_run_expands() -> bool:
+    """Whether this systemd-run expands variables in its command line (and so has the switch to stop it)."""
+    try:
+        out = subprocess.run(["systemd-run", "--help"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "--expand-environment" in out
 
 
 _wrap_heavy = heavy  # sh()'s parameter is named heavy too
