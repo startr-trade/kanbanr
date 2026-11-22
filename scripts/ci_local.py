@@ -658,6 +658,13 @@ def vars_are_variables() -> None:
                                   "\n".join(p.read_text() for p in (TREE / ".github/workflows").glob("*.yml")))))
     ok_v, variables = sh(["gh", "variable", "list", "-R", "startr-trade/kanbanr", "--json", "name", "-q", ".[].name"], TREE)
     ok_s, secrets = sh(["gh", "secret", "list", "-R", "startr-trade/kanbanr", "--json", "name", "-q", ".[].name"], TREE)
+    if not (ok_v and ok_s) and "HTTP 403" in variables + secrets:
+        # The account can't read the settings: nothing was observed, so nothing is wrong (MNT-007 T10).
+        _, login = sh(["gh", "api", "user", "-q", ".login"], TREE)
+        not_verified.append(
+            f"workflows: vars.* vs secrets: the gh account `{login.strip() or 'in use'}` cannot read Actions "
+            "variables/secrets (needs admin read on startr-trade/kanbanr); run `gh auth switch -u <admin>` and rerun")
+        return
     if not (ok_v and ok_s):
         say("workflows: vars.* are repository variables, not secrets", False,
             "could not list the repository's variables and secrets with gh:\n" + variables + secrets)

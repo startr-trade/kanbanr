@@ -662,5 +662,38 @@ class HeavySteps(unittest.TestCase):
             self.assertTrue(any(c.startswith("docker build") for c in calls), calls)
 
 
+class VarsAreVariables(unittest.TestCase):
+    """A gh 403 is "cannot verify", other gh failures still fail (MNT-007 T10)."""
+
+    def run_check(self, listing: tuple[bool, str]):
+        calls = []
+
+        def fake_sh(cmd, cwd, *a, **k):
+            calls.append(cmd)
+            if cmd[:2] == ["gh", "api"]:
+                return True, "someone\n"
+            return listing
+
+        said = []
+        with mock.patch.object(ci_local, "sh", fake_sh), \
+                mock.patch.object(ci_local, "say", lambda *a, **k: said.append(a)), \
+                mock.patch.object(ci_local, "not_verified", []) as nv:
+            ci_local.vars_are_variables()
+            return said, list(nv)
+
+    def test_a_403_is_not_verified_not_a_failure(self):
+        said, nv = self.run_check((False, "HTTP 403: Resource not accessible"))
+        self.assertEqual(said, [])
+        self.assertEqual(len(nv), 1)
+        self.assertIn("someone", nv[0])
+        self.assertIn("admin", nv[0])
+
+    def test_another_error_still_fails(self):
+        said, nv = self.run_check((False, "gh: network unreachable"))
+        self.assertEqual(nv, [])
+        self.assertEqual(len(said), 1)
+        self.assertFalse(said[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()
