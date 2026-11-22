@@ -174,6 +174,9 @@ pub fn with_lock_for<T>(
             .and_then(|()| file.sync_data());
     }
     let result = f();
+    // The holder is named only while the lock is held: an idle board's lock file is empty, so a
+    // refused write leaves no trace in it (DEF-102).
+    let _ = file.set_len(0);
     let _ = file.unlock();
     Ok(result)
 }
@@ -2429,20 +2432,22 @@ mod tests {
         let waiter = {
             let dir = dir.clone();
             std::thread::spawn(move || {
-                with_lock_for(&dir, Duration::from_secs(10), "POST /y", || 7)
+                with_lock_for(&dir, Duration::from_secs(10), "POST /y", || {
+                    // Read the holder while the lock is held: it is cleared on release.
+                    std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap()
+                })
             })
         };
         std::thread::sleep(Duration::from_millis(150));
         held.unlock().unwrap();
-        assert_eq!(
-            waiter.join().unwrap().unwrap(),
-            7,
-            "the waiting call goes ahead"
-        );
-        let now: Holder =
-            serde_json::from_str(&std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap())
-                .unwrap();
+        let text = waiter.join().unwrap().unwrap();
+        let now: Holder = serde_json::from_str(&text).unwrap();
         assert_eq!(now.op, "POST /y", "the taker names itself in the lock file");
+        let idle = std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap();
+        assert!(
+            idle.is_empty(),
+            "an idle board's lock file is empty: {idle}"
+        );
         assert_eq!(now.pid, std::process::id());
         let _ = std::fs::remove_dir_all(&dir);
     }
