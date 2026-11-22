@@ -1318,6 +1318,19 @@ fn cli_git_guardrails_in_a_scratch_repo() {
         "a@x",
         "--no-hooks",
     ]);
+    // Setup's own commit lands first: until the marker is in HEAD, main takes no other message (FTR-059 R-5).
+    std::fs::write(work.join("CLAUDE.md"), "# shop\n").unwrap();
+    std::fs::write(work.join(".gitignore"), ".claude/settings.local.json\n").unwrap();
+    assert!(
+        git(&["add", ".kanbanr", "CLAUDE.md", ".gitignore"])
+            .status
+            .success()
+    );
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] initial setup"])
+            .status
+            .success()
+    );
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
     run(&[
         "feature",
