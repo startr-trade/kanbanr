@@ -396,6 +396,9 @@ same in every workflow:
 | `docs_updated` | folds the item's design into each doc in `affects_docs` before the move, and says which docs it changed |
 | `diagrams_valid` | fixes each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then runs `kanbanr doctor` to confirm none is left |
 | `docs_cover` | adds a link to the item in each view doc a coverage rule names (the Zachman matrix, the catalog), then moves; it never asks you |
+| `system_baseline_accepted` | says the project's system baseline is waiting to be accepted, and links to it on the monitor; a project with none sets one up first with `kanbanr catalog baseline init` |
+| `design_sections` | drafts the subsections the item's kind asks for into the spec's Design (`kanbanr feature design --template --kind <kind>` lists them) |
+| `baseline` | names each accepted engineering-baseline entry the Design touches under `### Baseline`, with a test or a reason; asks about any option of an answered area the Design leaves open |
 | `small` | proposes splitting the item |
 | `approved` | your approval on the Review page; the agent says it is waiting and links to it |
 | `bypass` | your ratification on the Review page |
