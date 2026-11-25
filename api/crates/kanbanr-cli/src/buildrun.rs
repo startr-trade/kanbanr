@@ -1972,9 +1972,32 @@ mod tests {
     /// so it must hold none of that build's locks: neither a lock a wrapper left open without
     /// close-on-exec (cbuild's `flock`) nor the build's own slot. Once the build gives them back,
     /// both can be taken while the server still runs.
+    ///
+    /// The check runs in a test process of its own (MNT-010): it clears close-on-exec on a lock,
+    /// and under `cargo test` the sibling tests in this process spawn children (git, stub cache
+    /// servers that sleep on) that would inherit that descriptor and keep the lock. Nextest's one
+    /// process per test hid this; under cargo it failed about one run in eight.
     #[cfg(unix)]
     #[test]
     fn the_cache_server_holds_no_lock_of_the_build_that_started_it() {
+        const ALONE: &str = "KANBANR_TEST_LOCK_CHECK_ALONE";
+        const NAME: &str =
+            "buildrun::tests::the_cache_server_holds_no_lock_of_the_build_that_started_it";
+        if std::env::var_os(ALONE).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+                .env(ALONE, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "the check in its own process: {}\n{stdout}\n{}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
         use std::os::fd::AsRawFd;
         use std::os::unix::fs::PermissionsExt;
         let dir = std::fs::canonicalize(scratch("sccache-fds")).unwrap();
