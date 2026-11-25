@@ -75,7 +75,7 @@ export function DocsBody({
           const sub = crumbs.slice(0, i + 1).join("/");
           return (
             <span key={sub}>
-              <span className="sep">/</span>
+              <span className="sep" aria-hidden="true">/</span>
               <Link to={`${base}/folder/${sub}`}>{c}</Link>
             </span>
           );

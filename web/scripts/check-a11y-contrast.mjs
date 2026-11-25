@@ -60,4 +60,41 @@ function report(name, problems) {
   report("web::check_contrast_fixes_are_the_chosen_values", problems);
 }
 
+// R-7 offenders (T8): the pairs the browser pass found, checked from the source.
+{
+  const problems = [];
+  const themes = parseTokens(tokensCss);
+  const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+  const tokenOf = (rule) => {
+    const m = new RegExp(`${rule.replace(/[.\[\]]/g, "\\$&")}\\s*\\{[^}]*?[^-]color:\\s*var\\((--[a-z0-9-]+)\\)`).exec(styles);
+    return m ? m[1] : null;
+  };
+  const need = (rule, bgs, min) => {
+    const tok = tokenOf(rule);
+    if (!tok) return problems.push(`${rule} does not take its colour from a token`);
+    for (const theme of ["dark", "light"]) {
+      for (const bg of bgs) {
+        const r = ratio(themes[theme][tok], themes[theme][bg]);
+        if (r < min) problems.push(`${theme}: ${rule} ${tok} on ${bg} is ${r.toFixed(2)}:1, below ${min}:1`);
+      }
+    }
+  };
+  // A breadcrumb separator is decorative: hidden from assistive tech, and 3:1 for those who see it.
+  need(".crumbs .sep", ["--bg", "--surface"], 3);
+  need(".docs-crumbs .sep", ["--bg", "--surface"], 3);
+  need(".badge.prio.high", ["--bg", "--surface", "--surface-2"], 4.5);
+  for (const f of ["pages/DocPage.tsx", "pages/RepoDocPage.tsx", "pages/DocsPage.tsx", "App.tsx"]) {
+    for (const m of src(f).matchAll(/<span className="sep"[^>]*>/g)) {
+      if (!m[0].includes('aria-hidden="true"')) problems.push(`${f}: ${m[0]} is not aria-hidden`);
+    }
+  }
+  // The review page's text buttons were unstyled native buttons.
+  const dh = src("pages/review/DecisionsHere.tsx");
+  for (const label of ["Change", "Revoke"]) {
+    if (!new RegExp(`<button\\s+className="btn"[^]*?>\\s*${label}\\s*</button>`).test(dh)) problems.push(`DecisionsHere: the ${label} button is not a .btn`);
+  }
+  report("web::check_contrast_audit_offenders", problems);
+}
+
 if (failed) process.exit(1);
