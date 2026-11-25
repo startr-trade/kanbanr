@@ -111,10 +111,11 @@ export function ManualGroup(p: ManualGroupProps): JSX.Element {
     if (!r) return null;
     const why = p.reasonFor(r);
     // In the shipped section a check with no prepared result is ticked into the section's own
-    // selection, to be retired; one with a prepared result keeps the group's checkbox.
+    // selection, to be retired, even though the group's Confirm refuses it (`why`); one with a
+    // prepared result keeps the group's checkbox.
     const own = local && retirable(m);
     const select = own
-      ? { checked: retiring.has(r.key), disabled: why || undefined, onChange: (v: boolean) => pick(r.key, v) }
+      ? { checked: retiring.has(r.key), onChange: (v: boolean) => pick(r.key, v) }
       : { checked: p.sel.keys.has(r.key), disabled: why || undefined, onChange: (v: boolean) => p.onSelect(r.key, v) };
     return (
       <ReviewRow
