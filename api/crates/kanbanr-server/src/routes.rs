@@ -301,8 +301,10 @@ pub async fn drift_latest(
     Path(p): Path<String>,
     Query(q): Query<LatestQuery>,
 ) -> axum::response::Response {
-    if let Err(e) = crate::memo::store_for(&st, &p).load_meta(&p) {
-        return core_err(e).into_response();
+    // Only the project's existence is checked: loading it would read every item file, and this
+    // read must not grow with the board (R-9, T6).
+    if !crate::memo::store_for(&st, &p).project_exists(&p) {
+        return core_err(kanbanr_core::CoreError::ProjectNotFound(p)).into_response();
     }
     match st.background.get() {
         Some(bg) => Json(bg.latest(&p, q.flags.unwrap_or(true))).into_response(),
@@ -580,4 +582,78 @@ pub async fn sync_now(State(st): State<AppState>) -> impl IntoResponse {
         "pushed": outcome.pushed,
         "warnings": outcome.failures,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, OnceLock};
+
+    /// A scratch data dir under the system temp dir, never under the repository (L-41), with one
+    /// project, `demo`.
+    fn scratch_state() -> (AppState, std::path::PathBuf) {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-routes-{}", u64::from_le_bytes(bytes)));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let boards = Arc::new(kanbanr_core::boards::Boards::single(dir.clone()));
+        let st = AppState {
+            store: Arc::clone(&boards.first().store),
+            boards,
+            data_dir: dir.clone(),
+            tx: tokio::sync::broadcast::channel(4).0,
+            allow_writes: false,
+            push: crate::PushPolicy::for_board(&dir).0,
+            code_repo: None,
+            gens: Arc::new(crate::memo::Generations::default()),
+            memo: Arc::new(crate::memo::Memo::new(crate::memo::MEMO_CAP_BYTES)),
+            slices: tokio::sync::broadcast::channel(4).0,
+            background: Arc::new(OnceLock::new()),
+            katalogr: kanbanr_core::katalogr::Settings::from_env(),
+        };
+        assert!(st.store.data_dir().starts_with(std::env::temp_dir()));
+        st.store
+            .init_project("demo", kanbanr_core::ProjectConfig::default_for("demo"))
+            .unwrap();
+        (st, dir)
+    }
+
+    async fn get(addr: std::net::SocketAddr, path: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        out
+    }
+
+    /// R-9 (T6): the latest drift read answers without loading the project, so its time does not
+    /// grow with the board; an unknown project still answers 404.
+    #[tokio::test]
+    async fn drift_latest_loads_no_board() {
+        let (st, dir) = scratch_state();
+        let app = axum::Router::new()
+            .route(
+                "/projects/:project/drift/latest",
+                axum::routing::get(drift_latest),
+            )
+            .with_state(st.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let before = st.store.loads();
+        let known = get(addr, "/projects/demo/drift/latest?flags=false").await;
+        let after = st.store.loads();
+        let unknown = get(addr, "/projects/nope/drift/latest").await;
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!known.starts_with("HTTP/1.1 404"), "{known}");
+        assert_eq!(after, before, "the read loaded the project");
+        assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
+        assert!(unknown.contains("project 'nope' not found"), "{unknown}");
+    }
 }
