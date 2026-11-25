@@ -605,13 +605,15 @@ jobs:
           push: false
           load: true
           tags: kanbanr:scan
-          # The cooked dependency layer is reused across releases; MNT-006's package-layer refresh
-          # still applies, because its build argument changes that layer (MNT-007).
+          # The cooked dependency layer is reused across releases, but the package layer is not:
+          # KANBANR_APT_REFRESH changes on every run and re-run (MNT-006), so the image gets today's
+          # package fixes. Both builds pass the same value, so the push reuses the layer scanned (DEF-118).
           cache-from: type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
           build-args: |
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
+            KANBANR_APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
 
       # A binary that cannot say which build it is, or lacks the skill the archives carry, is not pushed.
       - name: The image's kanbanr is the released program (its commit, date and skill)
@@ -648,6 +650,7 @@ jobs:
           build-args: |
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
+            KANBANR_APT_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
           # `latest` is deliberately conditional: a pre-release must not become what an
           # unqualified `docker pull` gives you.
           tags: |
