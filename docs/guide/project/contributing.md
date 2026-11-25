@@ -80,7 +80,7 @@ an old one. It also refuses a tracked `*.orig` or `*.rej` file, which a merge to
 monitor build, the image build) run under `flock ~/.cache/heavy-build.lock`, so another heavy
 build on the machine waits for it rather than racing it, and inside
 `systemd-run --user --scope -p MemoryMax=…`, so a runaway build is killed before the desktop is.
-The cap is 60% of the machine's memory; set `KANBANR_CI_MEMORY_MAX` (bytes, or anything systemd's
+The cap is 7 GiB, twice the peak of a whole `make ci` (3.13 GiB, measured 22 Nov 2026); set `KANBANR_CI_MEMORY_MAX` (bytes, or anything systemd's
 `MemoryMax=` takes) to change it. A step that reaches the cap fails with the cap in its message.
 Every step gets `CARGO_BUILD_JOBS`, which defaults to the machine's CPUs minus two; set it to
 change that. Without `flock` or a systemd user session (a container, macOS) the heavy steps run
