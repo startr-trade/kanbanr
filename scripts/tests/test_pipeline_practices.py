@@ -472,6 +472,26 @@ class Release(unittest.TestCase):
             scopes |= set(re.findall(r"scope=([^,\s]+)", src + "," + dst))
         self.assertEqual(len(scopes), 1, f"the image builds should share one cache scope, not {scopes}")
 
+    def test_every_cached_image_build_refreshes_the_package_layer_per_run(self) -> None:
+        """DEF-118 R-1, R-2: a layer cache must not reuse an earlier release's `apt-get upgrade` layer."""
+        doc = workflow(RELEASE)
+        builds = [s for job in jobs(doc).values() for s in steps_of(job)
+                  if uses(s, "docker/build-push-action") and (s.get("with") or {}).get("cache-from")]
+        self.assertGreaterEqual(len(builds), 2, "release.yml should build the image twice (scan, push)")
+        values = set()
+        for s in builds:
+            args = {}
+            for line in str((s.get("with") or {}).get("build-args", "")).splitlines():
+                key, sep, val = line.strip().partition("=")
+                if sep:
+                    args[key] = val
+            value = args.get("KANBANR_APT_REFRESH")
+            self.assertIsNotNone(value, f"{s.get('name')!r} passes no KANBANR_APT_REFRESH")
+            self.assertIn("github.run_id", value, f"{s.get('name')!r}: the refresh value is not per run")
+            self.assertIn("github.run_attempt", value, f"{s.get('name')!r}: the refresh value is not per re-run")
+            values.add(value)
+        self.assertEqual(len(values), 1, f"the image builds should share one refresh value, not {values}")
+
 
 if __name__ == "__main__":
     unittest.main()
