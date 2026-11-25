@@ -2322,6 +2322,37 @@ pub(crate) mod tests {
         ));
     }
 
+    /// DEF-119 (R-1, R-2): the plan serves versioned buttons (DEF-034); a runbook names them as a
+    /// guide reads them, without the version, or exactly as served. The primary is ready and the
+    /// `again` button greyed out, so which one an offer took shows in what it reports.
+    #[test]
+    fn a_runbook_names_a_release_button_without_the_version() {
+        let plan = json!({
+            "version": "v0.1.0", "button": "Promote v0.1.0 to candidate", "ready": true, "repo": true,
+            "empty": false, "confirm": false, "conditions": [], "missing": [],
+            "again": {"stage": "candidate", "button": "Promote v0.1.0 to candidate again",
+                      "does": ["prepare again"], "ready": false, "missing": ["the notes changed since"]}
+        });
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote to candidate"),
+            Found::Offered,
+            "the guide's wording finds the primary"
+        );
+        let Found::Absent(why) = release_offer(&plan, "v0.1.0", "Promote to candidate again")
+        else {
+            panic!("the again button is greyed out")
+        };
+        assert!(
+            why.contains("\"Promote v0.1.0 to candidate again\" is greyed out"),
+            "the guide's wording finds the again button: {why}"
+        );
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote v0.1.0 to candidate"),
+            Found::Offered,
+            "the served label still finds the primary"
+        );
+    }
+
     /// RC6: with several items whose titles name "basket", a whole-word and an exact title win over a
     /// substring, and when several still fit equally the pick is ambiguous — named, not acted on.
     #[test]
