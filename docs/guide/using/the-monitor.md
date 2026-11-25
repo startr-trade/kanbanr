@@ -322,6 +322,9 @@ flowchart LR
 An item, status or milestone page belongs to the area it is reached from: on an item's page, Work
 is underlined and Board is marked; on a document, Records and Docs.
 
+Pages and rendered markdown (specs, docs, notes) use the window's full width; there is no page cap
+and no 80-character measure (FTR-046).
+
 **On a phone** (720 px wide or less) the areas fold behind one **≡ Menu** button, with the page you
 are on named beside it ("kanbanr · Board"). The button opens a full-width panel that lists every
 area as a heading with all its pages under it, and **All projects** (Projects, Portfolio) with

@@ -4,8 +4,9 @@
 //   web::check_gallery_shows_every_exported_component (R-8) — each component exported from
 //     ui/index.ts is drawn in UiGalleryPage.tsx, main.tsx routes /ui with no build-mode condition,
 //     and the gallery renders with one h1, both themes side by side;
-//   web::check_pages_are_uncapped_with_prose_at_80ch_and_rows_at_36px (R-11) — --page-max is none,
-//     --prose-max 80ch, --row-h 36px; styles.css has no 1,200 px cap; ui.css's .ui-row-head uses
+//   web::check_pages_and_markdown_are_uncapped_and_rows_at_36px (R-11) — --page-max is none,
+//     --row-h 36px, no --prose-max token and no max-width on .markdown; styles.css has no 1,200 px
+//     cap; ui.css's .ui-row-head uses
 //     min-height: var(--row-h) and white-space: nowrap.
 //
 // Usage: npm run check:ui-gallery
@@ -90,19 +91,20 @@ let ok = true;
   ok = report(name, problems) && ok;
 }
 
-// R-11: no page cap, prose at 80ch, single-line rows at 36 px.
+// R-11: no page cap, markdown at full width, single-line rows at 36 px.
 {
-  const name = "web::check_pages_are_uncapped_with_prose_at_80ch_and_rows_at_36px";
+  const name = "web::check_pages_and_markdown_are_uncapped_and_rows_at_36px";
   const problems = [];
   const { parseTokens } = await import("../src/ui/contrast.ts");
   const themes = parseTokens(read("ui/tokens.css") ?? "");
-  const want = { "--page-max": "none", "--prose-max": "80ch", "--row-h": "36px" };
+  const want = { "--page-max": "none", "--row-h": "36px" };
   for (const [theme, t] of Object.entries(themes)) {
     for (const [k, v] of Object.entries(want)) if (t[k] !== v) problems.push(`${theme}: ${k} is ${t[k]}, expected ${v}`);
   }
   const styles = stripComments(read("styles.css") ?? "");
   if (/max-width\s*:\s*1200px/.test(styles)) problems.push("styles.css still caps a page at max-width: 1200px");
-  if (!/\.markdown\b[^{]*\{[^}]*max-width\s*:\s*var\(--prose-max\)/.test(styles)) problems.push(".markdown is not held to max-width: var(--prose-max)");
+  if (/(?:^|[\s,}])\.markdown\s*\{[^}]*max-width/.test(styles)) problems.push(".markdown still has a max-width cap");
+  if (/--prose-max/.test(stripComments(read("ui/tokens.css") ?? "")) || /--prose-max/.test(styles)) problems.push("--prose-max is still defined or used");
   const ui = stripComments(read("ui/ui.css") ?? "");
   const head = ui.match(/(?:^|\})\s*\.ui-row-head\s*\{([^}]*)\}/);
   if (!head) problems.push("ui.css has no .ui-row-head rule");
