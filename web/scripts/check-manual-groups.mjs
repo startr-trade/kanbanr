@@ -27,6 +27,8 @@
 //     shipped, later and unplanned; the page draws them as collapsed sections, no "Other items";
 //   web::check_manual_shipped_checks_retire_together (R-7) — Retire N asks, wants a reason, and
 //     calls onRetire with the section's selection and the trimmed reason.
+//   web::check_manual_a_shipped_row_selects_for_retire (R-7) — a not-prepared row the group refuses
+//     (blocked) still ticks into Retire; Passed/Failed stay in the row; the prepared row keeps Confirm.
 //
 // Usage: npm run check:manual-groups
 import { MANUAL_PURPOSE, itemPrepared, lastResultLine, manualGroups, retirable } from "../src/manualTests.ts";
@@ -426,6 +428,41 @@ try {
     if (!/send\("retire", chosen, reason\)/.test(view)) problems.push('GroupView does not send("retire", chosen, reason)');
     if (!/guard\.current\?\.run/.test(view)) problems.push("GroupView lost its guardInFlight");
     renderChecks.push(["web::check_manual_shipped_checks_retire_together", problems]);
+  }
+  // DEF-113 R-7 (25 Nov 2026): a shipped row the group's Confirm refuses is still ticked into Retire.
+  {
+    const problems = [];
+    document.body.innerHTML = '<div id="root"></div>';
+    const { load } = await import("./lib/render.mjs");
+    const mod = await load("src/pages/review/ManualGroup.tsx");
+    const React = (await import("react")).default;
+    const { createRoot } = await import("react-dom/client");
+    const { MemoryRouter } = await import("react-router-dom");
+    const why = "No result is prepared for this check";
+    const rows = [
+      sliceRow("FEAT-001", "R-1", "manual: a", { release: "v0.6.0", blocked: why }),
+      sliceRow("FEAT-002", "R-1", "manual: c", { release: "v0.5.0", prepared: "P-1" }),
+    ];
+    const manual = rows.map((r) => ({ ...waiting(r.code, r.requirement, r.test, { release: r.release }), prepared: r.prepared ? { id: r.prepared, kind: "manual-test" } : undefined }));
+    const slice = { ...manualSlice(rows, []), shipped: ["v0.6.0", "v0.5.0"] };
+    const props = {
+      project: "x", slice, rows, manual, writable: true,
+      sel: { group: "manual", keys: new Set() },
+      onSelect: () => {}, onSelectItem: () => {}, onConfirmItem: () => {}, onRetire: () => {},
+      reasonFor: (r) => r.blocked, openRows: new Set(), onOpen: () => {}, inFlight: false, body: () => "",
+    };
+    const root = createRoot(document.getElementById("root"));
+    await React.act(() => root.render(React.createElement(MemoryRouter, null, React.createElement(mod.ManualGroup, props))));
+    await React.act(async () => { document.getElementById("manual-shipped-head").dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const box = document.querySelector('[id="FEAT-001/R-1/manual: a"] input[type=checkbox]');
+    expect(problems, "a refused, not-prepared shipped row's checkbox is enabled", box?.disabled, false);
+    if (box) await React.act(async () => { box.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
+    const retire = [...document.querySelectorAll("button")].map((b) => b.textContent.trim()).filter((b) => /^Retire/.test(b));
+    expect(problems, "ticking it arms Retire 1", retire, ["Retire 1"]);
+    const prepared = document.querySelector('[id="FEAT-002/R-1/manual: c"] input[type=checkbox]');
+    expect(problems, "the prepared row keeps the group's checkbox, enabled", prepared?.disabled, false);
+    await React.act(() => root.unmount());
+    renderChecks.push(["web::check_manual_a_shipped_row_selects_for_retire", problems]);
   }
   // FTR-038 T12 (2) and (3), the stylesheets as the browser reads them (jsdom draws no layout).
   {
