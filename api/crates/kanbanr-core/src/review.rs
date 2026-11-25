@@ -1568,9 +1568,23 @@ mod perf {
     #[ignore = "a timing measure; run it on its own in release"]
     fn review_on_a_board_with_many_commits_and_doc_refs() {
         let (store, dir) = generated_board(2_500, 70, 7);
+        let counts = || {
+            (
+                crate::git::path_history_walks_of(&dir),
+                crate::git::path_history_extends_of(&dir),
+            )
+        };
+        let before = counts();
         let started = std::time::Instant::now();
         let queue = pending(&store, "demo", None).unwrap();
         let elapsed = started.elapsed();
+        // MNT-014: the queue's history questions are answered from one shared walk of this HEAD.
+        let after_queue = counts();
+        assert_eq!(
+            (after_queue.0 - before.0, after_queue.1 - before.1),
+            (1, 0),
+            "the queue walks the history once and extends nothing"
+        );
         eprintln!("review::pending: {} entries in {elapsed:?}", queue.len());
         assert_eq!(queue.len(), 70);
         assert!(
@@ -1595,10 +1609,13 @@ mod perf {
             }
         }
         eprintln!("history: {:?}", history.stats());
+        // MNT-014: the walk the queue made at this HEAD is kept, so this history opens the
+        // repository and walks nothing, and nothing is extended (no commit came in between).
         assert_eq!(
             history.stats(),
-            crate::git::HistoryStats { opens: 1, walks: 1 }
+            crate::git::HistoryStats { opens: 1, walks: 0 }
         );
+        assert_eq!(counts(), after_queue, "the doc checks reuse the kept walk");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

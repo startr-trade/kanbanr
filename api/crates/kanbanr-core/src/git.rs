@@ -3585,12 +3585,23 @@ mod perf {
                 }
             }
             if timed {
-                assert!(
-                    lots[0].took <= few[0].took.mul_f64(1.15) + Duration::from_millis(50),
-                    "{name}: {ITEMS} questions {:?} against 1 question {:?}",
-                    lots[0].took,
-                    few[0].took
-                );
+                if name == "doctor" {
+                    // The doctor walks no history here (see above), so the ratio measures its own
+                    // per-item work, not history: 200 questions are bound by an absolute cap
+                    // instead (the person's decision, 25 Nov 2026).
+                    assert!(
+                        lots[0].took <= Duration::from_millis(100),
+                        "{name}: {ITEMS} questions {:?}, over 100 ms",
+                        lots[0].took
+                    );
+                } else {
+                    assert!(
+                        lots[0].took <= few[0].took.mul_f64(1.15) + Duration::from_millis(50),
+                        "{name}: {ITEMS} questions {:?} against 1 question {:?}",
+                        lots[0].took,
+                        few[0].took
+                    );
+                }
             }
             by_reader.push((name, lots));
         }
