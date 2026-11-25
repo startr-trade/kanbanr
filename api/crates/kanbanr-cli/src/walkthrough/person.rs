@@ -1088,10 +1088,13 @@ pub fn append_prepared_row(
 /// one a plan at a preparing stage whose preparation would change carries as `plan.again.button`
 /// (DEF-057, "Promote to candidate again"). An exact label wins over a prefix, so "Promote to
 /// candidate" never takes the `again` button and "Promote to candidate again" never takes the
-/// primary. `Err` lists the labels the page offers instead.
+/// primary. Each label is compared as served and with `release`'s own version token removed
+/// (DEF-119): DEF-034's "Promote v0.1.0 to candidate" also reads as a guide names it, "Promote to
+/// candidate". `Err` lists the labels the page offers instead.
 pub fn release_button(
     plan: &Value,
     button: &str,
+    release: &str,
 ) -> std::result::Result<(String, bool), Vec<String>> {
     let primary = plan["button"].as_str().unwrap_or("").to_string();
     let again = plan["again"]["button"]
@@ -1106,13 +1109,25 @@ pub fn release_button(
     if let Some(a) = again {
         labels.push((a, true));
     }
-    if let Some((l, is_again)) = labels.iter().find(|(l, _)| norm(l) == wanted) {
+    let version = norm(release);
+    // A label as served, then without the release's version token.
+    let forms = |l: &str| -> [String; 2] {
+        let served = norm(l);
+        let unversioned = served
+            .split(' ')
+            .filter(|t| version.is_empty() || *t != version)
+            .collect::<Vec<_>>()
+            .join(" ");
+        [served, unversioned]
+    };
+    if let Some((l, is_again)) = labels.iter().find(|(l, _)| forms(l).contains(&wanted)) {
         return Ok((l.clone(), *is_again));
     }
-    if let Some((l, is_again)) = labels
-        .iter()
-        .find(|(l, _)| norm(l).starts_with(&wanted) || wanted.starts_with(&norm(l)))
-    {
+    if let Some((l, is_again)) = labels.iter().find(|(l, _)| {
+        forms(l)
+            .iter()
+            .any(|f| !f.is_empty() && (f.starts_with(&wanted) || wanted.starts_with(f.as_str())))
+    }) {
         return Ok((l.clone(), *is_again));
     }
     Err(labels.into_iter().map(|(l, _)| l).collect())
@@ -1126,7 +1141,7 @@ pub fn release_offer(plan: &Value, release: &str, button: &str) -> Found {
     if plan["empty"] == true {
         return Found::Absent(format!("{release} holds nothing"));
     }
-    let (label, is_again) = match release_button(plan, button) {
+    let (label, is_again) = match release_button(plan, button, release) {
         Ok(found) => found,
         Err(labels) => {
             let offered: Vec<String> = labels.iter().map(|l| format!("\"{l}\"")).collect();
@@ -2262,15 +2277,15 @@ pub(crate) mod tests {
             })
         };
         assert_eq!(
-            release_button(&with_again(true), "Promote to candidate again"),
+            release_button(&with_again(true), "Promote to candidate again", "v0.1.0"),
             Ok(("Promote to candidate again".into(), true))
         );
         assert_eq!(
-            release_button(&with_again(true), "Promote to candidate"),
+            release_button(&with_again(true), "Promote to candidate", "v0.1.0"),
             Ok(("Promote to candidate".into(), false))
         );
         assert_eq!(
-            release_button(&with_again(true), "promote"),
+            release_button(&with_again(true), "promote", "v0.1.0"),
             Ok(("Promote to candidate".into(), false)),
             "a prefix takes the primary first"
         );
@@ -2320,6 +2335,49 @@ pub(crate) mod tests {
             release_offer(&json!({"empty": true}), "v0.1.0", "Cut v0.1.0"),
             Found::Absent(_)
         ));
+    }
+
+    /// DEF-119 (R-1, R-2): the plan serves versioned buttons (DEF-034); a runbook names them as a
+    /// guide reads them, without the version, or exactly as served. The primary is ready and the
+    /// `again` button greyed out, so which one an offer took shows in what it reports.
+    #[test]
+    fn a_runbook_names_a_release_button_without_the_version() {
+        let plan = json!({
+            "version": "v0.1.0", "button": "Promote v0.1.0 to candidate", "ready": true, "repo": true,
+            "empty": false, "confirm": false, "conditions": [], "missing": [],
+            "again": {"stage": "candidate", "button": "Promote v0.1.0 to candidate again",
+                      "does": ["prepare again"], "ready": false, "missing": ["the notes changed since"]}
+        });
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote to candidate"),
+            Found::Offered,
+            "the guide's wording finds the primary"
+        );
+        let Found::Absent(why) = release_offer(&plan, "v0.1.0", "Promote to candidate again")
+        else {
+            panic!("the again button is greyed out")
+        };
+        assert!(
+            why.contains("\"Promote v0.1.0 to candidate again\" is greyed out"),
+            "the guide's wording finds the again button: {why}"
+        );
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote v0.1.0 to candidate"),
+            Found::Offered,
+            "the served label still finds the primary"
+        );
+        assert_eq!(
+            release_button(&plan, "Promote to candidate", "v0.1.0"),
+            Ok(("Promote v0.1.0 to candidate".into(), false))
+        );
+        assert_eq!(
+            release_button(&plan, "Promote to candidate again", "v0.1.0"),
+            Ok(("Promote v0.1.0 to candidate again".into(), true))
+        );
+        assert_eq!(
+            release_button(&plan, "Promote v0.1.0 to candidate", "v0.1.0"),
+            Ok(("Promote v0.1.0 to candidate".into(), false))
+        );
     }
 
     /// RC6: with several items whose titles name "basket", a whole-word and an exact title win over a
