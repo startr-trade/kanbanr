@@ -173,7 +173,7 @@ export function ShellNav({
             up, so this says where you are and nothing more. */}
         {project && (
           <div className="crumbs" role="group" aria-label="Current project">
-            <span className="sep">/</span>
+            <span className="sep" aria-hidden="true">/</span>
             <Link to={`/p/${encodeURIComponent(project)}`} className="crumb-project" onClick={onNavigate}>
               {project}
             </Link>

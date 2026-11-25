@@ -72,11 +72,11 @@ export default function DocPage() {
           <Link to={base}>docs</Link>
           {parentPath && (
             <>
-              <span className="sep">/</span>
+              <span className="sep" aria-hidden="true">/</span>
               <Link to={`${base}/folder/${parentPath}`}>{parentPath}</Link>
             </>
           )}
-          <span className="sep">/</span>
+          <span className="sep" aria-hidden="true">/</span>
           <span className="mono">{path.split("/").pop()}</span>
         </nav>
         <LiveDot />

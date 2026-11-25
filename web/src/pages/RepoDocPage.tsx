@@ -58,7 +58,7 @@ export function RepoDocBody({
       <div className="page-head">
         <nav className="docs-crumbs">
           <Link to={repoDocsHref(project, pick)}>repository docs</Link>
-          <span className="sep">/</span>
+          <span className="sep" aria-hidden="true">/</span>
           <span className="mono">{path}</span>
         </nav>
         <PositionPicker picks={picks} pick={pick} />

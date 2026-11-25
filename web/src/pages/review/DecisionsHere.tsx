@@ -107,6 +107,7 @@ export function DecisionsHere({
             </select>
           </label>{" "}
           <button
+            className="btn"
             disabled={busy === "mode" || chosen === view.mode}
             onClick={() =>
               run(
@@ -191,6 +192,7 @@ export function DecisionsHere({
                 onChange={(e) => setReason(g.id, e.target.value)}
               />{" "}
               <button
+                className="btn"
                 disabled={busy === g.id || !reason(g.id).trim()}
                 onClick={() => run(g.id, () => api.revokeDelegation(project, g.id, by, reason(g.id)), "revoked")}
               >
