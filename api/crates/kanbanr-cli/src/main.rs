@@ -4075,23 +4075,12 @@ fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<Strin
     Some((sha.get(..8).unwrap_or(&sha).to_string(), refs))
 }
 
-/// Where the built monitor lives, for `review --ui`. `$KANBANR_UI_DIR` wins; otherwise the copy
-/// installed beside the binary, or a `web/dist` in the current checkout.
-fn ui_dir_for_review() -> Option<String> {
-    if let Ok(dir) = std::env::var("KANBANR_UI_DIR") {
-        return Some(dir);
-    }
-    let candidates = [
-        std::env::current_dir().ok().map(|d| d.join("web/dist")),
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|p| p.join("../share/kanbanr/web"))),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .find(|d| d.join("index.html").is_file())
-        .map(|d| d.display().to_string())
+/// The UI folder `review --ui` hands to `serve` (DEF-120): only an explicit `$KANBANR_UI_DIR`.
+/// Otherwise `None`, so the server serves the monitor built into the binary, exactly as plain
+/// `kanbanr serve` does. A `web/dist` in the current folder is never used: in a kanbanr checkout
+/// it is whatever that branch last built, and it served the v0.7.0 monitor from an 0.8.0 binary.
+fn review_ui_dir(env_ui_dir: Option<String>) -> Option<String> {
+    env_ui_dir.filter(|d| !d.trim().is_empty())
 }
 
 /// Refresh the board README's generated block after `claude sync` (DEF-053). A failure is a
@@ -10427,7 +10416,15 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false, &[], None);
+                return run_serve(
+                    cli,
+                    Some(bind),
+                    review_ui_dir(std::env::var("KANBANR_UI_DIR").ok()),
+                    true,
+                    false,
+                    &[],
+                    None,
+                );
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
@@ -17445,6 +17442,37 @@ fn board_text(project: &Project) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEF-120 R-1: `review --ui` serves the embedded monitor whatever `web/dist` the folder
+    /// holds; only an explicit `$KANBANR_UI_DIR` names another one.
+    #[test]
+    fn review_ui_serves_the_embedded_monitor_not_a_checkouts_web_dist() {
+        // A folder like a kanbanr checkout, with a stale build in web/dist (L-41: under temp_dir).
+        let dir = std::env::temp_dir().join(format!("kanbanr-def120-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("web/dist")).unwrap();
+        std::fs::write(dir.join("web/dist/index.html"), "<!doctype html>old").unwrap();
+        assert_eq!(
+            review_ui_dir(None),
+            None,
+            "no override: the embedded monitor"
+        );
+        assert_eq!(
+            review_ui_dir(Some(String::new())),
+            None,
+            "an empty override is no override"
+        );
+        assert_eq!(review_ui_dir(Some("  ".into())), None);
+        let named = dir.join("web/dist").display().to_string();
+        assert_eq!(
+            review_ui_dir(Some(named.clone())),
+            Some(named),
+            "an explicit override wins"
+        );
+        // The source no longer looks in the current folder for a UI.
+        let src = include_str!("main.rs");
+        assert!(!src.contains(&["current_dir().ok().map(|d| d.join(\"web", "/dist\"))"].concat()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// DEF-107 R-1: the line names the record that was asked for, not the item's last sign-off.
     /// An item whose latest earlier sign-off was delegated (design-review under DLG-001) still
