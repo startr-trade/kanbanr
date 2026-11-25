@@ -139,8 +139,8 @@ summary:focus-visible,
 }
 
 .content { padding: 22px; max-width: var(--page-max); margin: 0 auto; }
-/* The page is uncapped (FTR-046 R-11): `--page-max` is none, and prose is held to `--prose-max`
-   instead. A board needs every column in view — a six-status workflow (TOGAF) needs ~1,550px — so
+/* The page is uncapped (FTR-046 R-11): `--page-max` is none, and markdown takes the full width
+   too. A board needs every column in view — a six-status workflow (TOGAF) needs ~1,550px — so
    it takes the window whatever the page width is (FEAT-107). */
 .content:has(> .board-page) { max-width: none; }
 
@@ -510,7 +510,6 @@ summary:focus-visible,
 .diagram-problems h3 { font-size: var(--fs-2); margin: 4px 0 6px; color: var(--warn); }
 .diagram-problems ul { margin: 0; padding-left: 18px; }
 .diagram-problems li { margin: 4px 0; }
-.markdown { max-width: var(--prose-max); }
 .markdown img { max-width: 100%; height: auto; border-radius: 6px; }
 .markdown h1 { font-size: var(--fs-5); }
 .markdown h2 { font-size: var(--fs-4); }

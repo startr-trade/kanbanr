@@ -8,7 +8,7 @@
  * theme element, so they are recomputed inside a nested theme rather than inherited from the root.
  *
  * Decided by the person on 16 Nov 2026: the type scale (R-9), the severity palette (R-10), no page
- * cap with prose at 80ch and 36 px rows (R-11). The greys and the filled accent are DEF-082's rows
+ * cap, markdown at full width (25 Nov 2026) and 36 px rows (R-11). The greys and the filled accent are DEF-082's rows
  * of the same decision (R-8): each passes 4.5:1 on every surface it is drawn on.
  *
  * `--border` is a decorative separator. A control's edge, which a person needs to find the control,
@@ -85,10 +85,9 @@
   --r-1: 4px;
   --r-2: 8px;
 
-  /* Layout (R-11): no page-width cap, prose held to a readable measure, single-line rows. */
+  /* Layout (R-11): no page-width cap, markdown at full width, single-line rows. */
   --page-max: none;
   --page-pad: 24px;
-  --prose-max: 80ch;
   --row-h: 36px;
   /* Review's reason column: none until a group has reasons (review.css sets 16rem there). */
   --review-reason-w: 0;
