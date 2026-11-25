@@ -534,10 +534,9 @@ class HeavySteps(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         self.meminfo = Path(scratch.name) / "meminfo"
-        # 40 GiB, so 60% of it is 24 GiB.
+        # The default cap no longer reads this (MNT-007 T9); a different size proves it.
         self.meminfo.write_text("MemTotal:       41943040 kB\nMemFree:         1000000 kB\n")
         patches = [
-            mock.patch.object(ci_local, "MEMINFO", self.meminfo),
             mock.patch.object(ci_local.os, "cpu_count", return_value=12),
             mock.patch.dict(ci_local.os.environ, {}, clear=False),
         ]
@@ -563,7 +562,7 @@ class HeavySteps(unittest.TestCase):
 
     def test_heavy_steps_take_the_lock_and_the_memory_cap_when_the_tools_exist(self) -> None:
         cmd = ["bash", "-c", "cargo test"]
-        cap = str(int(41943040 * 1024 * 0.6))
+        cap = "7G"  # 2 x the 3.13 GiB peak of the 22 Nov 2026 gate, rounded up (MNT-007 T9)
         with self.which("flock", "systemd-run"), \
                 mock.patch.object(ci_local, "systemd_run_expands", return_value=True):
             self.assertEqual(ci_local.heavy(cmd, self.SESSION),
@@ -574,9 +573,9 @@ class HeavySteps(unittest.TestCase):
             ci_local.os.environ["KANBANR_CI_MEMORY_MAX"] = "8G"
             self.assertIn("MemoryMax=8G", ci_local.heavy(cmd, self.SESSION))
         del ci_local.os.environ["KANBANR_CI_MEMORY_MAX"]
-        self.meminfo.unlink()
+        self.meminfo.unlink()  # an unreadable MemTotal changes nothing: the default is fixed
         with self.which("flock", "systemd-run"):
-            self.assertIn("MemoryMax=max", ci_local.heavy(cmd, self.SESSION))
+            self.assertIn("MemoryMax=7G", ci_local.heavy(cmd, self.SESSION))
 
         # Which steps are heavy: Rust, the monitor's build and the image; not a Python check.
         self.assertTrue(ci_local.is_heavy("cargo clippy --locked --workspace --all-targets"))

@@ -301,7 +301,6 @@ def say(name: str, ok: bool, detail: str = "") -> None:
 # process runs. Without the tools (no flock, no user session manager: a container, macOS) a heavy
 # step runs plainly, and make ci says so once at the start.
 LOCK = Path.home() / ".cache/heavy-build.lock"
-MEMINFO = Path("/proc/meminfo")
 # scripts/test.sh runs cargo nextest or cargo test (MNT-010); the Test steps name only the script.
 # The hosted site's kind e2e and compose smoke build the image and run a cluster (FTR-030).
 HEAVY = re.compile(r"\bcargo\b|\bdocker build\b|\bnpm (ci|run build)\b|\bscripts/test\.sh\b"
@@ -311,15 +310,14 @@ HEAVY = re.compile(r"\bcargo\b|\bdocker build\b|\bnpm (ci|run build)\b|\bscripts
 LOCK_HELD = "KANBANR_HEAVY_LOCK_HELD"
 
 
+# The default cap is 2 x the peak RSS measured over a whole make ci: 3283552 kB (3.13 GiB, the
+# gate of 22 Nov 2026, the only full measurement), rounded up to a whole GiB (MNT-007 T9).
+MEMORY_CAP_DEFAULT = "7G"
+
+
 def memory_cap() -> str:
-    """KANBANR_CI_MEMORY_MAX, else 60% of MemTotal in bytes, else "max" (no cap; systemd accepts it)."""
-    if os.environ.get("KANBANR_CI_MEMORY_MAX"):
-        return os.environ["KANBANR_CI_MEMORY_MAX"]
-    try:
-        found = re.search(r"^MemTotal:\s+(\d+)\s+kB", MEMINFO.read_text(), re.M)
-    except OSError:
-        found = None
-    return str(int(int(found.group(1)) * 1024 * 0.6)) if found else "max"
+    """KANBANR_CI_MEMORY_MAX, else 7G: 2 x the 22 Nov 2026 peak of a whole make ci (MNT-007 T9)."""
+    return os.environ.get("KANBANR_CI_MEMORY_MAX") or MEMORY_CAP_DEFAULT
 
 
 def has_user_manager(env: dict[str, str]) -> bool:
