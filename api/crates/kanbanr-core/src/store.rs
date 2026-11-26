@@ -549,6 +549,20 @@ impl Store {
         })
     }
 
+    /// The project's config and milestones with one item, read from its own files with its spec
+    /// ([`Store::load_feature`]), for answering that item alone (DEF-128). Not counted by
+    /// [`Store::loads`], which counts whole-project loads. ProjectNotFound and FeatureNotFound as
+    /// `load_feature` gives them; an earlier code is not found here (FTR-056).
+    pub(crate) fn load_one(&self, id: &str, code: &str) -> Result<Project> {
+        let feature = self.load_feature(id, code)?;
+        Ok(Project {
+            id: id.to_string(),
+            config: self.read_config(id)?,
+            features: vec![feature],
+            milestones: Self::read_dir_yaml(&self.milestones_dir(id))?,
+        })
+    }
+
     /// Load a project for judging its gates: metadata only, unless a gate reads spec bodies
     /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
     pub fn load_for_gates(&self, id: &str) -> Result<Project> {
