@@ -310,6 +310,11 @@ pub fn out_of_date_line(project: &[PathBuf], user: &[PathBuf]) -> Option<String>
     let verb = if missing.len() == 1 { "is" } else { "are" };
     let in_project = read_all(project).iter().any(holds_kanbanr_hooks);
     let in_user = read_all(user).iter().any(holds_kanbanr_hooks);
+    // No kanbanr hook anywhere is a project that never installed them, not an upgrade: the
+    // doctor's "not registered" findings say that, not a refresh.
+    if !in_project && !in_user {
+        return None;
+    }
     let (place, run) = match (in_project, in_user) {
         (true, true) => (
             "kanbanr's other hooks are in both the project's and the user's settings",
