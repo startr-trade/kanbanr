@@ -38,7 +38,7 @@ fn script_hooks() -> Vec<(&'static str, &'static str)> {
 /// output of a run to record which tracked tests actually passed (FEAT-053), the other checks a
 /// `git commit` before it is attempted, so the feedback arrives with a suggestion rather than as a
 /// failure after the fact (FEAT-056).
-const CLI_HOOKS: [(&str, &str, &str); 4] = [
+const CLI_HOOKS: [(&str, &str, &str); 5] = [
     ("PostToolUse", "Bash", "kanbanr capture"),
     ("PreToolUse", "Bash", "kanbanr git guard"),
     // Documentation belongs on the board (FEAT-040). The rule lived only in the skill's prose
@@ -47,6 +47,9 @@ const CLI_HOOKS: [(&str, &str, &str); 4] = [
     // A decision taken in the conversation (FTR-035): it reads the person's answer to a tagged
     // question from Claude Code's own record of it and makes the one-time pass the verdict needs.
     ("PostToolUse", "AskUserQuestion", "kanbanr decisions heard"),
+    // It sees each tagged question before the person does (DEF-126): it refuses one the agent
+    // answered itself and marks the rest, and the answer hook makes a pass only for a marked one.
+    ("PreToolUse", "AskUserQuestion", "kanbanr decisions asked"),
 ];
 
 /// Where a project's own hooks are registered: `<root>/.claude`, which Claude Code reads for that
@@ -239,6 +242,97 @@ pub fn missing_across(files: &[PathBuf]) -> Vec<&'static str> {
         }
     }
     missing
+}
+
+fn read_all(files: &[PathBuf]) -> Vec<Value> {
+    files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|raw| serde_json::from_str(&raw).ok())
+        .collect()
+}
+
+/// Does `settings` register any of kanbanr's hooks, a CLI one or a script one?
+fn holds_kanbanr_hooks(settings: &Value) -> bool {
+    CLI_HOOKS
+        .iter()
+        .any(|(event, _, command)| commands(settings, event).any(|c| c.trim() == *command))
+        || script_hooks()
+            .into_iter()
+            .any(|(event, name)| commands(settings, event).any(|c| is_kanbanr_hook(c, name)))
+}
+
+/// The [`CLI_HOOKS`] entries `(event, matcher, command)` that neither the project's settings
+/// files nor the user's register (DEF-126): what a newer kanbanr registers that the settings
+/// do not have yet. Empty when any file enables the kanbanr plugin, which brings its own hooks.
+/// A file that is missing or does not parse counts as empty.
+pub fn missing_cli_hooks(
+    project: &[PathBuf],
+    user: &[PathBuf],
+) -> Vec<(&'static str, &'static str, &'static str)> {
+    let all: Vec<Value> = read_all(project)
+        .into_iter()
+        .chain(read_all(user))
+        .collect();
+    if all.iter().any(plugin_enabled) {
+        return Vec::new();
+    }
+    CLI_HOOKS
+        .into_iter()
+        .filter(|(event, matcher, command)| {
+            !all.iter().any(|settings| {
+                settings["hooks"][event]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|g| g["matcher"].as_str().unwrap_or("") == *matcher)
+                    .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+                    .filter_map(|h| h["command"].as_str())
+                    .any(|c| c.trim() == *command)
+            })
+        })
+        .collect()
+}
+
+/// The session summary's line when this kanbanr registers a hook the settings lack (DEF-126
+/// R-5), naming where the existing kanbanr hooks are, so the refresh goes to the same place:
+/// `None` when nothing is missing. `project` is the project's settings files, `user` the user's.
+pub fn out_of_date_line(project: &[PathBuf], user: &[PathBuf]) -> Option<String> {
+    let missing = missing_cli_hooks(project, user);
+    if missing.is_empty() {
+        return None;
+    }
+    let names = missing
+        .iter()
+        .map(|(_, _, c)| format!("`{c}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verb = if missing.len() == 1 { "is" } else { "are" };
+    let in_project = read_all(project).iter().any(holds_kanbanr_hooks);
+    let in_user = read_all(user).iter().any(holds_kanbanr_hooks);
+    let (place, run) = match (in_project, in_user) {
+        (true, true) => (
+            "kanbanr's other hooks are in both the project's and the user's settings",
+            "`kanbanr hooks install` and `kanbanr hooks install --global`",
+        ),
+        (false, true) => (
+            "kanbanr's other hooks are in the user's settings",
+            "`kanbanr hooks install --global`",
+        ),
+        _ => (
+            "kanbanr's other hooks are in the project's settings",
+            "`kanbanr hooks install`",
+        ),
+    };
+    // The line carries the whole instruction: an agent that answers from the summary alone, with
+    // the skill not loaded, still asks before anything else.
+    Some(format!(
+        "kanbanr's hooks are out of date: {names} {verb} not registered; {place}. Before you \
+         answer anything else, ask the person once, in one AskUserQuestion: \"Refresh kanbanr's \
+         hooks now?\", with \"Refresh now (Recommended)\" and \"Not now\". On \"Refresh now\" run \
+         {run}, then tell them to start a new session; on \"Not now\" change nothing. Never \
+         install hooks without that yes."
+    ))
 }
 
 /// Remove kanbanr's hook entries (all of them, or only those whose script is gone), dropping
@@ -817,6 +911,47 @@ mod tests {
         assert!(status(&json!({})).is_empty());
     }
 
+    /// DEF-126 R-4: install registers the question hook (PreToolUse on AskUserQuestion, `kanbanr
+    /// decisions asked`) once, beside the Bash guard on its event; settings without it are missing
+    /// PreToolUse, and only it is added back.
+    #[test]
+    fn hooks_install_registers_decisions_asked() {
+        let dir = temp_claude_dir(true);
+        assert!(matches!(install(&dir).unwrap(), Installed::Added(_)));
+        let read = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap()
+        };
+        let asked = |v: &Value| -> Vec<Value> {
+            v["hooks"]["PreToolUse"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|g| g["hooks"][0]["command"] == "kanbanr decisions asked")
+                .cloned()
+                .collect()
+        };
+        let v = read();
+        let groups = asked(&v);
+        assert_eq!(groups.len(), 1, "{v}");
+        assert_eq!(groups[0]["matcher"], "AskUserQuestion");
+        assert!(commands(&v, "PreToolUse").any(|c| c == "kanbanr git guard"));
+        assert!(missing(&v).is_empty());
+        assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
+        assert_eq!(asked(&read()).len(), 1);
+
+        let mut partial = v.clone();
+        partial["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|g| g["hooks"][0]["command"] != "kanbanr decisions asked");
+        assert_eq!(missing(&partial), ["PreToolUse"]);
+        assert_eq!(
+            add(&mut partial, &scripts_dir(&dir)).unwrap(),
+            ["PreToolUse"]
+        );
+        assert_eq!(asked(&partial).len(), 1);
+    }
+
     /// FTR-035 R-1: install registers the AskUserQuestion hook that makes a pass from the person's
     /// answer, once; uninstall takes it away and leaves the other hooks on its event alone; and a
     /// scope is not told apart from its agent without it.
@@ -871,7 +1006,7 @@ mod tests {
         assert!(identifying_hooks_registered_in(&scope_files(&v)));
         assert!(
             !identifying_hooks_registered_in(&scope_files(&partial)),
-            "all four CLI hooks must be registered"
+            "all five CLI hooks must be registered"
         );
         assert_eq!(
             add(&mut partial, &scripts_dir(&dir)).unwrap(),

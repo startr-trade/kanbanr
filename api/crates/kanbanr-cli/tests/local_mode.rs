@@ -8172,6 +8172,7 @@ impl ScopeFx {
             "PreToolUse": [
                 hook("Bash", "kanbanr git guard")[0].clone(),
                 hook("Write|Edit", "kanbanr claude guard")[0].clone(),
+                hook("AskUserQuestion", "kanbanr decisions asked")[0].clone(),
             ],
             "PostToolUse": [
                 hook("Bash", "kanbanr capture")[0].clone(),
@@ -14138,7 +14139,7 @@ fn git_tidy_names_the_scope_left_on_a_finished_item() {
     std::fs::create_dir_all(work.join(".claude")).unwrap();
     let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
     let settings = serde_json::json!({ "hooks": {
-        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard"), hook("AskUserQuestion", "kanbanr decisions asked")],
         "PostToolUse": [hook("Bash", "kanbanr capture"), hook("AskUserQuestion", "kanbanr decisions heard")],
     }});
     std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();
@@ -15930,6 +15931,84 @@ fn doctor_git_status_and_recover_name_a_hook_another_tool_replaced() {
         .find("kanbanr's Claude Code SessionStart hook")
         .expect("the Claude Code finding");
     assert!(git_line < claude_line, "git findings first\n{recover}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-126 R-5: when this kanbanr registers a hook the settings lack, the session summary says so
+/// in one line, naming the command, `kanbanr hooks install` and a new session, and where the other
+/// kanbanr hooks are (the user's: `--global`); with every hook registered it says nothing of it.
+#[test]
+fn the_session_summary_names_hooks_this_kanbanr_registers_that_are_missing() {
+    let (base, work) = recover_scratch("def126-refresh");
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
+    let older = serde_json::json!({ "hooks": {
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PostToolUse": [hook("Bash", "kanbanr capture"), hook("AskUserQuestion", "kanbanr decisions heard")],
+    }});
+    let project_settings = work.join(".claude").join("settings.json");
+    let user_settings = base.join("home").join(".claude").join("settings.json");
+    std::fs::create_dir_all(project_settings.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(user_settings.parent().unwrap()).unwrap();
+    let refresh_line = |recover: &str| -> Option<String> {
+        recover
+            .lines()
+            .find(|l| l.contains("kanbanr's hooks are out of date"))
+            .map(str::to_string)
+    };
+
+    // The project's settings, from an older kanbanr.
+    std::fs::write(&project_settings, older.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
+    assert!(
+        line.contains("`kanbanr decisions asked` is not registered")
+            && line.contains("Before you answer anything else, ask the person once")
+            && line.contains("\"Refresh now (Recommended)\" and \"Not now\"")
+            && line.contains("run `kanbanr hooks install`, then tell them to start a new session")
+            && line.contains("in the project's settings")
+            && !line.contains("--global"),
+        "{line}"
+    );
+    assert_eq!(
+        recover.matches("kanbanr's hooks are out of date").count(),
+        1,
+        "{recover}"
+    );
+    assert!(
+        !recover.contains("not registered in any settings file"),
+        "{recover}"
+    );
+
+    // The same hooks in the user's settings: the refresh goes there.
+    std::fs::remove_file(&project_settings).unwrap();
+    std::fs::write(&user_settings, older.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
+    assert!(
+        line.contains("in the user's settings")
+            && line.contains("run `kanbanr hooks install --global`, then"),
+        "{line}"
+    );
+
+    // Every hook registered: nothing is said of a refresh.
+    let mut current = older.clone();
+    current["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .push(hook("AskUserQuestion", "kanbanr decisions asked"));
+    std::fs::write(&user_settings, current.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    assert_eq!(refresh_line(&recover), None, "{recover}");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -20367,9 +20446,19 @@ fn conversation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
 /// Run `kanbanr decisions heard` as Claude Code's hook would: the payload on stdin, the project
 /// folder in `CLAUDE_PROJECT_DIR`.
 fn run_heard_hook(base: &std::path::Path, work: &std::path::Path, payload: &str) -> Output {
+    run_decisions_hook(base, work, "heard", payload)
+}
+
+/// Run `kanbanr decisions <hook>` (`heard` or `asked`) as Claude Code would.
+fn run_decisions_hook(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    hook: &str,
+    payload: &str,
+) -> Output {
     use std::io::Write;
     let mut child = Command::new(cli())
-        .args(["decisions", "heard"])
+        .args(["decisions", hook])
         .current_dir(work)
         .env("HOME", base.join("home"))
         .env_remove("CLAUDE_CONFIG_DIR")
@@ -20407,6 +20496,32 @@ fn ask_user_question_payload(project: &str, code: &str, rev: &str, answer: &str)
     )
 }
 
+/// The PreToolUse payload Claude Code sends for the same call as the PostToolUse `payload`
+/// (probed 26 Nov 2026): the same `tool_use_id`, and the agent's input, here with no answers.
+fn pre_payload_of(payload: &str) -> serde_json::Value {
+    let mut v: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let questions = v["tool_input"]["questions"].clone();
+    v["hook_event_name"] = serde_json::json!("PreToolUse");
+    v["tool_input"] = serde_json::json!({"questions": questions});
+    if let Some(m) = v.as_object_mut() {
+        m.remove("tool_response");
+    }
+    v
+}
+
+/// Run the question hook (`decisions asked`) on the call `payload` answers, as Claude Code does
+/// before it shows the question, then hand `payload` back for the answer hook (DEF-126).
+fn asked_first(base: &std::path::Path, work: &std::path::Path, payload: &str) -> String {
+    let o = run_decisions_hook(base, work, "asked", &pre_payload_of(payload).to_string());
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        o.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    payload.to_string()
+}
+
 /// FTR-035 R-1, R-2: the hook makes a pass from the person's approving answer; the verdict with
 /// `--pass` records `origin: conversation` and what was heard, uses the pass once, and a
 /// declined answer makes none.
@@ -20426,7 +20541,11 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     let declined = run_heard_hook(
         &base,
         &work,
-        &ask_user_question_payload("shop", "FEAT-002", &rev, "Not yet"),
+        &asked_first(
+            &base,
+            &work,
+            &ask_user_question_payload("shop", "FEAT-002", &rev, "Not yet"),
+        ),
     );
     assert!(declined.status.success());
     let said = String::from_utf8_lossy(&declined.stdout).to_string();
@@ -20434,15 +20553,16 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     let data = run_in(&base, &work, &["where"]);
     let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
     let passes = data.join(".git/kanbanr/passes");
-    assert!(
-        is_empty_or_missing(&passes),
-        "a declined answer wrote a pass"
-    );
+    assert_eq!(pass_files(&passes), 0, "a declined answer wrote a pass");
 
     let heard = run_heard_hook(
         &base,
         &work,
-        &ask_user_question_payload("shop", "FEAT-002", &rev, "Approve"),
+        &asked_first(
+            &base,
+            &work,
+            &ask_user_question_payload("shop", "FEAT-002", &rev, "Approve"),
+        ),
     );
     assert!(heard.status.success());
     let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
@@ -20528,7 +20648,11 @@ fn decisions_heard_reports_a_declined_question_beside_an_approved_one() {
     }
     payload["tool_response"]["answers"][second_text.as_str()] = serde_json::json!("Not yet");
 
-    let heard = run_heard_hook(&base, &work, &payload.to_string());
+    let heard = run_heard_hook(
+        &base,
+        &work,
+        &asked_first(&base, &work, &payload.to_string()),
+    );
     assert!(heard.status.success());
     let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
     let context = out["hookSpecificOutput"]["additionalContext"]
@@ -20548,10 +20672,198 @@ fn decisions_heard_reports_a_declined_question_beside_an_approved_one() {
     );
     let data = run_in(&base, &work, &["where"]);
     let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
-    let made = std::fs::read_dir(data.join(".git/kanbanr/passes"))
-        .map(|d| d.count())
-        .unwrap_or(0);
+    let made = pass_files(&data.join(".git/kanbanr/passes"));
     assert_eq!(made, 1, "exactly one pass file");
+}
+
+/// DEF-126 R-3: when the hook makes no pass for a tagged question it says why, in one line (here:
+/// kanbanr did not see it before it was shown, or its marker was used already); an untagged
+/// question stays silent.
+#[test]
+fn decisions_heard_says_why_no_pass_was_made_for_a_tagged_question() {
+    let (base, work) = conversation_board("def126-quiet");
+    let q = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    );
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+    let q: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    let rev = q["rev"].as_str().unwrap().to_string();
+    // The payload as Claude Code sends it: the person's answer in tool_input too.
+    let mut sent: serde_json::Value = serde_json::from_str(&ask_user_question_payload(
+        "shop", "FEAT-002", &rev, "Approve",
+    ))
+    .unwrap();
+    sent["tool_input"]["answers"] = sent["tool_response"]["answers"].clone();
+    let sent = sent.to_string();
+    let context = |o: &Output| -> String {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out: serde_json::Value = serde_json::from_slice(&o.stdout)
+            .unwrap_or_else(|_| panic!("no answer: {}", String::from_utf8_lossy(&o.stdout)));
+        out["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // kanbanr did not see the question before it was shown (no marker): no pass, and one line
+    // says why.
+    let said = context(&run_heard_hook(&base, &work, &sent));
+    assert_eq!(said.lines().count(), 1, "{said}");
+    assert!(
+        said.starts_with("kanbanr: no pass was made: ")
+            && said.contains("kanbanr did not see this question before it was shown")
+            && said.contains("kanbanr hooks install"),
+        "{said}"
+    );
+
+    // A marker is used once: the same answer heard again makes no second pass.
+    let first = context(&run_heard_hook(
+        &base,
+        &work,
+        &asked_first(&base, &work, &sent),
+    ));
+    assert!(first.contains("--pass P-"), "{first}");
+    let again = context(&run_heard_hook(&base, &work, &sent));
+    assert!(
+        again.contains("kanbanr did not see this question before it was shown"),
+        "{again}"
+    );
+    let data = run_in(&base, &work, &["where"]);
+    let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
+    let passes = data.join(".git/kanbanr/passes");
+    for entry in std::fs::read_dir(&passes).unwrap().flatten() {
+        if entry.path().extension().is_some_and(|x| x == "json") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+
+    // An untagged question stays silent.
+    let untagged = sent
+        .replace("[kanbanr approve", "(kanbanr approve")
+        .replace("--project shop]", "--project shop)");
+    assert_ne!(untagged, sent);
+    let o = run_heard_hook(&base, &work, &untagged);
+    assert!(o.status.success());
+    assert!(
+        o.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+
+    assert_eq!(pass_files(&passes), 0, "a quiet hook wrote a pass");
+    assert!(
+        is_empty_or_missing(&passes.join("asked")),
+        "a marker outlived its answer"
+    );
+}
+
+/// DEF-126 R-2: the question hook denies a tagged question the agent answered itself, before the
+/// person sees it, and leaves no marker for it; it marks one the agent did not answer; and the
+/// Bash guard refuses `kanbanr decisions asked` to the agent's shell, coordinator or sub-agent.
+#[test]
+fn decisions_asked_is_refused_to_the_agents_shell() {
+    let (base, work) = conversation_board("def126-asked");
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let q = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    );
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+    let q: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    let rev = q["rev"].as_str().unwrap().to_string();
+    let sent = ask_user_question_payload("shop", "FEAT-002", &rev, "Approve");
+    let data = run_in(&base, &work, &["where"]);
+    let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
+    let asked = data.join(".git/kanbanr/passes/asked");
+
+    // The agent answered it itself: denied, and no marker.
+    let mut pre = pre_payload_of(&sent);
+    pre["tool_input"]["answers"] =
+        serde_json::from_str::<serde_json::Value>(&sent).unwrap()["tool_response"]["answers"]
+            .clone();
+    let o = run_decisions_hook(&base, &work, "asked", &pre.to_string());
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout)
+        .unwrap_or_else(|_| panic!("no answer: {}", String::from_utf8_lossy(&o.stdout)));
+    assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        out["hookSpecificOutput"]["permissionDecisionReason"],
+        "kanbanr: a decision question is answered by the person, not pre-filled"
+    );
+    assert!(is_empty_or_missing(&asked), "a refused question was marked");
+
+    // The agent did not: marked, silently.
+    asked_first(&base, &work, &sent);
+    let id = pre["tool_use_id"].as_str().unwrap();
+    assert!(asked.join(format!("{id}.json")).is_file());
+
+    // The agent's shell may not run the hook itself.
+    let guard = |agent: bool, command: &str| -> String {
+        use std::io::Write;
+        let mut payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+            "cwd": work,
+        });
+        if agent {
+            payload["agent_id"] = serde_json::json!("a1b2c3");
+        }
+        let mut child = Command::new(cli())
+            .args(["git", "guard"])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env("CLAUDE_PROJECT_DIR", &work)
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn kanbanr");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let o = child.wait_with_output().unwrap();
+        assert!(o.status.success(), "the guard never fails a call");
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    for agent in [false, true] {
+        for command in [
+            "kanbanr decisions asked",
+            "rtk kanbanr decisions asked",
+            "echo '{}' | kanbanr --project shop decisions asked",
+        ] {
+            let said = guard(agent, command);
+            assert!(
+                said.contains("\"permissionDecision\":\"deny\""),
+                "passed ({agent}): {command}: {said}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// How many pass files the pass folder holds (its `asked/` folder of markers is not one, DEF-126).
+fn pass_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |d| {
+        d.flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count()
+    })
 }
 
 /// Does the folder hold nothing, or not exist?

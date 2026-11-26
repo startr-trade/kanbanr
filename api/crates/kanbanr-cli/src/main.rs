@@ -1896,6 +1896,11 @@ enum DecisionsCmd {
     /// person chose the approving option of a tagged question, writes a one-time pass and tells
     /// the agent the command that records it. Never run by hand.
     Heard,
+    /// Claude Code's PreToolUse hook on AskUserQuestion (DEF-126). Reads the payload on stdin;
+    /// refuses a tagged question the agent answered itself and marks the rest, so the answer to
+    /// one can make a pass. Never run by hand.
+    #[command(hide = true)]
+    Asked,
 }
 
 #[derive(Subcommand)]
@@ -2803,7 +2808,7 @@ fn runs_from_a_hook(command: &Command) -> bool {
             )
             | Command::Claude(ClaudeCmd::Guard)
             | Command::Walkthrough(walkthrough::WalkthroughCmd::Answer)
-            | Command::Decisions(DecisionsCmd::Heard)
+            | Command::Decisions(DecisionsCmd::Heard | DecisionsCmd::Asked)
     )
 }
 
@@ -2992,7 +2997,7 @@ fn command_access(cmd: &Command) -> Access {
         Command::Capture { .. } => Hook,
         // Makes a pass from the person's answer (FTR-035); every other decisions command writes
         // through core.
-        Command::Decisions(DecisionsCmd::Heard) => Hook,
+        Command::Decisions(DecisionsCmd::Heard | DecisionsCmd::Asked) => Hook,
         // Prints a question from what the board holds (FTR-035).
         Command::Decisions(DecisionsCmd::Question { .. }) => Read,
         Command::Decisions(_) => Core,
@@ -5265,7 +5270,7 @@ fn is_identifying_hook(command: &Command) -> bool {
         Command::Capture { junit: None, .. }
             | Command::Git(GitCmd::Guard)
             | Command::Claude(ClaudeCmd::Guard)
-            | Command::Decisions(DecisionsCmd::Heard)
+            | Command::Decisions(DecisionsCmd::Heard | DecisionsCmd::Asked)
     )
 }
 
@@ -5745,7 +5750,7 @@ fn verdict_refusal(
             }
         }
         let rest = &words[1..];
-        if matches!(path.as_slice(), ["decisions", "heard"]) {
+        if matches!(path.as_slice(), ["decisions", "heard" | "asked"]) {
             return Some((
                 "refused: a pass is made by Claude Code's hook from the person's answer, never by an \
                  agent: ask with `kanbanr decisions question <approve|ratify|signoff> <CODE>` and \
@@ -10742,6 +10747,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Prepare(cmd) => run_prepare(cli, &client, cmd),
         // The hook never fails the turn, so it runs before `run_decisions` asks for a project.
         Command::Decisions(DecisionsCmd::Heard) => run_decisions_heard(cli, Some(&client)),
+        Command::Decisions(DecisionsCmd::Asked) => run_decisions_asked(Some(&client)),
         Command::Decisions(cmd) => run_decisions(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
@@ -15004,8 +15010,36 @@ fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
 fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     use kanbanr_core::passes::{self, Listened};
     let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
-    let lines: Vec<String> = match passes::listen(&payload) {
-        Listened::Quiet(_) => return Ok(()),
+    // The marker `decisions asked` left when it saw the question before it was shown (DEF-126),
+    // used once; none, or a board this hook cannot read, makes no pass.
+    let marker = match (
+        client.map(Backend::store),
+        payload.get("tool_use_id").and_then(Value::as_str),
+    ) {
+        (Some(store), Some(id)) if !id.is_empty() && store.data_dir().is_dir() => {
+            passes::take_marker(store, id, &kanbanr_core::now_rfc3339())
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+    let lines: Vec<String> = match passes::listen(&payload, marker.as_ref()) {
+        // Silent unless the payload holds a tagged question: then one line says why (DEF-126).
+        Listened::Quiet(why) => {
+            let tagged = ["tool_response", "tool_input"].iter().any(|side| {
+                payload[*side]["questions"].as_array().is_some_and(|qs| {
+                    qs.iter().any(|q| {
+                        q["question"]
+                            .as_str()
+                            .is_some_and(|t| passes::parse_tag(t).is_some())
+                    })
+                })
+            });
+            if !tagged {
+                return Ok(());
+            }
+            vec![format!("kanbanr: no pass was made: {why}")]
+        }
         Listened::Declined(declined) => declined
             .iter()
             .map(|(tag, answer)| passes::declined_line(tag, answer))
@@ -15058,6 +15092,36 @@ fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()
                 "additionalContext": lines.join("\n"),
             }})
         );
+    }
+    Ok(())
+}
+
+/// `kanbanr decisions asked`, Claude Code's PreToolUse hook on AskUserQuestion (DEF-126). Reads
+/// the payload on stdin: a tagged question the agent answered itself is denied before the person
+/// sees it; any other tagged question gets a one-time marker the answer hook reads. Prints nothing
+/// else, and never exits non-zero (an unwritable pass folder leaves no marker, and the answer hook
+/// says why it made no pass).
+fn run_decisions_asked(client: Option<&Backend>) -> anyhow::Result<()> {
+    use kanbanr_core::passes::{self, Seen};
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    match passes::seen(&payload) {
+        Seen::Quiet(_) => {}
+        Seen::Refuse(_) => println!(
+            "{}",
+            json!({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason":
+                    "kanbanr: a decision question is answered by the person, not pre-filled",
+            }})
+        ),
+        Seen::Mark(marker) => {
+            if let Some(store) = client.map(Backend::store)
+                && store.data_dir().is_dir()
+            {
+                let _ = passes::mark(store, &marker, &kanbanr_core::now_rfc3339());
+            }
+        }
     }
     Ok(())
 }
@@ -15201,6 +15265,7 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
     };
     match cmd {
         DecisionsCmd::Heard => run_decisions_heard(cli, Some(client)),
+        DecisionsCmd::Asked => run_decisions_asked(Some(client)),
         DecisionsCmd::Question {
             verdict,
             code,
@@ -17843,6 +17908,7 @@ mod tests {
                 "kanbanr decisions heard",
                 "rtk kanbanr decisions heard",
                 "kanbanr --project p decisions heard",
+                "kanbanr decisions asked",
                 "echo x > ../board/.git/kanbanr/passes/P-1.json",
                 "cp p.json ../board/.git/kanbanr/passes/P-2.json",
                 "rm ../board/.git/kanbanr/passes/P-2.json",

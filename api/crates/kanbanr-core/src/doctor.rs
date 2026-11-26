@@ -232,7 +232,67 @@ pub fn run_project_in(store: &Store, id: &str, repo: Option<&std::path::Path>) -
     if project.config.method.is_on(crate::method::Part::Links) {
         scan_repository_links(store, &project, repo, &mut report);
     }
+    if let Some(repo) = repo {
+        scan_asked_hook(
+            store,
+            &project,
+            &crate::claude::settings_files(repo),
+            &mut report,
+        );
+    }
     Ok(report)
+}
+
+/// The question hook a decision taken in the conversation needs (DEF-126).
+pub const ASKED_HOOK: &str = "kanbanr decisions asked";
+
+/// Warn a project in conversation mode whose settings files (the project's two, then the
+/// user's) register no `kanbanr decisions asked` PreToolUse hook on AskUserQuestion, and enable no
+/// kanbanr plugin: no answer in the conversation can make a pass without it (DEF-126). A file that
+/// is missing or does not parse counts as empty.
+fn scan_asked_hook(store: &Store, project: &Project, files: &[PathBuf], report: &mut Report) {
+    let conversation = crate::decisions::load(store, &project.id)
+        .is_ok_and(|d| d.mode() == crate::decisions::Mode::Conversation);
+    if !conversation {
+        return;
+    }
+    let all: Vec<serde_json::Value> = files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|raw| serde_json::from_str(&raw).ok())
+        .collect();
+    let plugin = all.iter().any(|s| {
+        s["enabledPlugins"].as_object().is_some_and(|m| {
+            m.iter().any(|(id, on)| {
+                id.starts_with("kanbanr@")
+                    && !matches!(on, serde_json::Value::Bool(false) | serde_json::Value::Null)
+            })
+        })
+    });
+    let registered = all.iter().any(|s| {
+        s["hooks"]["PreToolUse"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|g| g["matcher"].as_str().unwrap_or("") == "AskUserQuestion")
+            .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+            .filter_map(|h| h["command"].as_str())
+            .any(|c| c.trim() == ASKED_HOOK)
+    });
+    if plugin || registered {
+        return;
+    }
+    report.issues.push(Issue {
+        severity: Severity::Warning,
+        project: project.id.clone(),
+        code: None,
+        message: format!(
+            "project {} is in conversation mode, but no settings file registers kanbanr's question \
+             hook (`{ASKED_HOOK}`), so no answer in the conversation makes a pass: run `kanbanr \
+             hooks install`, then start a new session",
+            project.id
+        ),
+    });
 }
 
 /// Report a spec's link to a repository doc that is not in the code repository at the item's
@@ -1796,6 +1856,74 @@ mod tests {
             .set_modified(when)
             .unwrap();
         path
+    }
+
+    /// DEF-126 R-4: a project in conversation mode whose settings lack the question hook is
+    /// warned, naming `kanbanr hooks install` and a new session; with the hook registered, the
+    /// kanbanr plugin enabled, or another mode, nothing is said.
+    #[test]
+    fn conversation_mode_without_the_asked_hook_is_warned() {
+        use crate::decisions::{Decisions, Mode, ModeChange};
+        let (store, dir) = fixture();
+        let project = store.load("demo").unwrap();
+        let settings = dir.join("settings.json");
+        let set_mode = |mode: Mode| {
+            let decisions = Decisions {
+                modes: vec![ModeChange {
+                    mode,
+                    by: "Ada".into(),
+                    at: "2026-11-26T10:00:00Z".into(),
+                    origin: "terminal".into(),
+                    reason: String::new(),
+                    extra: Default::default(),
+                }],
+                ..Default::default()
+            };
+            crate::atomic::write(
+                store
+                    .project_dir("demo")
+                    .join(crate::decisions::DECISIONS_FILE),
+                crate::yaml::to_string(&decisions).unwrap(),
+            )
+            .unwrap();
+        };
+        let warned = |settings_json: &str| -> Vec<String> {
+            std::fs::write(&settings, settings_json).unwrap();
+            let mut report = Report::default();
+            scan_asked_hook(
+                &store,
+                &project,
+                &[dir.join("no-such.json"), settings.clone()],
+                &mut report,
+            );
+            report
+                .issues
+                .iter()
+                .filter(|i| i.severity == Severity::Warning)
+                .map(|i| i.message.clone())
+                .collect()
+        };
+        let heard_only = r#"{"hooks": {"PostToolUse": [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "kanbanr decisions heard"}]}]}}"#;
+        let both = r#"{"hooks": {"PreToolUse": [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "kanbanr decisions asked"}]}], "PostToolUse": [{"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "kanbanr decisions heard"}]}]}}"#;
+
+        set_mode(Mode::Conversation);
+        let w = warned(heard_only);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("conversation mode")
+                && w[0].contains("kanbanr decisions asked")
+                && w[0].contains("kanbanr hooks install")
+                && w[0].contains("new session"),
+            "{}",
+            w[0]
+        );
+        assert!(warned("not json").len() == 1);
+        assert!(warned(both).is_empty());
+        assert!(warned(r#"{"enabledPlugins": {"kanbanr@market": true}}"#).is_empty());
+
+        set_mode(Mode::Monitor);
+        assert!(warned(heard_only).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-025 R-7.

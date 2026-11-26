@@ -1616,6 +1616,14 @@ The session start prints a summary sized to fit (`kanbanr recover`): what is in 
 waits for the person, the sprint and release. Read `kanbanr board` when you need every item; never
 assume an item is absent because the summary did not list it.
 
+**When the summary says "kanbanr's hooks are out of date"**, a newer kanbanr registers a hook the
+settings lack. Ask the person once, in one AskUserQuestion: "Refresh kanbanr's hooks now?", with
+"Refresh now (Recommended)" and "Not now". On "Refresh now", run `kanbanr hooks install` (with
+`--global` when the line says the hooks are in the user's settings), then tell the person to start
+a new session, since Claude Code loads hooks at session start. On "Not now", change nothing; the
+summary asks again next session. Never install hooks without that yes, and never edit a settings
+file yourself.
+
 ## Keep the tool updated — before AND after every task
 
 Treat Kanbanr updates as part of doing the work, not an afterthought:

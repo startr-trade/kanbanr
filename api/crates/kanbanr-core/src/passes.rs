@@ -7,6 +7,12 @@
 //! in its own UI, and when that answer is the approving option writes a pass: a ticket matched to
 //! the project, item, verdict and revision, which lasts [`TTL_MINUTES`] and is used once.
 //!
+//! The payload cannot tell the person's answer from one the agent set: Claude Code writes the
+//! person's choice into `tool_input.answers` too (DEF-126). So kanbanr sees each tagged question
+//! before it is shown, with a PreToolUse hook (`kanbanr decisions asked`, [`seen`]): it refuses one
+//! the agent answered itself and leaves a one-time [`Marker`] for the rest, under `asked/`. The
+//! answer hook makes a pass only for a question its marker holds.
+//!
 //! A pass is not board data. It lives under the board's git dir (`<git dir>/kanbanr/passes/`),
 //! outside the worktree, so `git status` never sees it and no commit carries one; what it carried
 //! is kept on the verdict record as `heard`. Expired and used passes are deleted.
@@ -25,6 +31,8 @@ pub const TTL_MINUTES: i64 = 15;
 pub const DIR: &str = "kanbanr/passes";
 /// The longest question a pass is made for.
 const MAX_QUESTION: usize = 2_000;
+/// Where markers of the questions kanbanr saw before they were shown live, under [`dir`].
+pub const ASKED: &str = "asked";
 
 /// A question's tag, read by [`parse_tag`]: the verdict command the pass stands in for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -149,13 +157,88 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// A tagged question kanbanr saw before it was shown (DEF-126): written by the PreToolUse hook
+/// (`kanbanr decisions asked`), read once by the answer hook by `tool_use_id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Marker {
+    pub tool_use_id: String,
+    pub session_id: String,
+    /// The tagged questions' text, as the agent asked them.
+    pub questions: Vec<String>,
+    /// When it was written; [`seen`] leaves it empty and [`mark`] sets it.
+    pub at: String,
+}
+
+/// What the question hook saw in one PreToolUse payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seen {
+    /// Nothing for kanbanr, with why (for the debug log).
+    Quiet(String),
+    /// A tagged question the agent answered itself: refuse it before the person sees it.
+    Refuse(String),
+    /// A tagged question to mark, so the answer to it can make a pass.
+    Mark(Marker),
+}
+
+/// The single-select tagged questions' text in `questions`, in order.
+fn tagged_questions(questions: &[Value]) -> Vec<String> {
+    questions
+        .iter()
+        .filter(|q| q.get("multiSelect").and_then(Value::as_bool) != Some(true))
+        .map(|q| text(q, "question"))
+        .filter(|q| parse_tag(q).is_some())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Read a PreToolUse payload. Pure. For one on AskUserQuestion, from no sub-agent, with at least
+/// one single-select tagged question: `Refuse` when its `tool_input.answers` is not empty (the
+/// agent answered it itself), else `Mark` with the tagged questions. Anything else is `Quiet`.
+pub fn seen(payload: &Value) -> Seen {
+    if text(payload, "hook_event_name") != "PreToolUse" {
+        return Seen::Quiet("not a PreToolUse payload".into());
+    }
+    if text(payload, "tool_name") != "AskUserQuestion" {
+        return Seen::Quiet("not an AskUserQuestion call".into());
+    }
+    if !text(payload, "agent_id").trim().is_empty() {
+        return Seen::Quiet("asked by a sub-agent, which never takes a verdict".into());
+    }
+    let input = payload.get("tool_input").unwrap_or(&Value::Null);
+    let Some(questions) = input.get("questions").and_then(Value::as_array) else {
+        return Seen::Quiet("no questions in the payload".into());
+    };
+    let questions = tagged_questions(questions);
+    if questions.is_empty() {
+        return Seen::Quiet("no single-select tagged question".into());
+    }
+    match input.get("answers") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(m)) if m.is_empty() => {}
+        Some(_) => {
+            return Seen::Refuse(
+                "the agent answered a decision question itself, before the person saw it".into(),
+            );
+        }
+    }
+    Seen::Mark(Marker {
+        tool_use_id: text(payload, "tool_use_id").to_string(),
+        session_id: text(payload, "session_id").to_string(),
+        questions,
+        at: String::new(),
+    })
+}
+
 /// Read a PostToolUse payload. Pure. `Quiet` unless it is a PostToolUse on AskUserQuestion, from
-/// no sub-agent, with no pre-set `tool_input.answers` (a question answered by a PreToolUse hook is
-/// not the person's), and at least one single-select tagged question. A question whose trimmed
-/// answer is its tag's approving label, offered among its options, is `Answered`; any other
-/// answer, or none, is declined. When a payload holds both, both are given, in payload order within
-/// each list (DEF-110).
-pub fn listen(payload: &Value) -> Listened {
+/// no sub-agent, with a `marker` (kanbanr saw the question before it was shown, DEF-126; Claude
+/// Code itself writes the person's choice into the payload's `tool_input.answers`, so the payload
+/// cannot tell), and with at least one single-select tagged question. A question whose trimmed
+/// answer is its tag's approving label, offered among its options, and whose text is in the
+/// marker, is `Answered`; any other answer, or none, or a question the marker does not hold, is
+/// declined. When a payload holds both, both are given, in payload order within each list
+/// (DEF-110).
+pub fn listen(payload: &Value, marker: Option<&Marker>) -> Listened {
     if text(payload, "hook_event_name") != "PostToolUse" {
         return Listened::Quiet("not a PostToolUse payload".into());
     }
@@ -165,16 +248,14 @@ pub fn listen(payload: &Value) -> Listened {
     if !text(payload, "agent_id").trim().is_empty() {
         return Listened::Quiet("asked by a sub-agent, which never takes a verdict".into());
     }
+    let Some(marker) = marker else {
+        return Listened::Quiet(
+            "kanbanr did not see this question before it was shown (run `kanbanr hooks install`, \
+             then start a new session)"
+                .into(),
+        );
+    };
     let input = payload.get("tool_input").unwrap_or(&Value::Null);
-    match input.get("answers") {
-        None | Some(Value::Null) => {}
-        Some(Value::Object(m)) if m.is_empty() => {}
-        Some(_) => {
-            return Listened::Quiet(
-                "the question was answered before the person saw it (tool_input.answers)".into(),
-            );
-        }
-    }
     let response = payload.get("tool_response").unwrap_or(&Value::Null);
     let questions = response
         .get("questions")
@@ -203,7 +284,8 @@ pub fn listen(payload: &Value) -> Listened {
             .get("options")
             .and_then(Value::as_array)
             .is_some_and(|os| os.iter().any(|o| text(o, "label") == label));
-        if answer.trim() == label && offered {
+        let marked = marker.questions.iter().any(|m| m == question);
+        if answer.trim() == label && offered && marked {
             answered.push(Answered {
                 tag,
                 question: question.to_string(),
@@ -399,6 +481,82 @@ pub fn consume(store: &Store, id: &str) -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         other => other,
     }
+}
+
+fn valid_tool_use_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+/// The folder markers live in: `<git dir>/kanbanr/passes/asked`.
+pub fn asked_dir(store: &Store) -> PathBuf {
+    dir(store).join(ASKED)
+}
+
+/// Has a marker written `at` lasted [`TTL_MINUTES`] by `now`? A value that is not a time has.
+fn marker_expired(at: &str, now: &str) -> bool {
+    match (instant(at), instant(now)) {
+        (Some(a), Some(n)) => a + time::Duration::minutes(TTL_MINUTES) <= n,
+        _ => true,
+    }
+}
+
+/// Write `m` as `<asked dir>/<tool_use_id>.json`, stamped `now`, removing expired markers on the
+/// way. A tool_use_id with any character outside `[A-Za-z0-9_-]` is refused before any path is
+/// built.
+pub fn mark(store: &Store, m: &Marker, now: &str) -> Result<()> {
+    if !valid_tool_use_id(&m.tool_use_id) {
+        return Err(CoreError::Unsupported(format!(
+            "`{}` is not a tool_use_id",
+            m.tool_use_id
+        )));
+    }
+    let folder = asked_dir(store);
+    std::fs::create_dir_all(&folder)?;
+    if let Ok(entries) = std::fs::read_dir(&folder) {
+        for path in entries.flatten().map(|e| e.path()) {
+            let stale = std::fs::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Marker>(&b).ok())
+                .is_none_or(|old| marker_expired(&old.at, now));
+            if stale && path.extension().is_some_and(|x| x == "json") {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    let marker = Marker {
+        at: now.to_string(),
+        ..m.clone()
+    };
+    let bytes =
+        serde_json::to_vec_pretty(&marker).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    crate::atomic::write(folder.join(format!("{}.json", m.tool_use_id)), bytes)?;
+    Ok(())
+}
+
+/// The marker for `tool_use_id`, read and deleted: used once. `None` when there is none, it does
+/// not parse, names another id, or has expired at `now` (an expired one is deleted too).
+pub fn take_marker(store: &Store, tool_use_id: &str, now: &str) -> Result<Option<Marker>> {
+    if !valid_tool_use_id(tool_use_id) {
+        return Ok(None);
+    }
+    let file = asked_dir(store).join(format!("{tool_use_id}.json"));
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    match std::fs::remove_file(&file) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let Ok(marker) = serde_json::from_slice::<Marker>(&bytes) else {
+        return Ok(None);
+    };
+    Ok((marker.tool_use_id == tool_use_id && !marker_expired(&marker.at, now)).then_some(marker))
 }
 
 /// Every pass file, with what it holds (`None` when it does not parse).
@@ -639,8 +797,28 @@ mod tests {
         })
     }
 
+    /// The marker the question hook leaves for a payload of [`payload`]'s shape: every question
+    /// in it, as kanbanr saw it before it was shown.
+    fn marker_for(v: &Value) -> Marker {
+        let questions = v["tool_input"]["questions"]
+            .as_array()
+            .map(|qs| qs.iter().map(|q| text(q, "question").to_string()).collect())
+            .unwrap_or_default();
+        Marker {
+            tool_use_id: text(v, "tool_use_id").into(),
+            session_id: text(v, "session_id").into(),
+            questions,
+            at: NOW.into(),
+        }
+    }
+
+    /// What the hook hears of `v` when kanbanr saw its questions before they were shown.
+    fn hear(v: &Value) -> Listened {
+        listen(v, Some(&marker_for(v)))
+    }
+
     fn answered(v: &Value) -> Vec<Answered> {
-        match listen(v) {
+        match hear(v) {
             Listened::Answered(a, _) => a,
             other => panic!("expected an answer, got {other:?}"),
         }
@@ -666,7 +844,7 @@ mod tests {
             mixed[part]["questions"].as_array_mut().unwrap().push(q);
         }
         mixed["tool_response"]["answers"][second.as_str()] = json!("Not yet");
-        match listen(&mixed) {
+        match hear(&mixed) {
             Listened::Answered(a, d) => {
                 assert_eq!(a.len(), 1);
                 assert_eq!(a[0].tag, tag);
@@ -769,14 +947,14 @@ mod tests {
         // No pass for anything that is not the approving option.
         for no in ["Not yet", "Yes, approve it", " ", ""] {
             assert!(
-                matches!(listen(&payload(&question, &["Approve", "Not yet"], no)),
+                matches!(hear(&payload(&question, &["Approve", "Not yet"], no)),
                     Listened::Declined(ref d) if d.len() == 1 && d[0].1 == no),
                 "{no:?}"
             );
         }
         // Nor for an approving label the question never offered.
         assert!(matches!(
-            listen(&payload(&question, &["Yes", "No"], "Approve")),
+            hear(&payload(&question, &["Yes", "No"], "Approve")),
             Listened::Declined(_)
         ));
         // Nor for a multi-select question.
@@ -784,28 +962,23 @@ mod tests {
         for side in ["tool_input", "tool_response"] {
             multi[side]["questions"][0]["multiSelect"] = json!(true);
         }
-        assert!(matches!(listen(&multi), Listened::Quiet(_)));
-        // Nor for a question answered before the person saw it.
-        let mut pre = yes.clone();
-        pre["tool_input"]["answers"] = json!({question.clone(): "Approve"});
-        assert!(matches!(listen(&pre), Listened::Quiet(_)));
-        let mut empty_pre = yes.clone();
-        empty_pre["tool_input"]["answers"] = json!({});
-        assert!(matches!(listen(&empty_pre), Listened::Answered(..)));
+        assert!(matches!(hear(&multi), Listened::Quiet(_)));
+        // Nor for a question kanbanr did not see before it was shown (DEF-126).
+        assert!(matches!(listen(&yes, None), Listened::Quiet(_)));
         // Nor for a sub-agent's question.
         let mut agent = yes.clone();
         agent["agent_id"] = json!("a1b2");
-        assert!(matches!(listen(&agent), Listened::Quiet(_)));
+        assert!(matches!(hear(&agent), Listened::Quiet(_)));
         // Nor for another tool or another event.
         let mut tool = yes.clone();
         tool["tool_name"] = json!("Bash");
-        assert!(matches!(listen(&tool), Listened::Quiet(_)));
+        assert!(matches!(hear(&tool), Listened::Quiet(_)));
         let mut event = yes.clone();
         event["hook_event_name"] = json!("PreToolUse");
-        assert!(matches!(listen(&event), Listened::Quiet(_)));
+        assert!(matches!(hear(&event), Listened::Quiet(_)));
         // Nor for an untagged question.
         assert!(matches!(
-            listen(&payload("Approve it?", &["Approve", "Not yet"], "Approve")),
+            hear(&payload("Approve it?", &["Approve", "Not yet"], "Approve")),
             Listened::Quiet(_)
         ));
 
@@ -871,6 +1044,203 @@ mod tests {
         let why = issue(&store, &a, NOW).unwrap().unwrap_err();
         assert!(why.contains("not in conversation mode"), "{why}");
         assert!(!root.join(".git").join(DIR).exists() || files(&store).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The payload Claude Code sent on 26 Nov 2026 (FTR-035 R-2 manual check), ids made neutral:
+    /// the person's answer and annotations in both `tool_input` and `tool_response`.
+    fn payload_as_sent(question: &str, answer: &str) -> Value {
+        json!({
+            "session_id": "00000000-0000-0000-0000-000000000000",
+            "transcript_path": "/tmp/kanbanr-fixture/transcript.jsonl",
+            "cwd": "/tmp/kanbanr-fixture/project",
+            "scratchpad_dir": "/tmp/kanbanr-fixture/scratchpad",
+            "prompt_id": "00000000-0000-0000-0000-000000000001",
+            "permission_mode": "auto",
+            "effort": {"level": "medium"},
+            "hook_event_name": "PostToolUse",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": sent_questions(question), "answers": {question: answer}, "annotations": {}},
+            "tool_response": {"questions": sent_questions(question), "answers": {question: answer}, "annotations": {}},
+            "tool_use_id": "toolu_01NEUTRAL",
+            "duration_ms": 0
+        })
+    }
+
+    /// The PreToolUse payload for the same call (probed 26 Nov 2026): the same `tool_use_id`, and
+    /// the agent's input without `answers` when the agent set none.
+    fn pre_payload(question: &str) -> Value {
+        json!({
+            "session_id": "00000000-0000-0000-0000-000000000000",
+            "transcript_path": "/tmp/kanbanr-fixture/transcript.jsonl",
+            "cwd": "/tmp/kanbanr-fixture/project",
+            "scratchpad_dir": "/tmp/kanbanr-fixture/scratchpad",
+            "prompt_id": "00000000-0000-0000-0000-000000000001",
+            "permission_mode": "auto",
+            "effort": {"level": "medium"},
+            "hook_event_name": "PreToolUse",
+            "tool_name": "AskUserQuestion",
+            "tool_input": {"questions": sent_questions(question)},
+            "tool_use_id": "toolu_01NEUTRAL"
+        })
+    }
+
+    fn sent_questions(question: &str) -> Value {
+        json!([{
+            "question": question,
+            "header": "Approve",
+            "options": [
+                {"label": "Approve", "description": "Record it now as your decision; kanbanr keeps this question and your answer on the record"},
+                {"label": "Not yet", "description": "Record nothing; tell your agent what to change or what you need to see first"}
+            ],
+            "multiSelect": false
+        }])
+    }
+
+    fn sent_question() -> String {
+        format!(
+            "Approve FTR-1 \"Example item\" 's definition as it stands (rev {})? [kanbanr approve FTR-1 --rev {REV} --project demo]",
+            &REV[..8]
+        )
+    }
+
+    /// DEF-126 R-1: the question hook marks the question before it is shown; the person's answer,
+    /// which Claude Code writes into `tool_input.answers` too, then makes the pass.
+    #[test]
+    fn the_persons_answer_to_a_question_kanbanr_saw_makes_a_pass() {
+        let (store, root, _code) = board(Mode::Conversation);
+        let question = sent_question();
+        let Seen::Mark(marker) = seen(&pre_payload(&question)) else {
+            panic!("expected the question to be marked");
+        };
+        assert_eq!(marker.tool_use_id, "toolu_01NEUTRAL");
+        assert_eq!(marker.questions, vec![question.clone()]);
+        mark(&store, &marker, NOW).unwrap();
+        assert!(asked_dir(&store).join("toolu_01NEUTRAL.json").is_file());
+        let payload = payload_as_sent(&question, "Approve");
+        let found = take_marker(&store, "toolu_01NEUTRAL", NOW).unwrap();
+        assert_eq!(
+            found.as_ref().map(|m| &m.questions),
+            Some(&marker.questions)
+        );
+        match listen(&payload, found.as_ref()) {
+            Listened::Answered(a, d) => {
+                assert_eq!(a.len(), 1);
+                assert!(d.is_empty());
+                assert_eq!(a[0].answer, "Approve");
+                assert_eq!(a[0].tag.code, "FTR-1");
+                assert_eq!(a[0].tag.rev, REV);
+                assert_eq!(a[0].tool_use_id, "toolu_01NEUTRAL");
+            }
+            other => panic!("expected a pass to be made, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// DEF-126 R-2: a tagged question the agent answered itself is refused before it is shown,
+    /// and no marker is left for it; untagged, multi-select, sub-agent and other-tool calls are
+    /// left alone.
+    #[test]
+    fn a_question_the_agent_answered_itself_is_refused_before_it_is_shown() {
+        let question = sent_question();
+        let mut pre = pre_payload(&question);
+        pre["tool_input"]["answers"] = json!({question.clone(): "Approve"});
+        assert!(matches!(seen(&pre), Seen::Refuse(_)), "{:?}", seen(&pre));
+        // Empty answers are no answers.
+        pre["tool_input"]["answers"] = json!({});
+        assert!(matches!(seen(&pre), Seen::Mark(_)));
+        // An untagged question, even pre-answered, is not kanbanr's.
+        let mut untagged = pre_payload("Ship it?");
+        untagged["tool_input"]["answers"] = json!({"Ship it?": "Approve"});
+        assert!(matches!(seen(&untagged), Seen::Quiet(_)));
+        let mut multi = pre_payload(&question);
+        multi["tool_input"]["questions"][0]["multiSelect"] = json!(true);
+        assert!(matches!(seen(&multi), Seen::Quiet(_)));
+        let mut agent = pre_payload(&question);
+        agent["agent_id"] = json!("a1b2");
+        assert!(matches!(seen(&agent), Seen::Quiet(_)));
+        let mut tool = pre_payload(&question);
+        tool["tool_name"] = json!("Bash");
+        assert!(matches!(seen(&tool), Seen::Quiet(_)));
+        assert!(matches!(
+            seen(&payload_as_sent(&question, "Approve")),
+            Seen::Quiet(_)
+        ));
+    }
+
+    /// DEF-126 R-2: an answer to a question kanbanr never saw makes no pass: no marker at all, or
+    /// a marker that does not hold this question.
+    #[test]
+    fn an_answer_to_a_question_kanbanr_never_saw_makes_no_pass() {
+        let (store, root, _code) = board(Mode::Conversation);
+        let question = sent_question();
+        let payload = payload_as_sent(&question, "Approve");
+        let none = take_marker(&store, "toolu_01NEUTRAL", NOW).unwrap();
+        assert_eq!(none, None);
+        match listen(&payload, none.as_ref()) {
+            Listened::Quiet(why) => assert!(
+                why.contains("kanbanr did not see this question before it was shown")
+                    && why.contains("kanbanr hooks install"),
+                "{why}"
+            ),
+            other => panic!("expected no pass, got {other:?}"),
+        }
+        let other = Marker {
+            tool_use_id: "toolu_01NEUTRAL".into(),
+            questions: vec![question.replace("Example item", "Another item")],
+            at: NOW.into(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            listen(&payload, Some(&other)),
+            Listened::Declined(ref d) if d.len() == 1
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// DEF-126 R-2: a marker is read once, then gone; one older than the pass lifetime is none,
+    /// and goes too; an id that could name a path is refused.
+    #[test]
+    fn a_marker_is_used_once_and_expires() {
+        let (store, root, _code) = board(Mode::Conversation);
+        let Seen::Mark(marker) = seen(&pre_payload(&sent_question())) else {
+            panic!("expected the question to be marked");
+        };
+        mark(&store, &marker, NOW).unwrap();
+        let first = take_marker(&store, &marker.tool_use_id, NOW).unwrap();
+        assert_eq!(first.map(|m| m.at), Some(NOW.to_string()));
+        assert_eq!(take_marker(&store, &marker.tool_use_id, NOW).unwrap(), None);
+
+        mark(&store, &marker, NOW).unwrap();
+        let later = (instant(NOW).unwrap() + time::Duration::minutes(TTL_MINUTES))
+            .format(&Rfc3339)
+            .unwrap();
+        assert_eq!(
+            take_marker(&store, &marker.tool_use_id, &later).unwrap(),
+            None
+        );
+        let file = asked_dir(&store).join(format!("{}.json", marker.tool_use_id));
+        assert!(!file.exists());
+
+        // Writing a marker sweeps expired ones.
+        let old = Marker {
+            tool_use_id: "toolu_01OLD".into(),
+            ..marker.clone()
+        };
+        mark(&store, &old, NOW).unwrap();
+        mark(&store, &marker, &later).unwrap();
+        assert!(!asked_dir(&store).join("toolu_01OLD.json").exists());
+        assert!(file.exists());
+
+        let bad = Marker {
+            tool_use_id: "../x".into(),
+            ..marker.clone()
+        };
+        assert!(mark(&store, &bad, NOW).is_err());
+        assert_eq!(take_marker(&store, "../x", NOW).unwrap(), None);
+        // The pass folder's own listing does not take the marker folder for a pass.
+        sweep(&store, &later);
+        assert!(file.exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
