@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-26
+
 ### Added
 
 - A project can take its decisions in the conversation: Claude asks with the board's tagged question, the person's answer makes a one-time pass through a Claude Code hook, and the verdict is recorded only with that pass, keeping the question and answer on the record (FTR-035).
@@ -1926,7 +1928,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/startr-trade/kanbanr/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/startr-trade/kanbanr/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/startr-trade/kanbanr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...v0.6.0
