@@ -8172,6 +8172,7 @@ impl ScopeFx {
             "PreToolUse": [
                 hook("Bash", "kanbanr git guard")[0].clone(),
                 hook("Write|Edit", "kanbanr claude guard")[0].clone(),
+                hook("AskUserQuestion", "kanbanr decisions asked")[0].clone(),
             ],
             "PostToolUse": [
                 hook("Bash", "kanbanr capture")[0].clone(),
@@ -14138,7 +14139,7 @@ fn git_tidy_names_the_scope_left_on_a_finished_item() {
     std::fs::create_dir_all(work.join(".claude")).unwrap();
     let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
     let settings = serde_json::json!({ "hooks": {
-        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard"), hook("AskUserQuestion", "kanbanr decisions asked")],
         "PostToolUse": [hook("Bash", "kanbanr capture"), hook("AskUserQuestion", "kanbanr decisions heard")],
     }});
     std::fs::write(work.join(".claude/settings.json"), settings.to_string()).unwrap();

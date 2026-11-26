@@ -38,7 +38,7 @@ fn script_hooks() -> Vec<(&'static str, &'static str)> {
 /// output of a run to record which tracked tests actually passed (FEAT-053), the other checks a
 /// `git commit` before it is attempted, so the feedback arrives with a suggestion rather than as a
 /// failure after the fact (FEAT-056).
-const CLI_HOOKS: [(&str, &str, &str); 4] = [
+const CLI_HOOKS: [(&str, &str, &str); 5] = [
     ("PostToolUse", "Bash", "kanbanr capture"),
     ("PreToolUse", "Bash", "kanbanr git guard"),
     // Documentation belongs on the board (FEAT-040). The rule lived only in the skill's prose
@@ -47,6 +47,9 @@ const CLI_HOOKS: [(&str, &str, &str); 4] = [
     // A decision taken in the conversation (FTR-035): it reads the person's answer to a tagged
     // question from Claude Code's own record of it and makes the one-time pass the verdict needs.
     ("PostToolUse", "AskUserQuestion", "kanbanr decisions heard"),
+    // It sees each tagged question before the person does (DEF-126): it refuses one the agent
+    // answered itself and marks the rest, and the answer hook makes a pass only for a marked one.
+    ("PreToolUse", "AskUserQuestion", "kanbanr decisions asked"),
 ];
 
 /// Where a project's own hooks are registered: `<root>/.claude`, which Claude Code reads for that
@@ -817,6 +820,47 @@ mod tests {
         assert!(status(&json!({})).is_empty());
     }
 
+    /// DEF-126 R-4: install registers the question hook (PreToolUse on AskUserQuestion, `kanbanr
+    /// decisions asked`) once, beside the Bash guard on its event; settings without it are missing
+    /// PreToolUse, and only it is added back.
+    #[test]
+    fn hooks_install_registers_decisions_asked() {
+        let dir = temp_claude_dir(true);
+        assert!(matches!(install(&dir).unwrap(), Installed::Added(_)));
+        let read = || -> Value {
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap()
+        };
+        let asked = |v: &Value| -> Vec<Value> {
+            v["hooks"]["PreToolUse"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|g| g["hooks"][0]["command"] == "kanbanr decisions asked")
+                .cloned()
+                .collect()
+        };
+        let v = read();
+        let groups = asked(&v);
+        assert_eq!(groups.len(), 1, "{v}");
+        assert_eq!(groups[0]["matcher"], "AskUserQuestion");
+        assert!(commands(&v, "PreToolUse").any(|c| c == "kanbanr git guard"));
+        assert!(missing(&v).is_empty());
+        assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
+        assert_eq!(asked(&read()).len(), 1);
+
+        let mut partial = v.clone();
+        partial["hooks"]["PreToolUse"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|g| g["hooks"][0]["command"] != "kanbanr decisions asked");
+        assert_eq!(missing(&partial), ["PreToolUse"]);
+        assert_eq!(
+            add(&mut partial, &scripts_dir(&dir)).unwrap(),
+            ["PreToolUse"]
+        );
+        assert_eq!(asked(&partial).len(), 1);
+    }
+
     /// FTR-035 R-1: install registers the AskUserQuestion hook that makes a pass from the person's
     /// answer, once; uninstall takes it away and leaves the other hooks on its event alone; and a
     /// scope is not told apart from its agent without it.
@@ -871,7 +915,7 @@ mod tests {
         assert!(identifying_hooks_registered_in(&scope_files(&v)));
         assert!(
             !identifying_hooks_registered_in(&scope_files(&partial)),
-            "all four CLI hooks must be registered"
+            "all five CLI hooks must be registered"
         );
         assert_eq!(
             add(&mut partial, &scripts_dir(&dir)).unwrap(),
