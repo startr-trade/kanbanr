@@ -15004,8 +15004,36 @@ fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
 fn run_decisions_heard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     use kanbanr_core::passes::{self, Listened};
     let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
-    let lines: Vec<String> = match passes::listen(&payload) {
-        Listened::Quiet(_) => return Ok(()),
+    // The agent's own call, as the session transcript records it (DEF-126); unreadable or not
+    // found makes no pass.
+    let model_input = match (
+        payload.get("transcript_path").and_then(Value::as_str),
+        payload.get("tool_use_id").and_then(Value::as_str),
+    ) {
+        (Some(path), Some(id)) if !path.is_empty() && !id.is_empty() => {
+            passes::model_call(std::path::Path::new(path), id)
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+    let lines: Vec<String> = match passes::listen(&payload, model_input.as_ref()) {
+        // Silent unless the payload holds a tagged question: then one line says why (DEF-126).
+        Listened::Quiet(why) => {
+            let tagged = ["tool_response", "tool_input"].iter().any(|side| {
+                payload[*side]["questions"].as_array().is_some_and(|qs| {
+                    qs.iter().any(|q| {
+                        q["question"]
+                            .as_str()
+                            .is_some_and(|t| passes::parse_tag(t).is_some())
+                    })
+                })
+            });
+            if !tagged {
+                return Ok(());
+            }
+            vec![format!("kanbanr: no pass was made: {why}")]
+        }
         Listened::Declined(declined) => declined
             .iter()
             .map(|(tag, answer)| passes::declined_line(tag, answer))

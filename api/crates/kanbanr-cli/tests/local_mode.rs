@@ -20407,6 +20407,37 @@ fn ask_user_question_payload(project: &str, code: &str, rev: &str, answer: &str)
     )
 }
 
+/// The payload with a session transcript of its own under `base`, which records the agent's call
+/// for the payload's `tool_use_id` with `model_input` (DEF-126), and `transcript_path` naming it.
+fn with_transcript_of(
+    base: &std::path::Path,
+    payload: &str,
+    model_input: &serde_json::Value,
+) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let id = v["tool_use_id"].as_str().unwrap().to_string();
+    let line = serde_json::json!({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": model_input}
+        ]}
+    });
+    let file = base.join(format!("transcript-{id}.jsonl"));
+    std::fs::write(&file, format!("{line}\n")).unwrap();
+    v["transcript_path"] = serde_json::json!(file.to_str().unwrap());
+    v.to_string()
+}
+
+/// The payload with a transcript whose call for it carried only the questions: the person's.
+fn with_transcript(base: &std::path::Path, payload: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+    with_transcript_of(
+        base,
+        payload,
+        &serde_json::json!({"questions": v["tool_input"]["questions"]}),
+    )
+}
+
 /// FTR-035 R-1, R-2: the hook makes a pass from the person's approving answer; the verdict with
 /// `--pass` records `origin: conversation` and what was heard, uses the pass once, and a
 /// declined answer makes none.
@@ -20426,7 +20457,10 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     let declined = run_heard_hook(
         &base,
         &work,
-        &ask_user_question_payload("shop", "FEAT-002", &rev, "Not yet"),
+        &with_transcript(
+            &base,
+            &ask_user_question_payload("shop", "FEAT-002", &rev, "Not yet"),
+        ),
     );
     assert!(declined.status.success());
     let said = String::from_utf8_lossy(&declined.stdout).to_string();
@@ -20442,7 +20476,10 @@ fn decisions_heard_makes_a_pass_and_the_verdict_uses_it_once() {
     let heard = run_heard_hook(
         &base,
         &work,
-        &ask_user_question_payload("shop", "FEAT-002", &rev, "Approve"),
+        &with_transcript(
+            &base,
+            &ask_user_question_payload("shop", "FEAT-002", &rev, "Approve"),
+        ),
     );
     assert!(heard.status.success());
     let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
@@ -20528,7 +20565,7 @@ fn decisions_heard_reports_a_declined_question_beside_an_approved_one() {
     }
     payload["tool_response"]["answers"][second_text.as_str()] = serde_json::json!("Not yet");
 
-    let heard = run_heard_hook(&base, &work, &payload.to_string());
+    let heard = run_heard_hook(&base, &work, &with_transcript(&base, &payload.to_string()));
     assert!(heard.status.success());
     let out: serde_json::Value = serde_json::from_slice(&heard.stdout).unwrap();
     let context = out["hookSpecificOutput"]["additionalContext"]
@@ -20552,6 +20589,84 @@ fn decisions_heard_reports_a_declined_question_beside_an_approved_one() {
         .map(|d| d.count())
         .unwrap_or(0);
     assert_eq!(made, 1, "exactly one pass file");
+}
+
+/// DEF-126 R-3: when the hook makes no pass for a tagged question it says why, in one line; an
+/// untagged question stays silent.
+#[test]
+fn decisions_heard_says_why_no_pass_was_made_for_a_tagged_question() {
+    let (base, work) = conversation_board("def126-quiet");
+    let q = run_in(
+        &base,
+        &work,
+        &["decisions", "question", "approve", "FEAT-002", "--json"],
+    );
+    assert!(q.status.success(), "{}", String::from_utf8_lossy(&q.stderr));
+    let q: serde_json::Value = serde_json::from_slice(&q.stdout).unwrap();
+    let rev = q["rev"].as_str().unwrap().to_string();
+    // The payload as Claude Code sends it: the person's answer in tool_input too.
+    let mut sent: serde_json::Value = serde_json::from_str(&ask_user_question_payload(
+        "shop", "FEAT-002", &rev, "Approve",
+    ))
+    .unwrap();
+    sent["tool_input"]["answers"] = sent["tool_response"]["answers"].clone();
+    let sent = sent.to_string();
+    let context = |o: &Output| -> String {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out: serde_json::Value = serde_json::from_slice(&o.stdout)
+            .unwrap_or_else(|_| panic!("no answer: {}", String::from_utf8_lossy(&o.stdout)));
+        out["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // The agent's own call carried the answers: no pass, and one line says why.
+    let mut model = serde_json::json!({"questions": serde_json::from_str::<serde_json::Value>(&sent).unwrap()["tool_input"]["questions"]});
+    model["answers"] =
+        serde_json::from_str::<serde_json::Value>(&sent).unwrap()["tool_input"]["answers"].clone();
+    let said = context(&run_heard_hook(
+        &base,
+        &work,
+        &with_transcript_of(&base, &sent, &model),
+    ));
+    assert_eq!(said.lines().count(), 1, "{said}");
+    assert!(
+        said.starts_with("kanbanr: no pass was made: ")
+            && said.contains("the agent's own call carried answers"),
+        "{said}"
+    );
+
+    // The call is not in the session transcript: no pass, and one line says why.
+    let mut gone: serde_json::Value = serde_json::from_str(&sent).unwrap();
+    gone["transcript_path"] = serde_json::json!(base.join("no-such.jsonl").to_str().unwrap());
+    let said = context(&run_heard_hook(&base, &work, &gone.to_string()));
+    assert_eq!(said.lines().count(), 1, "{said}");
+    assert!(
+        said.starts_with("kanbanr: no pass was made: ")
+            && said.contains("not found in the session transcript"),
+        "{said}"
+    );
+
+    // An untagged question stays silent.
+    let untagged = sent
+        .replace("[kanbanr approve", "(kanbanr approve")
+        .replace("--project shop]", "--project shop)");
+    assert_ne!(untagged, sent);
+    let o = run_heard_hook(&base, &work, &untagged);
+    assert!(o.status.success());
+    assert!(
+        o.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+
+    let data = run_in(&base, &work, &["where"]);
+    let data = std::path::PathBuf::from(String::from_utf8_lossy(&data.stdout).trim());
+    assert!(
+        is_empty_or_missing(&data.join(".git/kanbanr/passes")),
+        "a quiet hook wrote a pass"
+    );
 }
 
 /// Does the folder hold nothing, or not exist?
