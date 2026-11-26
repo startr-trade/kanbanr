@@ -307,11 +307,19 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
     let hooks = crate::code_repo()
         .filter(|root| project::find_marker(root, project::home_dir().as_deref()).is_some())
         .map(|root| {
-            hookhealth::git_hook_findings(&root)
-                .into_iter()
-                .chain(hookhealth::claude_hook_findings(&root))
-                .map(|f| format!("- {f}\n"))
-                .collect::<String>()
+            // A hook this kanbanr registers that the settings lack: the agent offers a refresh
+            // (DEF-126 R-5). The project's two settings files, then the user's.
+            let files = kanbanr_core::claude::settings_files(&root);
+            let (project_files, user_files) = files.split_at(files.len().min(2));
+            let refresh = crate::hooks::out_of_date_line(project_files, user_files)
+                .map(|line| format!("- {line}\n"))
+                .unwrap_or_default();
+            refresh
+                + &hookhealth::git_hook_findings(&root)
+                    .into_iter()
+                    .chain(hookhealth::claude_hook_findings(&root))
+                    .map(|f| format!("- {f}\n"))
+                    .collect::<String>()
         })
         .filter(|body| !body.is_empty())
         .map(|body| section("kanbanr's hooks", body));

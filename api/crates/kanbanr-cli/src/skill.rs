@@ -610,6 +610,25 @@ mod tests {
             .unwrap()
     }
 
+    /// DEF-126 R-5: when the session summary says kanbanr's hooks are out of date, the skill has
+    /// the agent offer the person a refresh in one question, install only on their yes (with
+    /// `--global` for the user's hooks), then say to start a new session; never edit settings.
+    #[test]
+    fn skill_offers_a_hook_refresh_when_the_summary_says_they_are_out_of_date() {
+        let skill = skill_md();
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        for want in [
+            "When the summary says \"kanbanr's hooks are out of date\"",
+            "\"Refresh kanbanr's hooks now?\"",
+            "\"Refresh now (Recommended)\" and \"Not now\"",
+            "run `kanbanr hooks install` (with `--global` when the line says the hooks are in the user's settings)",
+            "then tell the person to start a new session",
+            "Never install hooks without that yes, and never edit a settings file yourself.",
+        ] {
+            assert!(flat.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FTR-024 R-1, R-2: every verdict goes to the Review or Releases page, with what is waiting
     /// said in one message; with no monitor on writes Claude offers to start one, never records.
     #[test]

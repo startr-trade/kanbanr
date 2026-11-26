@@ -244,6 +244,86 @@ pub fn missing_across(files: &[PathBuf]) -> Vec<&'static str> {
     missing
 }
 
+fn read_all(files: &[PathBuf]) -> Vec<Value> {
+    files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|raw| serde_json::from_str(&raw).ok())
+        .collect()
+}
+
+/// Does `settings` register any of kanbanr's hooks, a CLI one or a script one?
+fn holds_kanbanr_hooks(settings: &Value) -> bool {
+    CLI_HOOKS
+        .iter()
+        .any(|(event, _, command)| commands(settings, event).any(|c| c.trim() == *command))
+        || script_hooks()
+            .into_iter()
+            .any(|(event, name)| commands(settings, event).any(|c| is_kanbanr_hook(c, name)))
+}
+
+/// The [`CLI_HOOKS`] entries `(event, matcher, command)` that neither the project's settings
+/// files nor the user's register (DEF-126): what a newer kanbanr registers that the settings
+/// do not have yet. Empty when any file enables the kanbanr plugin, which brings its own hooks.
+/// A file that is missing or does not parse counts as empty.
+pub fn missing_cli_hooks(
+    project: &[PathBuf],
+    user: &[PathBuf],
+) -> Vec<(&'static str, &'static str, &'static str)> {
+    let all: Vec<Value> = read_all(project)
+        .into_iter()
+        .chain(read_all(user))
+        .collect();
+    if all.iter().any(plugin_enabled) {
+        return Vec::new();
+    }
+    CLI_HOOKS
+        .into_iter()
+        .filter(|(event, matcher, command)| {
+            !all.iter().any(|settings| {
+                settings["hooks"][event]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|g| g["matcher"].as_str().unwrap_or("") == *matcher)
+                    .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+                    .filter_map(|h| h["command"].as_str())
+                    .any(|c| c.trim() == *command)
+            })
+        })
+        .collect()
+}
+
+/// The session summary's line when this kanbanr registers a hook the settings lack (DEF-126
+/// R-5), naming where the existing kanbanr hooks are, so the refresh goes to the same place:
+/// `None` when nothing is missing. `project` is the project's settings files, `user` the user's.
+pub fn out_of_date_line(project: &[PathBuf], user: &[PathBuf]) -> Option<String> {
+    let missing = missing_cli_hooks(project, user);
+    if missing.is_empty() {
+        return None;
+    }
+    let names = missing
+        .iter()
+        .map(|(_, _, c)| format!("`{c}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verb = if missing.len() == 1 { "is" } else { "are" };
+    let in_project = read_all(project).iter().any(holds_kanbanr_hooks);
+    let in_user = read_all(user).iter().any(holds_kanbanr_hooks);
+    let place = match (in_project, in_user) {
+        (true, true) => {
+            "kanbanr's other hooks are in both the project's and the user's settings: run it \
+             there and with `--global`"
+        }
+        (false, true) => "kanbanr's other hooks are in the user's settings: run it with `--global`",
+        _ => "kanbanr's other hooks are in the project's settings: run it there",
+    };
+    Some(format!(
+        "kanbanr's hooks are out of date: {names} {verb} not registered. Offer the person \
+         `kanbanr hooks install` (then a new session); {place}."
+    ))
+}
+
 /// Remove kanbanr's hook entries (all of them, or only those whose script is gone), dropping
 /// groups and events left empty. Returns how many entries were removed.
 fn remove(settings: &mut Value, only_stale: bool) -> usize {

@@ -15934,6 +15934,77 @@ fn doctor_git_status_and_recover_name_a_hook_another_tool_replaced() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-126 R-5: when this kanbanr registers a hook the settings lack, the session summary says so
+/// in one line, naming the command, `kanbanr hooks install` and a new session, and where the other
+/// kanbanr hooks are (the user's: `--global`); with every hook registered it says nothing of it.
+#[test]
+fn the_session_summary_names_hooks_this_kanbanr_registers_that_are_missing() {
+    let (base, work) = recover_scratch("def126-refresh");
+    assert!(
+        std::fs::canonicalize(&base)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+        "the board is not the test's own"
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let hook = |m: &str, c: &str| serde_json::json!({ "matcher": m, "hooks": [{ "type": "command", "command": c }] });
+    let older = serde_json::json!({ "hooks": {
+        "PreToolUse": [hook("Bash", "kanbanr git guard"), hook("Write|Edit", "kanbanr claude guard")],
+        "PostToolUse": [hook("Bash", "kanbanr capture"), hook("AskUserQuestion", "kanbanr decisions heard")],
+    }});
+    let project_settings = work.join(".claude").join("settings.json");
+    let user_settings = base.join("home").join(".claude").join("settings.json");
+    std::fs::create_dir_all(project_settings.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(user_settings.parent().unwrap()).unwrap();
+    let refresh_line = |recover: &str| -> Option<String> {
+        recover
+            .lines()
+            .find(|l| l.contains("kanbanr's hooks are out of date"))
+            .map(str::to_string)
+    };
+
+    // The project's settings, from an older kanbanr.
+    std::fs::write(&project_settings, older.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
+    assert!(
+        line.contains("`kanbanr decisions asked` is not registered")
+            && line.contains("Offer the person `kanbanr hooks install` (then a new session)")
+            && line.contains("in the project's settings")
+            && !line.contains("--global"),
+        "{line}"
+    );
+    assert_eq!(
+        recover.matches("kanbanr's hooks are out of date").count(),
+        1,
+        "{recover}"
+    );
+
+    // The same hooks in the user's settings: the refresh goes there.
+    std::fs::remove_file(&project_settings).unwrap();
+    std::fs::write(&user_settings, older.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
+    assert!(
+        line.contains("in the user's settings") && line.contains("`--global`"),
+        "{line}"
+    );
+
+    // Every hook registered: nothing is said of a refresh.
+    let mut current = older.clone();
+    current["hooks"]["PreToolUse"]
+        .as_array_mut()
+        .unwrap()
+        .push(hook("AskUserQuestion", "kanbanr decisions asked"));
+    std::fs::write(&user_settings, current.to_string()).unwrap();
+    let recover = ok(run_in(&base, &work, &["recover"]));
+    assert_eq!(refresh_line(&recover), None, "{recover}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-060 R-5: two task scopes build one item at once, each in its own worktree on its own task
 /// branch: each records only its own task's state and commits only on its branch.
 #[test]
