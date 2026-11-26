@@ -121,6 +121,7 @@ All notable changes to kanbanr are documented here. The format follows
 ### Fixed
 
 - `kanbanr review --ui` serves the monitor built into the binary, not a `web/dist` found in the current folder; only `$KANBANR_UI_DIR` names another (DEF-120).
+- In conversation mode the person's own answer in the question dialog makes the pass again: the hook tells it from an answer set before they saw the question by the agent's own call in the session transcript, not by the payload's `tool_input.answers`, which Claude Code now fills with the person's choice; when it makes no pass for a tagged question it says why, in one line (DEF-126).
 - No page scrolls sideways at 390 px: the top bar keeps one row, wide tables scroll inside their own frame, codes and status stay on one line and a title clamps at two lines with the full title on hover (FTR-047).
 - The Overview names each milestone with its code and progress, and item codes no longer wrap (FTR-048).
 - Review rows keep fixed columns and nothing is clipped (FTR-038).
