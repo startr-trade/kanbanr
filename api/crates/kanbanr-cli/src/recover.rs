@@ -314,10 +314,17 @@ fn gather(client: &Backend, p: &str, project: &Project) -> Inputs {
             let refresh = crate::hooks::out_of_date_line(project_files, user_files)
                 .map(|line| format!("- {line}\n"))
                 .unwrap_or_default();
+            // The refresh line already names the missing hook and how to add it: the generic
+            // "not registered in any settings file" line would only contradict it.
+            let claude = if refresh.is_empty() {
+                hookhealth::claude_hook_findings(&root)
+            } else {
+                Vec::new()
+            };
             refresh
                 + &hookhealth::git_hook_findings(&root)
                     .into_iter()
-                    .chain(hookhealth::claude_hook_findings(&root))
+                    .chain(claude)
                     .map(|f| format!("- {f}\n"))
                     .collect::<String>()
         })

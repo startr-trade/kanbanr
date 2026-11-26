@@ -15972,7 +15972,9 @@ fn the_session_summary_names_hooks_this_kanbanr_registers_that_are_missing() {
     let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
     assert!(
         line.contains("`kanbanr decisions asked` is not registered")
-            && line.contains("Offer the person `kanbanr hooks install` (then a new session)")
+            && line.contains("Before you answer anything else, ask the person once")
+            && line.contains("\"Refresh now (Recommended)\" and \"Not now\"")
+            && line.contains("run `kanbanr hooks install`, then tell them to start a new session")
             && line.contains("in the project's settings")
             && !line.contains("--global"),
         "{line}"
@@ -15982,6 +15984,10 @@ fn the_session_summary_names_hooks_this_kanbanr_registers_that_are_missing() {
         1,
         "{recover}"
     );
+    assert!(
+        !recover.contains("not registered in any settings file"),
+        "{recover}"
+    );
 
     // The same hooks in the user's settings: the refresh goes there.
     std::fs::remove_file(&project_settings).unwrap();
@@ -15989,7 +15995,8 @@ fn the_session_summary_names_hooks_this_kanbanr_registers_that_are_missing() {
     let recover = ok(run_in(&base, &work, &["recover"]));
     let line = refresh_line(&recover).unwrap_or_else(|| panic!("no refresh line\n{recover}"));
     assert!(
-        line.contains("in the user's settings") && line.contains("`--global`"),
+        line.contains("in the user's settings")
+            && line.contains("run `kanbanr hooks install --global`, then"),
         "{line}"
     );
 

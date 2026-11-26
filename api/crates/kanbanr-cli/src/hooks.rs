@@ -310,17 +310,28 @@ pub fn out_of_date_line(project: &[PathBuf], user: &[PathBuf]) -> Option<String>
     let verb = if missing.len() == 1 { "is" } else { "are" };
     let in_project = read_all(project).iter().any(holds_kanbanr_hooks);
     let in_user = read_all(user).iter().any(holds_kanbanr_hooks);
-    let place = match (in_project, in_user) {
-        (true, true) => {
-            "kanbanr's other hooks are in both the project's and the user's settings: run it \
-             there and with `--global`"
-        }
-        (false, true) => "kanbanr's other hooks are in the user's settings: run it with `--global`",
-        _ => "kanbanr's other hooks are in the project's settings: run it there",
+    let (place, run) = match (in_project, in_user) {
+        (true, true) => (
+            "kanbanr's other hooks are in both the project's and the user's settings",
+            "`kanbanr hooks install` and `kanbanr hooks install --global`",
+        ),
+        (false, true) => (
+            "kanbanr's other hooks are in the user's settings",
+            "`kanbanr hooks install --global`",
+        ),
+        _ => (
+            "kanbanr's other hooks are in the project's settings",
+            "`kanbanr hooks install`",
+        ),
     };
+    // The line carries the whole instruction: an agent that answers from the summary alone, with
+    // the skill not loaded, still asks before anything else.
     Some(format!(
-        "kanbanr's hooks are out of date: {names} {verb} not registered. Offer the person \
-         `kanbanr hooks install` (then a new session); {place}."
+        "kanbanr's hooks are out of date: {names} {verb} not registered; {place}. Before you \
+         answer anything else, ask the person once, in one AskUserQuestion: \"Refresh kanbanr's \
+         hooks now?\", with \"Refresh now (Recommended)\" and \"Not now\". On \"Refresh now\" run \
+         {run}, then tell them to start a new session; on \"Not now\" change nothing. Never \
+         install hooks without that yes."
     ))
 }
 
