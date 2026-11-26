@@ -173,8 +173,15 @@ records. Choose **Approve** (or **Ratify**, or **Sign off**) and Claude Code's h
 that lets the agent record that one verdict, once, within 15 minutes; choose **Not yet** and nothing
 is recorded. kanbanr keeps the question and your answer with the verdict, and `kanbanr feature
 show` prints them. The agent cannot make a pass or change the mode; you switch it under **Decisions
-here**. Run `kanbanr hooks install` once so the hook is registered; `kanbanr hooks status` warns
-if another hook could answer questions for you.
+here**. Run `kanbanr hooks install` once so both of its hooks are registered: one sees each
+question before it is shown and refuses one the agent answered for you, the other reads your
+answer. `kanbanr hooks status` warns if another hook could answer questions for you.
+
+**After an upgrade.** A newer kanbanr can register a hook your settings do not have yet. The
+session summary then says kanbanr's hooks are out of date, and the agent asks you once whether to
+refresh them. On your yes it runs `kanbanr hooks install` (with `--global` where your kanbanr hooks
+are in your user settings) and asks you to start a new session, since Claude Code loads hooks at
+session start; on "Not now" nothing changes, and the next session asks again.
 
 **Auto mode.** If Claude Code runs in auto mode, its safety check can stop a delegated command such
 as `kanbanr signoff … --under DLG-001` before kanbanr sees it, because the check cannot know you
