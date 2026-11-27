@@ -20,8 +20,8 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "kanbanr-core/src/write.rs",
-        "let mut file = std::fs::OpenOptions::new()",
-        "the board lock file is locked in place; only its holder line is written, under the lock, and a torn holder line only degrades the busy message",
+        "let file = std::fs::OpenOptions::new()",
+        "the board lock file is opened to be locked in place and is never written; the holder record goes to its own file through atomic::write (DEF-129)",
     ),
     (
         "kanbanr-core/src/buildplan.rs",
