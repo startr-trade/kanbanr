@@ -7887,8 +7887,9 @@ fn coverage_silent_without_rules() {
     assert!(!out.contains("coverage_warnings"), "{out}");
     let (doctor, _) = ok(&["doctor"]);
     // FTR-059's hook findings name the scratch folder, whose name holds "coverage": judge only
-    // the lines that do not name it.
-    let scratch = base.to_string_lossy().to_string();
+    // the lines that do not name it. By the folder's own name (L-46): doctor prints the resolved
+    // path, which on Windows and macOS is not the one the test was given (DEF-129).
+    let scratch = base.file_name().unwrap().to_string_lossy().to_string();
     assert!(
         !doctor
             .lines()
@@ -15282,7 +15283,8 @@ fn recover_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
 
 /// DEF-093 R-1, R-2, R-5: on a board of 400 items (300 Completed, 85 Planned, 10 In Progress, 5
 /// awaiting approval) `kanbanr recover` stays within the 8000-byte default, names every item in
-/// progress and no planned one, points at `kanbanr board` and `kanbanr ready`, and takes under 2 s;
+/// progress and no planned one, points at `kanbanr board` and `kanbanr ready`, and costs no more
+/// than a few whole-board reads (DEF-129: not a fixed time, which a slow runner breaks);
 /// `--budget 3000` stays within 3000.
 #[test]
 fn the_session_summary_of_a_400_item_board_stays_under_budget() {
@@ -15348,7 +15350,9 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
         &work,
         &["batch", "--file", bundle.to_str().unwrap()],
     ));
+    let started = std::time::Instant::now();
     let board = ok(run_in(&base, &work, &["board"]));
+    let board_took = started.elapsed();
     assert!(
         board.stdout.len() > 20_000,
         "the whole board is too big to print"
@@ -15359,7 +15363,14 @@ fn the_session_summary_of_a_400_item_board_stays_under_budget() {
     let took = started.elapsed();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(text.len() <= 8000, "{} bytes:\n{text}", text.len());
-    assert!(took < std::time::Duration::from_secs(2), "took {took:?}");
+    // Measured against the full board read on the same machine, not a fixed time: a slow runner
+    // (Windows' debug build took 2.3 s) slows both alike (DEF-129). Recover also reads git history
+    // and the lessons, about three times the board read on Linux; five times plus a second catches
+    // a summary that has started reading the board over and over, not a slow machine.
+    assert!(
+        took <= board_took * 5 + std::time::Duration::from_secs(1),
+        "recover took {took:?} against {board_took:?} for the whole board"
+    );
     for n in 301..=310 {
         assert!(
             text.contains(&format!("FEAT-{n:03}")),
@@ -19051,6 +19062,9 @@ fn build_bench_records_before_and_after_rows_for_each_scenario() {
             "1000",
             "--reserve-mem-gib",
             "0",
+            // No vCPU reserve, so a small runner's jobs are capped only by its CPU count (DEF-129).
+            "--reserve-cpus",
+            "0",
         ],
     ));
     let bin = base.join("bin");
@@ -19155,7 +19169,9 @@ fn build_bench_records_before_and_after_rows_for_each_scenario() {
     // Before: as it is (no jobs set here); after: the project's 3 jobs; slots: 5, then 3.
     let jobs: Vec<String> = lines.iter().map(|l| field(l, 2)).collect();
     assert_eq!(&jobs[..3], ["jobs=", "jobs=", "jobs="], "{text}");
-    assert_eq!(&jobs[3..6], ["jobs=3", "jobs=3", "jobs=3"], "{text}");
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let want = format!("jobs={}", 3.min(cpus));
+    assert_eq!(&jobs[3..6], [want.clone(), want.clone(), want], "{text}");
     let mut slot_jobs: Vec<String> = jobs[6..].to_vec();
     slot_jobs.sort();
     assert_eq!(

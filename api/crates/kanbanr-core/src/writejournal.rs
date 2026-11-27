@@ -244,7 +244,10 @@ mod tests {
         let repo = git2::Repository::open(&dir).unwrap();
         repo.worktree("wt", &linked, None).unwrap();
         let gd = git::git_dir(&linked);
-        assert!(gd.starts_with(dir.join(".git").join("worktrees")), "{gd:?}");
+        // Resolved paths on both sides (L-46): libgit2 writes the resolved path into `.git`, so
+        // macOS gives `/private/var/…` and Windows the long user folder name (DEF-129).
+        let worktrees = dir.join(".git").join("worktrees").canonicalize().unwrap();
+        assert!(gd.canonicalize().unwrap().starts_with(&worktrees), "{gd:?}");
         begin(&linked, &journal(&linked, vec![])).unwrap();
         assert_eq!(path(&linked), gd.join("kanbanr-write.json"));
         assert!(path(&linked).is_file());

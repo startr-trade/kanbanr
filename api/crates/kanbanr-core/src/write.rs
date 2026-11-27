@@ -82,7 +82,7 @@ fn lock_wait() -> std::time::Duration {
         .map_or(LOCK_WAIT, std::time::Duration::from_secs)
 }
 
-/// Who holds the board's write lock, written into the lock file once it is held (DEF-102). It
+/// Who holds the board's write lock, written to [`holder_path`] once it is held (DEF-102). It
 /// names the method and path only, never a body.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Holder {
@@ -122,10 +122,23 @@ pub(crate) fn fault(step: &str) {
     }
 }
 
+/// Where the holder of the board's write lock names itself (DEF-129): beside the write journal in
+/// the board's git dir, never tracked, or in the data dir when it is not a git repository. Not the
+/// lock file itself: on Windows a locked file cannot be read by another process.
+#[must_use]
+pub fn holder_path(data_dir: &Path) -> std::path::PathBuf {
+    let gd = git::git_dir(data_dir);
+    if gd.is_dir() {
+        gd.join("kanbanr-lock-holder.json")
+    } else {
+        data_dir.join(".kanbanr.lock.holder")
+    }
+}
+
 /// Run `f` holding the board's exclusive advisory write lock (FEAT-029), waiting at most `wait`
-/// for it (DEF-102). Once held, the lock file names this write (`op` is its method and path); a
-/// write that gives up names the one holding it. The OS releases the lock if the process dies, and
-/// the file is never removed. Reads are intentionally not locked.
+/// for it (DEF-102). Once held, the holder file ([`holder_path`]) names this write (`op` is its
+/// method and path); a write that gives up names the one holding it. The OS releases the lock if
+/// the process dies, and the lock file is never removed. Reads are intentionally not locked.
 pub fn with_lock_for<T>(
     data_dir: &Path,
     wait: std::time::Duration,
@@ -133,12 +146,11 @@ pub fn with_lock_for<T>(
     f: impl FnOnce() -> T,
 ) -> Result<T, WriteError> {
     use fs2::FileExt;
-    use std::io::Write as _;
     let lock_path = data_dir.join(git::WRITE_LOCK_FILE);
-    let mut file = std::fs::OpenOptions::new()
+    let holder_file = holder_path(data_dir);
+    let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        // Never truncated before the lock is held: the holder's name is in it.
         .truncate(false)
         .open(&lock_path)
         .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?;
@@ -151,7 +163,7 @@ pub fn with_lock_for<T>(
                 std::thread::sleep(std::time::Duration::from_millis(50).min(left));
             }
             Err(_) => {
-                let holder = std::fs::read_to_string(&lock_path)
+                let holder = std::fs::read_to_string(&holder_file)
                     .ok()
                     .and_then(|t| serde_json::from_str::<Holder>(&t).ok())
                     .map_or_else(|| "a kanbanr process".to_string(), |h| h.describe());
@@ -168,15 +180,12 @@ pub fn with_lock_for<T>(
         since: crate::now_rfc3339(),
     };
     if let Ok(text) = serde_json::to_vec(&me) {
-        let _ = file
-            .set_len(0)
-            .and_then(|()| file.write_all(&text))
-            .and_then(|()| file.sync_data());
+        let _ = crate::atomic::write(&holder_file, text);
     }
     let result = f();
-    // The holder is named only while the lock is held: an idle board's lock file is empty, so a
-    // refused write leaves no trace in it (DEF-102).
-    let _ = file.set_len(0);
+    // The holder is named only while the lock is held: an idle board has no holder file, so a
+    // refused write leaves no trace (DEF-102). A dead holder's file is overwritten by the next.
+    let _ = std::fs::remove_file(&holder_file);
     let _ = file.unlock();
     Ok(result)
 }
@@ -2391,12 +2400,11 @@ mod tests {
     #[test]
     fn a_write_waits_for_the_lock_at_most_its_bound_and_names_the_holder() {
         use fs2::FileExt;
-        use std::io::Write as _;
         use std::time::{Duration, Instant};
         let dir = std::env::temp_dir().join(format!("kanbanr-write-busy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut held = std::fs::OpenOptions::new()
+        let held = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(false)
@@ -2408,10 +2416,8 @@ mod tests {
             op: "PUT /projects/demo/features/FEAT-001/todos/TL-001/tasks/T5".into(),
             since: "2026-11-16T23:18:27Z".into(),
         };
-        held.set_len(0).unwrap();
-        held.write_all(&serde_json::to_vec(&holder).unwrap())
-            .unwrap();
-        held.sync_data().unwrap();
+        // The holder names itself in its own file, never in the locked one (DEF-129).
+        std::fs::write(holder_path(&dir), serde_json::to_vec(&holder).unwrap()).unwrap();
 
         let started = Instant::now();
         let err = with_lock_for(&dir, Duration::from_millis(300), "POST /x", || ()).unwrap_err();
@@ -2433,8 +2439,8 @@ mod tests {
             let dir = dir.clone();
             std::thread::spawn(move || {
                 with_lock_for(&dir, Duration::from_secs(10), "POST /y", || {
-                    // Read the holder while the lock is held: it is cleared on release.
-                    std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap()
+                    // Read the holder while the lock is held: it is removed on release.
+                    std::fs::read_to_string(holder_path(&dir)).unwrap()
                 })
             })
         };
@@ -2442,13 +2448,34 @@ mod tests {
         held.unlock().unwrap();
         let text = waiter.join().unwrap().unwrap();
         let now: Holder = serde_json::from_str(&text).unwrap();
-        assert_eq!(now.op, "POST /y", "the taker names itself in the lock file");
-        let idle = std::fs::read_to_string(dir.join(git::WRITE_LOCK_FILE)).unwrap();
+        assert_eq!(
+            now.op, "POST /y",
+            "the taker names itself in the holder file"
+        );
         assert!(
-            idle.is_empty(),
-            "an idle board's lock file is empty: {idle}"
+            !holder_path(&dir).exists(),
+            "an idle board has no holder file"
         );
         assert_eq!(now.pid, std::process::id());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-129 R-2: on a board in git, the holder file sits in the git dir beside the write
+    /// journal, so a write's own lock never shows as a change to the board or reaches a commit.
+    #[test]
+    fn the_lock_holder_is_kept_out_of_the_board() {
+        let (dir, _store) = demo_board("holder");
+        let during = with_lock_for(&dir, lock_wait(), "POST /x", || {
+            let holder = holder_path(&dir);
+            (
+                holder.exists(),
+                holder.starts_with(git::git_dir(&dir)),
+                git::changed_paths(&dir),
+            )
+        })
+        .unwrap();
+        assert_eq!(during, (true, true, Vec::<String>::new()));
+        assert!(!holder_path(&dir).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

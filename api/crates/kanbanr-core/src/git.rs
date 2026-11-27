@@ -559,7 +559,9 @@ pub fn restore_to_head(dir: &Path, paths: &[String]) -> Result<(), git2::Error> 
         .collect();
     if !in_head.is_empty() {
         let mut co = git2::build::CheckoutBuilder::new();
-        co.force().update_index(index_free);
+        // HEAD's exact bytes, whatever git's line-ending settings (DEF-129): kanbanr writes LF,
+        // and a converted file would no longer match the index entry's size.
+        co.force().update_index(index_free).disable_filters(true);
         for p in &in_head {
             co.path(p.as_str());
         }
@@ -3354,6 +3356,28 @@ mod tests {
                 .get_path(Path::new("staged.txt"), 0)
                 .is_none()
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-129 R-1: with git's line-ending conversion on (Git for Windows' default) and git's index
+    /// held by another program, a file is put back with HEAD's exact bytes, and git reports no
+    /// change once the index is free.
+    #[test]
+    fn restore_to_head_ignores_autocrlf_and_leaves_the_board_clean() {
+        let dir = board("restore-crlf");
+        Repository::open(&dir)
+            .unwrap()
+            .config()
+            .unwrap()
+            .set_str("core.autocrlf", "true")
+            .unwrap();
+        std::fs::write(dir.join("kept.txt"), "changed\n").unwrap();
+        let lock = dir.join(".git").join("index.lock");
+        std::fs::write(&lock, "").unwrap();
+        restore_to_head(&dir, &["kept.txt".to_string()]).unwrap();
+        std::fs::remove_file(&lock).unwrap();
+        assert_eq!(std::fs::read(dir.join("kept.txt")).unwrap(), b"kept\n");
+        assert!(changed_paths(&dir).is_empty(), "{:?}", changed_paths(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

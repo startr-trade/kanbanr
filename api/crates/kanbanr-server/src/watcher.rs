@@ -105,7 +105,7 @@ pub fn spawn(
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
             let mut bumped: BTreeSet<String> = BTreeSet::new();
-            for path in &event.paths {
+            for path in event.paths.iter().filter(|p| counts(&event.kind, p)) {
                 let found = project_rel(path, &base)
                     .or_else(|| resolved.as_deref().and_then(|r| project_rel(path, r)));
                 match found {
@@ -127,6 +127,16 @@ pub fn spawn(
     })?;
     watcher.watch(&projects_dir, RecursiveMode::Recursive)?;
     Ok(watcher)
+}
+
+/// Does this event on `path` say a board file changed? Windows reports a folder as modified when a
+/// file in it is created or renamed (DEF-129): that is the folder's own time, and the file's event
+/// carries the real tags. A folder's rename, creation or removal still counts.
+fn counts(kind: &notify::EventKind, path: &Path) -> bool {
+    use notify::event::ModifyKind;
+    let folder_touch =
+        matches!(kind, notify::EventKind::Modify(m) if !matches!(m, ModifyKind::Name(_)));
+    !(folder_touch && path.is_dir())
 }
 
 /// Collect `(project, tags)` and send one `Slices` per project `COALESCE_MS` after the first change
@@ -332,6 +342,37 @@ mod tests {
         assert_eq!(tags_for("config.yaml.bak"), vec!["*".to_string()]);
     }
 
+    /// DEF-129 R-3: a folder reported as modified (Windows, when a file in it is written) names no
+    /// slice; the folder's rename, creation and removal, and any file's change, still count.
+    #[test]
+    fn a_folder_modify_event_names_no_slice() {
+        use notify::EventKind;
+        use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+        let base =
+            std::env::temp_dir().join(format!("kanbanr-watch-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let folder = base.join("demo").join("features").join("Planned");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("FTR-1.yaml");
+        std::fs::write(&file, "x").unwrap();
+        assert!(!counts(&EventKind::Modify(ModifyKind::Any), &folder));
+        assert!(!counts(
+            &EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            &folder
+        ));
+        assert!(counts(
+            &EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+            &folder
+        ));
+        assert!(counts(&EventKind::Create(CreateKind::Folder), &folder));
+        assert!(counts(&EventKind::Remove(RemoveKind::Folder), &folder));
+        assert!(counts(&EventKind::Modify(ModifyKind::Any), &file));
+        assert!(counts(&EventKind::Create(CreateKind::File), &file));
+        let gone = folder.join("gone.yaml");
+        assert!(counts(&EventKind::Modify(ModifyKind::Any), &gone));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// DEF-081 R-7: three atomic writes in one burst send one `Slices` holding the union of their
     /// tags, and the project's generation was bumped before it arrived. An atomic write syncs to
     /// disk, so three take about 50 ms; the burst only has to land inside the coalescing window.
@@ -349,7 +390,16 @@ mod tests {
             std::fs::write(f, "old").unwrap();
         }
         let (_watcher, _rx, mut srx, gens) = watch(&base);
+        // The fixture's own writes can still arrive after the watch starts (FSEvents reports from
+        // just before it): wait until a whole window passes with none, then count from there.
         tokio::time::sleep(Duration::from_millis(300)).await;
+        loop {
+            tokio::time::sleep(Duration::from_millis(COALESCE_MS * 3)).await;
+            if srx.try_recv().is_err() {
+                break;
+            }
+            while srx.try_recv().is_ok() {}
+        }
         let before = gens.of(Some("demo"));
         let started = std::time::Instant::now();
         kanbanr_core::atomic::write(&item, "new").unwrap();
