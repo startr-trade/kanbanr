@@ -445,7 +445,13 @@ pub fn entry(
     code: &str,
     repo: Option<&std::path::Path>,
 ) -> Result<Option<ReviewEntry>> {
-    let inputs = Inputs::load(store, p, repo)?;
+    // The item alone, from its own files (DEF-128); an earlier code is found only over every
+    // item (FTR-056).
+    let project = match store.load_one(p, code) {
+        Err(crate::CoreError::FeatureNotFound(_)) => store.load_for_gates(p)?,
+        other => other?,
+    };
+    let inputs = Inputs::load_from(store, p, repo, project)?;
     let f = inputs.project.feature(code)?;
     let mut entries: Vec<ReviewEntry> = inputs.entry_for(store, p, f).into_iter().collect();
     if let Some(repo) = repo
@@ -1187,11 +1193,12 @@ mod tests {
     /// FTR-006 R-9: an item at the design role naming `architecture/context.md` gets the baseline
     /// row with its pinned and current hashes; an item changing no baseline row gets none, and its
     /// `views_changed` is empty.
-    #[test]
-    fn the_design_review_entry_names_the_system_baseline_rows_the_item_changes() {
+    /// A board with a catalog, an accepted system baseline whose `context` doc changed since, a
+    /// design-review gate, and two approved items in Scheduled: `touches` names the changed doc,
+    /// `apart` another. Returns the store, its folder, the two codes and the `context` pin.
+    fn baseline_board(tag: &str) -> (Store, std::path::PathBuf, String, String, String) {
         use crate::catalog::{Catalog, Level, Row, Source, SourceKind};
-        let dir =
-            std::env::temp_dir().join(format!("kanbanr-review-baseline-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kanbanr-review-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         assert!(dir.starts_with(std::env::temp_dir()));
@@ -1279,6 +1286,86 @@ mod tests {
                 &format!("# context, revised\n\n{}\n", "It moved. ".repeat(6)),
             )
             .unwrap();
+        (store, dir, touches, apart, pinned)
+    }
+
+    /// DEF-128 R-1: one item's entry reads that item's own files and the config, never the whole
+    /// project.
+    #[test]
+    fn one_items_entry_loads_no_project() {
+        let (store, dir, touches, _apart, _) = baseline_board("one-load");
+        let loads = store.loads();
+        let e = entry(&store, "demo", &touches, None).unwrap().unwrap();
+        assert_eq!(e.code, touches);
+        assert_eq!(
+            store.loads(),
+            loads,
+            "one item's entry loaded the whole project"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-128 R-1: the entry read alone is the entry the queue gives for that item, for an item
+    /// waiting on design-review with system baseline rows, one apart from them, one whose approval
+    /// lapsed, and one never approved; an earlier code still finds its item (FTR-056).
+    #[test]
+    fn one_items_entry_equals_its_entry_in_the_queue() {
+        let (store, dir, touches, apart, _) = baseline_board("one-equal");
+        let def = |statement: &str| FeatureDefinition {
+            statement: statement.into(),
+            ..Default::default()
+        };
+        let lapsed = store
+            .add_feature("demo", "Lapsed", "spec", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition("demo", &lapsed, Some(def("first")))
+            .unwrap();
+        store.approve_feature("demo", &lapsed, "Ada").unwrap();
+        store
+            .set_feature_definition("demo", &lapsed, Some(def("second")))
+            .unwrap();
+        let unapproved = store
+            .add_feature("demo", "New", "spec", "M", None)
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition("demo", &unapproved, Some(def("new")))
+            .unwrap();
+        let queue = pending(&store, "demo", None).unwrap();
+        let codes = [&touches, &apart, &lapsed, &unapproved];
+        assert!(
+            codes
+                .iter()
+                .filter(|c| queue.iter().any(|e| &e.code == **c))
+                .count()
+                >= 3,
+            "the fixture puts most items in the queue: {:?}",
+            queue.iter().map(|e| &e.code).collect::<Vec<_>>()
+        );
+        for code in codes {
+            let alone = entry(&store, "demo", code, None).unwrap();
+            let queued = queue.iter().find(|e| &e.code == code);
+            assert_eq!(
+                serde_json::to_value(&alone).unwrap(),
+                serde_json::to_value(queued).unwrap(),
+                "{code}"
+            );
+        }
+        // An earlier code: the item is found over every item, as before.
+        let renamed = format!("{unapproved}X");
+        store
+            .edit_feature("demo", &unapproved, None, None, None, Some(renamed.clone()))
+            .unwrap();
+        let by_old = entry(&store, "demo", &unapproved, None).unwrap().unwrap();
+        assert_eq!(by_old.code, renamed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_design_review_entry_names_the_system_baseline_rows_the_item_changes() {
+        let (store, dir, touches, apart, pinned) = baseline_board("baseline");
         let queue = pending(&store, "demo", None).unwrap();
         let entry = |code: &str| queue.iter().find(|e| e.code == code).unwrap();
         assert_eq!(entry(&touches).signoffs_needed, ["design-review"]);
