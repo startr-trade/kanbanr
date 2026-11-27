@@ -6,7 +6,7 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-26
+## [0.8.0] - 2026-11-27
 
 ### Added
 
